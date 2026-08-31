@@ -26,7 +26,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { getPluginToolMeta } from "../../plugins/tools.js";
+import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -177,6 +177,7 @@ export function resolveSkillDispatchTools(
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    sessionConfigSource: "runtime",
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,

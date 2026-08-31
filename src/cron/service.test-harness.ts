@@ -142,6 +142,7 @@ export function createFinishedBarrier() {
 export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
+  runSkillCollectionReview?: CronServiceDeps["runSkillCollectionReview"];
 }): {
   cron: CronService;
   enqueueSystemEvent: MockFn;
@@ -158,6 +159,9 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     enqueueSystemEvent,
     requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...(params.runSkillCollectionReview
+      ? { runSkillCollectionReview: params.runSkillCollectionReview }
+      : {}),
     onEvent: finished.onEvent,
   });
   return { cron, enqueueSystemEvent, requestHeartbeat, finished };
@@ -215,6 +219,7 @@ export function createRunningCronServiceState(params: {
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
   });
   state.running = true;
+  state.activeTimerTicks = 1;
   state.store = {
     version: 1,
     jobs: params.jobs,
@@ -249,12 +254,14 @@ export function createMockCronStateForJobs(params: {
     store: { version: 1, jobs: params.jobs },
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
-    runAdmission: { active: 0, waiters: [] },
+    runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map(),
     timer: null,
     storeLoadedAtMs: nowMs,

@@ -6,11 +6,12 @@ import {
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
-import type {
-  CodexPluginInventory,
-  CodexPluginInventoryRecord,
-  CodexPluginOwnedApp,
-  CodexPluginRuntimeRequest,
+import {
+  resolveOwnedAppReadOnlyToolConfigKeys,
+  type CodexPluginInventory,
+  type CodexPluginInventoryRecord,
+  type CodexPluginOwnedApp,
+  type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import {
   type CodexAppServerRequestResult,
@@ -27,6 +28,7 @@ export type CodexPluginThreadAppAdmissionDiagnostic = {
 type CodexPluginThreadAppAdmissionParams = {
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
+  threadId?: string;
   appCacheKey: string;
   nowMs?: number;
 };
@@ -37,6 +39,27 @@ export type CodexPluginThreadAppAdmissionConfig = {
   layers: readonly JsonObject[];
 };
 
+export function resolveCodexPluginThreadAppCacheKey(params: {
+  appCacheKey: string;
+  threadId?: string;
+}): string {
+  return params.threadId
+    ? `${params.appCacheKey}:thread:${encodeURIComponent(params.threadId)}`
+    : params.appCacheKey;
+}
+
+function createCodexPluginThreadAppInventoryRequest(
+  params: CodexPluginThreadAppAdmissionParams,
+): CodexAppInventoryRequest {
+  return async (method, requestParams) =>
+    (await params.request(
+      method,
+      (method === "app/installed" || method === "app/read") && params.threadId
+        ? { ...requestParams, threadId: params.threadId }
+        : requestParams,
+    )) as CodexAppServerRequestResult<typeof method>;
+}
+
 export async function refreshCodexPluginAppInventory(
   params: CodexPluginThreadAppAdmissionParams,
   appCache: CodexAppInventoryCache,
@@ -45,11 +68,10 @@ export async function refreshCodexPluginAppInventory(
   if (!params.appCacheKey) {
     return undefined;
   }
-  const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
+  const request = createCodexPluginThreadAppInventoryRequest(params);
   try {
     return await appCache.refreshNow({
-      key: params.appCacheKey,
+      key: resolveCodexPluginThreadAppCacheKey(params),
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
@@ -121,10 +143,9 @@ export async function readCodexThreadAdmissibleAccountApps(
 }> {
   // Account-wide policy must use a complete snapshot; a targeted plugin read
   // cannot establish which other account apps are authorized for this thread.
-  const request: CodexAppInventoryRequest = async (method, requestParams) =>
-    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
+  const request = createCodexPluginThreadAppInventoryRequest(params);
   const cachedInventory = appCache.read({
-    key: params.appCacheKey,
+    key: resolveCodexPluginThreadAppCacheKey(params),
     request,
     nowMs: params.nowMs,
     suppressRefresh: true,
@@ -167,6 +188,7 @@ export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedA
     accessible: app.isAccessible,
     enabled: app.isEnabled,
     needsAuth: !app.isAccessible,
+    ...resolveOwnedAppReadOnlyToolConfigKeys(app),
   };
 }
 

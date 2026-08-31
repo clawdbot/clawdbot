@@ -83,7 +83,8 @@ export async function runSafeGatewayRestart(
         ? "safe restart requested; gateway will restart after active work drains " +
           "(bounded wait; may force after the timeout expires)"
         : skipDeferral
-          ? "safe restart requested; gateway bypassing active-work deferral"
+          ? "safe restart requested; gateway bypassing active-work deferral; " +
+            "shutdown may still wait for pending replies to drain"
           : "safe restart requested; gateway will restart momentarily";
   const payload = {
     ok: true,

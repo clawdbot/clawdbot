@@ -29,6 +29,59 @@ describe("normalizeInboundTextNewlines", () => {
 });
 
 describe("inbound context contract (providers + extensions)", () => {
+  it.each([
+    ["heartbeat", "heartbeat"],
+    ["cron-event", "cron"],
+    ["exec-event", "exec"],
+  ] as const)("folds the legacy %s source without changing the reply route", (provider, source) => {
+    const input: MsgContext = {
+      Body: "An internal turn",
+      Provider: provider,
+      Surface: provider,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "chat:123",
+      MessageThreadId: "456",
+      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+    };
+    const ctx = finalizeInboundContextForSdk(input);
+    expect(ctx).toMatchObject({
+      InternalTurnSource: source,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "chat:123",
+      MessageThreadId: "456",
+      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+    });
+    expect(ctx.Provider).toBeUndefined();
+    expect(ctx.Surface).toBeUndefined();
+  });
+
+  it("preserves a typed wake without inventing a transport", () => {
+    const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: "exec" });
+    expect(ctx.InternalTurnSource).toBe("exec");
+    expect(ctx.Provider).toBeUndefined();
+    expect(ctx.OriginatingChannel).toBeUndefined();
+  });
+
+  it("removes a legacy wake label from the reply channel", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "Background work",
+      Provider: "cron-event",
+      OriginatingChannel: "cron-event",
+    });
+    expect(ctx.InternalTurnSource).toBe("cron");
+    expect(ctx.OriginatingChannel).toBeUndefined();
+  });
+
+  it("does not turn an unknown source into an internal wake", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "A user message",
+      Provider: "telegram",
+      InternalTurnSource: "unknown",
+    });
+    expect(ctx.InternalTurnSource).toBeUndefined();
+    expect(ctx.Provider).toBe("telegram");
+  });
+
   const cases: Array<{ name: string; ctx: MsgContext }> = [
     {
       name: "whatsapp group",

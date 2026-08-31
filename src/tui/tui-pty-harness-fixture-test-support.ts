@@ -14,6 +14,7 @@ import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-suppo
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
+import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
 import { startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
@@ -145,16 +146,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ? pluginApproval(initialPluginApprovalSessionKey)
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
-      let pendingTaskSuggestion: {
-        id: string;
-        title: string;
-        prompt: string;
-        tldr: string;
-        cwd: string;
-        sessionKey: string;
-        agentId: string;
-        createdAt: number;
-      } | null = null;
+      ${TUI_PTY_TASK_FIXTURE.variables}
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -169,10 +161,13 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         const entryFastMode = isModeSource ? true : isModeTarget ? undefined : fastMode;
         const entryVerboseLevel = isModeSource ? "full" : isModeTarget ? undefined : verboseLevel;
         const entryTraceLevel = isModeSource ? "raw" : isModeTarget ? modeTargetTraceLevel : undefined;
-        const entryReasoningLevel = isModeSource ? "stream" : undefined;
         return {
           key,
-          displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main",
+          ...(isModeSource
+            ? { displayName: "Production incident" }
+            : isModeTarget
+              ? {}
+              : { displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main" }),
           model: currentModel,
           modelProvider: "fixture-provider",
           contextTokens: 128,
@@ -180,7 +175,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
           ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
           ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
-          ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
+          ...(isModeSource ? { reasoningLevel: "stream" } : {}),
           thinkingLevels,
         };
       }
@@ -391,16 +386,16 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             }, 5);
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
-          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
-            if (isXaiLimitProof) {
+            if (opts.message === "xai limit proof" || opts.message === "provider failure proof") {
               this.onEvent?.({
                 event: "chat",
                 payload: {
                   runId,
                   sessionKey: opts.sessionKey,
+                  seq: 0,
                   state: "error",
-                  errorMessage: xaiLimitError,
+                  errorMessage: opts.message === "xai limit proof" ? xaiLimitError : "fixture provider failed",
                 },
               });
               return;
@@ -641,30 +636,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true };
         }
 
-        async listTaskSuggestions() {
-          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
-          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
-        }
-
-        async acceptTaskSuggestion(taskId: string) {
-          record("acceptTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "accepted" },
-          });
-          return { taskId, key: "agent:main:task-pty" };
-        }
-
-        async dismissTaskSuggestion(taskId: string) {
-          record("dismissTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "dismissed" },
-          });
-          return { taskId, dismissed: true };
-        }
+        ${TUI_PTY_TASK_FIXTURE.methods}
       }
 
       async function main() {

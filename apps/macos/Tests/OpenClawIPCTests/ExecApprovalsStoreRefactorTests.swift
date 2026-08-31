@@ -384,6 +384,37 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `cleanup removes obsolete generated approvals but preserves manual and current rules`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.addAllowlistEntries(
+                agentId: "main",
+                entries: [
+                    ExecAllowlistEntry(pattern: "/usr/bin/git", source: "allow-always"),
+                    ExecAllowlistEntry(
+                        pattern: "/usr/bin/curl",
+                        source: "allow-always",
+                        argPattern: "sha256:argv:obsolete"),
+                    ExecAllowlistEntry(
+                        pattern: "/usr/bin/rg",
+                        source: "allow-always",
+                        argPattern: "sha256:cwd-argv:v1:current"),
+                    ExecAllowlistEntry(pattern: "/usr/bin/python3", argPattern: #"^script\.py$"#),
+                    ExecAllowlistEntry(pattern: "=node-command:marker", source: "allow-always"),
+                ]).get()
+
+            let removed = try ExecApprovalsStore.removeObsoleteGeneratedAllowAlwaysEntries().get()
+            let entries = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist)
+
+            #expect(removed == 2)
+            #expect(entries.map(\.pattern) == [
+                "/usr/bin/rg",
+                "/usr/bin/python3",
+                "=node-command:marker",
+            ])
+        }
+    }
+
+    @Test
     func `usage checkpoint rejects a revoked reusable approval`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(id: "stale", pattern: "/usr/bin/printf")

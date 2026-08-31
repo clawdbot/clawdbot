@@ -1,7 +1,7 @@
 /**
  * Shell execution helpers.
  *
- * Resolves platform shell commands, sanitizes binary output, and exposes process-tree cleanup.
+ * Resolves platform shell commands and sanitizes binary output.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -9,10 +9,6 @@ import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import {
-  killProcessTree as killProcessTreeGracefully,
-  type KillProcessTreeOptions,
-} from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
 type ShellConfig = {
@@ -78,13 +74,13 @@ function isNonInteractiveShell(shellPath: string): boolean {
   return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
 }
 
-function getPosixShellArgs(shellPath: string): string[] {
+function getPosixShellArgs(shellPath: string, mode: "exec" | "session"): string[] {
   switch (path.basename(shellPath)) {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
     case "zsh":
-      // Exec commands assume bash-like literal handling for equals words and unmatched globs.
-      return ["-f", "+o", "equals", "+o", "nomatch", "-c"];
+      // Automatic exec expects literal arguments; an explicit session shell keeps its native semantics.
+      return mode === "exec" ? ["-f", "+o", "equals", "+o", "nomatch", "-c"] : ["-f", "-c"];
     case "fish":
       return ["--no-config", "-c"];
     default:
@@ -168,7 +164,7 @@ function resolveBashCommandConfig(shell: string): ShellConfig {
   }
   return createArgvShellConfig(
     shell,
-    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell),
+    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell, "session"),
   );
 }
 
@@ -188,7 +184,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath));
+    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath, "exec"));
   }
 
   if (process.platform === "win32") {
@@ -211,20 +207,20 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return createArgvShellConfig(bash, getPosixShellArgs(bash));
+      return createArgvShellConfig(bash, getPosixShellArgs(bash, "exec"));
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return createArgvShellConfig(sh, getPosixShellArgs(sh));
+      return createArgvShellConfig(sh, getPosixShellArgs(sh, "exec"));
     }
   }
   if (envShell) {
-    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
+    return createArgvShellConfig(envShell, getPosixShellArgs(envShell, "exec"));
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
   const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
-  return createArgvShellConfig(shell, getPosixShellArgs(shell));
+  return createArgvShellConfig(shell, getPosixShellArgs(shell, "exec"));
 }
 
 export function getBashShellConfig(customShellPath?: string): ShellConfig {
@@ -440,8 +436,4 @@ export function getBashShellEnv(
     ...pathEntries.filter((entry) => entry.toLowerCase() !== normalizedUsrBin),
   ].join(path.delimiter);
   return env;
-}
-
-export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
-  killProcessTreeGracefully(pid, { force: true, ...opts });
 }

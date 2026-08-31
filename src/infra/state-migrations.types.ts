@@ -105,6 +105,10 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  commitments?: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   auditLogs: LegacyAuditLogsDetection;
   acpReplayLedger: {
     sourcePath: string;
@@ -156,6 +160,9 @@ export type MigrationLogger = {
 
 export type DetectedPluginDoctorStateMigrationPlan = {
   pluginId: string;
+  /** Only bundled/trusted-official owners may reach durable channel ingress queues. */
+  trustedForDurableStores?: boolean;
+  channelIds: string[];
   migration: PluginDoctorStateMigration;
   preview: string[];
 };

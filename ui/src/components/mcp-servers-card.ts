@@ -23,6 +23,7 @@ import { icons } from "./icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "./mcp-server-form.ts";
 import {
   renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsSection,
   renderSettingsStatus,
@@ -237,8 +238,7 @@ class McpServersCard extends OpenClawLightDomElement {
           {
             title: t("mcpPage.configuredServers"),
             description: html`
-              ${t("mcpPage.runtimeHint")}
-              <a href=${this.pluginsHref}>${t("mcpPage.connectorsLink")}</a>
+              ${t("mcpPage.runtimeHint")} ${renderLearnMoreLink(this.pluginsHref)}
             `,
             actions: html`
               <button

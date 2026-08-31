@@ -1,7 +1,11 @@
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  formatSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import { captureRuntimeParityCell, type RuntimeParityUsage } from "./runtime-parity.js";
@@ -10,6 +14,11 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
+  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
+  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
+  // releases its leases through shared state and reopens it, so the store is released second.
+  closeOpenClawAgentDatabasesForTest();
+  resetPluginStateStoreForTests();
   await tempDirs.cleanup();
 });
 

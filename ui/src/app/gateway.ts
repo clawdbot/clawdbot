@@ -16,6 +16,7 @@ export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
+  restartPending?: boolean;
   hello: GatewayHelloOk | null;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
@@ -41,6 +42,7 @@ export type ApplicationGatewayConnectOptions = Partial<ApplicationGatewayConnect
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
+  readonly connectionRevision: number;
   readonly eventLog: readonly EventLogEntry[];
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;

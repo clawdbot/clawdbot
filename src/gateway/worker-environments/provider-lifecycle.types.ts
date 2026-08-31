@@ -16,7 +16,7 @@ import type {
   WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
@@ -39,13 +39,21 @@ export type WorkerProviderLifecycleInputOptions = {
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
+  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord) => Promise<void>;
   prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
+  closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
   providerCallTimeoutMs?: number;
 };
 
 export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
-  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+  tunnelManager?: {
+    stop(
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ): Promise<void>;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,

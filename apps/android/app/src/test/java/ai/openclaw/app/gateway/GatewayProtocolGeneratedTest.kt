@@ -55,6 +55,48 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
+  fun legacyFramesDecodePrincipalLessSharingErrorsAndRefreshEvents() {
+    for (id in listOf("unknown", "absent")) {
+      val response =
+        json.decodeFromString(
+          GatewayResponseFrame.serializer(),
+          """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"session membership includes actor evidence this client cannot represent","details":{"code":"SESSION_MEMBER_ACTOR_EVIDENCE_UNSUPPORTED","recommendedMethod":"session.members.listEvidence"}}}""",
+        )
+      assertEquals("INVALID_REQUEST", response.error?.code)
+      assertEquals(
+        "session.members.listEvidence",
+        response.error
+          ?.details
+          ?.jsonObject
+          ?.get("recommendedMethod")
+          ?.jsonPrimitive
+          ?.content,
+      )
+    }
+
+    val ignoredEvidence =
+      json.decodeFromString(
+        GatewayEventFrame.serializer(),
+        """{"type":"event","event":"session.sharing.evidence","payload":{"action":"member-added","sessionKey":"agent:main:main","agentId":"main","actorState":"unknown","identityId":"profile-bob","ts":2}}""",
+      )
+    val refresh =
+      json.decodeFromString(
+        GatewayEventFrame.serializer(),
+        """{"type":"event","event":"sessions.changed","payload":{"reason":"sharing","sessionKey":"agent:main:main","agentId":"main","ts":2}}""",
+      )
+    assertEquals("session.sharing.evidence", ignoredEvidence.event)
+    assertEquals("sessions.changed", refresh.event)
+    assertEquals(
+      "sharing",
+      refresh.payload
+        ?.jsonObject
+        ?.get("reason")
+        ?.jsonPrimitive
+        ?.content,
+    )
+  }
+
+  @Test
   fun generatedGatewayCatalogsAreCompleteAndUnique() {
     val methods = GatewayMethod.entries.map { it.rawValue }
     val events = GatewayEvent.entries.map { it.rawValue }
@@ -67,7 +109,7 @@ class GatewayProtocolGeneratedTest {
   }
 
   @Test
-  fun githubPublicationResultsRoundTripAsATypedUnion() {
+  fun githubPublicationResultsDecodeAsATypedUnion() {
     val cases =
       listOf(
         """{"requestId":"request-1","status":"requested","message":"Accepted."}""" to
@@ -83,22 +125,11 @@ class GatewayProtocolGeneratedTest {
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(SessionGitHubPublicationResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
-      val encoded =
-        json.encodeToJsonElement(SessionGitHubPublicationResult.serializer(), decoded).jsonObject
-      assertEquals(
-        json
-          .parseToJsonElement(payload)
-          .jsonObject
-          .getValue("status")
-          .jsonPrimitive
-          .content,
-        encoded.getValue("status").jsonPrimitive.content,
-      )
     }
   }
 
   @Test
-  fun githubDeviceAuthorizationResultsRoundTripAsATypedUnion() {
+  fun githubDeviceAuthorizationResultsDecodeAsATypedUnion() {
     val cases =
       listOf(
         """{"status":"pending","retryAfterMs":5000}""" to
@@ -120,19 +151,6 @@ class GatewayProtocolGeneratedTest {
     for ((payload, expectedType) in cases) {
       val decoded = json.decodeFromString(ToolsGitHubAuthorizePollResult.serializer(), payload)
       assertEquals(expectedType, decoded::class)
-      val encoded =
-        json
-          .encodeToJsonElement(ToolsGitHubAuthorizePollResult.serializer(), decoded)
-          .jsonObject
-      assertEquals(
-        json
-          .parseToJsonElement(payload)
-          .jsonObject
-          .getValue("status")
-          .jsonPrimitive
-          .content,
-        encoded.getValue("status").jsonPrimitive.content,
-      )
     }
   }
 }

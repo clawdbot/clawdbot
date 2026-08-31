@@ -5,7 +5,8 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
+import { repairObsoleteGeneratedExecApprovals } from "../../infra/exec-approvals-generated-migration.js";
+import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   loadPluginMetadataSnapshot,
@@ -63,6 +64,7 @@ export async function runDoctorRepairSequence(params: {
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
   pluginMetadataSnapshotState?: DoctorPluginMetadataSnapshotState;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<{
   state: DoctorConfigMutationState;
   /** Notes for repairs already committed to durable state (SQLite/filesystem). */
@@ -109,6 +111,13 @@ export async function runDoctorRepairSequence(params: {
     }
     return params.runWithPluginMetadataSnapshot(resolveCurrentPluginMetadataScope(), run);
   };
+
+  const removedExecApprovals = repairObsoleteGeneratedExecApprovals();
+  if (removedExecApprovals > 0) {
+    changeNotes.push(
+      `Exec approvals updated: removed ${removedExecApprovals} older generated ${removedExecApprovals === 1 ? "approval" : "approvals"} that were not tied to a working directory. Manual allowlist rules were not changed. Rerun affected workflows and choose "Always allow here" when prompted.`,
+    );
+  }
 
   const applyMutation = (mutation: {
     config: DoctorConfigMutationState["candidate"];
@@ -202,6 +211,7 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       ...(staleManagedNpmBundledPluginRepair
         ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }
         : {}),
@@ -320,12 +330,6 @@ export async function runDoctorRepairSequence(params: {
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
-  appendRepairNotes(
-    migrateLegacyOnboardingRecommendationsScope({
-      cfg: state.candidate,
-      env,
-    }),
-  );
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },

@@ -134,7 +134,7 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
-    expect(onAgentRunStart).toHaveBeenCalledWith("run-1", undefined);
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {
@@ -709,139 +709,6 @@ describe("executeFollowupTurn", () => {
     expect(observed).toBe(expected);
   });
 
-  it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
-    const onItemEvent = vi.fn(async () => undefined);
-    let warningSuppressed: boolean | undefined;
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onItemEvent?.({ phase: "end", status: "failed" });
-      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    const result = await executeFollowupTurn({
-      turn: createTurn(),
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: { onItemEvent },
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    await result.progress.drain();
-
-    expect(onItemEvent).toHaveBeenCalledOnce();
-    expect(warningSuppressed).toBe(true);
-  });
-
-  it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {
-    const onCommandOutput = vi.fn(async () => undefined);
-    let warningSuppressed: boolean | undefined;
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "full" }),
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onCommandOutput?.({ status: "failed", exitCode: 1 });
-      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    const result = await executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-        opts: { onCommandOutput },
-      },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    await result.progress.drain();
-
-    expect(onCommandOutput).toHaveBeenCalledOnce();
-    expect(warningSuppressed).toBe(true);
-  });
-
-  it("does not suppress warnings for hidden verbose-off tool errors", async () => {
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-    let warningSuppressed: boolean | undefined;
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "hidden failure", isError: true });
-      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-    const onToolResult = vi.fn(async () => {});
-
-    const result = await executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      },
-      onToolResult,
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    await result.progress.drain();
-
-    expect(onToolResult).not.toHaveBeenCalled();
-    expect(warningSuppressed).toBe(false);
-  });
-
-  it("suppresses duplicate warnings for delivered verbose-off tool errors", async () => {
-    const turn = createTurn({
-      session: {
-        kind: "session",
-        key: "main",
-        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
-        publish: () => undefined,
-        adopt: () => undefined,
-      },
-    });
-    let warningSuppressed: boolean | undefined;
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.opts?.onToolResult?.({ text: "visible failure", isError: true });
-      warningSuppressed = params.opts?.shouldSuppressToolErrorWarnings?.();
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-    const onToolResult = vi.fn(async () => {});
-
-    const result = await executeFollowupTurn({
-      turn,
-      defaults: {
-        typing: createTypingController(),
-        typingMode: "never",
-        defaultModel: "claude",
-      },
-      onToolResult,
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-    await result.progress.drain();
-
-    expect(onToolResult).toHaveBeenCalledWith(
-      { text: "visible failure", isError: true },
-      { runId: "run-1" },
-    );
-    expect(warningSuppressed).toBe(true);
-  });
-
   it("drains detached progress before the caller can project a final", async () => {
     const order: string[] = [];
     let releaseProgress!: () => void;
@@ -902,26 +769,6 @@ describe("executeFollowupTurn", () => {
 
     await expect(detachedProgress).resolves.toBe(false);
     await expect(result.progress.drain()).rejects.toBe(failure);
-  });
-
-  it("preserves numeric thread ids during canonical role-ordering recovery", async () => {
-    const turn = createTurn({
-      queued: { ...createTurn().queued, originatingThreadId: 42 },
-    });
-    state.reset.mockResolvedValue(true);
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.resetSessionAfterRoleOrderingConflict("invalid history");
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    await executeFollowupTurn({
-      turn,
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    expect(state.reset).toHaveBeenCalledWith(expect.objectContaining({ messageThreadId: "42" }));
   });
 
   it("updates the reply operation after role-ordering recovery rotates the session", async () => {

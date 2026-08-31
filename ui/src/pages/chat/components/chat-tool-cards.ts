@@ -2,18 +2,29 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import {
+  browserTabKey,
+  type BrowserTabSelection,
+} from "../../../components/browser/browser-target.ts";
+import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
+import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
+import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
 import type {
+  MessageGroup,
   ToolApprovalReview,
   ToolCard,
   ToolCardOutcome,
 } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
+  extractToolCardsCached,
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
@@ -22,12 +33,7 @@ import {
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  formatToolDetail,
-  resolveToolDisplay,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -39,9 +45,38 @@ export {
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
 
-type FullMessageRequest = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
->;
+export function renderBrowserTabPreviews(
+  groups: readonly MessageGroup[],
+  options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
+) {
+  const cards = groups.flatMap((group) =>
+    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+  );
+  // One card per tab per rendered group: open/navigate/screenshot in a single
+  // turn all describe the same tab, and stacked near-identical cards are noise.
+  const lastCardForTab = new Map<string, (typeof cards)[number]>();
+  for (const card of cards) {
+    if (
+      card.preview?.kind === "browser-tab" &&
+      resolveToolCardOutcome(card, false) === "succeeded"
+    ) {
+      lastCardForTab.set(browserTabKey(card.preview), card);
+    }
+  }
+  return [...lastCardForTab.values()].map((card) => {
+    const preview = card.preview;
+    if (preview?.kind !== "browser-tab") {
+      return nothing;
+    }
+    const revision = browserTabCardRevision(card);
+    return renderToolPreview(preview, "chat_tool", {
+      browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+      browserTabLatest: Boolean(
+        revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
+      ),
+    });
+  });
+}
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -65,7 +100,9 @@ function formatToolOutputForSidebar(text: string): string {
   const trimmed = text.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
+      JSON.parse(trimmed);
+      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
+      return "```json\n" + trimmed + "\n```";
     } catch {
       return text;
     }
@@ -145,25 +182,17 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
-function buildSidebarContent(
-  value: string,
-  options?: {
-    rawText?: string | null;
-    fullMessageRequest?: FullMessageRequest;
-  },
-): SidebarContent {
+function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
-  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -178,20 +207,7 @@ function buildPreviewSidebarContent(
     // trusted global embed mode would re-grant same-origin to widget script.
     ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
     ...(rawText ? { rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
-}
-
-function buildToolSidebarFullMessageRequest(
-  card: ToolCard,
-  sessionKey: string | undefined,
-): FullMessageRequest | undefined {
-  if (!sessionKey || !card.messageId) {
-    return undefined;
-  }
-  // A transcript entry can contain multiple tool blocks. Until the request can
-  // identify a specific block, upgrading by message id can show the wrong tool.
-  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -324,27 +340,13 @@ export function syncToolDisclosureOverflow(event: Event): void {
   );
 }
 
-export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
-  const target = event.currentTarget;
-  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
-  const scroller = row?.closest<HTMLElement>(".chat-thread");
-  const rowTop = row?.getBoundingClientRect().top;
-  toggle();
-  if (!row || !scroller || rowTop === undefined) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
-    // its end-anchor delta before we restore this disclosure row's position.
-    requestAnimationFrame(() => {
-      if (row.isConnected) {
-        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-      }
-    });
-  });
-}
-
-function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
+function renderToolRowContent(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  workspaceFilePath: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
     return html`
@@ -363,9 +365,23 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
           : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      <span class="chat-tool-row__target">${compactToolTarget(view.target, view.kind)}</span>
+      ${workspaceFilePath && onOpenWorkspaceFile
+        ? html`<button
+            class="chat-tool-row__file-link"
+            type="button"
+            title=${t("chat.toolCards.openFile")}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              onOpenWorkspaceFile({ path: workspaceFilePath });
+            }}
+          >
+            ${compactToolTarget(view.target, view.kind)}
+          </button>`
+        : html`<span class="chat-tool-row__target"
+            >${compactToolTarget(view.target, view.kind)}</span
+          >`}
       ${stat ? renderDiffStatChips(stat) : nothing}
-      ${view.targetDetail && view.kind !== "edit" && view.kind !== "write"
+      ${!workspaceFilePath && view.targetDetail && view.kind !== "edit" && view.kind !== "write"
         ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
     `;
@@ -450,43 +466,6 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
       <span class="chat-tool-msg-summary__label">${label}</span>
     </div>
   </div>`;
-}
-
-function renderFileToolRowContent(
-  card: ToolCard,
-  view: ToolCallView,
-  outcome: ToolCardOutcome,
-  workspaceFilePath: string | null,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
-) {
-  const verb = resolveToolRowVerb(view, outcome);
-  if (!verb || !view.target) {
-    return renderToolRowContent(card, view, outcome);
-  }
-  const stat =
-    outcome === "succeeded"
-      ? view.stat
-      : outcome === "running" && (view.kind === "edit" || view.kind === "write")
-        ? card.liveDiffStat
-        : undefined;
-  const filename = compactToolTarget(view.target, view.kind);
-  return html`
-    <span class="chat-tool-row__verb">${verb}</span>
-    ${workspaceFilePath && onOpenWorkspaceFile
-      ? html`<button
-          class="chat-tool-row__file-link"
-          type="button"
-          title=${t("chat.toolCards.openFile")}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            onOpenWorkspaceFile({ path: workspaceFilePath });
-          }}
-        >
-          ${filename}
-        </button>`
-      : html`<span class="chat-tool-row__target">${filename}</span>`}
-    ${stat ? renderDiffStatChips(stat) : nothing}
-  `;
 }
 
 // ── Command syntax highlighting ──
@@ -697,12 +676,7 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
 }
 
-function renderTerminalBlock(
-  command: string,
-  output: string | undefined,
-  outcome: ToolCardOutcome,
-  exitCode?: number,
-) {
+function renderTerminalBlock(command: string, output: string | undefined) {
   return html`
     <div class="chat-tool-term">
       <div class="chat-tool-term__cmd">
@@ -712,8 +686,44 @@ function renderTerminalBlock(
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
-      ${renderToolOutcome(outcome, exitCode)}
     </div>
+  `;
+}
+
+function renderToolCardModes(
+  card: ToolCard,
+  diff: NonNullable<ToolCallView["diff"]>,
+  outcome: ToolCardOutcome,
+  isError: boolean,
+  file: DiffFilePaths,
+) {
+  const active = isError ? "raw" : "diff";
+  const modeLabel = t("chat.toolCards.viewMode");
+  return html`
+    <wa-tab-group
+      class="chat-tool-card__modes"
+      aria-label=${modeLabel}
+      .active=${active}
+      activation="auto"
+      without-scroll-controls
+      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
+    >
+      <wa-tab slot="nav" id=${`${card.id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
+        ${t("chat.toolCards.diff")}
+      </wa-tab>
+      <wa-tab slot="nav" id=${`${card.id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
+        ${t("chat.toolCards.raw")}
+      </wa-tab>
+      <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
+        ${renderDiffBlock(diff, outcome, undefined, file)}
+      </wa-tab-panel>
+      <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
+        ${renderToolDataBlock({
+          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+          text: card.outputText!,
+        })}
+      </wa-tab-panel>
+    </wa-tab-group>
   `;
 }
 
@@ -824,19 +834,17 @@ export function renderToolApprovalReviews(card: ToolCard) {
   `;
 }
 
+type ToolCardRenderOptions = {
+  runActive?: boolean;
+  onOpenSidebar?: (content: SidebarContent) => void;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+};
+
 export function renderToolCard(
   card: ToolCard,
-  opts: {
+  opts: ToolCardRenderOptions & {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
-    runActive?: boolean;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
     showApprovalReviews?: boolean;
   },
 ) {
@@ -855,6 +863,19 @@ export function renderToolCard(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const isFileRow = Boolean(workspaceFilePath);
+  const rowContent = html`
+    <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+    <span class="chat-tool-disclosure__content"
+      >${renderToolRowContent(
+        card,
+        view,
+        outcome,
+        workspaceFilePath,
+        opts.onOpenWorkspaceFile,
+      )}</span
+    >
+    <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+  `;
 
   return html`
     <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
@@ -871,20 +892,9 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${(event: MouseEvent) =>
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
+              @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderFileToolRowContent(
-                card,
-                view,
-                outcome,
-                workspaceFilePath,
-                opts.onOpenWorkspaceFile,
-              )}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+            ${rowContent}
           </div>`
         : html`<button
             class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
@@ -896,31 +906,14 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
+                opts.onToggleExpanded(card.id);
               }
             }}
           >
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderToolRowContent(card, view, outcome)}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
+            ${rowContent}
           </button>`}
       ${expanded
-        ? html`
-            <div class="chat-tool-msg-body">
-              ${renderExpandedToolCardContent(
-                card,
-                opts.sessionKey,
-                opts.onOpenSidebar,
-                opts.canvasPluginSurfaceUrl,
-                opts.embedSandboxMode ?? "scripts",
-                opts.allowExternalEmbedUrls ?? false,
-                opts.runActive,
-                opts.onOpenWorkspaceFile,
-              )}
-            </div>
-          `
+        ? html` <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div> `
         : nothing}
       ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
     </div>
@@ -929,13 +922,7 @@ export function renderToolCard(
 
 export function renderExpandedToolCardContent(
   card: ToolCard,
-  sessionKey?: string,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  canvasPluginSurfaceUrl?: string | null,
-  embedSandboxMode: EmbedSandboxMode = "scripts",
-  allowExternalEmbedUrls = false,
-  runActive?: boolean,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+  { onOpenSidebar, runActive, onOpenWorkspaceFile }: ToolCardRenderOptions,
 ) {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
@@ -954,27 +941,15 @@ export function renderExpandedToolCardContent(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
+      ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
   const sidebarActionContent =
     previewSidebarContent ??
     buildSidebarContent(buildToolCardSidebarContent(card), {
-      fullMessageRequest,
       rawText: card.outputText ?? null,
     });
-  const visiblePreview = card.preview
-    ? renderToolPreview(card.preview, "chat_tool", {
-        onOpenSidebar,
-        rawText: card.outputText,
-        canvasPluginSurfaceUrl,
-        embedSandboxMode,
-        allowExternalEmbedUrls,
-        sessionKey,
-      })
-    : nothing;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -991,18 +966,7 @@ export function renderExpandedToolCardContent(
     : nothing;
   const diffCopyAction =
     view.diff && view.diff.length > 0
-      ? html`
-          <openclaw-tooltip content=${t("common.copy")}>
-            <button
-              class="chat-tool-card__action-btn"
-              type="button"
-              @click=${() => void copyToClipboard(serializeDiff(view.diff ?? []))}
-              aria-label=${t("common.copy")}
-            >
-              <span class="chat-tool-card__action-icon">${icons.copy}</span>
-            </button>
-          </openclaw-tooltip>
-        `
+      ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
 
   // Command calls render terminal-style: `$ command` + raw output. Remaining
@@ -1016,15 +980,17 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText, outcome, card.exitCode)}
+        ${renderTerminalBlock(view.command, card.outputText)}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
 
-  // Edits and writes with a resolvable diff render it inline; the raw tool
-  // output stays reachable behind the raw-details toggle.
+  // Edits and writes with a resolvable diff render it inline. When raw output
+  // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
+    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
@@ -1035,12 +1001,10 @@ export function renderExpandedToolCardContent(
           )}
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
-        ${renderDiffBlock(view.diff, outcome)} ${renderToolOutcome(outcome, card.exitCode)}
-        ${isError && hasOutput
-          ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
-          : hasOutput
-            ? renderRawOutputToggle(card.outputText!)
-            : nothing}
+        ${hasOutput
+          ? renderToolCardModes(card, view.diff, outcome, isError, file)
+          : renderDiffBlock(view.diff, outcome, undefined, file)}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
@@ -1077,8 +1041,8 @@ export function renderExpandedToolCardContent(
             })
         : nothing}
       ${hasOutput
-        ? card.preview
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
+        ? card.preview?.kind === "canvas"
+          ? renderRawOutputToggle(card.outputText!)
           : renderToolDataBlock({
               ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
               text: card.outputText!,

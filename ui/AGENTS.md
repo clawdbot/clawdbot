@@ -42,6 +42,10 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Method-advertisement checks (`isGatewayMethodAdvertised`) remain only as feature gates for config/plugin-dependent surfaces, never as version compat.
 - The handshake rejects gateway-served same-origin skew. The admission-exempt paths (`pnpm ui:dev`, custom `gateway.controlUi.root`, cross-origin/connection-settings dialing) are unsupported for version mismatch without enforcement: they carry no compat code and fail visibly at the first missing method, by design. Tightening admission to reject them at connect is a server-side product change owned separately.
 
+## Build Chunking
+
+- `ui/config/control-ui-boot-modules.json` is a generated manifest of the modules the default boot flow loads lazily; the `control-ui-boot` group in `ui/config/control-ui-chunking.ts` merges them into a few chunks so boot avoids ~140 HTTP/1.1 requests. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with only the old boot group disabled, preventing stale entries from feeding back into the capture. Rebuild with `pnpm ui:build` afterward to verify normal grouped output. Do not hand-edit the manifest.
+
 ## Live Verification
 
 - The Gateway serves the prebuilt bundle from `dist/control-ui`; editing `ui/src` changes nothing live until `pnpm ui:build`. Confirm the served `/assets/index-*.js` hash changed before trusting a live result.

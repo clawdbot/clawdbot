@@ -32,6 +32,10 @@ import {
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
+import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
@@ -90,11 +94,19 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
+  // Isolated probes acquire their own read-only runtime snapshot. Carrying the caller's
+  // ambient generation makes the admission guard reject that independent snapshot.
+  const pluginGeneration =
+    internalParamsInput.pluginGeneration ??
+    (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
+      ? undefined
+      : getPreparedModelRuntimePluginGeneration());
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
+      ...(pluginGeneration ? { pluginGeneration } : {}),
     }),
   );
 }
@@ -199,7 +211,11 @@ async function runEmbeddedAgentInternal(
       // Subscription-scoped claude-cli auth executes via the CLI backend;
       // resolved post-admission so dispatched runs obey the same lifecycle,
       // placement, and concurrency gates as native embedded runs.
-      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible(params);
+      const cliDispatched = await runEmbeddedAgentViaCliBackendIfEligible({
+        ...params,
+        // Preserve the admitted writer claim alongside the already resolved storage identity.
+        sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+      });
       if (cliDispatched) {
         return cliDispatched;
       }
@@ -222,7 +238,9 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
-      const requestedHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const requestedHarnessRuntime =
+        explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
       const runtimePluginFallbacksOverride =
         params.modelFallbacksOverride ??
         resolveRunModelFallbacksOverride({
@@ -245,8 +263,10 @@ async function runEmbeddedAgentInternal(
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
         fallbacksOverride: runtimePluginFallbacksOverride,
-      }).map((candidate) =>
-        requestedHarnessRuntime
+      }).map((candidate, index) =>
+        requestedHarnessRuntime &&
+        // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+        (index === 0 || explicitHarnessRuntime)
           ? {
               provider: candidate.provider,
               modelId: candidate.model,
@@ -283,17 +303,19 @@ async function runEmbeddedAgentInternal(
         noteLaneTaskProgress,
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
-            ? acquireReadOnlyPreparedModelRuntime(preparedInput)
+            ? acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal)
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
                 // Turns need only configured admission facts. Full live model inventory remains
                 // available through the snapshot's lazy control-plane loader.
                 catalogMode: "static",
                 ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+                abortSignal: params.abortSignal,
               }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+      let preparedLeaseActive = true;
       try {
         if (
           params.pluginGeneration &&
@@ -450,8 +472,17 @@ async function runEmbeddedAgentInternal(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+        const runWithPreparedRuntime = () =>
+          withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+        return params.pluginGeneration
+          ? await withPreparedModelRuntimePluginGenerationScope(
+              preparedModelRuntimeLease.pluginGeneration,
+              runWithPreparedRuntime,
+              () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
+            )
+          : await runWithPreparedRuntime();
       } finally {
+        preparedLeaseActive = false;
         preparedModelRuntimeLease.release();
       }
     });

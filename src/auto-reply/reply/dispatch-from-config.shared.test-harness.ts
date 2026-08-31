@@ -65,7 +65,7 @@ const globalMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
 }));
 const askUserMocks = vi.hoisted(() => ({
-  isAskUserPromptPending: vi.fn(async () => true),
+  isAskUserPromptPending: vi.fn(async (_questionId: string) => true),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
@@ -87,7 +87,9 @@ const hookMocks = vi.hoisted(() => ({
     }>,
   },
   runner: {
-    hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
+    hasHooks: vi.fn<(hookName?: string, scope?: { dispatchKind?: "agent" | "acp" }) => boolean>(
+      () => false,
+    ),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
     runInboundClaimForPluginOutcome: vi.fn<
@@ -505,6 +507,7 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
   logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
@@ -539,6 +542,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
     loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    patchSessionEntryCore: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
+      sessionStoreMocks.updateSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
   };
@@ -581,16 +586,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
     unbind: vi.fn(async () => []),
   }),
 }));
-vi.mock("../../bindings/records.js", () => ({
-  resolveConversationBindingRecord: (conversation: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => sessionBindingMocks.resolveByConversation(conversation),
-  touchConversationBindingRecord: (...args: [bindingId: string, at?: number]) =>
-    sessionBindingMocks.touch(...args),
-}));
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",
@@ -599,6 +594,10 @@ vi.mock("../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
+  // Plain stub, not a spy like onAgentEvent above: no test asserts per-run subscription,
+  // and staying out of agentEventMocks keeps the sibling mockReset() calls from clearing
+  // this implementation and handing the CLI bridges an undefined unsubscribe.
+  onAgentEventForRun: () => () => {},
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   runOncePerAgentRun: <T>(_runId: string, _operation: string, run: () => Promise<T>) => run(),
   withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T) => run(),
@@ -608,16 +607,26 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingErrorText: () => "Plugin binding request failed.",
   buildPluginBindingUnavailableText: (binding: { pluginName?: string; pluginId: string }) =>
     `${binding.pluginName ?? binding.pluginId} is not currently loaded.`,
-  hasShownPluginBindingFallbackNotice: (bindingId: string) =>
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(bindingId),
+  hasShownPluginBindingFallbackNotice: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) =>
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    ),
   isPluginOwnedSessionBindingRecord: (
     record: SessionBindingRecord | null | undefined,
   ): record is SessionBindingRecord =>
     record?.metadata != null &&
     typeof record.metadata === "object" &&
     (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
-  markPluginBindingFallbackNoticeShown: (bindingId: string) => {
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(bindingId);
+  markPluginBindingFallbackNoticeShown: (
+    bindingId: string,
+    scope?: { channel: string; accountId: string },
+  ) => {
+    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(
+      JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
+    );
   },
   toPluginConversationBinding: (record: SessionBindingRecord) => {
     const metadata = (record.metadata ?? {}) as {

@@ -369,7 +369,6 @@ export function buildWorkspaceSkillStatus(
         agentSkillFilter: "ignore",
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,
-        includeArchived: true,
       }),
     {
       canExec: opts?.eligibility?.nodeSkills?.canExec,

@@ -1,13 +1,17 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import {
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  listAgentIds,
+  resolveConfiguredAgentId,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   getMemorySearchManager,
   getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
@@ -24,9 +28,6 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
-}
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -57,7 +58,7 @@ async function loadMemoryCommandConfig(
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
       commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
       ...(mode ? { mode } : {}),
     });
     return { config: resolvedConfig, diagnostics };
@@ -125,12 +126,12 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
-  if (trimmed) {
-    return trimmed;
+  if (agent !== undefined && !trimmed) {
+    throw new Error("--agent must not be blank");
   }
-  return resolveDefaultAgentId(cfg);
+  return trimmed ? resolveConfiguredAgentId(cfg, trimmed) : resolveDefaultAgentId(cfg);
 }
 export function buildCliMemorySearchSessionKey(agentId: string): string {
   return buildAgentSessionKey({
@@ -142,10 +143,10 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
 }
 function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
-  if (trimmed) {
-    return [trimmed];
+  if (agent !== undefined && !trimmed) {
+    throw new Error("--agent must not be blank");
   }
-  return listAgentIds(cfg);
+  return trimmed ? [resolveConfiguredAgentId(cfg, trimmed)] : listAgentIds(cfg);
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
@@ -210,7 +211,7 @@ export async function withMemoryCommand(params: {
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
     ? resolveAgentIds(cfg, params.agent)
-    : [resolveAgent(cfg, params.agent)];
+    : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({
       commandName: params.commandName,

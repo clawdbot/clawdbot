@@ -776,7 +776,10 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+      omits: [
+        'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+        "recordMemoryArtifactWriteProvenance",
+      ],
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],

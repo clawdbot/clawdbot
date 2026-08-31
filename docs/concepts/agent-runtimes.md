@@ -143,16 +143,28 @@ this order:
    `openclaw` as the compatibility runtime. Use an explicit runtime id when
    the run must be strict.
 
-Whole-session and whole-agent runtime pins are ignored: `OPENCLAW_AGENT_RUNTIME`,
-session `agentHarnessId`/`agentRuntimeOverride` state, `agents.defaults.agentRuntime`,
-and `agents.entries.*.agentRuntime`. Run `openclaw doctor --fix` to remove stale
-whole-agent runtime config and convert legacy runtime model refs where intent
-can be preserved.
+Historical `agentHarnessId` records which runtime produced the transcript; it
+does not pin the next turn. Locked native transcripts retain their owner, and
+compatible explicit session runtime overrides take precedence over configured
+policy. ACP sessions retain their ACP backend. Legacy whole-agent runtime
+config and `OPENCLAW_AGENT_RUNTIME` are ignored; use `openclaw doctor --fix`
+to remove stale config and repair legacy model refs.
 
-Explicit provider/model plugin runtimes fail closed: `agentRuntime.id: "codex"`
-on a provider or model means Codex, or a clear selection/runtime error - it is
-never silently routed back to OpenClaw. Only `auto` may route an unmatched
-turn to OpenClaw.
+Explicit provider/model plugin runtimes fail closed when the harness is missing
+or cannot support the route or authentication. There is one selection-time
+exception: a harness may declare that OpenClaw can reproduce the exact request.
+Codex uses this fallback for authored request overrides such as headers, request
+parameters, timeouts, or payload compatibility switches. It preserves those
+settings instead of silently dropping them. Once a harness starts executing,
+its failures are not replayed through another runtime.
+
+Affirmative `compat.supportsReasoningEffort: true` and a nonempty
+`compat.supportedReasoningEfforts` list containing only `minimal`, `low`,
+`medium`, `high`, `xhigh`, `max`, or `ultra` describe native reasoning
+capabilities; they do not opt an otherwise compatible route out of Codex.
+Disabling reasoning, custom effort labels, and other compatibility switches
+remain request behavior. Model-level runtime controls such as `fastMode` and
+`thinking` also preserve native selection when their values are valid.
 
 CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 
@@ -171,9 +183,11 @@ CLI backend aliases differ from embedded harness ids. Preferred Claude CLI form:
 }
 ```
 
-Legacy refs such as `claude-cli/claude-opus-4-7` remain supported for
-compatibility, but new config should keep the provider/model canonical and
-put the execution backend in provider/model runtime policy.
+Legacy refs such as `claude-cli/claude-opus-4-7` are accepted as compatibility
+input, but new config should keep the provider/model canonical and put the
+execution backend in provider/model runtime policy. Run `openclaw doctor --fix`
+to rewrite persisted legacy model selections, model-map keys, and explicit
+`modelPolicy.allow` entries to that canonical shape.
 
 Legacy `codex-cli/*` refs are different: doctor migrates them to `openai/*` so
 they run through the Codex app-server harness instead of preserving a Codex
@@ -185,7 +199,7 @@ harness. Explicit OpenClaw runtime config remains an opt-in compatibility
 route for `openai/*` agent turns; when paired with a selected `openai` OAuth
 profile, OpenClaw routes that path internally through the Codex-auth
 transport while keeping the public model ref as `openai/*`. Stale OpenAI
-runtime session pins are ignored by runtime selection and can be cleaned with
+historical producer fields do not pin the next turn and can be cleaned with
 `openclaw doctor --fix`.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while legacy
@@ -249,7 +263,10 @@ diagnostics, not provider names:
 - A channel label such as Telegram or Discord is where the conversation is happening.
 
 If a run shows an unexpected runtime, inspect the selected provider/model
-runtime policy first. Legacy session runtime pins no longer decide routing.
+runtime policy first. Next-turn runtime metadata includes declared fallback
+when the registered harness can determine it from the configured route. It does
+not probe credentials or start a runtime; final route/auth preparation can still
+reject the turn. The completed result records the runtime that actually ran.
 
 ## Related
 

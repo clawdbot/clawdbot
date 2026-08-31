@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 
 type IdentitySectionProps = Parameters<typeof renderIdentitySection>[0];
@@ -124,7 +124,13 @@ describe("renderIdentitySection", () => {
     const container = document.createElement("div");
     render(renderIdentitySection(createProps({ onAvatarSelect })), container);
 
+    const chooser = container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn");
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const clickInput = vi.spyOn(input!, "click");
+    chooser?.click();
+    expect(chooser?.type).toBe("button");
+    expect(clickInput).toHaveBeenCalledOnce();
+
     const file = new File(["avatar"], "avatar.webp", { type: "image/webp" });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
     input?.dispatchEvent(new Event("change", { bubbles: true }));
@@ -132,6 +138,12 @@ describe("renderIdentitySection", () => {
     expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
     expect(input?.value).toBe("");
     expect(onAvatarSelect).toHaveBeenCalledWith(file);
+
+    render(renderIdentitySection(createProps({ busy: "display-name" })), container);
+    expect(
+      container.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled,
+    ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
   });
 
   it("shows verified GitHub identity and explicit co-author credit", () => {

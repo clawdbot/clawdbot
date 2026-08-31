@@ -397,6 +397,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -409,6 +410,7 @@ describe("cron protocol validators", () => {
       { agentId: "" },
       { scheduleKind: "yearly" },
       { lastRunStatus: "pending" },
+      { trigger: "configured" },
     ]);
   });
 

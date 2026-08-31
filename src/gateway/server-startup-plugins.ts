@@ -17,6 +17,7 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/run
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -169,11 +170,12 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  // Minimal gateway tests reuse an already-active registry when present. Production publishes
-  // an empty pre-bind registry; every startup plugin runtime attaches after the listener binds.
-  const pluginRegistry = params.minimalTestGateway
-    ? (getActivePluginRegistry() ?? emptyPluginRegistry)
-    : emptyPluginRegistry;
+  // Minimal tests may reuse an active registry only while plugins are enabled. Production
+  // publishes an empty pre-bind registry; startup plugin runtimes attach after the listener binds.
+  const pluginRegistry =
+    params.minimalTestGateway && !pluginsGloballyDisabled
+      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+      : emptyPluginRegistry;
   setActivePluginRegistry(pluginRegistry);
 
   return {
@@ -227,10 +229,23 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
+    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
+    if (!currentPluginRegistry) {
+      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
+    }
+    return {
+      pluginRegistry: currentPluginRegistry,
+      gatewayMethods: params.baseMethods,
+    };
+  }
   const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,

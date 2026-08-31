@@ -4,6 +4,7 @@ import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   sessionRow,
   sessionsListResponse,
@@ -28,7 +29,9 @@ suite.define(() => {
       ...sessionRow(newestKey, "External newest", baseTime + 1_000),
       createdAt: baseTime + 1_000,
     };
-    const expectedVisibleKeys = [newestKey, ...olderRows.slice(0, 9).map((row) => row.key)];
+    // Sticky membership: rows the operator already saw stay visible when a
+    // newer session enters the page, so the full prior page remains.
+    const expectedVisibleKeys = [newestKey, ...olderRows.map((row) => row.key)];
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -47,9 +50,11 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, olderRows[0]!.key));
       const rows = page.locator(".sidebar-recent-session");
       await expect.poll(() => rows.count(), { timeout: 10_000 }).toBe(10);
+      const retainedSessionKey = olderRows[5]!.key;
+      await rows.nth(5).evaluate((row) => Reflect.set(row, "__retainedSessionRow", true));
       await captureUiProof(page, "sidebar-created-sort-before-refresh.png");
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
@@ -74,9 +79,14 @@ suite.define(() => {
           ),
         )
         .toEqual(expectedVisibleKeys);
+      expect(
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${retainedSessionKey}"]`)
+          .evaluate((row) => Reflect.get(row, "__retainedSessionRow")),
+      ).toBe(true);
       await captureUiProof(page, "sidebar-created-sort-after-refresh.png");
 
-      expect(await rows.count()).toBe(10);
+      expect(await rows.count()).toBe(11);
       expect(
         await rows.evaluateAll((elements) =>
           elements.map((element) => element.getAttribute("data-session-key")),

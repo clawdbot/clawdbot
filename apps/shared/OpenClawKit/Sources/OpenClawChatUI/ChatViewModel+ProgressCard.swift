@@ -21,15 +21,18 @@ extension OpenClawChatViewModel {
     func scheduleProgressCardFetch(for session: SessionSnapshot? = nil) {
         let session = session ?? self.currentSessionSnapshot()
         guard self.isCurrentSession(session) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            self.progressCardStoreAvailable = await self.transport.gatewayAdvertisesProgressCardStore()
-        }
         self.lastIssuedProgressCardRequestID &+= 1
         let requestID = self.lastIssuedProgressCardRequestID
         let generation = self.progressCardGeneration
         Task { [weak self] in
-            await self?.fetchProgressCard(
+            guard let self else { return }
+            let storeAvailable = await self.transport.gatewayAdvertisesMethod("progressCard.get")
+            self.progressCardStoreAvailable = storeAvailable
+            // Gateways without the durable store reject the fetch outright
+            // (2026.7.x: "missing scope: operator.admin"); the legacy
+            // stream:"plan" fallback owns the card there.
+            guard storeAvailable != false else { return }
+            await self.fetchProgressCard(
                 for: session,
                 generation: generation,
                 requestID: requestID)

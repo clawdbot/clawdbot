@@ -76,6 +76,12 @@ export function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),
+    ...(existingEntry.pendingProjectGitUrl !== undefined
+      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
+      : {}),
+    ...(existingEntry.transcriptByteCompactionLatch
+      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
+      : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),
@@ -85,9 +91,6 @@ export function generationValidPrivateFieldsForSameSession(
           restartRecoveryRuns: existingEntry.restartRecoveryRuns,
           mainRestartRecovery: existingEntry.mainRestartRecovery,
         }
-      : {}),
-    ...(existingEntry.thinkingLevelSelection
-      ? { thinkingLevelSelection: { ...existingEntry.thinkingLevelSelection } }
       : {}),
   };
   return Object.keys(state).length > 0 ? state : undefined;

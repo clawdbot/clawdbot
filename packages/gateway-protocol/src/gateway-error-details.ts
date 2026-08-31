@@ -26,12 +26,14 @@ export const GatewayErrorDetailCodes = {
   CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   SKILL_PROPOSAL_REVISION_CHANGED: "SKILL_PROPOSAL_REVISION_CHANGED",
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -51,6 +53,10 @@ export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 };
 
+export type OutboundDeliveryQueuedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED;
+};
+
 /** Per-profile preference quota details returned by users.prefs.set. */
 export type UserPrefsLimitExceededErrorDetails = {
   code: typeof GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED;
@@ -62,6 +68,11 @@ export type UserPrefsLimitExceededErrorDetails = {
 export type UnknownAgentIdErrorDetails = {
   code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
   agentId: string;
+};
+
+/** Setup rejected before its task or wizard session was admitted. */
+export type SetupAdmissionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY;
 };
 
 /** Missing or expired process-local setup wizard session. */
@@ -94,11 +105,13 @@ export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
   | McpAppViewExpiredErrorDetails
+  | OutboundDeliveryQueuedErrorDetails
   | UserPrefsLimitExceededErrorDetails
   | SkillProposalRevisionChangedErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SetupAdmissionBusyErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;

@@ -292,6 +292,7 @@ function logAgentEventSubscriptionFailure(params: {
 export function dispatchPluginAgentEventSubscriptions(params: {
   registry: PluginRegistry | null | undefined;
   event: AgentEventPayload;
+  isLive: () => boolean;
 }): void {
   const subscriptions = params.registry?.agentEventSubscriptions ?? [];
   const pendingHandlers: Promise<void>[] = [];
@@ -306,11 +307,16 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     let handlerActive = true;
     const ctx: PluginAgentEventSubscriptionContext = {
       getRunContext: ((namespace: string) =>
-        getPluginRunContext({
-          pluginId,
-          get: { runId, namespace },
-        })) as PluginAgentEventSubscriptionContext["getRunContext"],
+        params.isLive()
+          ? getPluginRunContext({
+              pluginId,
+              get: { runId, namespace },
+            })
+          : undefined) as PluginAgentEventSubscriptionContext["getRunContext"],
       setRunContext: (namespace: string, value: PluginJsonValue) => {
+        if (!params.isLive()) {
+          return;
+        }
         setPluginRunContext({
           pluginId,
           patch: { runId, namespace, value },
@@ -318,6 +324,9 @@ export function dispatchPluginAgentEventSubscriptions(params: {
         });
       },
       clearRunContext: (namespace?: string) => {
+        if (!params.isLive()) {
+          return;
+        }
         clearPluginRunContext({ pluginId, runId, namespace });
       },
     };

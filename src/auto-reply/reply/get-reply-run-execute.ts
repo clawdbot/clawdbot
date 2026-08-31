@@ -25,6 +25,7 @@ import {
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
+import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -186,6 +187,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       OriginatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo,
       AccountId: ctx.AccountId ?? sessionCtx.AccountId,
       InputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
+      InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
       ChatType: ctx.ChatType ?? sessionCtx.ChatType,
     },
     entry: preparedSessionState.sessionEntry,
@@ -210,7 +212,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         })
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
-  const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
+  // Direct sender identity is safe only after channel admission and an ingress-owned
+  // self check. Gateway-local and from-me turns must keep the operator identity.
+  const persistChannelSender =
+    replyRoute.chatType === "group" ||
+    replyRoute.chatType === "channel" ||
+    (replyRoute.chatType === "direct" &&
+      ctx.InboundAccessAuthorized === true &&
+      ctx.SenderIsSelf !== true);
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
   const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
@@ -302,14 +311,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           // is identical whether this turn is sent as the current turn or
           // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
           ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
-          // Direct transcripts keep their existing identity-storage boundary.
-          sender: persistGroupSender
-            ? {
-                id: normalizeOptionalString(sessionCtx.SenderId),
-                name: normalizeOptionalString(sessionCtx.SenderName),
-                username: normalizeOptionalString(sessionCtx.SenderUsername),
-              }
-            : undefined,
+          sender: persistChannelSender ? buildChannelUserTurnSender(sessionCtx) : undefined,
         }
       : undefined;
   const userTurnTranscriptRecorder =
@@ -366,6 +368,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
+    ...(opts && "onQueuedFollowupReplyBatch" in opts
+      ? {
+          queuedFollowupReplyDisposition: opts.onQueuedFollowupReplyBatch
+            ? { kind: "deliver" as const, deliver: opts.onQueuedFollowupReplyBatch }
+            : { kind: "drop" as const, reason: "source-unavailable" as const },
+        }
+      : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
@@ -400,6 +409,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,
       agentAccountId: replyRoute.accountId,
+      conversationRoutePeerId: sessionCtx.ConversationRoutePeerId,
       conversationToolPolicy: sessionCtx.ConversationToolPolicy,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:

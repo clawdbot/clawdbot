@@ -1,5 +1,5 @@
 // Dependency Ownership Surface Report tests cover dependency ownership surface report script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -69,22 +69,24 @@ describe("parseArgs", () => {
 });
 
 describe("collectDependencyOwnershipSurfaceReport", () => {
-  it("reports root dependency reachability, install-surface packages, and ownership metadata gaps", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
-        dependencies: {
-          "core-lib": "1.0.0",
-          "missing-owner": "2.0.0",
-        },
-      }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "pnpm-lock.yaml",
-      `
+  it.each([false, true])(
+    "reports ownership and install surface with toolchain metadata %s",
+    (withToolchain) => {
+      const repoRoot = makeTempRepo();
+      writeRepoFile(
+        repoRoot,
+        "package.json",
+        JSON.stringify({
+          dependencies: {
+            "core-lib": "1.0.0",
+            "missing-owner": "2.0.0",
+          },
+        }),
+      );
+      writeRepoFile(
+        repoRoot,
+        "pnpm-lock.yaml",
+        `
 lockfileVersion: '9.0'
 importers:
   .:
@@ -113,72 +115,81 @@ snapshots:
   missing-owner@2.0.0: {}
   '@nolyfill/domexception@1.0.0': {}
 `,
-    );
-    writeRepoFile(
-      repoRoot,
-      "scripts/lib/dependency-ownership.json",
-      JSON.stringify({
-        schemaVersion: 1,
-        dependencies: {
-          "alias-domexception": {
-            owner: "core:test",
-            class: "core-runtime",
-            risk: ["compat"],
+      );
+      writeRepoFile(
+        repoRoot,
+        "scripts/lib/dependency-ownership.json",
+        JSON.stringify({
+          schemaVersion: 1,
+          dependencies: {
+            "alias-domexception": {
+              owner: "core:test",
+              class: "core-runtime",
+              risk: ["compat"],
+            },
+            "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
           },
-          "core-lib": { owner: "core:test", class: "core-runtime", risk: ["network"] },
-        },
-      }),
-    );
-    writeRepoFile(repoRoot, "src/index.ts", 'import "core-lib";\n');
+        }),
+      );
+      writeRepoFile(repoRoot, "src/index.ts", 'import "core-lib";\n');
 
-    const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
+      if (withToolchain) {
+        const lockPath = path.join(repoRoot, "pnpm-lock.yaml");
+        writeFileSync(
+          lockPath,
+          "---\nlockfileVersion: '9.0'\npackages:\n  toolchain@12.0.0:\n    hasBin: true\nsnapshots:\n  toolchain@12.0.0: {}\n---\n" +
+            readFileSync(lockPath, "utf8"),
+        );
+      }
+      const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
 
-    expect(report.summary).toEqual({
-      buildRiskPackageCount: 1,
-      importerCount: 1,
-      lockfilePackageCount: 4,
-      rootClosurePackageCount: 4,
-      rootDirectDependencyCount: 3,
-      rootOwnershipRecordCount: 2,
-    });
-    expect(report.ownershipGaps).toEqual(["missing-owner"]);
-    expect(report.topRootDependencyCones[0]).toEqual({
-      class: "core-runtime",
-      closureSize: 3,
-      missingSnapshotKeys: [],
-      name: "core-lib",
-      owner: "core:test",
-      resolved: "1.0.0",
-      risk: ["network"],
-      section: "dependencies",
-      sourceCategory: "unreferenced",
-      sourceFileCount: 0,
-      sourceSections: [],
-      specifier: "1.0.0",
-    });
-    expect(collectDependencyOwnershipSurfaceCheckErrors(report)).toEqual([
-      "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",
-    ]);
+      expect(report.summary).toEqual({
+        buildRiskPackageCount: withToolchain ? 2 : 1,
+        importerCount: 1,
+        lockfilePackageCount: withToolchain ? 5 : 4,
+        rootClosurePackageCount: 4,
+        rootDirectDependencyCount: 3,
+        rootOwnershipRecordCount: 2,
+      });
+      expect(report.ownershipGaps).toEqual(["missing-owner"]);
+      expect(report.topRootDependencyCones[0]).toEqual({
+        class: "core-runtime",
+        closureSize: 3,
+        missingSnapshotKeys: [],
+        name: "core-lib",
+        owner: "core:test",
+        resolved: "1.0.0",
+        risk: ["network"],
+        section: "dependencies",
+        sourceCategory: "unreferenced",
+        sourceFileCount: 0,
+        sourceSections: [],
+        specifier: "1.0.0",
+      });
+      expect(collectDependencyOwnershipSurfaceCheckErrors(report)).toEqual([
+        "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",
+      ]);
 
-    const markdown = renderDependencyOwnershipSurfaceMarkdownReport(report);
-    expect(markdown).toContain("# Dependency Ownership and Install Surface Report");
-    expect(markdown).toContain("## Target");
-    expect(markdown).toContain("## Scope");
-    expect(markdown).toContain("It does not query npm advisories");
-    expect(markdown).toContain("## Root Dependencies Missing Ownership Metadata");
-    expect(markdown).toContain("`missing-owner`");
-    expect(markdown).toContain("## Root Dependencies By Resolved Transitive Package Count");
-    expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
-    expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
-    expect(markdown).toContain("3 direct dependencies");
-    expect(markdown).not.toContain("dependencys");
-    expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
-    expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
-    expect(markdown).not.toContain("# Dependency Risk Report");
-    expect(markdown).not.toContain("Ownership gaps");
-    expect(markdown).not.toContain("Largest root dependency cones");
-    expect(markdown).not.toContain("## Root Dependencies With The Most Transitive Packages");
-  });
+      const markdown = renderDependencyOwnershipSurfaceMarkdownReport(report);
+      expect(markdown).toContain("# Dependency Ownership and Install Surface Report");
+      expect(markdown).toContain("## Target");
+      expect(markdown).toContain("## Scope");
+      expect(markdown).toContain("It does not query npm advisories");
+      expect(markdown).toContain("## Root Dependencies Missing Ownership Metadata");
+      expect(markdown).toContain("`missing-owner`");
+      expect(markdown).toContain("## Root Dependencies By Resolved Transitive Package Count");
+      expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
+      expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
+      expect(markdown).toContain("3 direct dependencies");
+      expect(markdown).not.toContain("dependencys");
+      expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
+      expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
+      expect(markdown).not.toContain("# Dependency Risk Report");
+      expect(markdown).not.toContain("Ownership gaps");
+      expect(markdown).not.toContain("Largest root dependency cones");
+      expect(markdown).not.toContain("## Root Dependencies With The Most Transitive Packages");
+    },
+  );
 
   it("does not mark plugin importer dependencies as stale ownership records", () => {
     const repoRoot = makeTempRepo();

@@ -46,6 +46,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
+    abortCleanup: Promise.resolve(),
     localCompletionRequested: false,
     terminalTurnNotificationQueued: false,
     // App-server collapses user interrupts and replacements to "interrupted";

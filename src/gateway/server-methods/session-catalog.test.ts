@@ -58,6 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 vi.mock("../../state/user-profiles.js", () => ({
+  getUserProfileRole: vi.fn(() => null),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
 const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
@@ -186,7 +187,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("single-flights identical concurrent lists and fans progress to active followers", async () => {
+  it("single-flights identical concurrent lists for one caller and fans progress to active followers", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -207,18 +208,19 @@ describe("session catalog Gateway methods", () => {
     const config = { agents: { list: [{ id: "main" }, { id: "research" }] } };
     const leaderBroadcast = vi.fn();
     const followerBroadcast = vi.fn();
+    const sharedClient = { connId: "requester" };
     const leader = startCall(
       "sessions.catalog.list",
       { progressId: "leader-progress", agentId: "main" },
       config,
-      { connId: "leader" },
+      sharedClient,
       { broadcastToConnIds: leaderBroadcast },
     );
     const follower = startCall(
       "sessions.catalog.list",
       { progressId: "follower-progress", agentId: "main" },
       config,
-      { connId: "follower" },
+      sharedClient,
       { broadcastToConnIds: followerBroadcast },
     );
     const otherAgent = startCall("sessions.catalog.list", { agentId: "research" }, config);
@@ -400,7 +402,11 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
-        createdActor: { type: "agent", id: "worker-1" },
+        createdActor: {
+          type: "agent",
+          id: "worker-1",
+          identity: { type: "agent", id: "worker-1" },
+        },
       }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
       expect.not.objectContaining({ createdActor: expect.anything() }),
@@ -423,7 +429,8 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
+    // One frozen adoption index, then one current index for each progress/final delivery.
+    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledTimes(3);
     expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledWith({
       agentId: "main",
       clone: false,
@@ -476,7 +483,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const catalogUsingNodes = (id: string) =>
@@ -503,7 +514,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const selectedList = vi.fn(async () => []);

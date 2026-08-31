@@ -45,6 +45,7 @@ export async function resolveStatusJsonOutput(params: {
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
+    configDiagnostics: scan.configDiagnostics,
     secretDiagnostics: scan.secretDiagnostics,
     securityAudit,
     health,

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import {
@@ -294,32 +295,9 @@ async function shouldReclaimGatewayLock(params: {
   }
 }
 
-function canonicalizeStateDir(stateDir: string): string {
-  const resolved = path.resolve(stateDir);
-  try {
-    return fsSync.realpathSync.native(resolved);
-  } catch {
-    const missingSegments: string[] = [];
-    let current = resolved;
-    while (true) {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(current));
-      current = parent;
-      try {
-        return path.join(fsSync.realpathSync.native(current), ...missingSegments.toReversed());
-      } catch {
-        // Keep walking so aliases in an existing ancestor still share one lock.
-      }
-    }
-  }
-}
-
 function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
-  const stateDir = canonicalizeStateDir(resolvedStateDir);
+  const stateDir = resolveIdentityPathViaExistingAncestorSync(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
   const configHash = sha256HexPrefixCore(configPath, 8);

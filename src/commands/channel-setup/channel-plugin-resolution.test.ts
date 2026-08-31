@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn(),
   getChannelPluginCatalogEntry: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
   createClackPrompter: vi.fn(() => ({}) as never),
@@ -26,6 +28,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
+  getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
   normalizeChannelId: (value: unknown) => (typeof value === "string" ? value.trim() || null : null),
 }));
 
@@ -78,12 +81,102 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 describe("resolveInstallableChannelPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
       cfg: {},
       installed: false,
     });
+  });
+
+  it("returns a registered plugin before resolving a multi-agent workspace owner", async () => {
+    const registeredPlugin = {
+      ...createPlugin("telegram"),
+      directory: { self: vi.fn() },
+    } as ChannelPlugin;
+    mocks.getLoadedChannelPlugin.mockReturnValue(registeredPlugin);
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: {
+        agents: {
+          list: [{ id: "alpha" }, { id: "beta" }],
+        },
+      },
+      runtime: {} as never,
+      rawChannel: "telegram",
+      allowInstall: true,
+      preferRegisteredPlugin: true,
+      supports: (plugin) => Boolean(plugin.directory),
+    });
+
+    expect(result).toMatchObject({
+      channelId: "telegram",
+      plugin: registeredPlugin,
+      configChanged: false,
+      pluginInstalled: false,
+      supportsRequestedCapability: true,
+    });
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+  });
+
+  it("requires a workspace owner before falling back to an unloaded bundled plugin", async () => {
+    mocks.getChannelPlugin.mockReturnValue(createPlugin("telegram"));
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    await expect(
+      resolveInstallableChannelPlugin({
+        cfg: {
+          agents: {
+            list: [{ id: "alpha" }, { id: "beta" }],
+          },
+        },
+        runtime: {} as never,
+        rawChannel: "telegram",
+        allowInstall: false,
+        preferRegisteredPlugin: true,
+      }),
+    ).rejects.toThrow("agent selection required");
+
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveDefaultAgentId).toHaveBeenCalledTimes(1);
+  });
+
+  it("still requires a workspace owner before resolving an unregistered plugin", async () => {
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    await expect(
+      resolveInstallableChannelPlugin({
+        cfg: {
+          agents: {
+            list: [{ id: "alpha" }, { id: "beta" }],
+          },
+        },
+        runtime: {} as never,
+        rawChannel: "workspace-channel",
+        allowInstall: false,
+        preferRegisteredPlugin: true,
+      }),
+    ).rejects.toThrow("agent selection required");
+
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("workspace-channel");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveDefaultAgentId).toHaveBeenCalledTimes(1);
+    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
   });
 
   it("ignores untrusted workspace channel shadows during setup resolution", async () => {
@@ -177,6 +270,44 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
   });
 
+  it("initializes a cold bundled plugin through the scoped snapshot before logout", async () => {
+    const runtimeStore = createPluginRuntimeStore<{ cleared: boolean; loggedOut: boolean }>(
+      "runtime not initialized",
+    );
+    const plugin: ChannelPlugin = {
+      ...createPlugin("telegram"),
+      gateway: { logoutAccount: async () => runtimeStore.getRuntime() },
+    };
+    mocks.getChannelPlugin.mockReturnValue(plugin);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry({ id: "telegram", pluginId: "telegram", origin: "bundled" }),
+    ]);
+    mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(() => {
+      runtimeStore.setRuntime({ cleared: true, loggedOut: true });
+      return { channels: [{ plugin }], channelSetups: [] };
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: {},
+      runtime: {} as never,
+      rawChannel: "telegram",
+      allowInstall: false,
+      supports: (candidate) => Boolean(candidate.gateway?.logoutAccount),
+    });
+
+    await expect(
+      result.plugin?.gateway?.logoutAccount?.({
+        cfg: result.cfg,
+        accountId: "default",
+        account: {},
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual({ cleared: true, loggedOut: true });
+    expect(result.configChanged).toBe(false);
+    expect(result.pluginInstalled).toBe(false);
+    expect(result.supportsRequestedCapability).toBe(true);
+  });
+
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
     const catalogEntry = createCatalogEntry({
       id: "openclaw-weixin",
@@ -186,7 +317,7 @@ describe("resolveInstallableChannelPlugin", () => {
     const installedPlugin = createPlugin("openclaw-weixin");
 
     mocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    mocks.getChannelPlugin.mockReturnValue(installedPlugin);
+    mocks.getLoadedChannelPlugin.mockReturnValue(installedPlugin);
 
     const result = await resolveInstallableChannelPlugin({
       cfg: { plugins: { enabled: true } },

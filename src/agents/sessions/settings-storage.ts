@@ -142,19 +142,17 @@ export class FileSettingsStorage implements SettingsStorage {
 
     let release: (() => void) | undefined;
     try {
-      // Only create directory and lock if file exists or we need to write
-      const fileExists = existsSync(path);
-      if (fileExists) {
+      const directoryExists = existsSync(dir);
+      if (directoryExists) {
         release = acquireFileLockSyncWithRetry(path);
       }
-      const current = fileExists ? readFileSync(path, "utf-8") : undefined;
+      // Missing-directory reads stay side-effect free. Concurrent external first creators
+      // remain unsupported because they can derive writes before a lock path exists.
+      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        // Only create directory when we actually need to write
-        if (!existsSync(dir)) {
+        if (!directoryExists) {
           mkdirSync(dir, { recursive: true });
-        }
-        if (!release) {
           release = acquireFileLockSyncWithRetry(path);
         }
         writeFileSync(path, next, "utf-8");

@@ -109,7 +109,7 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "", emoji: "🦊" },
           },
         }),
       ),
@@ -119,6 +119,7 @@ describe("renderAgents", () => {
     expect(
       container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
     ).toBe("Fetched Beta");
+    expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
   });
 
   it("shows a model-catalog failure and lets the operator retry", () => {
@@ -145,8 +146,8 @@ describe("renderAgents", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
-    const globalNextWakeAtMs = Date.now() + 60_000;
-    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const nextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
     render(
       renderAgents(
@@ -154,7 +155,7 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
             jobs: [job],
             jobsTotal: 1,
             jobsHasMore: false,
@@ -188,7 +189,7 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
       formatNextRun(scopedNextWakeAtMs),
     );
-    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -227,7 +228,7 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               jobs: cronState.cronJobs,
               jobsTotal: cronState.cronJobsTotal,
               jobsHasMore: cronState.cronJobsHasMore,

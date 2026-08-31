@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
   observeReplayMetadata,
 } from "./replay-state.js";
+import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
 import { dispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -74,7 +77,13 @@ function makeDispatchInput(
       fallbackActive: false,
       fallbackReason: null,
       agentHarnessId: "codex",
-      runtimePlan: {},
+      runtimePlan: {
+        resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
+        auth: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+        },
+      },
       model: {
         id: "gpt-5.6-luna",
         provider: "openai",
@@ -127,6 +136,65 @@ describe("embedded run retry dispatch", () => {
     mocks.settleRequesterAfterSessionSpawns.mockReset();
   });
 
+  it("forwards private commit accounting before queued notices and thrown attempt cleanup", async () => {
+    const flushStarted = createDeferred();
+    const flush = createDeferred();
+    const afterTurnError = new Error("after-turn cleanup failed");
+    const onContextAccountingEvent = vi.fn();
+    const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+    input.runtime.agentHarnessId = "openclaw";
+    input.control.pluginHarnessOwnsTransport = false;
+    Object.assign(input.params, { onContextAccountingEvent });
+    let subscription: ReturnType<typeof createSubscribedSessionHarness>["subscription"] | undefined;
+    mocks.runAttempt.mockImplementationOnce(async (attempt: EmbeddedRunAttemptInternalParams) => {
+      const harness = createSubscribedSessionHarness({
+        runId: attempt.runId,
+        sessionExtras: { messages: [] },
+        blockReplyBreak: "message_end",
+        onBlockReplyFlush: () => {
+          flushStarted.resolve();
+          return flush.promise;
+        },
+        onContextAccountingEvent: attempt.onContextAccountingEvent,
+      });
+      subscription = harness.subscription;
+      try {
+        harness.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Completed answer" }],
+            stopReason: "stop",
+          },
+        });
+        await flushStarted.promise;
+        // The mocked attempt reports its replacement hook before the public notice.
+        attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 40 });
+        harness.emit({
+          type: "compaction_end",
+          reason: "threshold",
+          outcome: { status: "completed", tokensBefore: 100, tokensAfter: 40, willRetry: false },
+        });
+        expect(subscription.getCompactionCount()).toBe(0);
+        throw afterTurnError;
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+
+    try {
+      await expect(dispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
+      expect(onContextAccountingEvent.mock.calls).toEqual([
+        [{ kind: "model", contextTokens: undefined }],
+        [{ kind: "compaction", tokensAfter: 40 }],
+      ]);
+    } finally {
+      flush.resolve();
+      await subscription?.waitForPendingEvents();
+      subscription?.unsubscribe();
+    }
+  });
+
   it("preserves caller-owned turn facts and unsafe replay state on the next attempt", async () => {
     const sessionManager = { owner: "caller" };
     const replayState = observeReplayMetadata(
@@ -168,6 +236,32 @@ describe("embedded run retry dispatch", () => {
     expect(uncapped.preparedAttempt.contextTokenBudget).toBe(272_000);
     expect(uncapped.preparedAttempt).not.toHaveProperty("authoredContextTokenCap");
   });
+
+  it.each([undefined, false, true])(
+    "preserves prepared GitHub publication capability (%s)",
+    async (githubPublicationAvailable) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.githubPublicationAvailable = githubPublicationAvailable;
+
+      const result = await dispatchEmbeddedRunAttempt(input);
+
+      expect(result.preparedAttempt.githubPublicationAvailable).toBe(githubPublicationAvailable);
+    },
+  );
+
+  it.each([undefined, "current-turn-tool-policy"])(
+    "preserves the supplied turn tool authority at dispatch (%s)",
+    async (toolAuthorityFingerprint) => {
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      input.params.toolAuthorityFingerprint = toolAuthorityFingerprint;
+
+      await dispatchEmbeddedRunAttempt(input);
+
+      expect(mocks.runAttempt.mock.calls[0]?.[0].toolAuthorityFingerprint).toBe(
+        toolAuthorityFingerprint,
+      );
+    },
+  );
 
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",

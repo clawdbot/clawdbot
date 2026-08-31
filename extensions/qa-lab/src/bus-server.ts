@@ -33,7 +33,10 @@ const QA_MALFORMED_JSON_BODY_MESSAGE = "Malformed JSON body";
 const qaBusConversationSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["direct", "channel", "group"]),
+    kind: z.preprocess(
+      (kind) => (kind === "dm" ? "direct" : kind),
+      z.enum(["direct", "channel", "group"]),
+    ),
     title: z.string().optional(),
   })
   .passthrough();

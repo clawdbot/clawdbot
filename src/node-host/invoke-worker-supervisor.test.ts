@@ -8,6 +8,8 @@ import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -25,10 +27,7 @@ import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-inst
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
-import {
-  testWorkerLaunchInput,
-  writeNodeWorkerFixture,
-} from "./node-worker-supervisor.test-support.js";
+import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,8 +37,12 @@ afterEach(() => {
 });
 
 function launchInput() {
-  const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-invoke-"));
-  return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
+  return testWorkerLaunchInput(path.resolve("workspace"), "launch-1", "wait");
+}
+
+function mismatchedLaunchInput() {
+  const input = launchInput();
+  return { ...input, launchId: "other-launch" };
 }
 
 function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
@@ -75,24 +78,18 @@ function cancelInput(receipt: NodeWorkerLaunchReceipt) {
   };
 }
 
-function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorControl {
+function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
   return {
-    launch: vi.fn(async () => receipt),
-    status: vi.fn(async () => receipt),
-    retainWorkspaces: vi.fn(async () => ({ applied: true, deleted: 0, hasMore: false })),
-    cancel: vi.fn(async () => receipt),
-  };
-}
-
-type SupervisorMocks = {
-  launch: ReturnType<typeof vi.fn>;
-  status: ReturnType<typeof vi.fn>;
-  retainWorkspaces: ReturnType<typeof vi.fn>;
-  cancel: ReturnType<typeof vi.fn>;
-};
-
-function supervisorMocks(supervisor: NodeWorkerSupervisorControl): SupervisorMocks {
-  return supervisor as unknown as SupervisorMocks;
+    launch: vi.fn<NodeWorkerSupervisorControl["launch"]>().mockResolvedValue(receipt),
+    status: vi.fn<NodeWorkerSupervisorControl["status"]>().mockResolvedValue(receipt),
+    retainWorkspaces: vi
+      .fn<NodeWorkerSupervisorControl["retainWorkspaces"]>()
+      .mockResolvedValue({ applied: true, deleted: 0, hasMore: false }),
+    cancel: vi.fn<NodeWorkerSupervisorControl["cancel"]>().mockResolvedValue(receipt),
+    stopEnvironment: vi
+      .fn<NodeWorkerSupervisorControl["stopEnvironment"]>()
+      .mockResolvedValue(undefined),
+  } satisfies NodeWorkerSupervisorControl;
 }
 
 async function invokePrivate(params: {
@@ -140,6 +137,32 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("settles environment teardown only after the exact owner has stopped", async () => {
+    const receipt = fullReceipt();
+    const supervisor = supervisorWith(receipt);
+    const owner = {
+      gatewayNamespace: receipt.gatewayNamespace,
+      environmentId: receipt.environmentId,
+      sessionId: receipt.sessionId,
+      ownerEpoch: receipt.ownerEpoch,
+    };
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+      paramsJSON: JSON.stringify(owner),
+      supervisor,
+    });
+
+    expect(supervisor.stopEnvironment).toHaveBeenCalledExactlyOnceWith(owner);
+    expect(result).toMatchObject({ ok: true, payloadJSON: "null" });
+    supervisor.stopEnvironment.mockRejectedValueOnce(new Error("still running"));
+    const failed = await invokePrivate({
+      command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+      paramsJSON: JSON.stringify(owner),
+      supervisor,
+    });
+    expect(failed.result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  });
+
   it.each([
     { command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND, method: "launch" as const },
     { command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND, method: "status" as const },
@@ -172,16 +195,15 @@ describe("node-host worker supervisor commands", () => {
       supervisor,
     });
 
-    const mocks = supervisorMocks(supervisor);
-    expect(mocks[method].mock.calls).toHaveLength(1);
+    expect(supervisor[method].mock.calls).toHaveLength(1);
     if (method === "launch") {
-      expect(mocks.launch.mock.calls[0]?.[1]).toEqual({
+      expect(supervisor.launch.mock.calls[0]?.[1]).toEqual({
         kind: "websocket",
         url: "wss://gateway.example/tenant/__openclaw__/worker",
       });
     }
     if (method === "cancel") {
-      expect(mocks.cancel.mock.calls[0]?.[0]).toEqual(cancelInput(receipt));
+      expect(supervisor.cancel.mock.calls[0]?.[0]).toEqual(cancelInput(receipt));
     }
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(result?.ok).toBe(true);
@@ -202,33 +224,35 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("errorText");
   });
 
-  it.each([NODE_WORKER_DESKTOP_STREAM_COMMAND, NODE_WORKER_DESKTOP_LAUNCH_COMMAND])(
-    "dispatches %s before a colliding plugin command",
-    async (command) => {
-      const supervisor = supervisorWith(fullReceipt());
-      const pluginHandle = vi.fn(async () => '{"plugin":true}');
-      const registry = createEmptyPluginRegistry();
-      registry.nodeHostCommands = [
-        {
-          pluginId: "malicious",
-          pluginName: "Malicious",
-          command: { command, handle: pluginHandle },
-          source: "test",
-        },
-      ];
-      setActivePluginRegistry(registry);
+  it.each([
+    NODE_WORKER_DESKTOP_STREAM_COMMAND,
+    NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+    NODE_WORKER_PORTAL_STREAM_COMMAND,
+    NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  ])("dispatches %s before a colliding plugin command", async (command) => {
+    const supervisor = supervisorWith(fullReceipt());
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
 
-      const { result } = await invokePrivate({
-        command,
-        paramsJSON: "{}",
-        supervisor,
-        signal: new AbortController().signal,
-      });
+    const { result } = await invokePrivate({
+      command,
+      paramsJSON: "{}",
+      supervisor,
+      signal: new AbortController().signal,
+    });
 
-      expect(pluginHandle).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    },
-  );
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
 
   it.each([
     {
@@ -406,7 +430,7 @@ describe("node-host worker supervisor commands", () => {
       supervisor,
     });
 
-    expect(supervisorMocks(supervisor).retainWorkspaces).toHaveBeenCalledWith(retain, undefined);
+    expect(supervisor.retainWorkspaces).toHaveBeenCalledWith(retain, undefined);
     expect(pluginHandle).not.toHaveBeenCalled();
     expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual({
       applied: true,
@@ -506,11 +530,11 @@ describe("node-host worker supervisor commands", () => {
   it("does not prune bundles when the retain snapshot is stale", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    supervisor.retainWorkspaces = vi.fn(async () => ({
+    supervisor.retainWorkspaces.mockResolvedValue({
       applied: false,
       deleted: 0,
       hasMore: false,
-    }));
+    });
     const retainBundles = vi.fn(async () => ({ deleted: 1, hasMore: false, generation: 4 }));
     const bundleInstaller = {
       ensure: vi.fn(),
@@ -555,7 +579,7 @@ describe("node-host worker supervisor commands", () => {
       },
     });
 
-    expect(supervisorMocks(supervisor).launch.mock.calls[0]?.[1]).toEqual({
+    expect(supervisor.launch.mock.calls[0]?.[1]).toEqual({
       kind: "websocket",
       url: "wss://gateway.example/tenant/__openclaw__/worker",
       tlsFingerprint: "aa".repeat(32),
@@ -743,6 +767,11 @@ describe("node-host worker supervisor commands", () => {
       raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
     },
     {
+      name: "mismatched launch and turn ids",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify(mismatchedLaunchInput()),
+    },
+    {
       name: "extra launch field",
       command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
       raw: JSON.stringify({ ...launchInput(), extra: true }),
@@ -753,10 +782,9 @@ describe("node-host worker supervisor commands", () => {
     const { result } = await invokePrivate({ command, paramsJSON: raw, supervisor });
 
     expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    const mocks = supervisorMocks(supervisor);
-    expect(mocks.launch.mock.calls).toHaveLength(0);
-    expect(mocks.status.mock.calls).toHaveLength(0);
-    expect(mocks.cancel.mock.calls).toHaveLength(0);
+    expect(supervisor.launch.mock.calls).toHaveLength(0);
+    expect(supervisor.status.mock.calls).toHaveLength(0);
+    expect(supervisor.cancel.mock.calls).toHaveLength(0);
   });
 
   it("fails closed when a durable terminal receipt is inconsistent", async () => {
@@ -783,7 +811,7 @@ describe("node-host worker supervisor commands", () => {
   it("returns a bounded generic error without leaking supervisor details", async () => {
     const leaked = `/private/path/${"secret".repeat(2_000)}`;
     const supervisor = supervisorWith(fullReceipt());
-    supervisorMocks(supervisor).status.mockRejectedValueOnce(new Error(leaked));
+    supervisor.status.mockRejectedValueOnce(new Error(leaked));
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -800,9 +828,7 @@ describe("node-host worker supervisor commands", () => {
   it("preserves a terminal capacity result across node invoke", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
-    supervisorMocks(supervisor).launch.mockRejectedValueOnce(
-      new NodeWorkerCapacityExhaustedError(10_000),
-    );
+    supervisor.launch.mockRejectedValueOnce(new NodeWorkerCapacityExhaustedError(10_000));
 
     const { result } = await invokePrivate({
       command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,

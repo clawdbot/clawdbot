@@ -10,6 +10,7 @@ import {
   handleAgentStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -185,9 +186,10 @@ describe("handleAgentEnd", () => {
     );
   });
 
-  it("keeps explicit session and agent identity on lifecycle start events", () => {
+  it("keeps identity and the same observed start time on the bus and callback", () => {
     emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
     ctx.params.sessionId = "session-1";
     ctx.params.agentId = "main";
 
@@ -200,6 +202,12 @@ describe("handleAgentEnd", () => {
       agentId: "main",
       stream: "lifecycle",
       data: expect.objectContaining({ phase: "start" }),
+    });
+    const event = emitAgentEventMock.mock.calls[0]?.[0];
+    expect(event.data.startedAt).toEqual(expect.any(Number));
+    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+      stream: "lifecycle",
+      data: event.data,
     });
   });
 
@@ -811,36 +819,6 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("keeps a recovery-only token-limited terminal working", async () => {
-    const onAgentEvent = vi.fn();
-    const onBeforeTerminalDelivery = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [],
-      },
-      { onAgentEvent, onBeforeTerminalDelivery },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-    ctx.state.lastToolRecovery = { toolName: "write" };
-
-    await handleAgentEnd(ctx);
-
-    expect(onBeforeTerminalDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ incompleteTerminalAssistant: false }),
-    );
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
   it("preserves token-limited terminal tool media before runner finalization", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(
@@ -967,6 +945,9 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    vi.mocked(ctx.emitBlockReply).mockImplementation(
+      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+    );
 
     await handleAgentEnd(ctx);
 

@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -8,6 +9,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { ConnectionPage, supportsSystemInfo } from "./connection-page.ts";
 
 function deferred<T>() {
@@ -35,6 +37,40 @@ describe("supportsSystemInfo", () => {
     expect(supportsSystemInfo(hello)).toBe(true);
     expect(supportsSystemInfo(unsupportedHello)).toBe(false);
     expect(supportsSystemInfo(null)).toBe(false);
+  });
+});
+
+describe("ConnectionPage credentials", () => {
+  it("re-scopes credentials when the Gateway URL changes", () => {
+    const page = new ConnectionPage();
+    const state = page as unknown as {
+      settings: ReturnType<typeof loadSettings>;
+      password: string;
+      context: ApplicationContext;
+      render: () => ReturnType<ConnectionPage["render"]>;
+    };
+    state.settings = {
+      ...loadSettings(),
+      gatewayUrl: "wss://gateway.example/openclaw",
+      token: "old-token",
+    };
+    state.password = "old-password";
+    state.context = {
+      gateway: { snapshot: { phase: "stopped", hello: null, lastError: null } },
+      channels: { state: { channelsLastSuccess: null } },
+    } as unknown as ApplicationContext;
+    const container = document.createElement("div");
+    render(state.render(), container);
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="WebSocket URL"]');
+    if (!input) {
+      throw new Error("expected Gateway URL input");
+    }
+
+    input.value = "wss://other-gateway.example/openclaw";
+    input.dispatchEvent(new Event("input"));
+
+    expect(state.settings.token).toBe("");
+    expect(state.password).toBe("");
   });
 });
 

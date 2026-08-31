@@ -16,8 +16,8 @@ const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
     case "message":
-      // Private shell history stays persisted but never enters replay or summarization.
-      return entry.message.role === "bashExecution" && entry.message.excludeFromContext === true
+      // Display-only history stays persisted but never enters replay or summarization.
+      return "excludeFromContext" in entry.message && entry.message.excludeFromContext === true
         ? undefined
         : entry.message;
     case "custom_message":

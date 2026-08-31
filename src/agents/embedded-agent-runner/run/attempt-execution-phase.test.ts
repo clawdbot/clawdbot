@@ -40,7 +40,9 @@ vi.mock("./attempt-timeout-prepare.js", () => ({
   prepareEmbeddedAttemptTimeout: mocks.prepareTimeout,
 }));
 
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
+import type { EmbeddedContextAccountingEvent } from "./internal-params.js";
 
 type ExecutionInput = Parameters<typeof runEmbeddedAttemptExecutionPhase>[0];
 
@@ -72,7 +74,9 @@ function createFixture(
     getRunAbortDeadlineAtMs: vi.fn(() => 123),
     clearTimers: vi.fn(),
   };
+  const setContextReplacementHook = vi.fn();
   const activeSession = {
+    [agentSessionSetContextReplacementHook]: setContextReplacementHook,
     agent: { streamFn: vi.fn() },
     dispose: vi.fn(),
     isCompacting: false,
@@ -97,13 +101,13 @@ function createFixture(
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
+  const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
   const sessionRuntime = {
     agentSession: {
       activeSession,
       allCustomTools: [{ name: "custom" }],
       builtinToolNames: new Set(["read"]),
       clientToolCallSlots: [],
-      clientToolLoopDetection: {},
       hasDeliveredSourceReply: vi.fn(() => false),
       hookRunner: {},
       markSourceReplyDelivered: vi.fn(),
@@ -146,7 +150,7 @@ function createFixture(
       bundleTools: {},
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { toolSearchTargetTranscriptProjections: new Map() },
+      toolBase: { skillInstructionDeliveryCache, nestedToolActivities: new Map() },
       toolCatalog: {
         toolSearchRunPlan: {
           capabilityToolNames: new Set(["read"]),
@@ -241,6 +245,8 @@ function createFixture(
     result,
     runAbort,
     sessionManager,
+    setContextReplacementHook,
+    skillInstructionDeliveryCache,
     setToolSearchCatalogExecutor,
     state,
     streamResult,
@@ -262,6 +268,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const result = await runEmbeddedAttemptExecutionPhase(fixture.input);
 
     expect(result).toBe(fixture.result);
+    expect(fixture.setContextReplacementHook).toHaveBeenCalledOnce();
+    const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
+    expect(replacementHook).toEqual(expect.any(Function));
+    replacementHook?.(40);
+    expect(fixture.skillInstructionDeliveryCache.size).toBe(0);
     expect(fixture.order).toEqual([
       "guards",
       "stream-ready",
@@ -343,6 +354,34 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
     expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
     expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
+  });
+
+  it("publishes the replacement fact and invalidates the skill cache before attempt cleanup throws", async () => {
+    const fixture = createFixture({ exerciseTerminalMerges: false });
+    const events: EmbeddedContextAccountingEvent[] = [];
+    Object.assign(fixture.input.attempt, {
+      onContextAccountingEvent: (event: EmbeddedContextAccountingEvent) => {
+        events.push(event);
+      },
+    });
+    const cleanupError = new Error("attempt cleanup failed after compaction committed");
+    let eventsBeforeCleanup: EmbeddedContextAccountingEvent[] | undefined;
+    let cacheSizeBeforeCleanup: number | undefined;
+    mocks.runSettledPhase.mockImplementationOnce(async () => {
+      const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
+      if (typeof replacementHook !== "function") {
+        throw new Error("expected the attempt-owned context replacement hook");
+      }
+      replacementHook(40);
+      eventsBeforeCleanup = [...events];
+      cacheSizeBeforeCleanup = fixture.skillInstructionDeliveryCache.size;
+      throw cleanupError;
+    });
+
+    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toBe(cleanupError);
+
+    expect(eventsBeforeCleanup).toEqual([{ kind: "compaction", tokensAfter: 40 }]);
+    expect(cacheSizeBeforeCleanup).toBe(0);
   });
 
   it("does not start a prompt after external cancellation", async () => {

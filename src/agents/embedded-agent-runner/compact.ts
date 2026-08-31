@@ -144,9 +144,13 @@ export async function compactNativeCliSession(params: {
       ...(params.compactParams.sessionEntry
         ? { sessionEntry: params.compactParams.sessionEntry }
         : {}),
+      contextWindow: params.compactParams.sessionEntry?.contextWindow,
       trigger: "manual",
       controlOperation: "compact",
       disableCliLiveSession: true,
+      // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
+      // after the control turn so the next user turn reloads the compacted conversation.
+      cleanupCliLiveSessionOnRunEnd: true,
       allowEmptyAssistantReplyAsSilent: true,
       abortSignal: params.compactParams.abortSignal,
     });

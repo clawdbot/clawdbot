@@ -180,6 +180,21 @@ describe("exec authorization renderer", () => {
     expect(command).toBe("cd .");
   });
 
+  it("rejects shell expansion in safe builtins without rewriting them", async () => {
+    const plan = await planShellAuthorization({
+      command: "true *.txt && head -n 1",
+      env: POSIX_ENV,
+    });
+
+    expect(
+      buildAuthorizedShellCommandFromPlan({
+        plan,
+        mode: "enforced",
+        segmentSatisfiedBy: ["safeBuiltins", "allowlist"],
+      }),
+    ).toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+  });
+
   it("rewrites quoted POSIX executable source spans", async () => {
     const plan = await planShellAuthorization({
       command: '"head" -c 16',

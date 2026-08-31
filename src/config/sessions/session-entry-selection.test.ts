@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { inheritSessionSelection, SessionLabelOwnerIndex } from "./session-entry-selection.js";
-import type { InternalSessionEntry, SessionEntry } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 describe("inheritSessionSelection", () => {
   it("inherits canonical user and automatic provenance without the old generation", () => {
@@ -10,18 +10,11 @@ describe("inheritSessionSelection", () => {
         updatedAt: 1,
         authProfileOverride: "openai:work",
         thinkingLevel: "ultra",
-        thinkingLevelSelection: {
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentRuntime: "codex",
-          level: "ultra",
-        },
-      } as InternalSessionEntry),
+      }),
     ).toMatchObject({
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
       thinkingLevel: "ultra",
-      thinkingLevelSelection: { model: "gpt-5.6-sol", level: "ultra" },
     });
 
     const automatic = inheritSessionSelection({
@@ -36,6 +29,37 @@ describe("inheritSessionSelection", () => {
     });
     expect(automatic.authProfileOverrideCompactionCount).toBeUndefined();
   });
+  it.each([
+    { source: "auto" as const, profile: "google-vertex:fallback", inheritedProfile: undefined },
+    { source: "user" as const, profile: "openai:work", inheritedProfile: "openai:work" },
+  ])(
+    "drops fallback model state while preserving only $source auth intent",
+    ({ source, profile, inheritedProfile }) => {
+      const inherited = inheritSessionSelection({
+        sessionId: "legacy-auto-model",
+        updatedAt: 1,
+        providerOverride: "google-vertex",
+        modelOverride: "gemini-fallback",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "gpt-primary",
+        agentRuntimeOverride: "vertex-runtime",
+        contextWindow: "1m",
+        authProfileOverride: profile,
+        authProfileOverrideSource: source,
+        thinkingLevel: "high",
+      });
+
+      expect(inherited.providerOverride).toBeUndefined();
+      expect(inherited.modelOverride).toBeUndefined();
+      expect(inherited.modelOverrideSource).toBeUndefined();
+      expect(inherited.agentRuntimeOverride).toBeUndefined();
+      expect(inherited.contextWindow).toBe("1m");
+      expect(inherited.authProfileOverride).toBe(inheritedProfile);
+      expect(inherited.authProfileOverrideSource).toBe(inheritedProfile ? "user" : undefined);
+      expect(inherited.thinkingLevel).toBe("high");
+    },
+  );
 });
 
 describe("SessionLabelOwnerIndex", () => {

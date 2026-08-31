@@ -27,6 +27,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
+  isAnthropicOAuthApiKey,
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
 } from "../providers/anthropic-auth-headers.js";
@@ -81,7 +82,11 @@ import {
 } from "../providers/tool-result-text.js";
 import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   buildAnthropicReplayPlan,
@@ -102,12 +107,14 @@ import {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   coerceTransportToolCallArguments,
+  copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
   transportAbortError,
@@ -118,7 +125,6 @@ import {
   parseRetryAfterSeconds,
   readResponseTextSnippet,
   resolveModelHeaderSentinels,
-  resolveSecretSentinel,
 } from "./transport-utils.js";
 
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -144,7 +150,10 @@ type AnthropicMessagesClient = {
     stream(
       params: Record<string, unknown>,
       options?: { signal?: AbortSignal },
-    ): AsyncIterable<Record<string, unknown>>;
+    ): Promise<{
+      response: Response;
+      stream: AsyncIterable<Record<string, unknown>> | Iterable<Record<string, unknown>>;
+    }>;
   };
 };
 
@@ -217,12 +226,6 @@ function resolveAnthropicMessagesMaxTokens(params: {
           Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
         ),
       );
-}
-
-function isAnthropicOAuthToken(apiKey: string): boolean {
-  // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
-  const resolved = resolveSecretSentinel(apiKey);
-  return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -742,7 +745,7 @@ function createAnthropicMessagesClient(params: {
   const url = resolveAnthropicMessagesUrl(params.baseURL);
   return {
     messages: {
-      async *stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+      async stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         const headers = mergeTransportHeaders(
           {
             "content-type": "application/json",
@@ -758,14 +761,10 @@ function createAnthropicMessagesClient(params: {
           body: JSON.stringify(body),
           signal: options?.signal,
         });
-        if (!response.ok) {
-          const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(formatAnthropicMessagesHttpError(response, detail));
-        }
-        if (!response.body) {
-          return;
-        }
-        yield* parseAnthropicSseBody(response.body, options?.signal);
+        return {
+          response,
+          stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
+        };
       },
     },
   };
@@ -867,7 +866,7 @@ function createAnthropicTransportClient(params: {
   if (needsInterleavedBeta) {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
-  if (isAnthropicOAuthToken(apiKey)) {
+  if (isAnthropicOAuthApiKey(apiKey)) {
     const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
       client: createAnthropicMessagesClient({
@@ -1085,7 +1084,7 @@ function resolveAnthropicTransportOptions(
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const reasoning =
     options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;
-  const resolved: AnthropicTransportOptions = {
+  const resolved: AnthropicTransportOptions = copyProviderAcceptanceObserver(options, {
     temperature: options?.temperature,
     stop: options?.stop,
     maxTokens: baseMaxTokens,
@@ -1095,6 +1094,7 @@ function resolveAnthropicTransportOptions(
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,
+    onResponse: options?.onResponse,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
@@ -1103,7 +1103,7 @@ function resolveAnthropicTransportOptions(
     reasoning,
     ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
-  };
+  });
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
     return resolved;
@@ -1192,12 +1192,22 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const anthropicStream = client.messages.stream(
+        const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
+        await notifyProviderHttpResponse({ options: transportOptions, response, model });
+        if (!response.ok) {
+          const detail = await readAnthropicMessagesErrorBodySnippet(response);
+          throw new Error(formatAnthropicMessagesHttpError(response, detail));
+        }
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        // Preview schedules are per active tool call; WeakMap keys die with the block.
+        const toolArgumentPreviewSchedules = new WeakMap<
+          Extract<TransportContentBlock, { type: "toolCall" }>,
+          ToolArgumentPreviewSchedule
+        >();
         const sealedToolCalls: Array<{
           block: Extract<TransportContentBlock, { type: "toolCall" }>;
           contentIndex: number;
@@ -1514,6 +1524,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               };
               output.content.push(block);
               blockIndexes.set(index, output.content.length - 1);
+              toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
@@ -1618,7 +1629,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             ) {
               const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
               block.partialJson = partialJson;
-              block.arguments = parseAnthropicToolCallArguments(partialJson);
+              // Preview refresh is scheduled geometrically; content_block_stop
+              // re-parses the full buffer authoritatively either way.
+              if (toolArgumentPreviewSchedules.get(block)?.(partialJson.length)) {
+                block.arguments = parseAnthropicToolCallArguments(partialJson);
+              }
               eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,

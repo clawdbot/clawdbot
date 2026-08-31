@@ -2051,11 +2051,11 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
-      "@wecom/wecom-openclaw-plugin@2026.5.7",
+      "@wecom/wecom-openclaw-plugin@2026.7.2",
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.15.0",
+      "openclaw-plugin-yuanbao@2.18.2",
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
     expect(qqbotByPlugin).toBe(qqbotByChannel);
@@ -2600,6 +2600,24 @@ describe("official external plugin catalog", () => {
       optionKey: "tokenplanApiKey",
       cliFlag: "--tokenplan-api-key",
     });
+  });
+
+  it("keeps the shared OpenRouter onboarding flag with its provider", () => {
+    const arceeChoices = expectCatalogEntry("arcee").openclaw?.providers?.find(
+      (provider) => provider.id === "arcee",
+    )?.authChoices;
+    const directChoice = arceeChoices?.find((choice) => choice.choiceId === "arceeai-api-key");
+    const openRouterChoice = arceeChoices?.find(
+      (choice) => choice.choiceId === "arceeai-openrouter",
+    );
+
+    expect(directChoice).toMatchObject({
+      optionKey: "arceeaiApiKey",
+      cliFlag: "--arceeai-api-key",
+    });
+    expect(openRouterChoice).toMatchObject({ optionKey: "openrouterApiKey" });
+    expect(openRouterChoice).not.toHaveProperty("cliFlag");
+    expect(openRouterChoice).not.toHaveProperty("cliOption");
   });
 
   it("keeps Groq available through the cold-install auth catalog", () => {

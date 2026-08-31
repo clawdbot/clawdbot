@@ -9,6 +9,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
 import {
+  createSessionListEntryFilter,
   resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
@@ -85,6 +86,69 @@ async function invoke(params: {
   return { authorization, requestContext, responses };
 }
 
+describe("sessions.patch", () => {
+  it("keeps a newly created session visible to its identified non-admin creator", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profileId = ensureProfileForEmail("patch-creator@example.test").id;
+      const sessionKey = "agent:main:patch-created";
+      const requestClient = client(profileId);
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+      const requestContext = context(cfg);
+      const patch = async (pinned: boolean) => {
+        const request = { key: sessionKey, pinned };
+        const authorization = resolveSessionMutationAuthorization({
+          client: requestClient,
+          method: "sessions.patch",
+          requestParams: request,
+          context: requestContext,
+        });
+        expect(authorization.error).toBeNull();
+        const respond = vi.fn();
+        await sessionMutationHandlers["sessions.patch"]?.({
+          params: request,
+          client: requestClient,
+          context: requestContext,
+          sessionMutationAuthorization: authorization.authorization,
+          respond,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      };
+
+      await patch(true);
+      const entry = loadSessionEntry({ agentId: "main", env: state.env, sessionKey });
+      expect(entry).toMatchObject({
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: profileId },
+        createdAt: expect.any(Number),
+      });
+      if (!entry) {
+        throw new Error("expected patch-created session entry");
+      }
+      expect(
+        createSessionListEntryFilter({ client: requestClient, cfg })?.(sessionKey, entry),
+      ).toBe(true);
+
+      await patch(false);
+      expect(
+        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.pinnedAt,
+      ).toBeUndefined();
+    });
+  });
+});
+
 describe("sessions.assignOwner", () => {
   it("records the trusted in-process agent tool caller as the assigning agent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -95,7 +159,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -148,7 +212,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -233,7 +297,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-private-handoff",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       const cfg = {
@@ -300,7 +364,7 @@ describe("sessions.assignOwner", () => {
           sessionId: "session-private-handoff",
           updatedAt: 2,
           visibility: "shared",
-          createdActor: { type: "human", id: "profile-creator" },
+          createdActor: { type: "human", source: "profile", id: "profile-creator" },
         },
       );
       for (const owner of [

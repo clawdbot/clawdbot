@@ -1,5 +1,3 @@
-import type { SessionThinkingLevelSelection } from "./thinking-level-selection.js";
-
 export type AgentPatchedSessionModelFallback = {
   prevModel: string;
   prevProvider: string;
@@ -12,14 +10,11 @@ export type AgentPatchedSessionModelFallback = {
   prevAuthProfileOverride?: string;
   prevAuthProfileOverrideSource?: "auto" | "user";
   prevAuthProfileOverrideCompactionCount?: number;
+  prevContextWindow?: string;
   prevThinkingLevel?: string;
   lastValidatedPatchTs?: number;
   ts: number;
   source: "agent-patch";
-};
-
-export type InternalAgentPatchedSessionModelFallback = AgentPatchedSessionModelFallback & {
-  prevThinkingLevelSelection?: SessionThinkingLevelSelection;
 };
 
 export function createAgentPatchedSessionModelFallback(params: {
@@ -35,11 +30,11 @@ export function createAgentPatchedSessionModelFallback(params: {
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user";
     authProfileOverrideCompactionCount?: number;
+    contextWindow?: string;
     thinkingLevel?: string;
-    thinkingLevelSelection?: SessionThinkingLevelSelection;
   };
   ts: number;
-}): InternalAgentPatchedSessionModelFallback {
+}): AgentPatchedSessionModelFallback {
   const { entry } = params;
   return {
     prevModel: params.model,
@@ -63,10 +58,8 @@ export function createAgentPatchedSessionModelFallback(params: {
     ...(entry.authProfileOverrideCompactionCount !== undefined
       ? { prevAuthProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount }
       : {}),
+    ...(entry.contextWindow ? { prevContextWindow: entry.contextWindow } : {}),
     ...(entry.thinkingLevel ? { prevThinkingLevel: entry.thinkingLevel } : {}),
-    ...(entry.thinkingLevelSelection
-      ? { prevThinkingLevelSelection: { ...entry.thinkingLevelSelection } }
-      : {}),
     ts: params.ts,
     source: "agent-patch",
   };

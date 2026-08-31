@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 
 /**
  * Shared channel MCP contracts and normalization helpers.
@@ -133,6 +134,25 @@ export type WaitFilter = {
   sessionKey?: string;
 };
 
+/** Retained queue boundary reported when a requested cursor can no longer be replayed. */
+export type EventCursorGap = {
+  requested_after_cursor: number;
+  oldest_available_cursor: number;
+};
+
+/** Closed result for one bounded event poll. */
+export type EventPollResult = {
+  events: QueueEvent[];
+  nextCursor: number;
+  gap?: EventCursorGap;
+};
+
+/** Closed result for one event wait, including timeout, close, or cursor-gap outcomes. */
+export type EventWaitResult = {
+  event: QueueEvent | null;
+  gap?: EventCursorGap;
+};
+
 /** Raw MCP notification schema emitted by Claude channel clients for permission prompts. */
 export const ClaudePermissionRequestSchema = z.object({
   method: z.literal("notifications/claude/channel/permission_request"),
@@ -221,21 +241,27 @@ export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean
   return "sessionKey" in event && event.sessionKey === filter.sessionKey;
 }
 
-/** Return non-text content blocks from a raw message payload. */
+/** Return non-text content blocks plus canonical persisted media from a raw message payload. */
 export function extractAttachmentsFromMessage(message: unknown): unknown[] {
   if (!message || typeof message !== "object") {
     return [];
   }
   const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    return toText((entry as { type?: unknown }).type) !== "text";
-  });
+  const contentAttachments = Array.isArray(content)
+    ? content.filter((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return false;
+        }
+        return toText((entry as { type?: unknown }).type) !== "text";
+      })
+    : [];
+  const mediaAttachments = (readPersistedMediaFacts(message) ?? [])
+    .filter(isMeaningfulMediaFact)
+    .map((media) => ({
+      type: "openclaw_media" as const,
+      media: Object.fromEntries(Object.entries(media).filter(([, value]) => value !== undefined)),
+    }));
+  return [...contentAttachments, ...mediaAttachments];
 }
 
 /** Normalize approval identifiers before local tracking or resolution. */

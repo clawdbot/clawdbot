@@ -67,10 +67,10 @@ async function waitForCronRunCompletion(params: {
   pollIntervalMs: number;
 }): Promise<CronRunLogEntryResult> {
   // Poll the task ledger rather than cron.run because completion state is written asynchronously.
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let hasPolled = false;
   for (;;) {
-    const elapsedBeforePollMs = Date.now() - startedAt;
+    const elapsedBeforePollMs = Math.floor(performance.now() - startedAt);
     if (hasPolled && elapsedBeforePollMs >= params.timeoutMs) {
       throw new Error(`timed out waiting for cron run ${params.runId}`);
     }
@@ -91,7 +91,7 @@ async function waitForCronRunCompletion(params: {
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
       return entry;
     }
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = Math.floor(performance.now() - startedAt);
     if (elapsedMs >= params.timeoutMs) {
       throw new Error(`timed out waiting for cron run ${params.runId}`);
     }

@@ -55,7 +55,6 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
-import { updateSessionThinkingLevelSelection } from "../session-thinking-level-selection.js";
 import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
@@ -610,12 +609,6 @@ export async function resolveEmbeddedModelSelection(params: {
       lastInteractionAt: now,
       thinkingLevel: params.thinkOverride,
     };
-    updateSessionThinkingLevelSelection(next, {
-      provider,
-      model,
-      agentRuntime: thinkingRuntime,
-      level: params.thinkOverride,
-    });
     sessionEntry =
       (await persistAgentSession({
         sessionStore: params.sessionStore,

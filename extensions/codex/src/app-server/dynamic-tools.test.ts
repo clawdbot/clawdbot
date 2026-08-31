@@ -541,13 +541,10 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(response.terminalResolution?.lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_store"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_store"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I'll remember");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",
@@ -587,13 +584,10 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(response.terminalResolution?.lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I forgot");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",

@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชท"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เซสชัน"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โมเดล"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ก่อนหน้า"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ถัดไป"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การควบคุม"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูด"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เสียงจากนาฬิกาล้มเหลว"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เริ่มการสนทนา"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูดหรือพิมพ์บนนาฬิกาของคุณ โทรศัพท์ที่จับคู่ไว้จะส่งข้อความผ่านเซสชัน OpenClaw ที่ผ่านการยืนยันตัวตน"</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เซสชันปัจจุบัน"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ปิด"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ค้นหา"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ค้นหาเซสชัน"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ค้นหาโมเดล"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"โหลดเพิ่มเติม"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ใช้งานบนโทรศัพท์"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"เปิดบนนาฬิกา"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ไม่พบรายการที่ตรงกัน"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ค้นหาเซสชัน"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ค้นหาโมเดล"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รูปลักษณ์"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"มืด"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"สว่าง"</string>

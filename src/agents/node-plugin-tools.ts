@@ -5,11 +5,16 @@ import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
 } from "../infra/node-commands.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -40,30 +45,19 @@ function mapMcpPayloadToAgentToolResult(
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  const projected = projectMcpCallToolResult(payload, {
+  const textContent =
+    payload.structuredContent === undefined && Array.isArray(payload.content)
+      ? payload.content.flatMap((block) =>
+          isRecord(block) && block.type === "text" && typeof block.text === "string"
+            ? [{ type: "text" as const, text: block.text }]
+            : [],
+        )
+      : [];
+  return projectMcpCallToolResult(payload, {
     mcpServer: mcp.server,
     mcpTool: mcp.tool,
+    ...(textContent.length > 0 ? { content: textContent } : {}),
   });
-  if (payload.structuredContent !== undefined || !isRecord(projected.details)) {
-    return projected;
-  }
-  const textContent = Array.isArray(payload.content)
-    ? payload.content.flatMap((block) =>
-        isRecord(block) && block.type === "text" && typeof block.text === "string"
-          ? [{ type: "text" as const, text: block.text }]
-          : [],
-      )
-    : [];
-  if (textContent.length === 0) {
-    return projected;
-  }
-  return {
-    ...projected,
-    details: {
-      ...projected.details,
-      content: textContent,
-    },
-  };
 }
 
 function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {
@@ -114,19 +108,6 @@ function describeNodeToolLocation(params: {
   return `${params.description} (node: ${label})`;
 }
 
-function sanitizeToolNameFragment(value: string): string {
-  const fragment = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  if (!fragment) {
-    return "node";
-  }
-  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
-}
-
 function isProviderSafeToolName(value: string): boolean {
   return NODE_PLUGIN_TOOL_NAME_RE.test(value);
 }
@@ -150,7 +131,7 @@ function resolveUniqueToolName(params: {
   if (params.duplicateCount === 1 && !params.existingNormalized.has(params.normalizedName)) {
     return params.baseName;
   }
-  const nodeFragment = sanitizeToolNameFragment(params.nodeId);
+  const nodeFragment = sanitizeNodeIdFragment(params.nodeId);
   for (let index = 0; index < 100; index += 1) {
     const suffix = index === 0 ? "" : `_${index + 1}`;
     const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);
@@ -229,11 +210,17 @@ export function createNodePluginTools(params: {
         nodeId: entry.nodeId,
       }),
       parameters: descriptor.parameters as never,
-      ...(mcpTool ? { executionMode: "sequential" as const } : {}),
+      ...(mcpTool
+        ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
+        : {}),
       execute: async (toolCallId, toolParams, signal) => {
         const raw = await callGatewayTool(
           "node.invoke",
-          mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS } : {},
+          {
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS
+              : NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+          },
           {
             nodeId: entry.nodeId,
             command: entry.command,
@@ -244,7 +231,7 @@ export function createNodePluginTools(params: {
                   arguments: toolParams,
                 }
               : toolParams,
-            ...(mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_TIMEOUT_MS } : {}),
+            timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
             idempotencyKey: toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
@@ -254,7 +241,8 @@ export function createNodePluginTools(params: {
         if (mcpTool) {
           return mapMcpPayloadToAgentToolResult(payload, mcpTool);
         }
-        return isAgentToolResult(payload) ? payload : jsonResult(payload);
+        const result = isAgentToolResult(payload) ? payload : jsonResult(payload);
+        return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;
       },
     };
     setPluginToolMeta(tool, {

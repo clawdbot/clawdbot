@@ -177,26 +177,26 @@ describe("formatDocumentTitle", () => {
     );
   });
 
-  it("does not add a queued count for an empty offline outbox", () => {
-    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 0 })).toBe(
-      "(Offline) Usage — OpenClaw",
-    );
+  it("names the disconnected gateway without implying internet loss", () => {
+    expect(
+      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 0 }),
+    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 
-  it("includes the queued outbox count in the offline marker", () => {
-    expect(formatDocumentTitle({ context: "Usage", offline: true, queuedCount: 3 })).toBe(
-      "(Offline · 3 queued) Usage — OpenClaw",
-    );
+  it("includes the queued outbox count in the disconnected marker", () => {
+    expect(
+      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 3 }),
+    ).toBe("(Disconnected · 3 queued) Usage — OpenClaw");
   });
 
   it("ignores a queued count while online", () => {
     expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
   });
 
-  it("suppresses the attention count while offline", () => {
-    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2, offline: true })).toBe(
-      "(Offline) Usage — OpenClaw",
-    );
+  it("suppresses the attention count while disconnected", () => {
+    expect(
+      formatDocumentTitle({ context: "Usage", attentionCount: 2, gatewayDisconnected: true }),
+    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -290,7 +290,7 @@ describe("subtitleForRoute", () => {
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
-      appearance: "Theme, UI, and setup wizard settings.",
+      appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",

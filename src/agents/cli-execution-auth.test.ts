@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
 const mocks = vi.hoisted(() => ({
+  order: [] as string[],
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
@@ -10,16 +11,65 @@ vi.mock("./auth-profiles/store.js", () => ({
 }));
 
 vi.mock("./auth-profiles/order.js", () => ({
-  resolveAuthProfileOrder: () => [],
+  resolveAuthProfileOrder: () => mocks.order,
 }));
 
 import { resolveCliExecutionAuthProfileId } from "./cli-execution-auth.js";
 
 describe("resolveCliExecutionAuthProfileId", () => {
   beforeEach(() => {
+    mocks.order.length = 0;
     for (const profileId of Object.keys(mocks.profiles)) {
       delete mocks.profiles[profileId];
     }
+  });
+
+  it.each(["auto", "user"] as const)(
+    "ignores a retired native Claude profile selected by %s",
+    (authProfileIdSource) => {
+      const authProfileId = "anthropic:claude-cli";
+      mocks.profiles[authProfileId] = {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "retired-access",
+        refresh: "retired-refresh",
+        expires: Date.now() - 60_000,
+      };
+      mocks.order.push(authProfileId);
+
+      expect(
+        resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: "claude-cli",
+          authProfileProvider: "claude-cli",
+          config: {},
+          agentDir: "/tmp/unused-agent",
+          ...(authProfileIdSource === "user"
+            ? { selected: { authProfileId, authProfileIdSource } }
+            : {}),
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("keeps forwarding a non-retired Claude profile", () => {
+    const authProfileId = "claude-cli:work";
+    mocks.profiles[authProfileId] = {
+      type: "oauth",
+      provider: "claude-cli",
+      access: "test-access",
+      refresh: "test-refresh",
+      expires: Date.now() + 60_000,
+    };
+
+    expect(
+      resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "claude-cli",
+        config: {},
+        agentDir: "/tmp/unused-agent",
+        selected: { authProfileId, authProfileIdSource: "user" },
+      }),
+    ).toBe(authProfileId);
   });
 
   it("rejects an explicitly selected profile from another provider", () => {

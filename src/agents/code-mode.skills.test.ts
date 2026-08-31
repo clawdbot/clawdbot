@@ -146,33 +146,55 @@ describe("Code Mode skills and read tools", () => {
     });
   });
 
-  it("returns ordinary read content through tools.callValue", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const read = createOpenClawReadTool(
-      createReadTool("/workspace", {
-        operations: {
-          access: async () => {},
-          detectImageMimeType: async () => null,
-          readFile: async () => Buffer.from("ordinary file content"),
-        },
-      }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
-    );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, read],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+  it.each([
+    {
+      name: "existing ordinary file",
+      path: "notes.txt",
+      content: "ordinary file content",
+      expected: { kind: "text", content: "ordinary file content" },
+    },
+    {
+      name: "missing implicitly optional daily memory",
+      path: "memory/2026-05-15.md",
+      expected: {
+        kind: "not_found",
+        status: "not_found",
+        path: "memory/2026-05-15.md",
+        optional: true,
+      },
+    },
+  ])(
+    "returns $name through the wrapped Code Mode boundary",
+    async ({ path, content, expected }) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const read = createOpenClawReadTool(
+        createReadTool("/workspace", {
+          operations: {
+            access: async () => {
+              if (content === undefined) {
+                throw Object.assign(new Error("missing"), { code: "ENOENT" });
+              }
+            },
+            readFile: async () => Buffer.from(content ?? "unreachable"),
+          },
+        }) as unknown as Parameters<typeof createOpenClawReadTool>[0],
+      );
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, read],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
 
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: `return await tools.callValue("openclaw:core:read", { path: "notes.txt" });`,
-    });
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+        code: `return await read(${JSON.stringify({ path })});`,
+      });
 
-    expect(details.status).toBe("completed");
-    expect(details.value).toEqual({ kind: "text", content: "ordinary file content" });
-  });
+      expect(details).toMatchObject({ status: "completed", value: expected });
+    },
+  );
 });

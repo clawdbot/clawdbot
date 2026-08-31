@@ -3,6 +3,7 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { registerAgentRunCapacityWait } from "../../../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
   getAgentRunContext,
@@ -46,8 +47,23 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   let laneTaskProgressAtMs = Date.now();
   let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
   let queuedRunAbortSignal: AbortSignal | undefined;
+  let releaseCapacityWait: (() => void) | undefined;
+  const endCapacityWait = () => {
+    releaseCapacityWait?.();
+    releaseCapacityWait = undefined;
+  };
+  const noteCapacityWait = () => {
+    const params = options.getParams();
+    if (!params.abortSignal?.aborted) {
+      releaseCapacityWait = registerAgentRunCapacityWait(
+        params.runId,
+        options.getLifecycleGeneration(),
+      );
+    }
+  };
 
   const releaseQueuedContext = (outcome: "admitted" | "abandoned") => {
+    endCapacityWait();
     queuedRunAbortSignal?.removeEventListener("abort", abandonQueuedContext);
     queuedRunAbortSignal = undefined;
     releaseQueuedRunContext?.(outcome);
@@ -123,10 +139,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
+      onQueued: noteCapacityWait,
     };
     const taskWithCurrentLifecycle = async () => {
+      endCapacityWait();
       let params = options.getParams();
-      params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       params.replyOperation?.markGlobalLaneWaitEnded();
       throwIfAborted();
       let lifecycleGeneration = options.getLifecycleGeneration();
@@ -181,11 +198,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
             claimAgentRunContext(params.runId, {
               ...existingContext,
+              agentId: params.agentId ?? existingContext?.agentId,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
               lastActiveAt: Date.now(),
             });
+            // Queue dequeue can still block on writer or placement admission.
+            params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
           },
         ),
       );
@@ -202,9 +222,13 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
-    const taskWithLaneAdmission = () => {
-      options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+    const sessionOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+      onQueued: noteCapacityWait,
+    };
+    const admittedTask = () => {
+      endCapacityWait();
       return task();
     };
     const params = options.getParams();
@@ -224,12 +248,12 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     let queuedRun: Promise<T>;
     try {
       if (params.enqueue) {
-        queuedRun = params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+        queuedRun = params.enqueue(admittedTask, withRunLaneWait(sessionOpts));
       } else {
         noteLaneWaitIfBusy(options.sessionLane);
         queuedRun = enqueueCommandInLane(
           options.sessionLane,
-          taskWithLaneAdmission,
+          admittedTask,
           withRunLaneWait(sessionOpts),
         );
       }

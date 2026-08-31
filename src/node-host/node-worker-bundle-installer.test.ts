@@ -39,6 +39,7 @@ describe("node worker bundle installer", () => {
       workerSource?: string;
       fixtureName?: string;
       bundlePrewarm?: 1;
+      compileCacheDisabled?: boolean;
     } = {},
   ): Promise<{
     archive: Buffer;
@@ -48,10 +49,12 @@ describe("node worker bundle installer", () => {
     const source = path.join(root, `source-${fixtureName}`);
     const archivePath = path.join(root, `bundle-${fixtureName}.tgz`);
     await fs.mkdir(source, { recursive: true });
+    const compileCacheDisabled =
+      options.compileCacheDisabled ?? process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
     const workerSource =
       options.workerSource ??
       (options.prewarmMarker
-        ? `import fs from "node:fs";\nif (process.argv[2] !== "--internal-worker-prewarm" || !process.env.NODE_COMPILE_CACHE || process.env.NODE_DISABLE_COMPILE_CACHE) throw new Error("worker bundle was not prewarmed with compile cache");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
+        ? `import fs from "node:fs";\nconst cacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE === "1";\nif (process.argv[2] !== "--internal-worker-prewarm" || cacheDisabled !== ${compileCacheDisabled} || (cacheDisabled ? process.env.NODE_COMPILE_CACHE : !process.env.NODE_COMPILE_CACHE)) throw new Error("worker bundle was not prewarmed with the requested compile-cache mode");\nfs.writeFileSync(${JSON.stringify(options.prewarmMarker)}, "ready");\n`
         : "export {};\n");
     await fs.writeFile(path.join(source, "worker.mjs"), workerSource, { mode: 0o700 });
     const archiveEntries = ["worker.mjs"];
@@ -115,7 +118,11 @@ describe("node worker bundle installer", () => {
 
   it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
     const prewarmMarker = path.join(root, "worker-prewarmed");
-    const fixture = await bundleFixture({ prewarmMarker, bundlePrewarm: 1 });
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: false,
+    });
     const staleBundleHash = "f".repeat(64);
     const staleStaging = path.join(
       root,
@@ -125,7 +132,10 @@ describe("node worker bundle installer", () => {
     );
     await fs.mkdir(staleStaging, { recursive: true });
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: undefined },
+    });
 
     await expect(
       installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
@@ -149,6 +159,77 @@ describe("node worker bundle installer", () => {
         "utf8",
       ),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("prewarms bundles while honoring an explicitly disabled compile cache", async () => {
+    const prewarmMarker = path.join(root, "worker-prewarmed-without-cache");
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: true,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: { ...process.env, NODE_COMPILE_CACHE: undefined, NODE_DISABLE_COMPILE_CACHE: "1" },
+    });
+
+    await expect(
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
+  });
+
+  it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
+    const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: false,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: {
+        ...process.env,
+        NODE_COMPILE_CACHE: "/tmp/ambient-host-compile-cache",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+        OPENCLAW_SERVICE_KIND: "node",
+      },
+    });
+
+    await expect(
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
+  });
+
+  it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {

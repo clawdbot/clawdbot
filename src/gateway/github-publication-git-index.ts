@@ -6,6 +6,8 @@ import path from "node:path";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
 
+const HARDENED_GIT = ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
+
 class GitHubPublicationRefCasRejectedError extends Error {}
 export class GitHubPublicationRecoveryPendingError extends Error {}
 
@@ -121,7 +123,7 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
       ["git", "rev-parse", "--verify", `refs/heads/${params.branch}`],
       { cwd: params.cwd },
     );
-    const indexTree = await params.run(["git", "write-tree"], { cwd: params.cwd });
+    const indexTree = await params.run([...HARDENED_GIT, "write-tree"], { cwd: params.cwd });
     if (
       branchHead === params.sourceHeadCommit ||
       (indexTree === params.workspaceTree && (await publicationCommitMatches(params, branchHead)))
@@ -206,8 +208,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       GIT_CONFIG_GLOBAL: os.devNull,
       GIT_CONFIG_SYSTEM: os.devNull,
     };
-    const hardenedGit = ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
-    await params.run([...hardenedGit, "read-tree", params.headCommit], {
+    await params.run([...HARDENED_GIT, "read-tree", params.headCommit], {
       cwd: params.cwd,
       env: { ...gitEnv, GIT_INDEX_FILE: replacementIndex },
     });
@@ -275,7 +276,7 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
       });
     }
     await fs.copyFile(indexPath, observedIndex);
-    const currentIndexTree = await params.run([...hardenedGit, "write-tree"], {
+    const currentIndexTree = await params.run([...HARDENED_GIT, "write-tree"], {
       cwd: params.cwd,
       env: { ...gitEnv, GIT_INDEX_FILE: observedIndex },
     });

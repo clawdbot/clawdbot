@@ -4,9 +4,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
@@ -127,6 +131,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
         session_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+        route_context_json TEXT,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, conversation_id, role),
@@ -269,13 +274,48 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
-/** Installs the same-version project identity projection on first updated-binary open. */
-export function ensureSessionProjectColumn(db: DatabaseSync): void {
-  const columns = readSqliteTableColumns(db, "session_nodes");
-  if (!columns || columns.has("project_id")) {
-    return;
+/** Installs same-version session projections on first updated-binary open. */
+export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  ensurePendingInputConsumptionColumn(db);
+  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
+    // NULL records an older writer's unclassified projection; the transcript
+    // reconcile owner fills it without parsing payloads during schema open.
+    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
   }
-  db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (columns && !columns.has("project_id")) {
+    db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
+  }
+  const conversationColumns = readSqliteTableColumns(db, "session_conversations");
+  if (conversationColumns && !conversationColumns.has("route_context_json")) {
+    db.exec("ALTER TABLE session_conversations ADD COLUMN route_context_json TEXT");
+  }
+  if (conversationColumns) {
+    // Same-version older writers leave the envelope byte-identical. Clear it on their update so
+    // stale owner facts cannot survive a downgrade/re-upgrade cycle with an unchanged timestamp.
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS session_conversations_route_context_invalidate_after_update
+      AFTER UPDATE OF role, last_seen_at ON session_conversations
+      WHEN NEW.route_context_json IS OLD.route_context_json
+      BEGIN
+        UPDATE session_conversations
+        SET route_context_json = NULL
+        WHERE session_id = NEW.session_id
+          AND conversation_id = NEW.conversation_id
+          AND role = NEW.role;
+      END;
+    `);
+  }
+}
+
+export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_conversations");
+  return Boolean(columns && !columns.has("route_context_json"));
+}
+
+export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_transcript_active_events");
+  return Boolean(columns && !columns.has("context_eligible"));
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
@@ -362,5 +402,28 @@ export function migrateSessionEntryStatusProjection(
     if (typeof row.session_key === "string") {
       update.run(readStatus(row.entry_json), row.session_key);
     }
+  }
+}
+
+export function migrateSessionCreatorNamespaces(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 19 || !tableExists(db, "session_nodes")) {
+    return;
+  }
+  const update = db.prepare(
+    "UPDATE session_nodes SET entry_json = ?, created_actor_type = ?, created_actor_id = ? WHERE session_key = ?",
+  );
+  const rows = db.prepare(`SELECT session_key, entry_json FROM session_nodes
+    WHERE json_valid(entry_json) AND (json_extract(entry_json, '$.createdActor.type') = 'human'
+      OR (json_type(entry_json, '$.createdActor') IS NULL AND json_type(entry_json, '$.createdBy') = 'object'))`);
+  // SAFETY: The query selects the two declared, non-null TEXT columns without projection casts.
+  for (const row of rows.all() as Array<{ session_key: string; entry_json: string }>) {
+    // SAFETY: SQL admits valid JSON with a human actor or legacy actor object; all other fields are retained verbatim.
+    const entry = migrateLegacySessionCreator(JSON.parse(row.entry_json) as SessionEntry);
+    update.run(
+      JSON.stringify(entry),
+      entry.createdActor?.type ?? null,
+      entry.createdActor?.id ?? null,
+      row.session_key,
+    );
   }
 }

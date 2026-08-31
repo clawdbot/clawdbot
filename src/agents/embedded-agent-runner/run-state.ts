@@ -5,19 +5,20 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
-import {
-  getActiveReplyRunCount,
-  listActiveReplyRunSessionKeys,
-  listActiveReplyRunSessionIds,
-  resolveActiveReplyRunSessionId,
-  type ReplyBackendQueueMessageOptions,
-  type ReplyBackendQueueMessageResult,
-  type ReplyBackendMessageInjection,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import type {
+  ReplyBackendQueueMessageOptions,
+  ReplyBackendQueueMessageResult,
+  ReplyBackendMessageInjection,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -34,6 +35,8 @@ export type EmbeddedAgentQueueHandle = {
   readonly diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   /** Synchronously closes diagnostic authority before this handle is evicted. */
   readonly closeDiagnostics?: () => void;
+  /** Core run start time used by live recovery projections. */
+  startedAtMs?: number;
   /** Exact authority of the concrete provider/model attempt behind this handle. */
   toolAuthorityFingerprint?: string;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
@@ -75,6 +78,14 @@ export type ActiveEmbeddedRunSnapshot = {
   inFlightPrompt?: string;
 };
 
+export type EmbeddedRunRegistration = {
+  sessionId: string;
+  sessionKey?: string;
+  delegatedAuthority?: AgentRunDelegatedAuthority;
+  humanInputWaits?: Set<() => boolean>;
+  onHumanInputResolved?: () => void;
+};
+
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   handle?: EmbeddedAgentQueueHandle;
@@ -94,6 +105,7 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  activeRunRegistrations: new WeakMap<EmbeddedAgentQueueHandle, EmbeddedRunRegistration>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
@@ -113,6 +125,74 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS =
+  embeddedRunState.activeRunRegistrations ??
+  (embeddedRunState.activeRunRegistrations = new WeakMap<
+    EmbeddedAgentQueueHandle,
+    EmbeddedRunRegistration
+  >());
+
+/** Only an accepted question's exact admitted owner may suppress stale-work recovery. */
+export function registerActiveEmbeddedRunHumanInputWait(
+  authority: AgentRunDelegatedAuthority,
+  isPending: () => boolean,
+): ((resolved: boolean) => void) | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(authority.operationalRunInstance.runId);
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  if (
+    !handle ||
+    !registration ||
+    ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||
+    !validateAgentRunDelegatedAuthority(authority) ||
+    registration.delegatedAuthority !==
+      getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance)
+  ) {
+    return undefined;
+  }
+  const waits = (registration.humanInputWaits ??= new Set());
+  waits.add(isPending);
+  return (resolved) => {
+    if (
+      waits.delete(isPending) &&
+      resolved &&
+      ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) === handle &&
+      validateAgentRunDelegatedAuthority(authority) &&
+      !handle.isAborted?.()
+    ) {
+      registration.onHumanInputResolved?.();
+    }
+  };
+}
+
+/** Re-read at the recovery action, including after queued/lazy recovery dispatch. */
+export function resolveActiveEmbeddedRunRecoveryBlocker(
+  sessionId: string,
+  expectedHandle?: object,
+): "human_input_wait" | "stale_session_state" | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (expectedHandle && handle !== expectedHandle) {
+    return "stale_session_state";
+  }
+  const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const authority = registration?.delegatedAuthority;
+  if (!handle || !authority || !registration.humanInputWaits) {
+    return undefined;
+  }
+  for (const isPending of registration.humanInputWaits) {
+    // Question validation can synchronously close authority or replace the run.
+    const pending = isPending() && !handle.isAborted?.();
+    if (
+      ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+      !registration.humanInputWaits.has(isPending)
+    ) {
+      return "stale_session_state";
+    }
+    if (pending && validateAgentRunDelegatedAuthority(authority)) {
+      return "human_input_wait";
+    }
+  }
+  return undefined;
+}
 const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??
   (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
@@ -158,6 +238,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       continue;
     }
     handle.closeDiagnostics?.();
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
     staleHandles.add(handle);
     if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
       ACTIVE_EMBEDDED_RUNS.delete(sessionId);
@@ -217,39 +298,6 @@ function evictPriorLifecycleEmbeddedRuns(): void {
 
 registerAgentEventLifecycleRotationHandler("embedded-agent-runs", evictPriorLifecycleEmbeddedRuns);
 
-/** Counts active embedded runs while including auto-reply registry runs for shared sessions. */
-export function getActiveEmbeddedRunCount(): number {
-  let activeCount = ACTIVE_EMBEDDED_RUNS.size;
-  for (const sessionId of listActiveReplyRunSessionIds()) {
-    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
-      activeCount += 1;
-    }
-  }
-  return Math.max(activeCount, getActiveReplyRunCount());
-}
-
-/** Lists active embedded-run session keys from both embedded and auto-reply registries. */
-export function listActiveEmbeddedRunSessionKeys(): string[] {
-  return [
-    ...new Set([
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
-      ...listActiveReplyRunSessionKeys(),
-    ]),
-  ].toSorted((a, b) => a.localeCompare(b));
-}
-
-/** Lists active embedded-run session ids from all embedded-run lookup maps. */
-export function listActiveEmbeddedRunSessionIds(): string[] {
-  return [
-    ...new Set([
-      ...ACTIVE_EMBEDDED_RUNS.keys(),
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
-      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.values(),
-      ...listActiveReplyRunSessionIds(),
-    ]),
-  ].toSorted((a, b) => a.localeCompare(b));
-}
-
 export function setActiveEmbeddedRunLifecycleGeneration(
   handle: EmbeddedAgentQueueHandle,
   lifecycleGeneration: string,
@@ -262,16 +310,4 @@ export function setActiveEmbeddedRunLifecycleGeneration(
   }
   ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.set(handle, lifecycleGeneration);
   return lifecycleGeneration;
-}
-
-/** Resolves the current session id for an active run after resets or compaction. */
-export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  return (
-    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
-    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
-  );
 }

@@ -382,11 +382,32 @@ export function renderColumn(
 ) {
   const state = getWorkboardState(props.host);
   const writable = canMutate(props);
+  const surface = options.surface ?? "page";
+  const collapsible = surface === "page";
+  const label = formatStatusLabel(status);
+  const autoCollapsed =
+    state.emptyColumnMode === "collapse" &&
+    cards.length === 0 &&
+    !state.expandedEmptyStatuses.has(status);
+  const collapsed = collapsible && (state.collapsedStatuses.has(status) || autoCollapsed);
+  const expandColumn = () => {
+    state.collapsedStatuses.delete(status);
+    if (cards.length === 0) {
+      state.expandedEmptyStatuses.add(status);
+    }
+    props.onRequestUpdate?.();
+  };
+  const collapseColumn = () => {
+    state.collapsedStatuses.add(status);
+    state.expandedEmptyStatuses.delete(status);
+    props.onRequestUpdate?.();
+  };
   return html`
     <section
       class="workboard-column workboard-column--${status} ${state.draggedCardId
         ? "workboard-column--drop"
-        : ""}"
+        : ""} ${collapsed ? "workboard-column--collapsed" : ""}"
+      aria-label=${`${label}, ${cards.length}`}
       @dragover=${(event: DragEvent) => {
         if (writable && state.draggedCardId) {
           event.preventDefault();
@@ -412,15 +433,68 @@ export function renderColumn(
         });
       }}
     >
-      <div class="workboard-column__header">
-        <h2>${formatStatusLabel(status)}</h2>
-        <span>${cards.length}</span>
-      </div>
-      <div class="workboard-column__cards">
-        ${cards.length
-          ? cards.map((card) => renderCard(props, card, options.surface ?? "page"))
-          : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`}
-      </div>
+      ${collapsed
+        ? html`
+            <button
+              class="workboard-column__rail"
+              type="button"
+              aria-label=${t("workboard.expandColumn", { column: label })}
+              aria-expanded="false"
+              @click=${expandColumn}
+            >
+              <span class="workboard-column__rail-title">${label}</span>
+              <span class="workboard-column__count">${cards.length}</span>
+              <span class="workboard-column__rail-icon" aria-hidden="true">
+                <span
+                  class="workboard-column__direction-icon workboard-column__direction-icon--expand-horizontal"
+                  >${icons.panelRightClose}</span
+                >
+                <span
+                  class="workboard-column__direction-icon workboard-column__direction-icon--expand-vertical"
+                  >${icons.panelBottomOpen}</span
+                >
+              </span>
+            </button>
+          `
+        : html`
+            <div class="workboard-column__header">
+              <h2>${label}</h2>
+              ${collapsible
+                ? html`
+                    <div class="workboard-column__header-actions">
+                      <span class="workboard-column__count">${cards.length}</span>
+                      <openclaw-tooltip
+                        .content=${t("workboard.collapseColumn", { column: label })}
+                      >
+                        <button
+                          class="btn btn--icon workboard-column__collapse"
+                          type="button"
+                          aria-label=${t("workboard.collapseColumn", { column: label })}
+                          aria-expanded="true"
+                          @click=${collapseColumn}
+                        >
+                          <span class="workboard-column__collapse-icon" aria-hidden="true">
+                            <span
+                              class="workboard-column__direction-icon workboard-column__direction-icon--collapse-horizontal"
+                              >${icons.panelRightOpen}</span
+                            >
+                            <span
+                              class="workboard-column__direction-icon workboard-column__direction-icon--collapse-vertical"
+                              >${icons.panelBottomClose}</span
+                            >
+                          </span>
+                        </button>
+                      </openclaw-tooltip>
+                    </div>
+                  `
+                : html`<span class="workboard-column__count">${cards.length}</span>`}
+            </div>
+            <div class="workboard-column__cards">
+              ${cards.length
+                ? cards.map((card) => renderCard(props, card, surface))
+                : html`<div class="workboard-empty">${t("workboard.emptyColumn")}</div>`}
+            </div>
+          `}
     </section>
   `;
 }

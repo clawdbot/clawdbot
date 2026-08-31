@@ -133,31 +133,6 @@ describe("getShellConfig", () => {
     expect(args).toEqual(["-f", "+o", "equals", "+o", "nomatch", "-c"]);
   });
 
-  it.runIf(fs.existsSync("/bin/zsh"))(
-    "keeps POSIX-style equals words and unmatched globs literal in zsh",
-    () => {
-      const config = getShellConfig("/bin/zsh");
-      const cases = [
-        { command: "printf '%s\\n' ===", expected: "===\n" },
-        {
-          command: "printf '%s\\n' *.definitely-no-openclaw-match",
-          expected: "*.definitely-no-openclaw-match\n",
-        },
-      ];
-
-      for (const testCase of cases) {
-        const invocation = buildShellCommandInvocation(testCase.command, config);
-        const result = spawnSync(invocation.argv[0], invocation.argv.slice(1), {
-          encoding: "utf8",
-          input: invocation.input,
-        });
-
-        expect(result.status).toBe(0);
-        expect(result.stdout).toBe(testCase.expected);
-      }
-    },
-  );
-
   it("uses startup-suppressed args for bash env shells", () => {
     process.env.SHELL = "/bin/bash";
     process.env.PATH = "";
@@ -574,3 +549,72 @@ describe("getShellConfig on Windows", () => {
     expect(getShellConfig().shell).toBe(ps51Path);
   });
 });
+
+describe.runIf(process.platform === "darwin" || fs.existsSync("/bin/zsh"))(
+  "zsh execution contracts",
+  () => {
+    let envSnapshot: ReturnType<typeof captureEnv>;
+    let root: string;
+
+    beforeEach(() => {
+      envSnapshot = captureEnv(["SHELL"]);
+      process.env.SHELL = "/bin/zsh";
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zsh-contract-")));
+      fs.writeFileSync(path.join(root, ".zshenv"), "printf 'unexpected startup file\\n'\n");
+      fs.writeFileSync(path.join(root, "matched.fixture"), "");
+    });
+
+    afterEach(() => {
+      envSnapshot.restore();
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    function runZsh(command: string, mode: "exec" | "session") {
+      const config = mode === "exec" ? getShellConfig() : getBashShellConfig("/bin/zsh");
+      const invocation = buildShellCommandInvocation(command, config);
+      const result = spawnSync(invocation.argv[0], invocation.argv.slice(1), {
+        cwd: root,
+        encoding: "utf8",
+        env: { HOME: root, ZDOTDIR: root, PATH: "/bin:/usr/bin" },
+        input: invocation.input,
+        timeout: 5_000,
+      });
+      expect(result.error).toBeUndefined();
+      return result;
+    }
+
+    it.each([
+      { label: "equals words", argument: "===", output: "===" },
+      { label: "unmatched globs", argument: "*.missing", output: "*.missing" },
+    ])("keeps $label literal through an exec command chain", ({ argument, output }) => {
+      const result = runZsh(
+        `printf '%s\\n' before; printf '%s\\n' ${argument}; printf '%s\\n' after`,
+        "exec",
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`before\n${output}\nafter\n`);
+    });
+
+    it("preserves equals expansion for an explicit zsh session shell", () => {
+      const result = runZsh("printf '%s\\n' =zsh", "session");
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("/bin/zsh\n");
+    });
+
+    it("preserves unmatched-glob rejection for an explicit zsh session shell", () => {
+      const result = runZsh("printf '%s\\n' *.missing; printf '%s\\n' after", "session");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("no matches found");
+      expect(result.stdout).toBe("");
+    });
+
+    it.each(["exec", "session"] as const)(
+      "preserves expansions and suppresses startup files for %s",
+      (mode) => {
+        const result = runZsh("printf '%s\\n' ~ {a,b} *.fixture", mode);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe(`${root}\na\nb\nmatched.fixture\n`);
+      },
+    );
+  },
+);

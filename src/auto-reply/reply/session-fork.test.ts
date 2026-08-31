@@ -78,7 +78,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionKey: "agent:main:subagent:child",
         storePath,
       }),
-    ).resolves.toEqual({ status: "failed" });
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child", storePath }),
     ).toBeUndefined();

@@ -91,6 +91,7 @@ describe("board widget frame terminal failure message", () => {
     for (const origin of [
       "http://localhost:18790",
       "http://127.0.0.1:18790",
+      "http://127.0.0.5:18790",
       "http://[::1]:18790",
     ]) {
       const message = terminalFailureError({ widget: {}, resolvedSandboxOrigin: origin });

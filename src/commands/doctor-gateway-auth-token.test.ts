@@ -111,16 +111,21 @@ describe("resolveGatewayAuthTokenForService", () => {
     expect(resolved).toEqual({ token: "resolved-token" });
   });
 
-  it("skips exec SecretRefs by default for service token checks", async () => {
+  it("reports skipped exec SecretRefs as unavailable without using ambient tokens", async () => {
     const tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-service-token-exec-ref-"));
     const markerPath = join(tmp, "exec-ran");
     try {
       const resolved = await resolveGatewayAuthTokenForService(
         createExecGatewayTokenConfig(markerPath),
-        {} as NodeJS.ProcessEnv,
+        { OPENCLAW_GATEWAY_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
       );
 
-      expect(resolved).toEqual({});
+      expect(resolved).toEqual({
+        unavailableReason:
+          "gateway.auth.token SecretRef is configured but unavailable because exec SecretRef resolution is disabled.",
+      });
+      expect(resolved.unavailableReason).not.toContain(markerPath);
+      expect(resolved.unavailableReason).not.toContain("ambient-token");
       await expect(fs.access(markerPath)).rejects.toThrow();
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
@@ -146,7 +151,7 @@ describe("resolveGatewayAuthTokenForService", () => {
     }
   });
 
-  it("falls back to OPENCLAW_GATEWAY_TOKEN when SecretRef is unresolved", async () => {
+  it("does not fall back to OPENCLAW_GATEWAY_TOKEN when a SecretRef is unresolved", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
       {
         gateway: {
@@ -169,10 +174,13 @@ describe("resolveGatewayAuthTokenForService", () => {
       } as NodeJS.ProcessEnv,
     );
 
-    expect(resolved).toEqual({ token: "env-fallback-token" });
+    expect(resolved).toEqual({
+      unavailableReason:
+        "gateway.auth.token SecretRef is configured but unresolved (gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).).",
+    });
   });
 
-  it("falls back to OPENCLAW_GATEWAY_TOKEN when SecretRef resolves to empty", async () => {
+  it("does not fall back to OPENCLAW_GATEWAY_TOKEN when a SecretRef resolves to empty", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
       {
         gateway: {
@@ -196,7 +204,9 @@ describe("resolveGatewayAuthTokenForService", () => {
       } as NodeJS.ProcessEnv,
     );
 
-    expect(resolved).toEqual({ token: "env-fallback-token" });
+    expect(resolved.token).toBeUndefined();
+    expect(resolved.unavailableReason).toContain("gateway.auth.token SecretRef");
+    expect(resolved.unavailableReason).not.toContain("env-fallback-token");
   });
 
   it("returns unavailableReason when SecretRef is unresolved without env fallback", async () => {

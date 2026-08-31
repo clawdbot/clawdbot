@@ -17,6 +17,7 @@ import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "../message-access/identifier-authentication.js";
 import type {
   ChannelMessageSendPollContext,
   MessageReceipt,
@@ -310,6 +311,7 @@ export type ChannelSecurityDmPolicy = {
   allowFromPath: string;
   approveHint: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: (raw: string) => IdentifierAuthentication | undefined;
 };
 
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {
@@ -494,6 +496,32 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  resolveConversationRouteOwner?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    conversation: {
+      kind: "direct" | "group" | "channel";
+      peerId: string;
+      /** Canonical delivery target when it differs from the routing peer. */
+      target?: string;
+      threadId?: string;
+      nativeChannelId?: string;
+      context?: {
+        parentPeerId?: string;
+        guildId?: string;
+        teamId?: string;
+        memberRoleIds?: string[];
+      };
+    };
+  }) =>
+    // `undefined` delegates to core, `null` denies ownership, and `unavailable`
+    // preserves temporary owner-store outages as retryable delivery failures.
+    | { kind: "agent"; agentId: string }
+    | { kind: "plugin"; pluginId: string; fallbackAgentId: string }
+    | { kind: "unavailable" }
+    | null
+    | undefined;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
@@ -721,6 +749,11 @@ export type ChannelMessageActionContext = {
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Server-owned fact: this caller receives proven-not-sent failures and resends
+   * them. Plugins forward it into durable sends so recovery does not replay too.
+   */
+  deliveryRetryOwner?: "caller";
 };
 
 export type ChannelToolSend = {

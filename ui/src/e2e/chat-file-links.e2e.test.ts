@@ -44,7 +44,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     try {
       const file = {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "export const loaded = true;\n",
           kind: "read",
@@ -136,7 +136,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           },
           "sessions.files.list": {
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             files: [],
             browser: {
               entries: [
@@ -193,7 +193,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     const responses = {
       "/workspace/notes.txt": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "Exact-head workspace preview proof.\n",
           contentEncoding: "utf8",
@@ -210,7 +210,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/openclaw.png": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: pngBase64,
           contentEncoding: "base64",
@@ -226,7 +226,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           kind: "read",
           mimeType: "image/bmp",
@@ -264,7 +264,7 @@ describeControlUiE2e("Control UI chat file links", () => {
             },
             files: [],
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           },
         },
       });
@@ -318,12 +318,12 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
       ).toEqual([
-        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
-        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "main" },
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "agent:main:main" },
+        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "agent:main:main" },
         {
           agentId: "main",
           path: "/workspace/unsupported-binary.bmp",
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         },
       ]);
     } finally {

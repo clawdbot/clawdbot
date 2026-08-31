@@ -1,27 +1,35 @@
-import type {
-  AgentPatchedSessionModelFallback,
-  InternalAgentPatchedSessionModelFallback,
-} from "./session-model-fallback.js";
+import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
+
+type RetiredThinkingSelectionQuarantine = {
+  thinkingLevelSelection?: unknown;
+  modelFallback?: AgentPatchedSessionModelFallback & { prevThinkingLevelSelection?: unknown };
+};
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
+  lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingProjectGitUrl: undefined,
+  pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
-  thinkingLevelSelection: undefined,
+  transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
+  "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingProjectGitUrl",
+  "pendingWorktree",
   "sessionDiffBaselineCapture",
-  "thinkingLevelSelection",
+  "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
 function projectPublicModelFallback(
-  fallback: InternalAgentPatchedSessionModelFallback | undefined,
+  fallback: RetiredThinkingSelectionQuarantine["modelFallback"],
 ): AgentPatchedSessionModelFallback | undefined {
   if (!fallback) {
     return undefined;
@@ -35,12 +43,13 @@ function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry>;
 function stripPrivateSessionEntryFields(
-  entry: Partial<InternalSessionEntry>,
+  entry: Partial<InternalSessionEntry> & RetiredThinkingSelectionQuarantine,
 ): Partial<SessionEntry> {
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
   }
+  delete projected.thinkingLevelSelection;
   const modelFallback = projectPublicModelFallback(entry.modelFallback);
   if (modelFallback) {
     projected.modelFallback = modelFallback;

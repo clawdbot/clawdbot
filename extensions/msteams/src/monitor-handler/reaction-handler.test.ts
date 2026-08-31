@@ -57,7 +57,7 @@ function createReactionTestHarness() {
   setMSTeamsRuntime(mockRuntime);
 
   const cfg: OpenClawConfig = {
-    channels: { msteams: { allowFrom: ["allowed-aad"] } },
+    channels: { msteams: { allowFrom: ["allowed-aad"], groupPolicy: "open" } },
   } as OpenClawConfig;
 
   const deps = buildDeps(cfg, mockRuntime);
@@ -81,14 +81,6 @@ function firstEnqueueLabel(enqueue: ReturnType<typeof vi.fn>): string {
     throw new Error("Expected enqueueSystemEvent label");
   }
   return label;
-}
-
-function firstEnqueueMeta(enqueue: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [, meta] = firstEnqueueCall(enqueue);
-  if (!meta || typeof meta !== "object") {
-    throw new Error("Expected enqueueSystemEvent metadata");
-  }
-  return meta as Record<string, unknown>;
 }
 
 async function invokeReactionEvent(
@@ -190,25 +182,34 @@ describe("createMSTeamsReactionHandler", () => {
   });
 
   describe("inbound reaction events", () => {
-    it("enqueues system event for reactionsAdded", async () => {
-      const { handler, enqueue } = createReactionTestHarness();
-      await invokeReactionEvent(
-        handler,
-        {
-          reactionsAdded: [{ type: "like" }],
-          from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
-          replyToId: "msg-1",
-        },
-        "added",
-      );
+    it.each([
+      { conversationType: "personal", conversationId: "a:dm" },
+      { conversationType: "groupChat", conversationId: "19:g@thread.v2" },
+      { conversationType: "channel", conversationId: "19:c@thread.tacv2" },
+    ] as const)(
+      "enqueues the exact inbound reaction event label for $conversationType conversations",
+      async ({ conversationType, conversationId }) => {
+        const { handler, enqueue } = createReactionTestHarness();
+        await invokeReactionEvent(
+          handler,
+          {
+            reactionsAdded: [{ type: "like" }],
+            from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
+            conversation: { id: conversationId, conversationType },
+            replyToId: "msg-1",
+          },
+          "added",
+        );
 
-      expect(enqueue).toHaveBeenCalledOnce();
-      const label = firstEnqueueLabel(enqueue);
-      const meta = firstEnqueueMeta(enqueue);
-      expect(label).toContain("added");
-      expect(meta.sessionKey).toBe("test-session");
-      expect(meta.contextKey).toContain("added");
-    });
+        expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+          "Teams reaction 👍 added by User on message msg-1",
+          {
+            sessionKey: "test-session",
+            contextKey: `msteams:reaction:${conversationId}:msg-1:allowed-aad:like:added`,
+          },
+        );
+      },
+    );
 
     it("enqueues system event for reactionsRemoved", async () => {
       const { handler, enqueue } = createReactionTestHarness();

@@ -348,9 +348,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       lastToolError: { toolName: "exec", error: "post-processing error" },
     },
     { label: "no remaining failure summary", lastToolError: undefined },
+    {
+      label: "a terminal-marked failed tool",
+      lastToolError: { toolName: "exec", error: "post-processing error" },
+      failedToolTerminate: true,
+    },
   ])(
     "recognizes successful and failed current-batch tools with $label (#118274)",
-    ({ lastToolError }) => {
+    ({ lastToolError, failedToolTerminate }) => {
       const toolUseAssistant = makeLastAssistant({
         stopReason: "toolUse",
         content: [
@@ -361,7 +366,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const instruction = resolveSettledToolTerminalContinuationInstruction(
         makeSettledContinuationParams({
           assistantTexts: [],
-          toolMetas: [{ toolName: "read" }, { toolName: "exec", isError: true }],
+          toolMetas: [
+            { toolName: "read" },
+            {
+              toolName: "exec",
+              toolCallId: "tool_failed",
+              isError: true,
+              ...(failedToolTerminate ? { terminate: true } : {}),
+            },
+          ],
           itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
           messagesSnapshot: [
             toolUseAssistant,

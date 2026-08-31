@@ -1,19 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  markEmbeddedRunAuthProfileSuccess,
+  reportEmbeddedRunSuccessfulAuthBinding,
+} from "./auth-profile-success.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
-  copyAttemptDeliveryState,
-  createTerminalToolPresentationTracker,
   resolveEmbeddedRunTerminal,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
+
+vi.mock("./auth-profile-success.js", () => ({
+  markEmbeddedRunAuthProfileSuccess: vi.fn(),
+  reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
+}));
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
@@ -50,6 +58,7 @@ function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInpu
     sessionKey: "agent:main:terminal-resolution",
     runId: "run:terminal-resolution",
     agentDir: "/tmp/openclaw-terminal-resolution",
+    workspaceDir: "/tmp/openclaw-terminal-resolution",
     ...overrides.runParams,
   } as TerminalInput["runParams"];
   const base = {
@@ -107,37 +116,223 @@ function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInpu
   return { ...base, ...overrides, runParams };
 }
 
+async function resolveTerminalText(overrides: TerminalInputOverrides): Promise<string | undefined> {
+  const resolved = await resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
+  expect(resolved.action).toBe("complete");
+  if (resolved.action !== "complete") {
+    throw new Error("expected terminal resolution to complete");
+  }
+  return resolved.result.payloads?.[0]?.text;
+}
+
 describe("terminal resolution", () => {
-  it("carries presentation across retries until a newer tool outcome replaces it", () => {
-    const tracker = createTerminalToolPresentationTracker();
-    const firstOrdinal = tracker.allocateOrdinal();
-    tracker.observe({
-      toolCallOrdinal: firstOrdinal,
-      terminalPresentation: "Fetched https://example.com",
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each(["empty", "reasoning", "cleanup", "tool warning", "partial reply", "committed delivery"])(
+    "preserves a failed harness turn instead of retrying its %s output",
+    async (output) => {
+      const error = new Error("Provider failed while a tool was pending");
+      const cleanupFailed = output !== "empty" && output !== "reasoning";
+      const partialText = "The first operation finished.";
+      const assistant =
+        output === "reasoning"
+          ? buildEmbeddedRunnerAssistant({ content: [{ type: "thinking", thinking: "checking" }] })
+          : cleanupFailed
+            ? buildEmbeddedRunnerAssistant({
+                stopReason: "toolUse",
+                content: [{ type: "text", text: partialText }],
+              })
+            : undefined;
+      const payloads =
+        output === "tool warning"
+          ? [{ text: "The pending tool was cancelled.", isError: true }]
+          : output === "partial reply"
+            ? [{ text: partialText }]
+            : output === "cleanup"
+              ? undefined
+              : [];
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error },
+        assistantTexts: output === "partial reply" ? [partialText] : [],
+        currentAttemptAssistant: assistant,
+        lastAssistant: assistant,
+        lastToolError: cleanupFailed
+          ? { toolName: "exec", error: "Tool execution aborted" }
+          : undefined,
+        toolMetas: cleanupFailed ? [{ toolName: "exec", isError: true, replaySafe: false }] : [],
+        didSendViaMessagingTool: output === "committed delivery",
+        messagingToolSentTexts: output === "committed delivery" ? [partialText] : [],
+        replayMetadata: { hadPotentialSideEffects: cleanupFailed, replaySafe: false },
+      });
+      const onSuccessfulAuthProfile = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        payloadsWithToolMedia: payloads,
+        authProfileId: "openai:selected",
+        runParams: { onSuccessfulAuthProfile },
+      });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expect(resolved).toMatchObject({
+        action: "complete",
+        result: { meta: { error: { message: error.message, fallbackSafe: false } } },
+      });
+      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(input.setSuppressNextUserMessagePersistence).not.toHaveBeenCalled();
+      expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
+      expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
+      expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
+      expect(onSuccessfulAuthProfile).not.toHaveBeenCalled();
+      expect(input.setTerminalLifecycleMeta).toHaveBeenCalledWith(
+        expect.objectContaining({ livenessState: "abandoned" }),
+      );
+      if (resolved.action === "complete") {
+        expect(classifyAgentExecResult(resolved.result).status).toBe("error");
+        expect(resolved.result.meta.executionTrace?.attempts ?? []).not.toContainEqual(
+          expect.objectContaining({ result: "success" }),
+        );
+        if (cleanupFailed) {
+          expect(resolved.result.payloads ?? []).toEqual(payloads ?? []);
+          expect(resolved.result.messagingToolSentTexts).toEqual(attempt.messagingToolSentTexts);
+        }
+      }
+    },
+  );
+
+  it("keeps external cancellation ahead of a failed attempt during final result construction", async () => {
+    const assistant = emptyAssistant({ stopReason: "stop" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "failed", source: "prompt", error: new Error("Late provider failure") },
+      lastToolError: { toolName: "exec", error: "Tool execution aborted" },
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
-
-    expect(tracker.read()).toBe("Fetched https://example.com");
-
-    const retryOrdinal = tracker.allocateOrdinal();
-    expect(tracker.read()).toBe("Fetched https://example.com");
-    tracker.observe({ toolCallOrdinal: retryOrdinal });
-    tracker.observe({
-      toolCallOrdinal: firstOrdinal,
-      terminalPresentation: "stale presentation",
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+      abortSignal: AbortSignal.abort(),
     });
-
-    expect(tracker.read()).toBeUndefined();
+    const input = makeTerminalInput({ attempt, terminalState });
+    const resolved = await resolveEmbeddedRunTerminal(input);
+    expect(resolved).toMatchObject({ action: "complete", result: { meta: { aborted: true } } });
+    if (resolved.action === "complete") {
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(resolved.result.meta.livenessState).toBe("blocked");
+    }
+    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
   });
 
-  it("keeps only the bounded latest MCP App view identity", () => {
-    expect(
-      copyAttemptDeliveryState({
-        latestMcpAppChannelView: { viewId: "view-latest" },
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-      } as never).latestMcpAppChannelView,
-    ).toEqual({ viewId: "view-latest" });
+  it("keeps an ordinary tool failure nonfatal when the attempt completed", async () => {
+    const text = "The operation failed; the earlier result is still available.";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastToolError: { toolName: "exec", error: "Tool failed" },
+      assistantTexts: [text],
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({ attempt, payloadsWithToolMedia: [{ text }] }),
+    );
+    expect(resolved.action).toBe("complete");
+    if (resolved.action === "complete") {
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(classifyAgentExecResult(resolved.result).status).toBe("ok");
+      expect(resolved.result.payloads).toEqual([{ text }]);
+    }
+    expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
+  });
+
+  it.each(["openai:selected", undefined])(
+    "reports the successful profile %s privately for command maintenance",
+    async (authProfileId) => {
+      const text = "The turn completed.";
+      const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [text],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+      });
+      const onSuccessfulAuthProfile = vi.fn();
+      const resolved = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          attempt,
+          attemptAssistant: assistant,
+          payloadsWithToolMedia: [{ text }],
+          authProfileId,
+          runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
+        }),
+      );
+
+      expect(resolved.action).toBe("complete");
+      expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
+      if (resolved.action === "complete") {
+        expect(resolved.result.meta.agentMeta).not.toHaveProperty("authProfileId");
+      }
+    },
+  );
+
+  it.each([
+    {
+      reason: "auth" as const,
+      expected: "Couldn't sign in to openai. Your saved login looks expired or no longer works.",
+    },
+    {
+      reason: "auth_permanent" as const,
+      expected: "openai isn't accepting your saved login.",
+    },
+  ])("surfaces provider recovery guidance for $reason terminal failures", async (testCase) => {
+    const text = await resolveTerminalText({
+      assistantProfileFailureReason: testCase.reason,
+      maxEmptyResponseRetryAttempts: 0,
+    });
+    expect(text).toContain(testCase.expected);
+    expect(text).toContain("openclaw configure");
+  });
+
+  it("keeps non-auth incomplete turns on the generic warning", async () => {
+    await expect(
+      resolveTerminalText({
+        assistantProfileFailureReason: "timeout",
+        maxEmptyResponseRetryAttempts: 0,
+      }),
+    ).resolves.toBe("⚠️ Agent couldn't generate a response. Please try again.");
+  });
+
+  it("does not replace timeout suppression with auth guidance", async () => {
+    const assistant = emptyAssistant({ stopReason: "aborted" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "timeout", phase: "prompt", source: "external" },
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    await expect(
+      resolveTerminalText({
+        attempt,
+        attemptAssistant: assistant,
+        assistantProfileFailureReason: "auth",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps the side-effect warning ahead of auth guidance", async () => {
+    const assistant = emptyAssistant({ stopReason: "error" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+    const text = await resolveTerminalText({
+      attempt,
+      attemptAssistant: assistant,
+      assistantProfileFailureReason: "auth",
+      replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+    });
+    expect(text).toContain("some tool actions may have already been executed");
+    expect(text).not.toContain("Couldn't sign in");
   });
 
   it("retries a required empty reply even when deliberate silence is enabled", async () => {
@@ -211,6 +406,114 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
     expect(resolved.result.meta.livenessState).toBe("working");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "an exactly settled terminal tool batch", expectedCompletion: "tool-batch" as const },
+    { label: "stale terminal metadata", metadata: { toolCallId: "stale-call" } },
+    { label: "a reused call id whose current occurrence is nonterminal", reusedCall: true },
+    {
+      label: "a partially settled batch",
+      lifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 },
+    },
+    { label: "a mixed terminal and nonterminal batch", mixedBatch: true },
+    { label: "failed terminal metadata", metadata: { isError: true } },
+    {
+      label: "an asynchronously running terminal tool",
+      expectIncompleteTurn: false,
+      metadata: { asyncStarted: true },
+    },
+    { label: "a failed terminal result", result: { isError: true } },
+    { label: "a result with the wrong tool owner", result: { toolName: "another_tool" } },
+    { label: "a stale prior-turn result with the reused call id", staleResult: true },
+  ])("resolves $label from exact current-batch ownership", async (testCase) => {
+    const terminalCall = {
+      type: "toolCall" as const,
+      id: "terminal-tool-call",
+      name: "ask_user",
+      arguments: {},
+    };
+    const otherCall = { ...terminalCall, id: "nonterminal-tool-call", name: "another_tool" };
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [terminalCall, ...(testCase.mixedBatch ? [otherCall] : [])],
+    });
+    const toolResult = {
+      role: "toolResult" as const,
+      toolCallId: terminalCall.id,
+      toolName: terminalCall.name,
+      content: [{ type: "text", text: "The visible question was cancelled." }],
+      isError: false,
+      ...testCase.result,
+    };
+    const currentTurn = [
+      { role: "user", content: [{ type: "text", text: "Ask the current question." }] },
+      assistant,
+    ];
+    const messagesSnapshot = testCase.staleResult
+      ? [
+          buildEmbeddedRunnerAssistant({ stopReason: "toolUse", content: [terminalCall] }),
+          toolResult,
+          ...currentTurn,
+        ]
+      : [
+          ...currentTurn,
+          ...(testCase.expectedCompletion
+            ? [
+                buildEmbeddedRunnerAssistant({
+                  content: [{ type: "text", text: "The question was already shown." }],
+                }),
+              ]
+            : []),
+          toolResult,
+          ...(testCase.mixedBatch
+            ? [{ ...toolResult, toolCallId: otherCall.id, toolName: otherCall.name }]
+            : []),
+        ];
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [
+        {
+          toolName: terminalCall.name,
+          toolCallId: terminalCall.id,
+          terminate: true,
+          ...testCase.metadata,
+        },
+        ...(testCase.reusedCall
+          ? [{ toolName: terminalCall.name, toolCallId: terminalCall.id }]
+          : []),
+        ...(testCase.mixedBatch ? [{ toolName: otherCall.name, toolCallId: otherCall.id }] : []),
+      ],
+      itemLifecycle: testCase.lifecycle ?? {
+        startedCount: testCase.mixedBatch ? 2 : 1,
+        completedCount: testCase.mixedBatch ? 2 : 1,
+        activeCount: 0,
+      },
+      messagesSnapshot: messagesSnapshot as TerminalInput["attempt"]["messagesSnapshot"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action === "complete") {
+      expect(resolved.result.meta.intentionalTerminalCompletion).toBe(testCase.expectedCompletion);
+      if (testCase.expectedCompletion) {
+        expect(resolved.result.meta.error).toBeUndefined();
+        expect(resolved.result.payloads).toBeUndefined();
+        expect(resolved.result.meta.livenessState).toBe("working");
+        expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(attempt.messagesSnapshot.at(-1)).toBe(toolResult);
+      } else if (testCase.expectIncompleteTurn !== false) {
+        expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+        expect(resolved.result.payloads?.[0]?.isError).toBe(true);
+      }
+    }
   });
 
   it("completes a cron turn from a trailing silent tool result", async () => {
@@ -482,6 +785,60 @@ describe("terminal resolution", () => {
     ).toBeNull();
   });
 
+  it("keeps explicit silence terminal only for reply-optional settled turns", () => {
+    const toolUseAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
+    });
+    const silentAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "stop",
+      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [SILENT_REPLY_TOKEN],
+      toolMetas: [{ toolName: "write", toolCallId: "tool-1", replaySafe: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      messagesSnapshot: [
+        { role: "user", content: [{ type: "text", text: "[OpenClaw heartbeat poll]" }] },
+        toolUseAssistant,
+        { role: "toolResult", toolCallId: "tool-1", toolName: "write", isError: false },
+        silentAssistant,
+      ] as never,
+      lastAssistant: silentAssistant,
+      currentAttemptAssistant: silentAssistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const request = (runParams: {
+      trigger: "heartbeat" | "user";
+      terminalReplyExpectation?: "required";
+    }) =>
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-silent",
+          runId: "run:settled-silent",
+          ...runParams,
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
+
+    expect(request({ trigger: "heartbeat" })).toBeNull();
+    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBe(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
+  });
+
   it("requires an available finalizer and no visible structured error", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
@@ -671,7 +1028,7 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
   });
 
-  it("still reports an incomplete turn when the output budget ends with no text", async () => {
+  it("still reports an incomplete turn when auth failure bookkeeping rejects", async () => {
     const assistant = emptyAssistant({ stopReason: "length" });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
@@ -679,8 +1036,17 @@ describe("terminal resolution", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
+    const maybeMarkAuthProfileFailure = vi.fn(async () => {
+      throw new Error("injected auth store write failure");
+    });
     const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({ attempt, attemptAssistant: assistant }),
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        authProfileId: "openai:default",
+        assistantProfileFailureReason: "unknown",
+        maybeMarkAuthProfileFailure,
+      }),
     );
 
     expect(resolved.action).toBe("complete");
@@ -690,5 +1056,10 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
     expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
     expect(resolved.result.meta.livenessState).toBe("abandoned");
+    expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+      profileId: "openai:default",
+      reason: "unknown",
+      modelId: "gpt-5.6-luna",
+    });
   });
 });

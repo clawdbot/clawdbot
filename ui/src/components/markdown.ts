@@ -483,11 +483,6 @@ function installHooks() {
   });
 }
 
-function formatTruncatedMarkdownInput(input: string): string {
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated);
-}
-
 function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
@@ -555,18 +550,16 @@ export function toSanitizedMarkdownHtml(
     return "";
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
+  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
+    return renderSanitizedMarkdown(renderInput, renderOptions);
+  }
   const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
-  if (cacheable) {
-    const cached = getCachedMarkdown(cacheKey);
-    if (cached !== null) {
-      return cached;
-    }
+  const cached = getCachedMarkdown(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
   const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  if (cacheable) {
-    setCachedMarkdown(cacheKey, sanitized);
-  }
+  setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
 }
 
@@ -582,6 +575,7 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
+  streamKey?: string,
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
@@ -595,9 +589,14 @@ export function toStreamingMarkdownHtml(
   if (!trimmedInput) {
     return "";
   }
-  const input = formatTruncatedMarkdownInput(trimmedInput);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+    input,
+    streamKey,
+    truncated.text.length,
+  );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
@@ -606,7 +605,7 @@ export function toStreamingMarkdownHtml(
   }
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,

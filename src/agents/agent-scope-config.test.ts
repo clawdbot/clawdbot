@@ -6,6 +6,7 @@ import {
   AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveAgentConfig,
   resolveAgentOperationAgentId,
   resolveAgentWorkspaceDir,
@@ -21,6 +22,33 @@ import {
 vi.unmock("./agent-scope-config.js");
 
 describe("agent roster resolution", () => {
+  it("rejects unknown configured-agent selections with canonical CLI guidance", () => {
+    const cfg = { agents: { entries: { main: {}, ops: {} } } };
+
+    expect(resolveConfiguredAgentId(cfg, "ops")).toBe("ops");
+    expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
+      'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.',
+    );
+  });
+
+  it("keeps the guidance runnable under a profile", () => {
+    const cfg = { agents: { entries: { main: {}, ops: {} } } };
+    const previous = process.env.OPENCLAW_PROFILE;
+    process.env.OPENCLAW_PROFILE = "testprof";
+    try {
+      // A hint the operator cannot paste back is worse than none, so the profile must survive.
+      expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
+        "Run openclaw --profile testprof agents list to see configured agents.",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = previous;
+      }
+    }
+  });
+
   it("preserves the Plugin SDK fallback only when the roster property is absent", () => {
     expect(listAgentIds({})).toEqual(["main"]);
     expect(listAgentIds({ agents: { entries: {} } })).toEqual([]);
@@ -193,6 +221,25 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig({ agents: { defaults } }, "work")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
+  });
+
+  it("does not project unrelated keyed entries while resolving one agent", () => {
+    let unrelatedEntryReads = 0;
+    const entries = new Proxy(
+      { main: { name: "Primary" }, worker: { name: "Worker" } },
+      {
+        get(target, property, receiver) {
+          if (property === "worker") {
+            unrelatedEntryReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const config = { agents: { ownership: "explicit" as const, entries } };
+
+    expect(resolveAgentConfig(config, "main")?.name).toBe("Primary");
+    expect(unrelatedEntryReads).toBe(0);
   });
 
   it("keeps the retained legacy owner on the inherited workspace before config write", () => {

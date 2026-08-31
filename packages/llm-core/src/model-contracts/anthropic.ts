@@ -17,7 +17,6 @@ function normalizeClaudeModelId(modelId?: string): string {
 
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
   levels: [
-    { id: "off" },
     { id: "minimal" },
     { id: "low" },
     { id: "medium" },

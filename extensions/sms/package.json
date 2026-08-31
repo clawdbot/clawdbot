@@ -26,12 +26,11 @@
             "TWILIO_AUTH_TOKEN",
             "TWILIO_PHONE_NUMBER",
             "TWILIO_SMS_FROM",
-            "TWILIO_MESSAGING_SERVICE_SID",
-            "SMS_PUBLIC_WEBHOOK_URL",
-            "SMS_WEBHOOK_PATH",
-            "SMS_ALLOWED_USERS"
+            "TWILIO_MESSAGING_SERVICE_SID"
           ]
-        }
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasConfiguredSmsChannelState"
       },
       "label": "SMS",
       "selectionLabel": "SMS (Twilio)",

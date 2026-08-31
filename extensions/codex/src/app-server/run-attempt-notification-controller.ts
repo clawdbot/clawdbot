@@ -98,7 +98,7 @@ export function createCodexAttemptNotificationController(
     if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
       const item = readCodexNotificationItem(notification.params);
       if (item?.type === "userMessage" && typeof item.clientId === "string") {
-        steeringQueue?.confirmConsumed(item.clientId);
+        await steeringQueue?.confirmConsumed(item.clientId);
       }
     }
     if (notificationState.isTurnAbortMarker) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatGoogleChatTextChunks, GOOGLE_CHAT_FORMAT_PROFILE } from "./format.js";
 
 const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
@@ -104,6 +104,26 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("   - top-level")).toBe("* top-level");
   });
 
+  it("keeps dense bullet-list formatting work bounded", () => {
+    const input = Array.from({ length: 1_000 }, (_, index) => `- row ${index}`).join("\n");
+    const expected = input.replace(/^- /gmu, "* ");
+    const sliceSpy = vi.spyOn(String.prototype, "slice");
+    let fullMessagePrefixSlices = 0;
+    try {
+      expect(formatGoogleChatText(input)).toBe(expected);
+      fullMessagePrefixSlices = sliceSpy.mock.calls.reduce((count, [start, end], index) => {
+        const source = sliceSpy.mock.contexts[index];
+        return String(source).length === input.length && start === 0 && end !== undefined
+          ? count + 1
+          : count;
+      }, 0);
+    } finally {
+      sliceSpy.mockRestore();
+    }
+
+    expect(fullMessagePrefixSlices).toBeLessThan(50);
+  });
+
   it("neutralizes nested markup inside native link labels", () => {
     expect(formatGoogleChatText("[x > y](https://example.com)")).toBe(
       "<https://example.com|x ＞ y>",
@@ -128,6 +148,25 @@ describe("formatGoogleChatText", () => {
 
   it("preserves linkified URLs containing delimiter characters", () => {
     expect(formatGoogleChatText("https://example.com/a_b_c")).toBe("https://example.com/a_b_c");
+  });
+
+  it.each([
+    ["**a**[**b** c](https://example.com)", "*ab* c (https://example.com)"],
+    ["[**label**](https://example.com)", "*label* (https://example.com)"],
+    ["[**label**](https://example.com)_tail_", "*label* (https://example.com)_tail_"],
+    ["**before [label](https://example.com) after**", "*before label (https://example.com) after*"],
+  ])("appends terminal link text once in %s", (markdown, expected) => {
+    expect(formatGoogleChatText(markdown)).toBe(expected);
+  });
+
+  it("counts terminal link text when chunking a crossed label", () => {
+    const chunks = formatGoogleChatTextChunks(
+      "**a**[**b** c](https://example.com) trailing text",
+      40,
+    );
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= 40)).toBe(true);
+    expect(chunks.join(" ").match(/https:\/\/example\.com/g)).toHaveLength(1);
   });
 
   it("handles newline-heavy messages without changing their content", () => {

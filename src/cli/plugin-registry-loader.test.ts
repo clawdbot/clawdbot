@@ -6,10 +6,17 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
+const readRegistryMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ entries: Array<{ backendId?: string }> }> => ({ entries: [] })),
+);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
+}));
+
+vi.mock("../agents/sandbox/registry.js", () => ({
+  readRegistry: readRegistryMock,
 }));
 
 describe("plugin-registry-loader", () => {
@@ -24,6 +31,7 @@ describe("plugin-registry-loader", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readRegistryMock.mockResolvedValue({ entries: [] });
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
   });
@@ -89,6 +97,19 @@ describe("plugin-registry-loader", () => {
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
+    });
+  });
+
+  it("includes persisted runtime owners when loading sandbox managers", async () => {
+    readRegistryMock.mockResolvedValue({
+      entries: [{ backendId: "openshell" }, { backendId: "docker" }, { backendId: "openshell" }],
+    });
+
+    await ensureCliPluginRegistryLoaded({ scope: "sandbox-management" });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "sandbox-backends",
+      persistedSandboxBackendIds: ["docker", "openshell"],
     });
   });
 

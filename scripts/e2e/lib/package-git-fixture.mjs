@@ -43,10 +43,13 @@ function prepare(root) {
   ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  // npm still resolves omitted dev dependencies; this fixture runs the packed runtime.
+  delete packageJson.devDependencies;
   packageJson.scripts = {
     ...packageJson.scripts,
     openclaw: "node openclaw.mjs",
   };
+  delete packageJson.scripts.postinstall;
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
   const aiRuntimePackageJson = path.join(aiRuntimeSource, "package.json");
   if (!fs.existsSync(aiRuntimePackageJson)) {

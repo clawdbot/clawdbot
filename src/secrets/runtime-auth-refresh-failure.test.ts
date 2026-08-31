@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
   beginSecretsRuntimeIsolationForTest,
@@ -136,6 +141,11 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
         loadAuthStore,
       });
+      const discordTokenPath = "channels.discord.accounts.ops.token";
+      setConfigResolutionFacts(
+        prepared.config,
+        createConfigResolutionFacts([], new Map([[discordTokenPath, "DISCORD_BOT_TOKEN"]])),
+      );
       prepared.secretOwners = [
         ...(prepared.secretOwners ?? []),
         {
@@ -166,6 +176,9 @@ describe("secrets runtime snapshot auth refresh failure", () => {
 
       activeRef = secondRef;
       await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+      expect(
+        getAuthoredConfigSecretRef(expectActiveSecretsRuntimeSnapshot().config, discordTokenPath),
+      ).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
       expect(expectActiveSecretsRuntimeSnapshot().secretOwners).toContainEqual({
         ownerKind: "account",
         ownerId: "discord:ops",
@@ -250,9 +263,10 @@ describe("secrets runtime snapshot auth refresh failure", () => {
       );
       expect(candidate.authStores[0]?.store.profiles[profileId]).toMatchObject({
         type: "api_key",
+        provider: "openai",
         keyRef: OPENAI_FILE_KEY_REF,
-        key: undefined,
       });
+      expect(candidate.authStores[0]?.store.profiles[profileId]).not.toHaveProperty("key");
     });
   });
 });

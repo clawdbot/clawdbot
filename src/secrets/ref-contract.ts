@@ -83,6 +83,20 @@ export function resolveDefaultSecretProviderAlias(
   return DEFAULT_SECRET_PROVIDER_ALIAS;
 }
 
+/** Builds an environment-backed gateway credential using its configured provider alias. */
+export function createGatewayEnvSecretRef(
+  config: SecretRefDefaultsCarrier,
+  envVarName: string,
+): SecretRef {
+  return {
+    source: "env",
+    provider: resolveDefaultSecretProviderAlias(config, "env", {
+      preferFirstProviderForSource: true,
+    }),
+    id: envVarName,
+  };
+}
+
 /** Whether a source-specific built-in provider owns this selected default alias. */
 export function isBuiltInDefaultSecretProviderRef(
   config: SecretRefDefaultsCarrier,

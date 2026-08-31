@@ -121,9 +121,11 @@ rm -rf "$tmpdir"
 OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency
 name list, strips dev-only workspace metadata from the published manifest,
-runs a script-free npm install for the package-local runtime dependencies,
-then packs or publishes the plugin tarball with those dependency files
-included. Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
+stages a separate package directory without source `node_modules`, and runs a
+script-free npm install there for runtime dependencies. It then packs or publishes
+the plugin tarball with those dependency files included and removes the staging
+directory. The pnpm-owned source dependency tree stays unchanged.
+Native-heavy packages (Codex, ACPX, Copilot, llama.cpp,
 memory-lancedb, Microsoft Teams, Tlon) opt out with
 `openclaw.release.bundleRuntimeDependencies: false`; they still ship a
 precisely pinned manifest, but npm resolves runtime dependencies during install
@@ -193,23 +195,58 @@ Bundled plugin manifests must not request dependency staging. Large or
 optional plugin functionality should be packaged as a normal plugin and
 installed through the same npm/git/ClawHub path as third-party plugins.
 
-In source checkouts, OpenClaw treats the repository as a pnpm monorepo.
-After `pnpm install`, bundled plugins load from `extensions/<id>` so
-package-local workspace dependencies are available and edits are picked up
-directly. Source checkout development is pnpm-only; plain `npm install` at
-the repository root does not prepare bundled plugin dependencies.
+Internal bundled plugins retain their dependency declarations in their own
+manifests. Runtime dependencies that are not compiled into `dist` must also
+be declared in the root OpenClaw package's `dependencies` or
+`optionalDependencies`, because the root package ships their runtime.
+External plugins keep their runtime dependencies plugin-local.
 
-| Install shape                    | Bundled plugin location               | Dependency owner                                                     |
-| -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| Global npm install               | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
-| Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
-| `openclaw plugins install ...`   | Managed npm project/git/ClawHub root  | The plugin install/update flow                                       |
+In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
+prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
+`extensions` when neither built tree is available. pnpm owns the source dependency
+trees: postinstall and build preparation preserve plugin-local versions and
+workspace links. Native Node imports resolve from each plugin package;
+packaged bundled runtime still uses the root runtime declarations above.
+Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
+`npm install` at the repository root does not prepare the pnpm workspace.
+
+| Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
+| ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| Global npm install                              | Built runtime tree inside the package                | Root OpenClaw package for internal bundled runtime     |
+| Git checkout plus `pnpm install` + `pnpm build` | `dist/extensions`, then `dist-runtime/extensions`    | Root runtime declarations plus plugin manifests        |
+| Unbuilt source checkout                         | `extensions/<id>` fallback when no built tree exists | pnpm workspace with explicit root runtime dependencies |
+| `openclaw plugins install ...`                  | Managed npm project/git/ClawHub root                 | The plugin install/update flow                         |
 
 For the global npm row, use
 `npm install -g openclaw --allow-scripts=openclaw` on npm 12 or npm 11.16+.
 On npm 11.15 and earlier, omit `--allow-scripts=openclaw`. Plugin dependency
 convergence remains intentionally script-disabled and continues to use the
 `--ignore-scripts` commands above.
+
+### Native imports from a standalone source build
+
+To import an already-built `extensions/<package>/dist` directly with Node, use
+the host link installed by pnpm. If that link is missing, explicitly prepare it
+from the source checkout root:
+
+```bash
+node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions/<package>
+```
+
+This requires existing root SDK output in `dist/plugin-sdk` and the selected
+package's standalone runtime output. If the package output is missing, build
+it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The preparation command does not rebuild either output or execute plugin code.
+It only links the checkout as `node_modules/openclaw` for a real immediate
+source package that declares `openclaw` in `peerDependencies` or `dependencies`.
+It does not install third-party dependencies; those must already be available
+through the pnpm workspace.
+
+Preparation refuses symlinked package paths, unsafe manifests, and conflicting
+dependency paths instead of reporting success. Ordinary package builds remain
+artifact-only. Postinstall and root build preparation preserve source
+plugin-local `node_modules`, including this link. Runtime loading never performs
+this setup or runs a package manager.
 
 ## Legacy cleanup
 

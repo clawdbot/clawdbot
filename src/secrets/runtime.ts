@@ -11,9 +11,15 @@ import {
   clearAuthProfileMigrationDiagnostics,
   markAuthProfileMigrationRequired,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  prepareRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsExcept,
+} from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshotMetadata,
@@ -27,6 +33,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { secretRefKey } from "./ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
@@ -215,7 +222,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     const snapshot = {
       sourceConfig,
       config: resolvedConfig,
-      authStores,
+      authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
       authStoreCredentialsRevision,
       warnings: [],
       degradedOwners: migrationDegradedOwners,
@@ -304,6 +311,13 @@ export async function prepareSecretsRuntimeSnapshot(params: {
           forceColdRefKeys: params.forceColdRefKeys,
         })
       : { degradedOwners: [], resolvedValues: new Map<string, unknown>() };
+  copyConfigResolutionFactsExcept(
+    assignmentSourceConfig,
+    resolvedConfig,
+    context.assignments
+      .filter((assignment) => assignmentResolution.resolvedValues.has(secretRefKey(assignment.ref)))
+      .map((assignment) => assignment.path),
+  );
   const assignmentSecretOwners = listSecretAssignmentOwners(
     context.assignments,
     assignmentResolution.resolvedValues,
@@ -325,7 +339,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const snapshot = {
     sourceConfig,
     config: resolvedConfig,
-    authStores,
+    authStores: prepareRuntimeAuthProfileStoreSnapshots(authStores, runtimeEnv),
     authStoreCredentialsRevision,
     warnings: context.warnings,
     degradedOwners: [
@@ -644,7 +658,7 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
     if (!runtimeConfig || !runtimeSourceConfig || !runtimeMetadata) {
       return false;
     }
-    const config = { ...runtimeConfig };
+    const config = cloneConfigWithResolutionFacts(runtimeConfig);
     const modelsPatch = patchResolvedSecretRefLeaves({
       current: runtimeConfig.models,
       source: providerAuthConfig.models,

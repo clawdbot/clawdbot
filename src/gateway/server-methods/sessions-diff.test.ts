@@ -138,6 +138,42 @@ describe("loadSessionDiff", () => {
     expect(result.unavailableReason).toBe("not_git");
   });
 
+  // Diff and baseline reads run inside the Gateway process against user
+  // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
+  // never execute — same invariant as the publication git transport.
+  it.skipIf(process.platform === "win32")(
+    "never executes a checkout-configured core.fsmonitor command",
+    async () => {
+      initRepo(repoRoot);
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
+      git(repoRoot, "add", "a.txt");
+      git(repoRoot, "commit", "-qm", "init");
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "two\n");
+      // Script and sentinel live outside the checkout so they never show up
+      // as untracked entries in the diffs under test.
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fsmonitor-"));
+      try {
+        const sentinel = path.join(outside, "sentinel");
+        const hook = path.join(outside, "fsmonitor.sh");
+        fs.writeFileSync(hook, `#!/bin/sh\n: > "${sentinel}"\nexit 1\n`, { mode: 0o755 });
+        git(repoRoot, "config", "core.fsmonitor", hook);
+        // Sanity: unpinned git in this checkout does run the command.
+        git(repoRoot, "status", "--porcelain");
+        expect(fs.existsSync(sentinel)).toBe(true);
+        fs.rmSync(sentinel);
+
+        mockSession(repoRoot);
+        const diff = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+        expect(diff.files.map((file) => file.path)).toEqual(["a.txt"]);
+        const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+        expect(baseline?.files.map((file) => file.path)).toEqual(["a.txt"]);
+        expect(fs.existsSync(sentinel)).toBe(false);
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("shows the full diff without mutating a pending baseline claim", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");

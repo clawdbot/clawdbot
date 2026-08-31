@@ -116,7 +116,6 @@ describe("plugin package update policy reconciliation", () => {
       deny: ["other-denied"],
       entries: { "pack/one": { enabled: true }, other: { enabled: true } },
       load: { paths: ["/plugins/unrelated.js"] },
-      slots: { memory: "memory-core", contextEngine: "legacy" },
     });
     expect(result.config.channels).toEqual({
       shared: { enabled: true },

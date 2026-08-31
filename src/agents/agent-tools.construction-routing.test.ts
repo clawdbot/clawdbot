@@ -37,6 +37,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | undefined {
@@ -112,5 +113,44 @@ describe("createOpenClawCodingTools exec notification routing", () => {
         notifySessionKey: liveSessionKey,
       }),
     );
+  });
+});
+
+describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
+  const sandbox = createAgentToolsSandboxContext({ workspaceDir: "/managed/workspace" });
+
+  it("keeps host-owned tools available when no sandbox filesystem family is requested", () => {
+    mocks.createOpenClawToolsOptions.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { includeBaseCodingTools: true, includeShellTools: false },
+    { includeBaseCodingTools: false, includeShellTools: true },
+  ])("rejects sandbox filesystem families without their bridge: %o", (families) => {
+    expect(() =>
+      createOpenClawCodingTools({
+        sandbox,
+        toolConstructionPlan: {
+          ...families,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      }),
+    ).toThrow("Sandbox filesystem bridge is unavailable.");
   });
 });

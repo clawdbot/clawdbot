@@ -179,6 +179,7 @@ describe("cron one-shot schedule ownership", () => {
           expect.objectContaining({
             status: "error",
             error: "Cron job removed by operator.",
+            deliveryStatus: "not-requested",
             job: expect.objectContaining({ name: "removed original one-shot" }),
           }),
         ]);
@@ -190,6 +191,7 @@ describe("cron one-shot schedule ownership", () => {
           expect.objectContaining({
             status: "error",
             error: "Cron job removed by operator.",
+            deliveryStatus: "not-requested",
             runId: finishedEvents[0]?.runId,
           }),
         ]);

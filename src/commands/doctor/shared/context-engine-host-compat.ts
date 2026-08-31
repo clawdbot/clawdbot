@@ -359,7 +359,7 @@ function formatCompatibilityWarnings(params: {
   const incompatibleAllHosts = params.issues.length === params.hostCount;
   lines.push(
     incompatibleAllHosts
-      ? `- Run "${params.doctorFixCommand}" to switch plugins.slots.contextEngine to "legacy", or configure a compatible runtime/harness for agent runs.`
+      ? `- Run "${params.doctorFixCommand}" to remove the plugins.slots.contextEngine override and restore the default "legacy", or configure a compatible runtime/harness for agent runs.`
       : `- Some configured runtimes support context engine "${params.info.id}" and others do not; doctor will not rewrite the global contextEngine slot automatically. Configure unsupported models to use a compatible runtime/harness or set plugins.slots.contextEngine to "legacy".`,
   );
   return [lines.join("\n")];
@@ -416,13 +416,17 @@ export async function maybeRepairContextEngineHostCompatibility(params: {
   }
 
   const next = structuredClone(params.cfg);
-  next.plugins ??= {};
-  next.plugins.slots ??= {};
-  next.plugins.slots.contextEngine = defaultSlotIdForKey("contextEngine");
+  const slots = next.plugins?.slots;
+  if (slots) {
+    delete slots.contextEngine;
+    if (Object.keys(slots).length === 0) {
+      delete next.plugins?.slots;
+    }
+  }
   return {
     config: next,
     changes: [
-      `Set plugins.slots.contextEngine to "legacy" because context engine "${resolved.info.id}" is incompatible with every configured agent-run host.`,
+      `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${resolved.info.id}" is incompatible with every configured agent-run host.`,
     ],
     warnings: resolved.warnings,
   };

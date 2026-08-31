@@ -23,6 +23,11 @@ import {
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
 
 const standaloneBundledChannelSmokeFiles = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
@@ -31,6 +36,7 @@ const standaloneBundledChannelSmokeFiles = [
   "scripts/lib/optional-bundled-clusters.mjs",
   "scripts/lib/package-root-args.mts",
   "scripts/lib/record-shared.mjs",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/process-warning-filter.mts",
 ];
 
@@ -107,6 +113,7 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     const rootPackageJson = {
       dependencies: { "@openclaw/ai": "workspace:*" },
       name: "openclaw-source-pack-regression",
+      packageManager: rootPackageManager,
       version,
     };
     mkdirSync(aiDir, { recursive: true });
@@ -122,15 +129,11 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
       `${JSON.stringify({ name: "@openclaw/ai", version }, null, 2)}\n`,
     );
 
-    const install = spawnSync(
-      "pnpm",
-      ["install", "--ignore-scripts", "--lockfile=false", "--reporter=silent"],
-      {
-        cwd: rootDir,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const install = spawnSync("pnpm", ["install", "--ignore-scripts", "--reporter=silent"], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     expect(install.status, install.stderr).toBe(0);
     const packed = spawnSync(
       "pnpm",
@@ -212,10 +215,12 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     const originalPackageJson = `${JSON.stringify(
       {
         name: "openclaw-direct-pack-manifest",
+        packageManager: rootPackageManager,
         version: "2099.1.2-test.0",
         scripts: {
           prepack: "node scripts/package-manifest.mjs prepare",
           postpack: "node scripts/package-manifest.mjs restore",
+          "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
         },
         devDependencies: {
           "@openclaw/session-url-contract": "workspace:*",
@@ -250,8 +255,9 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
 
     const packedPackageJson = JSON.parse(
       readFileSync(path.join(extractDir, "package", "package.json"), "utf8"),
-    ) as { devDependencies?: Record<string, string> };
+    ) as { devDependencies?: Record<string, string>; scripts?: Record<string, string> };
     expect(packedPackageJson.devDependencies).toEqual({ vitest: "4.1.10" });
+    expect(packedPackageJson.scripts?.["crabbox:run"]).toBe("node dist/crabbox-wrapper.js run");
     expect(readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalPackageJson);
     expect(
       existsSync(

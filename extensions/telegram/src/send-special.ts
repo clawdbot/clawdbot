@@ -148,11 +148,11 @@ async function sendPollTelegramWithContext(
   const durationSeconds = normalizedPoll.durationSeconds;
   if (durationSeconds === undefined && normalizedPoll.durationHours !== undefined) {
     throw new Error(
-      "Telegram poll durationHours is not supported. Use durationSeconds (5-600) instead.",
+      "Telegram poll durationHours is not supported. Use durationSeconds (5-604800) instead.",
     );
   }
-  if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 600)) {
-    throw new Error("Telegram poll durationSeconds must be between 5 and 600");
+  if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 604_800)) {
+    throw new Error("Telegram poll durationSeconds must be between 5 and 604800");
   }
 
   const pollParams: TelegramSendPollParams = {

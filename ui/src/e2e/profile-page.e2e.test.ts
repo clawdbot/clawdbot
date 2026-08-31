@@ -188,6 +188,23 @@ suite.define(() => {
     );
   });
 
+  it("credits a verified GitHub account by default with no stored preference", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      await openProfilePage(page, {
+        "users.self": { profile: linkedGitHubProfile },
+        "users.prefs.get": { status: "ok", entries: {} },
+      });
+
+      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
+        has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
+      });
+      const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
+      await expect(toggle).toBeEnabled();
+      await expect(toggle).toBeChecked();
+      await screenshot(page, "13-git-coauthor-default-on.png");
+    });
+  });
+
   it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
     await suite.withPage(
       {
@@ -628,7 +645,16 @@ suite.define(() => {
         const updatedAtRequestCountBefore = avatarRequests.filter(
           (url) => new URL(url).searchParams.get("v") === updatedAtRevision,
         ).length;
-        await page.locator('input[type="file"]').setInputFiles({
+        const chooser = page.locator(".identity-avatar-control > button");
+        await expect(chooser).toHaveAccessibleName("Choose image");
+        await chooser.focus();
+        await expect(chooser).toBeFocused();
+        await screenshot(page, "11-avatar-keyboard-focus.png");
+        const [fileChooser] = await Promise.all([
+          page.waitForEvent("filechooser"),
+          chooser.press("Enter"),
+        ]);
+        await fileChooser.setFiles({
           name: "avatar.png",
           mimeType: "image/png",
           buffer: Buffer.from(
@@ -639,6 +665,11 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.setAvatar")).length)
           .toBe(requestCountBefore + 1);
+        await screenshot(page, "12-avatar-action-disabled.png");
+        await expect(chooser).toBeDisabled();
+        await expect
+          .poll(() => chooser.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("0.5");
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {

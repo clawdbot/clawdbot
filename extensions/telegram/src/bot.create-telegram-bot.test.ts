@@ -1806,44 +1806,54 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
 
-  it("routes plugin callback_query payloads to plugin handlers without fallback callback_data text", async () => {
-    const pluginHandler = vi.fn(async (ctx) => {
-      expect(ctx.callback.namespace).toBe("code-agent");
-      expect(ctx.callback.payload).toBe("approve-123");
-      await ctx.respond.clearButtons();
-      return { handled: true };
-    });
-    expect(
-      registerPluginInteractiveHandler("openclaw-code-agent", {
-        channel: "telegram",
-        namespace: "code-agent",
-        handler: pluginHandler,
-      }),
-    ).toEqual({ ok: true });
+  it.each([
+    { name: "raw", data: "code-agent:approve-123", payload: "approve-123" },
+    {
+      name: "opaque with trailing whitespace",
+      data: buildTelegramOpaqueCallbackData("code-agent:approve-123 "),
+      payload: "approve-123",
+    },
+  ])(
+    "routes $name plugin callback_query payloads without fallback callback_data text",
+    async ({ data, payload }) => {
+      const pluginHandler = vi.fn(async (ctx) => {
+        expect(ctx.callback.namespace).toBe("code-agent");
+        expect(ctx.callback.payload).toBe(payload);
+        await ctx.respond.clearButtons();
+        return { handled: true };
+      });
+      expect(
+        registerPluginInteractiveHandler("openclaw-code-agent", {
+          channel: "telegram",
+          namespace: "code-agent",
+          handler: pluginHandler,
+        }),
+      ).toEqual({ ok: true });
 
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({
-        id: "cbq-plugin-1",
-        data: "code-agent:approve-123",
-        messageId: 10,
-        text: "Approve this code-agent action?",
-        message: {
-          reply_markup: {
-            inline_keyboard: [[{ text: "Approve", callback_data: "code-agent:approve-123" }]],
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getCallbackHandler();
+      await callbackHandler(
+        makeCallbackRetryContext({
+          id: "cbq-plugin-1",
+          data,
+          messageId: 10,
+          text: "Approve this code-agent action?",
+          message: {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Approve", callback_data: data }]],
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
-      reply_markup: { inline_keyboard: [] },
-    });
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
-  });
+      expect(pluginHandler).toHaveBeenCalledTimes(1);
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
+    },
+  );
 
   it("preserves raw tgcb1 callbacks emitted before the prefix became reserved", async () => {
     const pluginHandler = vi.fn(async (ctx) => {
@@ -1957,32 +1967,39 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-1");
   });
 
-  it("toggles OC_MULTI buttons without routing through the generic callback message path", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({
-        id: "cbq-multi-toggle-1",
-        data: "OC_MULTI|toggle|env|prod",
-        messageId: 10,
-        message: {
-          business_connection_id: "biz-multi-1",
-          reply_markup: {
-            inline_keyboard: [[{ text: "Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
+  it.each([
+    { name: "delimited", value: "env|prod" },
+    { name: "trailing-whitespace", value: "env|prod " },
+  ])(
+    "toggles $name OC_MULTI buttons without routing through generic messages",
+    async ({ value }) => {
+      const data = `OC_MULTI|toggle|${value}`;
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getCallbackHandler();
+      await callbackHandler(
+        makeCallbackRetryContext({
+          id: "cbq-multi-toggle-1",
+          data,
+          messageId: 10,
+          message: {
+            business_connection_id: "biz-multi-1",
+            reply_markup: {
+              inline_keyboard: [[{ text: "Prod", callback_data: data }]],
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
-      business_connection_id: "biz-multi-1",
-      reply_markup: {
-        inline_keyboard: [[{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
-      },
-    });
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
-  });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        business_connection_id: "biz-multi-1",
+        reply_markup: {
+          inline_keyboard: [[{ text: "✅ Prod", callback_data: data }]],
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
+    },
+  );
 
   it("submits OC_MULTI selections as a synthetic inbound message", async () => {
     createTelegramBot({ token: "tok" });
@@ -4936,7 +4953,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(createTelegramBotTestStateDir(), "group-activation.json");
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5650,7 +5667,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
     expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime unchanged.",
+      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

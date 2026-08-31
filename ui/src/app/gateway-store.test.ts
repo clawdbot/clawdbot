@@ -1,16 +1,16 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import type {
-  GatewayBrowserClient,
-  GatewayBrowserClientOptions,
-  GatewayEventFrame,
-  GatewayHelloOk,
-} from "../api/gateway.ts";
-import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { createApplicationGateway } from "./gateway-store.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore as createStore,
+  GATEWAY_STORE_TEST_HELLO as HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "./user-profile.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
   scheduleStaleChunkReloadMock: vi.fn(async () => true),
@@ -43,95 +43,10 @@ vi.mock("../build-info.ts", () => ({
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
-
-function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload,
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
-}
-
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
-
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn(
-    (_method: string, _params: unknown): Promise<unknown> =>
-      Promise.reject(new Error("unexpected gateway request")),
-  );
-
-  addEventListener() {
-    return () => {};
-  }
-}
-
-function createStore(
-  params: {
-    settings?: ReturnType<typeof loadSettings>;
-    persistDefaultConnectionSettings?: boolean;
-    resourceBasePath?: string;
-  } = {},
-) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      resourceBasePath: params.resourceBasePath,
-    },
-  );
-  const current = () => {
-    const client = clients.at(-1);
-    if (!client) {
-      throw new Error("expected a gateway client");
-    }
-    return client;
-  };
-  return { gateway, clients, current };
-}
-
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     scheduleStaleChunkReloadMock.mockClear();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("location", {
-      protocol: "http:",
-      host: "127.0.0.1:18789",
-      hostname: "127.0.0.1",
-      origin: "http://127.0.0.1:18789",
-      pathname: "/",
-      href: "http://127.0.0.1:18789/",
-    } as Location);
+    stubGatewayStoreTestGlobals();
   });
 
   afterEach(() => {
@@ -421,6 +336,70 @@ describe("createApplicationGateway connection phase", () => {
     expect(current().opts.url).toBe("wss://other-gateway.example.test");
     expect(current().opts.token).toBe("other-token");
     expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("restores the newly selected Gateway's saved agent", () => {
+    const otherGateway = "wss://other-gateway.example.test";
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${otherGateway}`,
+      JSON.stringify({
+        gatewayUrl: otherGateway,
+        sessionsByGateway: {
+          [otherGateway]: {
+            sessionKey: "global",
+            lastActiveSessionKey: "global",
+            selectedAgentId: "research",
+          },
+        },
+      }),
+    );
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: otherGateway });
+
+    expect(gateway.snapshot.sessionKey).toBe("global");
+    expect(loadSettings()).toMatchObject({
+      sessionKey: "global",
+      lastActiveSessionKey: "global",
+      selectedAgentId: "research",
+    });
+  });
+
+  it("does not carry an agent selection into an unsaved Gateway", () => {
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: "wss://fresh-gateway.example.test" });
+
+    expect(loadSettings().selectedAgentId).toBeUndefined();
+  });
+
+  it("clears inherited credentials when selecting another Gateway", () => {
+    const settings = { ...loadSettings(), token: "old-token" };
+    const { gateway, current } = createStore({ settings });
+    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
+
+    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
+
+    expect(current().opts.token).toBeUndefined();
+    expect(current().opts.password).toBeUndefined();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+  });
+
+  it("advances the connection revision only when credentials change", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.connectionRevision).toBe(0);
+    gateway.connect({ sessionKey: "agent:main:other" });
+    expect(gateway.connectionRevision).toBe(0);
+
+    gateway.connect({ token: "replacement-token" });
+    expect(gateway.connectionRevision).toBe(1);
   });
 
   it("keeps a newly selected Gateway's first retry at the login gate", () => {
@@ -941,6 +920,50 @@ describe("createApplicationGateway connection phase", () => {
     });
     expect(gateway.eventLog).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    "keeps refreshed self authoritative over hello (initial profile: %s)",
+    (qualified) => {
+      const { gateway, current } = createStore();
+      gateway.start();
+      const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
+      const profile = { ...user, identity: { type: "profile" as const, id: user.id } };
+      const initialUser = qualified ? profile : user;
+      current().opts.onHello?.({
+        ...HELLO,
+        snapshot: { presence: [{ instanceId: current().instanceId, user: initialUser }] },
+      });
+      const renderedSelf = vi.fn(() =>
+        resolveCurrentSelfUser({
+          snapshotUser: gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(gateway.snapshot.hello?.snapshot),
+          presenceInstanceId: current().instanceId,
+        }),
+      );
+      gateway.subscribeEvents(renderedSelf);
+      for (const nextUser of [
+        profile,
+        user,
+        {
+          ...profile,
+          id: "merged-profile",
+          identity: { type: "profile" as const, id: "merged-profile" },
+        },
+      ]) {
+        current().opts.onEvent?.({
+          type: "event",
+          event: "presence",
+          payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+        });
+        expect(gateway.snapshot.selfUser).toEqual(nextUser);
+        expect(renderedSelf.mock.lastCall).toBeDefined();
+        expect(renderedSelf.mock.results.at(-1)?.value).toEqual(nextUser);
+        expect(readPresenceEntries(gateway.snapshot.hello?.snapshot)?.[0]?.user).toEqual(
+          initialUser,
+        );
+      }
+    },
+  );
 
   it("projects only this browser connection's optional presence identity", () => {
     const { gateway, current } = createStore();

@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import { touchConversationBindingRecord } from "../../bindings/records.js";
 import { logVerbose } from "../../globals.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -48,6 +48,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     sessionKey,
     sessionStoreEntry,
     suppressDelivery,
+    turnLedger,
   } = state;
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -62,7 +63,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     logKind: "fast_abort" | "fast_approve";
   }) => {
     if (pluginOwnedBinding) {
-      touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+      getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
@@ -165,11 +166,22 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     };
   }
 
+  const settlePluginBindingDeliveryVisibility = async () => {
+    const settlement = await turnLedger.settleQueued(state.getPreDispatchAbortSignal());
+    if (settlement === "aborted" || isPreDispatchOperationAborted()) {
+      return { status: "aborted" as const };
+    }
+    return {
+      status: "ready" as const,
+      observedReplyDelivery: turnLedger.hasVisibleDelivery(),
+    };
+  };
+
   if (pluginOwnedBinding) {
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
-    touchConversationBindingRecord(pluginOwnedBinding.bindingId);
+    getSessionBindingService().touch(pluginOwnedBinding.bindingId, undefined, pluginOwnedBinding);
     params.replyOptions ??= {};
     if (
       shouldBypassPluginOwnedBindingForCommand(
@@ -250,15 +262,24 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               transcriptOwner,
             );
           }
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
           completeDispatchReplyOperation();
           return {
             status: "complete" as const,
+            // Routed binding deliveries bypass the dispatcher counters, so the
+            // ledger's settled visibility keeps a delivered reply from reading as
+            // a silent zero-count turn. A hook-suppressed or failed route never
+            // reached the recipient, so it must keep the warning eligible.
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -287,13 +308,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               }),
             };
           }
-          if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+          if (
+            !hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId, pluginOwnedBinding)
+          ) {
             const didSendNotice = await sendBindingNotice(
               { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
               "additive",
             );
             if (didSendNotice) {
-              markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
+              markPluginBindingFallbackNoticeShown(
+                pluginOwnedBinding.bindingId,
+                pluginOwnedBinding,
+              );
             }
           }
           break;
@@ -305,6 +331,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
@@ -314,6 +344,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -327,6 +358,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
@@ -336,6 +371,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }

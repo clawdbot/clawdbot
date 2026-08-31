@@ -53,6 +53,54 @@
   },
   "redirects": [
     {
+      "source": "/install/clawdock",
+      "destination": "/install/docker#clawdock-migration"
+    },
+    {
+      "source": "/concepts/message-lifecycle-refactor",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plan/cloud-workers",
+      "destination": "/gateway/cloud-workers"
+    },
+    {
+      "source": "/plan/computer-use",
+      "destination": "/nodes/computer-use"
+    },
+    {
+      "source": "/plan/memory-provenance",
+      "destination": "/concepts/memory-provenance"
+    },
+    {
+      "source": "/plan/runners",
+      "destination": "/gateway/cloud-sessions"
+    },
+    {
+      "source": "/plan/ui-channels",
+      "destination": "/plugins/message-presentation"
+    },
+    {
+      "source": "/plan/worker-hibernation",
+      "destination": "/gateway/cloud-workers#warm-images"
+    },
+    {
+      "source": "/refactor/acp",
+      "destination": "/tools/acp-agents"
+    },
+    {
+      "source": "/refactor/database-first",
+      "destination": "/reference/database-schemas"
+    },
+    {
+      "source": "/refactor/operator-approvals",
+      "destination": "/tools/exec-approvals"
+    },
+    {
+      "source": "/start/onboarding-redesign",
+      "destination": "/cli/onboard"
+    },
+    {
       "source": "/gateway/security/shrinkwrap",
       "destination": "/gateway/security/dependency-locking"
     },
@@ -1054,6 +1102,7 @@
                 "pages": [
                   "index",
                   "start/showcase",
+                  "start/why-openclaw",
                   "concepts/features"
                 ]
               },
@@ -1070,6 +1119,7 @@
                 "group": "Guides",
                 "pages": [
                   "start/openclaw",
+                  "start/teams",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -1110,7 +1160,6 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1182,6 +1231,7 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/a2a",
                   "channels/buzz",
                   "channels/clickclack",
                   "channels/irc",
@@ -1256,7 +1306,6 @@
                   "concepts/session",
                   "concepts/session-attachment",
                   "concepts/session-search",
-                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-state",
                   "concepts/session-tool",
@@ -1265,6 +1314,7 @@
                     "pages": [
                       "concepts/memory",
                       "concepts/memory-architecture",
+                      "concepts/memory-provenance",
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
@@ -1291,7 +1341,6 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
-                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
@@ -1334,6 +1383,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/geolocation",
                   "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
@@ -1376,6 +1426,7 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
                   "automation/standing-orders",
@@ -1407,6 +1458,7 @@
                   "tools/music-generation",
                   "tools/pdf",
                   "tools/reactions",
+                  "tools/secrets",
                   "tools/thinking",
                   "tools/tokenjuice",
                   "tools/tool-search",
@@ -1677,6 +1729,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/audit",
+                      "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1691,6 +1744,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-sessions",
                       "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
@@ -1828,6 +1882,7 @@
                       "cli/security",
                       "cli/setup",
                       "cli/status",
+                      "cli/triage",
                       "cli/uninstall",
                       "cli/update"
                     ]
@@ -2028,6 +2083,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]

@@ -20,7 +20,11 @@ import {
   isFailoverErrorMessage,
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
-import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import {
+  describeFailoverError,
+  FailoverError,
+  resolveFailoverStatus,
+} from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import {
@@ -481,7 +485,10 @@ export function createEmbeddedRunAuthController(params: {
       });
     if (params.fallbackConfigured) {
       const authMode =
-        reason === "billing"
+        reason === "billing" ||
+        reason === "auth" ||
+        reason === "auth_permanent" ||
+        reason === "session_expired"
           ? resolveSubscriptionAuthModeForProfiles({
               store: params.authStore,
               profileIds: failoverParams.allInCooldown
@@ -495,6 +502,7 @@ export function createEmbeddedRunAuthController(params: {
         model: modelId,
         authMode,
         status: resolveFailoverStatus(reason),
+        code: failoverParams.error ? describeFailoverError(failoverParams.error).code : undefined,
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });

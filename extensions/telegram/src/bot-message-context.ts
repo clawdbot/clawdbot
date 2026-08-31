@@ -54,8 +54,8 @@ import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
-  isTelegramSupportedReactionEmoji,
-  resolveTelegramAllowedEmojiReactions,
+  resolveTelegramAllowedReactions,
+  resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
@@ -434,8 +434,6 @@ export const buildTelegramMessageContext = async ({
     }),
   };
   const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
     sessionKey,
     agentId: route.agentId,
     cfg,
@@ -554,8 +552,7 @@ export const buildTelegramMessageContext = async ({
     channel: "telegram",
     accountId: account.accountId,
   });
-  const ackReactionEmoji =
-    ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
+  const ackReactionEmoji = ackReaction ? resolveTelegramReactionEmoji(ackReaction) : undefined;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -598,16 +595,26 @@ export const buildTelegramMessageContext = async ({
             setReaction: async (emoji: string) => {
               if (reactionApi) {
                 if (!allowedStatusReactionEmojisPromise) {
-                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
+                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedReactions({
                     chat: msg.chat,
                     chatId,
                     getChat: getChatApi ?? undefined,
-                  }).catch((err: unknown) => {
-                    logVerbose(
-                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
-                    );
-                    return null;
-                  });
+                  })
+                    .then((reactions) =>
+                      reactions
+                        ? new Set(
+                            reactions.flatMap((reaction) =>
+                              reaction.type === "emoji" ? [reaction.emoji] : [],
+                            ),
+                          )
+                        : null,
+                    )
+                    .catch((err: unknown) => {
+                      logVerbose(
+                        `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+                      );
+                      return null;
+                    });
                 }
                 const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
                 const resolvedEmoji = resolveTelegramReactionVariant({

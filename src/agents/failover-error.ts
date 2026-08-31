@@ -6,10 +6,11 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
+import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   extractFailoverSignalDetails,
+  isProviderRequestSizeCeilingError,
   isUnclassifiedNoBodyHttpSignal,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
@@ -47,6 +48,11 @@ export class FailoverError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
+  /**
+   * Recorded at construction because the fact is only legible in the provider's own text: by the
+   * time this error reaches the fallback boundary `message` carries user-facing copy instead.
+   */
+  readonly requestSizeCeiling: boolean;
   readonly authProfileFailure?: { allInCooldown: boolean };
   // Originating request attribution propagated through wrapper errors so
   // structured log ingestion (e.g. api_health_log) can attribute exhausted
@@ -90,6 +96,7 @@ export class FailoverError extends Error {
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
+    this.requestSizeCeiling = isProviderRequestSizeCeilingError(params.rawError ?? message);
     this.authProfileFailure = params.authProfileFailure;
     this.sessionId = params.sessionId;
     this.lane = params.lane;
@@ -110,6 +117,24 @@ export function isFailoverError(err: unknown): err is FailoverError {
     typeof err === "object" &&
     (err as { name?: unknown }).name === "FailoverError" &&
     typeof (err as { reason?: unknown }).reason === "string",
+  );
+}
+
+function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
+  const errors = candidate.errors;
+  return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
+}
+
+/**
+ * True when the provider refused the request for its own size rather than for context pressure or
+ * bucket state.  An error that never became a `FailoverError` still carries the provider's text in
+ * its message, so it is read directly.
+ */
+export function hasProviderRequestSizeCeiling(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
+    isFailoverError(candidate)
+      ? candidate.requestSizeCeiling
+      : isProviderRequestSizeCeilingError(formatErrorMessage(candidate)),
   );
 }
 
@@ -482,10 +507,9 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function errorGraphHasName(err: unknown, name: string): boolean {
-  return collectErrorGraphCandidates(err, (candidate) => {
-    const errors = candidate.errors;
-    return [candidate.error, candidate.cause, ...(Array.isArray(errors) ? errors : [])];
-  }).some((candidate) => readErrorName(candidate) === name);
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) => readErrorName(candidate) === name,
+  );
 }
 
 function hasGatewayDrainingFailure(err: unknown): boolean {
@@ -493,9 +517,11 @@ function hasGatewayDrainingFailure(err: unknown): boolean {
 }
 
 function hasWorkerRunnerCoordinationFailure(err: unknown): boolean {
-  return ["WorkerRunnerUnavailableError", "WorkerRunnerCapacityError"].some((name) =>
-    errorGraphHasName(err, name),
-  );
+  return [
+    "WorkerRunnerUnavailableError",
+    "WorkerRunnerCapacityError",
+    "WorkerWorkspaceReconciliationError",
+  ].some((name) => errorGraphHasName(err, name));
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {

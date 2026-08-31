@@ -116,12 +116,13 @@ export function createDiscordDraftPreviewController(params: {
     });
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
+    presentation: discordStreamMode === "progress" ? "summary" : undefined,
     entry: params.discordConfig,
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
-    commentaryLinePrefix: "💬 ",
+    commentaryLinePrefix: "",
     reasoningGate: previewToolProgressEnabled,
     commentaryItalics: false,
     buildProgressEventLine: (input, options) =>
@@ -263,7 +264,8 @@ export function createDiscordDraftPreviewController(params: {
     disableBlockStreamingForDraft: draftStream ? true : undefined,
     pushToolEvent: progressDraft.pushToolEvent,
     pushItemEvent: progressDraft.pushItemEvent,
-    pushApprovalEvent: progressDraft.pushApprovalEvent,
+    pushApprovalEvent: (payload: Parameters<typeof progressDraft.pushApprovalEvent>[0]) =>
+      progressDraft.pushApprovalEvent(payload),
     pushCommandOutputEvent: progressDraft.pushCommandOutputEvent,
     pushPatchEvent: progressDraft.pushPatchEvent,
     async pushToolProgress(
@@ -420,7 +422,7 @@ export function createDiscordDraftPreviewController(params: {
         if (finalReplyError !== true && !finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
-        await draftStream?.cleanupRetargeted();
+        await draftStream?.cleanupPendingMessages();
       } catch (err) {
         params.log(`discord: draft cleanup failed: ${String(err)}`);
       }

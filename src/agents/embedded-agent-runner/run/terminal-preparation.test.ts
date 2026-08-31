@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import { createUsageAccumulator } from "../usage-accumulator.js";
+import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
@@ -204,6 +204,55 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
   });
 
+  it("projects a Code Mode cron tool failure into terminal metadata", async () => {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const assistant = assistantMessage("stop");
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
+        sessionId: "session-1",
+        runId: "run-1",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "cron",
+        timeoutMs: 60_000,
+      },
+      attempt: attemptResult({
+        codeModeEngaged: true,
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "invalid_input",
+          error:
+            "Unknown tool id: MCP.notes.read. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+        },
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-1",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.failureSignal).toBeUndefined();
+    expect(prepared.terminalToolFailure).toEqual({
+      source: "tool",
+      toolName: "exec",
+      code: "UNKNOWN_TOOL_ID",
+    });
+  });
+
   it("recovers current final text and tool media after a prompt-timeout race", async () => {
     const completedText = "Completed answer block before the timeout.";
     const partialText = "Partial final response before the timeout.";
@@ -308,6 +357,25 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ lastAssistant: yieldedAssistant, currentAssistant: null }),
     );
   });
+
+  it("carries the canonical restart reason into terminal payload rendering", async () => {
+    await prepareAttempt({
+      attempt: attemptResult({
+        lastToolError: {
+          toolName: "gateway_exec",
+          error: "OpenClaw dynamic tool call aborted.",
+        },
+      }),
+      terminalState: {
+        outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+        signalOwnedInterruption: true,
+      },
+    });
+
+    expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
+    );
+  });
 });
 
 describe("prepareEmbeddedRunTerminal run stats", () => {
@@ -323,12 +391,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     model?: string;
     outerContextTokenMeta?: { contextTokens?: number };
     responseModel?: string;
-    usage?: Partial<
-      Pick<
-        ReturnType<typeof createUsageAccumulator>,
-        "input" | "output" | "cacheRead" | "cacheWrite" | "total"
-      >
-    >;
+    usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
+    attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
   };
 
   async function prepareStats(statsInput: StatsInput = {}) {
@@ -342,7 +406,10 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       ...(statsInput.responseModel ? { responseModel: statsInput.responseModel } : {}),
     };
     const usageAccumulator = createUsageAccumulator();
-    Object.assign(usageAccumulator, statsInput.usage);
+    mergeUsageIntoAccumulator(usageAccumulator, statsInput.usage);
+    for (const attempt of statsInput.attempts ?? []) {
+      mergeUsageIntoAccumulator(usageAccumulator, attempt);
+    }
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
     return prepareEmbeddedRunTerminal({
@@ -431,6 +498,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
   });
 
+  it("reports the terminal physical attempt's redacted credential source", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        modelAttempt: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          credentialSource: {
+            kind: "direct",
+            evidence: "environment",
+            authorization: "declared",
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
+  });
+
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {
     const counted = await prepareStats({ assistantTurns: 3 });
     expect(counted.agentMeta.assistantTurns).toBe(3);
@@ -462,6 +551,57 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
     // (1M*$1 + 0.5M*$2 + 2M*$0.5 + 0.25M*$4) per million tokens.
     expect(prepared.agentMeta.costUsd).toBeCloseTo(4, 10);
+  });
+
+  it.each([
+    { firstCost: 0, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0.125, tokens: { input: 150_000, output: 100 } },
+    { firstCost: 0, tokens: {} },
+    { firstCost: 0.125, tokens: {} },
+  ])(
+    "preserves carried per-attempt cost $firstCost with tokens $tokens instead of repricing",
+    async ({ firstCost, tokens }) => {
+      const prepared = await prepareStats({
+        config: COST_CONFIG,
+        attempts: [
+          { ...tokens, cost: { total: firstCost } },
+          { ...tokens, cost: { total: 0 } },
+        ],
+      });
+      expect(prepared.agentMeta.costUsd).toBe(firstCost);
+    },
+  );
+
+  it("omits tiered aggregate cost when an observed call has no price", async () => {
+    const prepared = await prepareStats({
+      config: {
+        models: {
+          providers: {
+            "cost-test-provider": {
+              models: [
+                {
+                  id: "cost-model",
+                  cost: {
+                    input: 1,
+                    output: 2,
+                    cacheRead: 0.5,
+                    cacheWrite: 4,
+                    tieredPricing: [
+                      { range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      attempts: [
+        { input: 150_000, output: 100, cost: { total: 0.125 } },
+        { input: 150_000, output: 100 },
+      ],
+    });
+    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
   });
 
   it("omits costUsd when the model has no cost data", async () => {

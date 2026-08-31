@@ -15,11 +15,13 @@ const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
 
 const {
+  buildPluginRuntimeLoadOptions,
   clearPluginCommands,
   getPluginCommandSpecs,
   getPluginModuleLoaderStats,
   loadOpenClawPlugins,
   matchPluginCommand,
+  resolvePluginRuntimeLoadContext,
 } = await import(pathToFileURL(smokeEntryPath).href);
 
 assert.equal(typeof loadOpenClawPlugins, "function", "built loader export missing");
@@ -126,24 +128,28 @@ assert.equal(
 clearPluginCommands();
 
 const smsStatsBefore = getPluginModuleLoaderStats();
-const smsRegistry = loadOpenClawPlugins({
-  cache: false,
-  preferBuiltPluginArtifacts: true,
-  workspaceDir: tempRoot,
-  env: {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
-  },
-  config: {
-    plugins: {
-      enabled: true,
-      allow: ["sms"],
-      entries: {
-        sms: { enabled: true },
+// Prepared runtimes carry this context into late, plugin-scoped loads. Prove that the load-options
+// projection retains the built-artifact choice instead of reopening source transformation.
+const smsRegistry = loadOpenClawPlugins(
+  buildPluginRuntimeLoadOptions(
+    resolvePluginRuntimeLoadContext({
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["sms"],
+          entries: { sms: { enabled: true } },
+        },
       },
-    },
-  },
-});
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+      },
+      preferBuiltPluginArtifacts: true,
+      workspaceDir: tempRoot,
+    }),
+    { cache: false, onlyPluginIds: ["sms"] },
+  ),
+);
 const smsRecord = smsRegistry.plugins.find((entry: { id: string }) => entry.id === "sms");
 assert.ok(smsRecord, "SMS plugin missing from registry");
 assert.equal(smsRecord.status, "loaded", smsRecord.error ?? "SMS plugin failed to load");
@@ -205,5 +211,52 @@ assert.ok(match, "canonical built command registry did not receive the command")
 assert.equal(match.args, "now");
 const result = await match.command.handler({ args: match.args });
 assert.deepEqual(result, { text: "paired:now" });
+
+// Keep these imports after the cold native checks so they cannot prewarm the loader.
+const { buildBundleMcpToolsFromCatalog } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "agents", "agent-bundle-mcp-materialize.js")).href
+);
+const { getPluginToolMeta } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugins", "tool-metadata.js")).href
+);
+const { getPluginToolMeta: getSdkPluginToolMeta } = await import(
+  pathToFileURL(path.join(repoRoot, "dist", "plugin-sdk", "agent-harness-runtime.js")).href
+);
+const [mcpTool] = buildBundleMcpToolsFromCatalog({
+  catalog: {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      "build-smoke-mcp": {
+        serverName: "build-smoke-mcp",
+        safeServerName: "build-smoke-mcp",
+        launchSummary: "build smoke inventory fixture",
+        toolCount: 1,
+      },
+    },
+    tools: [
+      {
+        serverName: "build-smoke-mcp",
+        safeServerName: "build-smoke-mcp",
+        toolName: "lookup",
+        inputSchema: { type: "object", properties: {} },
+        fallbackDescription: "Look up a build smoke inventory item",
+      },
+    ],
+  },
+});
+assert.ok(mcpTool, "compiled MCP materializer did not produce a tool");
+const mcpMetadata = getPluginToolMeta(mcpTool);
+assert.ok(mcpMetadata, "canonical built metadata owner did not receive MCP tool metadata");
+assert.equal(mcpMetadata.pluginId, "bundle-mcp");
+assert.equal(mcpMetadata.mcp?.serverName, "build-smoke-mcp");
+assert.equal(mcpMetadata.mcp?.safeServerName, "build-smoke-mcp");
+assert.equal(mcpMetadata.mcp?.toolName, "lookup");
+assert.equal(mcpMetadata.mcp?.operation, "tool");
+assert.strictEqual(
+  getSdkPluginToolMeta(mcpTool),
+  mcpMetadata,
+  "public agent-harness-runtime SDK did not read the canonical MCP metadata record",
+);
 
 process.stdout.write("[build-smoke] built plugin singleton smoke passed\n");

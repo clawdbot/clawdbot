@@ -2,18 +2,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
-import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  createAgentRuntimeApprovalAuthorityValidator,
+  verifyAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import {
   withGatewayToolApprovalOwner,
@@ -83,21 +88,97 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["cron.remove", { id: "job-1" }, { id: "job-1" }],
     ["wake", { mode: "now", text: "ping" }, { ok: true }],
+    ["question.request", { questions: [] }, { id: "question-1" }],
   ] as const)(
     "marks trusted local %s calls with runtime identity",
     async (method, params, result) => {
       mocks.callGateway.mockResolvedValueOnce(result);
+      const context = {} as GatewayRequestContext;
 
       await withActiveGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
           operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+          gatewayContextResolver: () => context,
         },
         async () => await callGatewayTool(method, {}, params),
       );
 
       expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
+    },
+  );
+
+  it.each([{}, { gatewayToken: "synthetic-remote-override" }])(
+    "keeps ordinary questions available without local authority: %j",
+    async (opts) => {
+      mocks.callGateway.mockResolvedValueOnce({ id: "question-1" });
+      await withGatewayToolCallerIdentity({ agentId: "ops", sessionKey: "agent:ops:main" }, () =>
+        callGatewayTool("question.request", opts, { questions: [] }),
+      );
+      expect(capturedGatewayCall()).not.toHaveProperty("agentRuntimeIdentityToken");
+    },
+  );
+
+  it.each(["question.request", "node.invoke"])(
+    "omits optional %s identity for independently admitted callers with only ambient context",
+    async (method) => {
+      mocks.callGateway.mockResolvedValueOnce({ ok: true });
+      await withActiveGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          operationalRunInstance: createOperationalRunInstanceRef("independent-run"),
+        },
+        () =>
+          withPluginRuntimeGatewayRequestScope(
+            { context: {} as GatewayRequestContext, isWebchatConnect: () => false },
+            () => callGatewayTool(method, {}, {}),
+          ),
+      );
+      expect(Object.hasOwn(capturedGatewayCall(), "agentRuntimeIdentityToken")).toBe(false);
+    },
+  );
+
+  it.each(["before call", "during mint", "replacement", "before retry"])(
+    "rejects a retired Gateway binding without dropping identity (%s)",
+    async (closure) => {
+      mocks.callGateway.mockResolvedValueOnce({ id: "question-1" });
+      let context: GatewayRequestContext | undefined = {} as GatewayRequestContext;
+      await withActiveGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          operationalRunInstance: createOperationalRunInstanceRef("bound-run"),
+          gatewayContextResolver: () => context,
+        },
+        async () => {
+          if (closure === "before call") {
+            context = undefined;
+          } else if (closure === "before retry") {
+            mocks.callGateway.mockReset().mockImplementationOnce(async () => {
+              context = undefined;
+              throw Object.assign(
+                new Error("invalid node.invoke params: unexpected property 'turnSourceChannel'"),
+                {
+                  name: "GatewayClientRequestError",
+                  gatewayCode: "INVALID_REQUEST",
+                  details: { nodeCommandDispatched: false },
+                },
+              );
+            });
+          } else {
+            queueMicrotask(() => {
+              context = closure === "replacement" ? ({} as GatewayRequestContext) : undefined;
+            });
+          }
+          const method = closure === "before retry" ? "node.invoke" : "question.request";
+          await expect(callGatewayTool(method, {}, {})).rejects.toThrow(
+            "admitting Gateway is no longer available",
+          );
+        },
+      );
+      expect(mocks.callGateway).toHaveBeenCalledTimes(closure === "before retry" ? 1 : 0);
     },
   );
 
@@ -361,6 +442,44 @@ describe("gateway tool runtime identity", () => {
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");
   });
 
+  it("invalidates message action identity when its turn capability closes", async () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("run-capability-close");
+    const sessionKey = "agent:ops:telegram:group:room-close";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "ops",
+      runId: operationalRunInstance.runId,
+      sessionKey,
+      sessionId: "session-capability-close",
+    });
+    mintedTurnCapabilities.push(turnCapability);
+
+    await withActiveGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey, operationalRunInstance },
+      async () => {
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          turnCapability,
+          runId: operationalRunInstance.runId,
+          sessionId: "session-capability-close",
+        });
+        const identity = await verifyAgentRuntimeIdentityToken(token);
+        expect(identity).toMatchObject({
+          messageActionContext: { turnCapability },
+        });
+        expect(identity).toBeDefined();
+        if (!identity) {
+          return;
+        }
+        const validate = createAgentRuntimeApprovalAuthorityValidator();
+        expect(validate(identity)).toBe(true);
+
+        expect(revokeMessageActionTurnCapability(turnCapability)).toBe(true);
+        expect(validate(identity)).toBe(false);
+      },
+    );
+  });
+
   it("mints split-session message action identity and rejects policy-session substitution", async () => {
     const policySessionKey = "agent:ops:telegram:default:direct:alice";
     const runSessionKey = "agent:ops:main";
@@ -427,6 +546,7 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["exec.approval.request", undefined, false],
     ["plugin.approval.request", "codex", false],
+    ["secrets.store.delete", undefined, false],
     ["exec.approval.request", undefined, true],
     ["plugin.approval.request", "codex", true],
   ] as const)(

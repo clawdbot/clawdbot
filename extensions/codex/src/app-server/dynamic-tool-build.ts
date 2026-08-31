@@ -19,7 +19,10 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
+  resolveCodexScheduledToolProjectionFactory,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   isCodexRemoteExecPlacementSandbox,
@@ -42,12 +45,14 @@ import {
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
+import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 import {
   CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-  createExecAliasDynamicTool,
-  createGatewayProcessAliasDynamicTool,
+  createGatewayExecProjection,
+  createGatewayProcessProjection,
+  createNodeExecAliasDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
@@ -74,6 +79,35 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "apply_patch",
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
+
+/** Keeps node filesystem and process ownership on its native exec-server. */
+export function resolveCodexNodePlacementToolConstructionPlan(
+  sandbox: OpenClawSandboxContext | undefined,
+  nativeToolSurfaceEnabled: boolean | undefined,
+): OpenClawCodingToolsOptions["toolConstructionPlan"] {
+  if (
+    !isCodexRemoteExecPlacementSandbox(sandbox) ||
+    sandbox?.backendId !== "node" ||
+    !("placementNodeId" in sandbox) ||
+    typeof sandbox.placementNodeId !== "string" ||
+    !sandbox.placementNodeId
+  ) {
+    return undefined;
+  }
+  if (!nativeToolSurfaceEnabled) {
+    throw new Error(
+      "Codex node execution requires its native exec-server tool surface; adjust the session tool policy and start a fresh attempt.",
+    );
+  }
+  return {
+    includeBaseCodingTools: false,
+    includeShellTools: false,
+    includeChannelTools: true,
+    includeOpenClawTools: true,
+    includePluginTools: true,
+  };
+}
+
 function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?: string }>(
   allTools: T[],
   filteredTools: T[],
@@ -94,6 +128,7 @@ type DynamicToolBuildParams = {
   effectiveCwd?: string;
   sandboxSessionKey: string;
   sandbox: OpenClawSandboxContext;
+  sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
   nativeToolSurfaceEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
@@ -121,6 +156,7 @@ type DynamicToolBuildParams = {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   };
+  registerRunCleanup?: OpenClawCodingToolsOptions["registerRunCleanup"];
 };
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
 function resolveOpenClawCodingToolsSessionKeys(
@@ -223,6 +259,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
+  const toolRunContext = buildEmbeddedAttemptToolRunContext({
+    ...params,
+    forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+  });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
     return [];
@@ -254,20 +294,25 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   const buildOpenClawCodingTools = () => {
+    const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
+      input.sandbox,
+      input.nativeToolSurfaceEnabled,
+    );
     const options: OpenClawCodingToolsOptions = {
       agentId: input.sessionAgentId,
-      ...buildEmbeddedAttemptToolRunContext(params),
+      ...toolRunContext,
       exec: {
         ...params.execOverrides,
+        ...(input.sessionPermissionPolicy ? { mode: input.sessionPermissionPolicy.execMode } : {}),
         ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
         config: params.config,
         elevated: params.bashElevated,
       },
-      sessionPermissionPolicy:
-        params.permissionMode && params.sessionRoot
-          ? { mode: params.permissionMode, root: params.sessionRoot }
-          : undefined,
+      sessionPermissionPolicy: input.sessionPermissionPolicy
+        ? { mode: input.sessionPermissionPolicy.mode, root: input.sessionPermissionPolicy.root }
+        : undefined,
       sandbox: input.sandbox,
+      ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
       messageProvider: resolveCodexMessageToolProvider(params),
       toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
       // Capability-gated tools (requiredClientCaps) need the originating client's
@@ -309,6 +354,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
               resolvedWorkspace: input.resolvedWorkspace,
             }),
       config: params.config,
+      githubPublicationAvailable: params.githubPublicationAvailable,
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,
       emitBeforeToolCallDiagnostics: false,
@@ -340,6 +386,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       hasRepliedRef: params.hasRepliedRef,
       modelHasVision,
       computerContextEpoch: input.computerContextEpoch,
+      registerRunCleanup: input.registerRunCleanup,
       requireExplicitMessageTarget:
         params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -471,8 +518,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         transientWebSearchRestriction &&
         webSearchPolicy.persistentAllowed),
   );
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    visionFilteredTools,
+    toolRunContext.runtimeToolAllowlist,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -577,37 +626,22 @@ function addGatewayShellDynamicToolsIfAvailable(
   const processAliasAvailable = Boolean(
     processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
   );
+  const createProjection = resolveCodexScheduledToolProjectionFactory(
+    input.params.hostCapabilities,
+  );
+  if (!createProjection) {
+    return filteredTools;
+  }
   const toolsToAppend = [
-    createExecAliasDynamicTool(execTool, {
-      host: "gateway",
+    createGatewayExecProjection(createProjection, execTool, {
       processAliasAvailable,
+      ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
     }),
   ];
   if (processAliasAvailable && processTool) {
-    toolsToAppend.push(createGatewayProcessAliasDynamicTool(processTool));
+    toolsToAppend.push(createGatewayProcessProjection(createProjection, processTool));
   }
   return [...filteredTools, ...toolsToAppend];
-}
-/** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
-function includeForcedCodexDynamicToolAllow(
-  toolsAllow: string[] | undefined,
-  params: EmbeddedRunAttemptParams,
-): string[] | undefined {
-  if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
-    return toolsAllow;
-  }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
-  if (forcedToolNames.length === 0) {
-    return toolsAllow;
-  }
-  if (toolsAllow.length === 0) {
-    return forcedToolNames;
-  }
-  const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
-  const missingToolNames = forcedToolNames.filter(
-    (toolName) => !normalized.has(normalizeCodexDynamicToolName(toolName)),
-  );
-  return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
 }
 /** Decides whether Codex native code mode can own shell/file tools for this turn. */
 export function shouldEnableCodexAppServerNativeToolSurface(
@@ -637,7 +671,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   ) {
     return false;
   }
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = params.toolsAllow;
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }
@@ -688,7 +722,7 @@ function canCodexAppServerNativeToolSurfaceHonorSandbox(
   }
   if (
     options.sandboxExecServerEnabled === true &&
-    sandbox.backend &&
+    (sandbox.backend || isCodexRemoteExecPlacementSandbox(sandbox)) &&
     canSandboxToolPolicyExposeCodexNativeToolSurface(sandbox)
   ) {
     return true;
@@ -882,10 +916,7 @@ function addNodeShellDynamicToolsIfNeeded(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    return [
-      ...filteredTools,
-      createExecAliasDynamicTool(execTool, { host: "node", node: nodePolicy.node }),
-    ];
+    return [...filteredTools, createNodeExecAliasDynamicTool(execTool, nodePolicy.node)];
   }
   return filteredTools;
 }

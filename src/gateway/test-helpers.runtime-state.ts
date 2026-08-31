@@ -42,6 +42,8 @@ type GatewayTestHoistedState = {
       name?: string;
       provider: string;
       contextWindow?: number;
+      contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
+      contextWindowDefault?: string;
       reasoning?: boolean;
       input?: string[];
     }>;

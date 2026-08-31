@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
@@ -15,7 +16,9 @@ export function formatClawHubSkillRequestError(
       error.requestPath.endsWith(`${skillPath}/install`) ||
       error.requestPath.endsWith(`${skillPath}/verify`))
   ) {
-    return `Skill "${params.slug}" not found. Run \`openclaw skills list\` to see available skills.`;
+    // ClawHub said this slug is not in the registry, so listing locally installed skills cannot
+    // resolve it; search is the only next step that can find the right slug.
+    return `Skill "${params.slug}" not found on ClawHub. Run \`${formatCliCommand(`openclaw skills search ${params.slug}`)}\` to find the right skill reference.`;
   }
   const action = params.operation === "install" ? "installing" : "verifying";
   if (error.status === 401) {

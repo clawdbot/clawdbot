@@ -17,7 +17,6 @@
     "install": {
       "npmSpec": "@openclaw/diffs-language-pack",
       "clawhubSpec": "clawhub:@openclaw/diffs-language-pack",
-      "localPath": "extensions/diffs-language-pack",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.27"
     },
@@ -28,6 +27,7 @@
       "build": "node --import tsx ../../scripts/build-diffs-viewer-runtime.mts full"
     },
     "build": {
+      "bundledDist": false,
       "openclawVersion": "2026.8.1",
       "staticAssets": [
         {

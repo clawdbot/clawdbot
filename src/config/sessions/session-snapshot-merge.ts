@@ -14,7 +14,6 @@ export const SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS = [
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
-  "thinkingLevelSelection",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 
 const MODEL_ROUTE_OVERRIDE_FIELDS = [
@@ -36,14 +35,11 @@ const MODEL_OVERRIDE_RUNTIME_FIELD_SET = new Set<keyof SessionEntry>(MODEL_OVERR
 const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   ...MODEL_OVERRIDE_RUNTIME_FIELDS,
   "liveModelSwitchPending",
+  "contextWindow",
   "thinkingLevel",
-  "thinkingLevelSelection",
 ]);
 
-const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = [
-  "thinkingLevel",
-  "thinkingLevelSelection",
-] as const satisfies ReadonlyArray<keyof SessionEntry>;
+const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["contextWindow", "thinkingLevel"] as const;
 
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",
@@ -67,6 +63,7 @@ function mainSessionRecoveryTransactionChanged(before: SessionEntry, after: Sess
     !isDeepStrictEqual(before.restartRecoveryRuns, after.restartRecoveryRuns) ||
     beforeState?.cycleId !== afterState?.cycleId ||
     beforeState?.chargedAttempts !== afterState?.chargedAttempts ||
+    beforeState?.startedAttempt !== afterState?.startedAttempt ||
     !isDeepStrictEqual(beforeState?.reservation, afterState?.reservation) ||
     !isDeepStrictEqual(beforeState?.tombstone, afterState?.tombstone)
   );
@@ -94,6 +91,7 @@ function mainSessionRecoveryCycleStateUnchanged(
   return (
     beforeState.cycleId === afterState.cycleId &&
     beforeState.chargedAttempts === afterState.chargedAttempts &&
+    beforeState.startedAttempt === afterState.startedAttempt &&
     isDeepStrictEqual(beforeState.reservation, afterState.reservation) &&
     isDeepStrictEqual(beforeState.tombstone, afterState.tombstone)
   );

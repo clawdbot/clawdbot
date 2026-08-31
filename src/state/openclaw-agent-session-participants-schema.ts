@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const SESSION_PARTICIPANTS_TABLE = "session_participants";
 
@@ -9,7 +8,7 @@ const SCHEMA_START = `CREATE TABLE IF NOT EXISTS ${SESSION_PARTICIPANTS_TABLE} (
 const SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_key_contract (";
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 
-function sessionParticipantsSchemaSql(): string {
+export function sessionParticipantsSchemaSql(): string {
   const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_START);
   const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SCHEMA_END, start);
   if (start === -1 || end === -1) {
@@ -26,7 +25,6 @@ export function ensureSessionParticipantsSchema(database: DatabaseSync): boolean
   const ensure = () => {
     // sqlite-allow-raw -- canonical additive DDL only.
     database.exec(sessionParticipantsSchemaSql());
-    ensureColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source TEXT");
   };
   if (database.isTransaction) {
     ensure();

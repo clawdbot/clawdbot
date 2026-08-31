@@ -15,10 +15,7 @@ import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
-import {
-  resolvePluginWebProviders,
-  resolveRuntimeWebProviders,
-} from "./web-provider-runtime-shared.js";
+import { resolvePluginWebProviders } from "./web-provider-runtime-shared.js";
 
 function resolveWebFetchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
@@ -27,6 +24,7 @@ function resolveWebFetchCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidatePluginIds({
     contract: "webFetchProviders",
@@ -37,6 +35,7 @@ function resolveWebFetchCandidatePluginIds(params: {
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
     sandboxed: params.sandboxed,
+    manifestRecords: params.manifestRecords,
   });
 }
 
@@ -62,6 +61,7 @@ export function resolvePluginWebFetchProviders(params: {
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
@@ -80,8 +80,9 @@ export function resolveRuntimeWebFetchProviders(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebFetchProviderEntry[] {
-  return resolveRuntimeWebProviders(params, {
+  return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,

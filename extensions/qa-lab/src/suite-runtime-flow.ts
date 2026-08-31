@@ -30,6 +30,7 @@ import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -258,15 +259,18 @@ function createQaSuiteScenarioFlowApi(
 function createQaScenarioDeadline(timeoutMs?: number) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
   const deadline =
-    timeoutMs === undefined
+    deadlineTimeoutMs === undefined
       ? undefined
       : new Promise<never>((_resolve, reject) => {
           const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
+          // Scenario-owned polls may consume the full declared timeout. Keep the outer
+          // lifecycle fence later so their terminal result and cleanup stay authoritative.
           timer = setTimeout(() => {
             controller.abort(timeoutError);
             reject(timeoutError);
-          }, timeoutMs);
+          }, deadlineTimeoutMs);
         });
   return {
     signal: controller.signal,

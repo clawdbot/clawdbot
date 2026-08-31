@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگو"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مدل"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s قبلی"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s بعدی"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"کنترل‌ها"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"صحبت"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پخش صدا در ساعت ناموفق بود"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"شروع گفتگو"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"با ساعت خود صحبت کنید یا تایپ کنید. تلفن جفت‌شده پیام را از طریق نشست احراز هویت‌شده OpenClaw ارسال می‌کند."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نشست فعلی"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بستن"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جستجو"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جستجوی نشست‌ها"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جستجوی مدل‌ها"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بارگیری بیشتر"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"فعال روی تلفن"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"باز کردن روی ساعت"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"موردی یافت نشد"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"یافتن یک جلسه"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"یافتن یک مدل"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ظاهر"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تیره"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"روشن"</string>

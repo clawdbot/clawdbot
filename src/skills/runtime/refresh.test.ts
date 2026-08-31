@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   bumpSkillsSnapshotVersion,
@@ -38,6 +39,12 @@ const watchMock = vi.fn(() => {
   createdWatchers.push(watcher);
   return watcher;
 });
+const pluginSkillsMocks = vi.hoisted(() => ({
+  resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
+  resolvePluginSkillRootsFromMetadata: vi.fn(
+    (): Array<{ dir: string; rejectHardlinks: boolean }> => [],
+  ),
+}));
 
 let refreshModule: typeof import("./refresh.js");
 let refreshTestSupport: typeof import("./refresh.test-support.js");
@@ -47,7 +54,8 @@ vi.mock("chokidar", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: vi.fn(() => []),
+  resolvePluginSkillRoots: pluginSkillsMocks.resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata: pluginSkillsMocks.resolvePluginSkillRootsFromMetadata,
 }));
 
 describe("ensureSkillsWatcher", () => {
@@ -59,6 +67,8 @@ describe("ensureSkillsWatcher", () => {
   beforeEach(() => {
     watchMock.mockClear();
     createdWatchers.length = 0;
+    pluginSkillsMocks.resolvePluginSkillRoots.mockClear();
+    pluginSkillsMocks.resolvePluginSkillRootsFromMetadata.mockClear();
   });
 
   afterEach(async () => {
@@ -534,6 +544,30 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
+  it("reuses prepared plugin metadata when reconciling watch targets", () => {
+    const config = { skills: { load: {} } };
+    const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config,
+      pluginMetadataSnapshot,
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config,
+      pluginMetadataSnapshot,
+    });
+
+    expect(pluginSkillsMocks.resolvePluginSkillRoots).not.toHaveBeenCalled();
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenCalledTimes(2);
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenLastCalledWith({
+      workspaceDir: "/tmp/workspace",
+      config,
+      metadataSnapshot: pluginMetadataSnapshot,
+    });
+  });
+
   it("watches extra-dir roots and companion skills folders without resolving them", async () => {
     const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-pair-"));
     try {
@@ -667,7 +701,9 @@ describe("ensureSkillsWatcher", () => {
         "---\nname: demo\ndescription: Demo\n---\n",
       );
       const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+      vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+        { dir: pluginDir, rejectHardlinks: true },
+      ]);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
@@ -690,7 +726,9 @@ describe("ensureSkillsWatcher", () => {
     );
     try {
       const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+      vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+        { dir: pluginDir, rejectHardlinks: true },
+      ]);
 
       refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
@@ -722,7 +760,9 @@ describe("ensureSkillsWatcher", () => {
         );
         await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
         const pluginSkills = await import("../loading/plugin-skills.js");
-        vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+        vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+          { dir: pluginDir, rejectHardlinks: true },
+        ]);
 
         refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 

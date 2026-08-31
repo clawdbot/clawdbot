@@ -29,7 +29,7 @@ import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import type { ToolErrorSummary, ToolRecoverySummary } from "./tool-error-summary.js";
+import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
 type EmbeddedSubscribeLogger = {
@@ -51,8 +51,6 @@ export type ToolCallSummary = {
   replaySafe: boolean;
   mutatingAction: boolean;
   ownerKey?: string;
-  actionFingerprint?: string;
-  fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
@@ -61,7 +59,9 @@ type AssistantStreamData = {
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
+  itemId?: string;
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */
@@ -83,6 +83,7 @@ export type EmbeddedAgentSubscribeState = {
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
@@ -107,7 +108,6 @@ export type EmbeddedAgentSubscribeState = {
    */
   assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
 
@@ -120,6 +120,16 @@ export type EmbeddedAgentSubscribeState = {
   deltaBuffer: string;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream: ThinkingTagStreamState;
+  /**
+   * True while the buffered stream text belongs to an explicit commentary
+   * item (e.g. the Responses API "commentary" phase). Commentary is routed to
+   * a separate lane by the normal stream path, so the run-budget timeout
+   * flush must skip it too: flushing the raw deltaBuffer without this marker
+   * would publish reasoning/commentary bytes as assistant text.
+   */
+  deltaBufferIsCommentary: boolean;
+  /** Whether timeout settlement committed visible text for this message. */
+  hasFlushedPartialText: boolean;
   blockBuffer: string;
   blockState: {
     thinking: boolean;
@@ -169,6 +179,7 @@ export type EmbeddedAgentSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  retryUsage?: NormalizedUsage;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
@@ -205,6 +216,7 @@ export type EmbeddedAgentSubscribeState = {
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
   pendingToolAudioAsVoice: boolean;
+  pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
@@ -327,6 +339,7 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentMessagingTarget"
+  | "currentAccountId"
   | "currentThreadId"
   | "currentMessageId"
   | "replyToMode"
@@ -335,6 +348,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "codeModeExecToolNames"
   | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
@@ -354,13 +368,13 @@ type ToolHandlerState = Pick<
   | "itemStartedCount"
   | "itemCompletedCount"
   | "lastToolError"
-  | "lastToolRecovery"
   | "latestMcpAppChannelView"
   | "latestMcpConnectAction"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"

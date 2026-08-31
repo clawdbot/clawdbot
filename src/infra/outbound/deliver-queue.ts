@@ -41,6 +41,16 @@ import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
+function isReusablePreparedDeliveryOwner(
+  owner: ReturnType<typeof findDeliveryIntentOwner>,
+): boolean {
+  // Pending recovery or a retained completion receipt already owns the effect.
+  // A replaying producer accepts that custody instead of creating another send.
+  return (
+    owner?.namespace === "prepared" && (owner.status === "pending" || owner.status === "completed")
+  );
+}
+
 export async function runOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
@@ -72,6 +82,12 @@ export async function runOutboundDeliveryInternal(
     });
     if (claim.status === "claimed") {
       return claim.value;
+    }
+    const owner = params.reusePendingDeliveryIntent
+      ? findDeliveryIntentOwner(stableIntentId)
+      : null;
+    if (isReusablePreparedDeliveryOwner(owner)) {
+      return [];
     }
     throw new Error(`Stable delivery intent is already queued: ${stableIntentId}`);
   }
@@ -170,6 +186,9 @@ async function runOutboundDeliveryWithQueue(
   if (params.deliveryIntentId && !existingStableDelivery && !stablePreparationOwner) {
     const owner = findDeliveryIntentOwner(params.deliveryIntentId);
     if (owner) {
+      if (params.reusePendingDeliveryIntent && isReusablePreparedDeliveryOwner(owner)) {
+        return [];
+      }
       throw new Error(
         owner.namespace === "legacy"
           ? `Stable delivery intent is awaiting queue migration: ${params.deliveryIntentId}`
@@ -383,7 +402,7 @@ async function runOutboundDeliveryWithQueue(
     return claimResult.value;
   }
   if (params.reusePendingDeliveryIntent) {
-    throw new Error(`Stable delivery intent is already queued: ${queueId}`);
+    return [];
   }
   return [];
 }

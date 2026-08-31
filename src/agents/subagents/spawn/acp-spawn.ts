@@ -71,7 +71,7 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import {
   resolveAcpSpawnRequesterState,
-  resolveAcpSpawnStreamPlan,
+  shouldStreamAcpSpawnToParent,
   resolveRequesterInternalSessionKey,
   validateAcpResumeSessionOwnership,
 } from "./acp-spawn-requester.js";
@@ -320,7 +320,7 @@ export async function spawnAcpDirect(
       error: targetAgentResult.error,
     });
   }
-  const targetAgentId = targetAgentResult.agentId;
+  const { agentId: targetAgentId, backendId } = targetAgentResult;
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return createAcpSpawnFailure({
@@ -338,7 +338,6 @@ export async function spawnAcpDirect(
     requesterAgentId,
     targetAgentId,
     ctx,
-    subagentStore,
   });
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
@@ -367,6 +366,7 @@ export async function spawnAcpDirect(
   const resumeAuthorization = validateAcpResumeSessionOwnership({
     cfg,
     targetAgentId,
+    backendId,
     requesterSessionKey: requesterInternalKey,
     resumeSessionId: params.resumeSessionId,
   });
@@ -392,7 +392,7 @@ export async function spawnAcpDirect(
       error: runtimeOptionsResult.error,
     });
   }
-  const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
+  const effectiveStreamToParent = shouldStreamAcpSpawnToParent({
     spawnMode,
     requestThreadBinding,
     streamToParentRequested,
@@ -528,6 +528,7 @@ export async function spawnAcpDirect(
         sessionKey,
         targetAgentId,
         runtimeMode,
+        backendId,
         resumeSessionId: params.resumeSessionId,
         runtimeOptions: runtimeOptionsResult.runtimeOptions,
         modelExplicit: runtimeOptionsResult.modelExplicit,
@@ -552,7 +553,6 @@ export async function spawnAcpDirect(
       state.deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
         cfg,
         spawnMode,
-        requestThreadBinding,
         effectiveStreamToParent,
         requester: requesterState,
         binding: state.binding,
@@ -715,16 +715,13 @@ export async function spawnAcpDirect(
       runId: pipelineResult.runId,
     });
   }
-  const childRunId = pipelineResult.runId;
-  const deliveryPlan = pipelineResult.state.deliveryPlan;
-
   return {
     status: "accepted",
     childSessionKey: sessionKey,
-    runId: childRunId,
+    runId: pipelineResult.runId,
     mode: spawnMode,
     runTimeoutSeconds,
-    ...(deliveryPlan?.useInlineDelivery ? { inlineDelivery: true } : {}),
+    ...(pipelineResult.state.deliveryPlan?.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }
