@@ -14,6 +14,7 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withInstallationTarget } from "../infra/installation-target-context.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -402,11 +403,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("./agent-runtime-config.js", () => {
   return {
-    resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-    }),
+    resolveAgentRuntimeConfig: async () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   };
 });
 
@@ -5244,6 +5241,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("refuses a local installation target only when dispatching an ACP turn", async () => {
+    setupAcpSession();
+    await expect(
+      withInstallationTarget(
+        {
+          stateDir: "/fixture/diagnosed",
+          configPath: "/fixture/custom.json",
+          defaultWorkspaceDir: "/fixture/default-workspace",
+        },
+        runBasicAgentCommand,
+      ),
+    ).rejects.toThrow("saved prompt");
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    await runBasicAgentCommand();
+    expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
   });
 
   it("marks ACP execution start before prompt submission", async () => {

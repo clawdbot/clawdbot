@@ -1,4 +1,3 @@
-// Matrix tests cover route plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import {
@@ -45,10 +44,10 @@ function dmRoomPeer(id = "!dm:example.org"): RoutePeer {
   return { kind: "channel", id };
 }
 
-const threadCfg = {
+const threadCfg: OpenClawConfig = {
   ...baseCfg,
   bindings: [matrixBinding("main")],
-} satisfies OpenClawConfig;
+};
 
 function resolveDmRoute(
   cfg: OpenClawConfig,
@@ -124,44 +123,27 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.lastRoutePolicy).toBe("session");
   });
 
-  it("lets configured ACP room bindings override DM parent-peer routing", () => {
-    const cfg = {
-      ...baseCfg,
-      bindings: [
-        matrixBinding("room-agent", dmRoomPeer()),
-        matrixBinding("acp-agent", dmRoomPeer(), "acp"),
-      ],
-    } satisfies OpenClawConfig;
+  it.each([undefined, "per-room"] as const)(
+    "keeps configured ACP room bindings ahead of DM session scope %s",
+    (dmSessionScope) => {
+      const cfg = {
+        ...baseCfg,
+        bindings: [
+          matrixBinding("room-agent", dmRoomPeer()),
+          matrixBinding("acp-agent", dmRoomPeer(), "acp"),
+        ],
+      } satisfies OpenClawConfig;
 
-    const { route, configuredBinding } = resolveDmRoute(cfg);
+      const { route, configuredBinding } = resolveDmRoute(cfg, { dmSessionScope });
 
-    expect(configuredBinding?.spec.agentId).toBe("acp-agent");
-    expect(route.agentId).toBe("acp-agent");
-    expect(route.matchedBy).toBe("binding.channel");
-    expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
-    expect(route.lastRoutePolicy).toBe("session");
-  });
-
-  it("keeps configured ACP room bindings ahead of per-room DM session scope", () => {
-    const cfg = {
-      ...baseCfg,
-      bindings: [
-        matrixBinding("room-agent", dmRoomPeer()),
-        matrixBinding("acp-agent", dmRoomPeer(), "acp"),
-      ],
-    } satisfies OpenClawConfig;
-
-    const { route, configuredBinding } = resolveDmRoute(cfg, {
-      dmSessionScope: "per-room",
-    });
-
-    expect(configuredBinding?.spec.agentId).toBe("acp-agent");
-    expect(route.agentId).toBe("acp-agent");
-    expect(route.matchedBy).toBe("binding.channel");
-    expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
-    expect(route.sessionKey).not.toBe("agent:acp-agent:matrix:channel:!dm:example.org");
-    expect(route.lastRoutePolicy).toBe("session");
-  });
+      expect(configuredBinding?.spec.agentId).toBe("acp-agent");
+      expect(route.agentId).toBe("acp-agent");
+      expect(route.matchedBy).toBe("binding.channel");
+      expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
+      expect(route.sessionKey).not.toBe("agent:acp-agent:matrix:channel:!dm:example.org");
+      expect(route.lastRoutePolicy).toBe("session");
+    },
+  );
 
   it.each(["agent:bound:session-1", "global"])(
     "lets runtime binding %s override sender and room routes",
@@ -253,56 +235,26 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.agentId).toBe("sender-agent");
     expect(runtimeBindingId).toBe(expectedBindingId);
   });
-});
-
-describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
-  beforeEach(() => {
-    sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
-    );
-  });
-
-  it("scopes session key to thread when a thread id is provided", () => {
+  it.each([
+    ["$thread-root", "agent:main:matrix:channel:!room:example.org:thread:$thread-root"],
+    [
+      "$AbC123:example.org",
+      "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+    ],
+    [undefined, "agent:main:matrix:channel:!room:example.org"],
+  ])("resolves session keys for thread %s", (threadId, expectedSessionKey) => {
     const { route } = resolveMatrixInboundRoute({
-      cfg: threadCfg as never,
+      cfg: threadCfg,
       accountId: "ops",
       roomId: "!room:example.org",
       senderId: "@alice:example.org",
       isDirectMessage: false,
-      threadId: "$thread-root",
+      threadId,
       resolveAgentRoute,
     });
 
-    expect(route.sessionKey).toContain(":thread:$thread-root");
+    expect(route.sessionKey).toBe(expectedSessionKey);
     expect(route.mainSessionKey).not.toContain(":thread:");
     expect(route.lastRoutePolicy).toBe("session");
-  });
-
-  it("preserves mixed-case matrix thread ids in session keys", () => {
-    const { route } = resolveMatrixInboundRoute({
-      cfg: threadCfg as never,
-      accountId: "ops",
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-      isDirectMessage: false,
-      threadId: "$AbC123:example.org",
-      resolveAgentRoute,
-    });
-
-    expect(route.sessionKey).toContain(":thread:$AbC123:example.org");
-  });
-
-  it("does not scope session key when thread id is absent", () => {
-    const { route } = resolveMatrixInboundRoute({
-      cfg: threadCfg as never,
-      accountId: "ops",
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-      isDirectMessage: false,
-      resolveAgentRoute,
-    });
-
-    expect(route.sessionKey).not.toContain(":thread:");
   });
 });

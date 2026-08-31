@@ -1256,6 +1256,7 @@ describe("prepareCliRunContext", () => {
 
     setCliBackendForPrepareTest({
       prepareExecution,
+      authEpochMode: "profile-only",
       autoSelectAuthProfile: testCase.autoSelectAuthProfile,
     });
     const context = await fixture.prepare({
@@ -3260,137 +3261,63 @@ describe("prepareCliRunContext", () => {
     expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
   });
 
-  it("binds current turn context into the bundle MCP client grant", async () => {
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
-    const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-    const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
-    const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-    const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
-    const transferMcpLoopbackClientGrant = vi.fn(() => true);
-    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
-    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
-      agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
+  it.each(["main", "worker"])(
+    "binds current turn context into the bundle MCP client grant with explicit %s owner",
+    async (explicitAgentId) => {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      }));
+      const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+      const transferMcpLoopbackClientGrant = vi.fn(() => true);
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a message",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        activateMcpLoopbackClientGrantCapture,
+        deactivateMcpLoopbackClientGrantCapture,
+        transferMcpLoopbackClientGrant,
+        mintMcpLoopbackClientGrant,
+        revokeMcpLoopbackClientGrant,
+        resolveMcpLoopbackScopedTools,
+      });
+      setRawCliBackendForPrepareTest({
+        id: "native-cli",
+        pluginId: "native-plugin",
+        bundleMcp: true,
+        bundleMcpMode: "codex-config-overrides",
+        config: {
+          command: "native-cli",
+          args: ["--print"],
+          input: "arg",
+          sessionMode: "existing",
         },
-      ],
-    }));
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-      ensureMcpLoopbackServer,
-      createMcpLoopbackServerConfig,
-      activateMcpLoopbackClientGrantCapture,
-      deactivateMcpLoopbackClientGrantCapture,
-      transferMcpLoopbackClientGrant,
-      mintMcpLoopbackClientGrant,
-      revokeMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools,
-    });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "codex-config-overrides",
-      config: {
-        command: "native-cli",
-        args: ["--print"],
-        input: "arg",
-        sessionMode: "existing",
-      },
-    });
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:telegram:group:chat123",
-      runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-      agentId: "worker",
-      provider: "native-cli",
-      modelProvider: "anthropic",
-      runId: "run-test-room-event-tools",
-      sessionEntry: {
-        execHost: "node",
-        execNode: "mac-a",
-      } as never,
-      execOverrides: {
-        host: "node",
-        security: "allowlist",
-        ask: "always",
-        node: "mac-b",
-      },
-      bashElevated: {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "runtime",
-      },
-      trigger: "user",
-      currentInboundEventKind: "room_event",
-      messageChannel: "telegram",
-      messageProvider: "discord",
-      clientCaps: ["tool-events", "inline-widgets"],
-      currentChannelId: "telegram:-100123:topic:42",
-      currentThreadTs: "42",
-      currentMessageId: "reply-message-1",
-      currentInboundAudio: true,
-      sourceReplyDeliveryMode: "message_tool_only",
-      taskSuggestionDeliveryMode: "gateway",
-      requireExplicitMessageTarget: true,
-      approvalReviewerDeviceId: "reviewer-device",
-      senderId: "canonical-sender",
-      senderName: "Canonical Name",
-      senderUsername: "canonical-user",
-      senderE164: "+15551234567",
-      groupId: "chat123",
-      groupChannel: "ops",
-      groupSpace: "workspace-a",
-      spawnedBy: "agent:main:telegram:group:parent",
-      channelContext: {
-        sender: { id: "sender-1", displayName: "not-forwarded" },
-        chat: { id: "chat-1", title: "not-forwarded" },
-      },
-    });
-
-    expect(context.preparedBackend.env).toMatchObject({
-      OPENCLAW_MCP_TOKEN: "loopback-token",
-      OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-    });
-    expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
-      context: {
+      });
+      const context = await fixture.prepare({
         sessionKey: "agent:main:telegram:group:chat123",
         runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        runtimePolicyAgentId: "worker",
-        agentId: "main",
-        sessionId: "session-test",
-        runId: "run-test-room-event-tools",
-        workspaceDir: context.workspaceDir,
+        agentId: explicitAgentId,
+        provider: "native-cli",
         modelProvider: "anthropic",
-        modelId: "test-model",
-        messageProvider: "telegram",
-        clientCaps: ["tool-events", "inline-widgets"],
-        currentChannelId: "telegram:-100123:topic:42",
-        currentThreadTs: "42",
-        currentMessageId: "reply-message-1",
-        currentInboundAudio: true,
-        accountId: undefined,
-        inboundEventKind: "room_event",
-        sourceReplyDeliveryMode: "message_tool_only",
-        taskSuggestionDeliveryMode: "gateway",
-        requireExplicitMessageTarget: true,
-        senderIsOwner: false,
-        nodeExecAllowed: true,
-        execSession: {
+        runId: "run-test-room-event-tools",
+        sessionEntry: {
           execHost: "node",
           execNode: "mac-a",
-        },
+        } as never,
         execOverrides: {
           host: "node",
           security: "allowlist",
@@ -3405,94 +3332,167 @@ describe("prepareCliRunContext", () => {
           fullAccessBlockedReason: "runtime",
         },
         trigger: "user",
-        approvalReviewerDeviceId: "reviewer-device",
-        channelContext: {
-          sender: { id: "canonical-sender" },
-          chat: { id: "chat-1" },
-        },
-        senderName: "Canonical Name",
-        senderUsername: "canonical-user",
-        senderE164: "+15551234567",
-        groupId: "chat123",
-        groupChannel: "ops",
-        groupSpace: "workspace-a",
-        spawnedBy: "agent:main:telegram:group:parent",
-      },
-      runtimeOwnerToken: "loopback-owner-token",
-      admittedRunContext: context.params.admittedRunContext,
-      toolAuth: {
-        agentDir: expect.any(String),
-        store: expect.objectContaining({ version: 1, profiles: {} }),
-      },
-    });
-    expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
-    context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
-    context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
-    context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
-    expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
-      sourceToken: "loopback-token",
-      targetToken: "stable-loopback-token",
-      runtimeOwnerToken: "loopback-owner-token",
-    });
-    expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-      token: "stable-loopback-token",
-      runtimeOwnerToken: "loopback-owner-token",
-      captureKey: "capture-test",
-    });
-    expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-      token: "stable-loopback-token",
-      runtimeOwnerToken: "loopback-owner-token",
-      captureKey: "capture-test",
-    });
-    context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
-    expect(context.mcpDeliveryCapture).toBe(true);
-    expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
-      expect.objectContaining({
+        currentInboundEventKind: "room_event",
+        messageChannel: "telegram",
+        messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
+        currentChannelId: "telegram:-100123:topic:42",
+        currentThreadTs: "42",
+        currentMessageId: "reply-message-1",
+        currentInboundAudio: true,
+        sourceReplyDeliveryMode: "message_tool_only",
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
-        senderIsOwner: false,
-        runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-        runtimePolicyAgentId: "worker",
-        agentId: "main",
-        modelProvider: "anthropic",
-        modelId: "test-model",
-        execOverrides: {
-          host: "node",
-          security: "allowlist",
-          ask: "always",
-          node: "mac-b",
-        },
-        bashElevated: {
-          enabled: true,
-          allowed: true,
-          defaultLevel: "full",
-          fullAccessAvailable: false,
-          fullAccessBlockedReason: "runtime",
-        },
-        channelContext: {
-          sender: { id: "canonical-sender" },
-          chat: { id: "chat-1" },
-        },
+        approvalReviewerDeviceId: "reviewer-device",
+        senderId: "canonical-sender",
         senderName: "Canonical Name",
         senderUsername: "canonical-user",
         senderE164: "+15551234567",
-        messageProvider: "telegram",
         groupId: "chat123",
         groupChannel: "ops",
         groupSpace: "workspace-a",
         spawnedBy: "agent:main:telegram:group:parent",
-      }),
-    );
-    expect(context.systemPrompt).toContain(
-      "`send`: `target` + `message`; target required this turn",
-    );
-    expect(context.systemPrompt).not.toContain("current source is default target");
-    await context.preparedBackend.cleanup?.();
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
-  });
+        channelContext: {
+          sender: { id: "sender-1", displayName: "not-forwarded" },
+          chat: { id: "chat-1", title: "not-forwarded" },
+        },
+      });
+
+      expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_TOKEN: "loopback-token",
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      });
+      expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
+        context: {
+          sessionKey: "agent:main:telegram:group:chat123",
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          runtimePolicyAgentId: "worker",
+          agentId: "main",
+          sessionId: "session-test",
+          runId: "run-test-room-event-tools",
+          workspaceDir: context.workspaceDir,
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          messageProvider: "telegram",
+          clientCaps: ["tool-events", "inline-widgets"],
+          currentChannelId: "telegram:-100123:topic:42",
+          currentThreadTs: "42",
+          currentMessageId: "reply-message-1",
+          currentInboundAudio: true,
+          accountId: undefined,
+          inboundEventKind: "room_event",
+          sourceReplyDeliveryMode: "message_tool_only",
+          taskSuggestionDeliveryMode: "gateway",
+          requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+          nodeExecAllowed: true,
+          execSession: {
+            execHost: "node",
+            execNode: "mac-a",
+          },
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          trigger: "user",
+          approvalReviewerDeviceId: "reviewer-device",
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
+        },
+        runtimeOwnerToken: "loopback-owner-token",
+        admittedRunContext: context.params.admittedRunContext,
+        toolAuth: {
+          agentDir: expect.any(String),
+          store: expect.objectContaining({ version: 1, profiles: {} }),
+        },
+      });
+      expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
+      context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
+      context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
+      context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+      expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
+        sourceToken: "loopback-token",
+        targetToken: "stable-loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+      });
+      expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+        token: "stable-loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+        captureKey: "capture-test",
+      });
+      expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
+        token: "stable-loopback-token",
+        runtimeOwnerToken: "loopback-owner-token",
+        captureKey: "capture-test",
+      });
+      context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
+      expect(context.mcpDeliveryCapture).toBe(true);
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientCaps: ["tool-events", "inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
+          requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+          runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
+          runtimePolicyAgentId: "worker",
+          agentId: "main",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+          execOverrides: {
+            host: "node",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-b",
+          },
+          bashElevated: {
+            enabled: true,
+            allowed: true,
+            defaultLevel: "full",
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "runtime",
+          },
+          channelContext: {
+            sender: { id: "canonical-sender" },
+            chat: { id: "chat-1" },
+          },
+          senderName: "Canonical Name",
+          senderUsername: "canonical-user",
+          senderE164: "+15551234567",
+          messageProvider: "telegram",
+          groupId: "chat123",
+          groupChannel: "ops",
+          groupSpace: "workspace-a",
+          spawnedBy: "agent:main:telegram:group:parent",
+        }),
+      );
+      expect(context.systemPrompt).toContain(
+        "`send`: `target` + `message`; target required this turn",
+      );
+      expect(context.systemPrompt).not.toContain("current source is default target");
+      await context.preparedBackend.cleanup?.();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
+    },
+  );
 
   it("enables gateway delivery capture for Claude-style JSONL bundle MCP", async () => {
     setCliRunnerPrepareTestDeps({

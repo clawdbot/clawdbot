@@ -7,10 +7,14 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFindingSeverity } from "../flows/health-checks.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import {
+  installationTargetEnv,
+  resolveInstallationTarget,
+  withInstallationTarget,
+} from "../infra/installation-target-context.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { select } from "./configure.shared.js";
@@ -35,16 +39,17 @@ async function collectTriageBundle(skipExport: boolean): Promise<TriageBundle> {
   }
   try {
     const rpc = { timeout: "3000", json: true };
-    const health = await callGatewayFromCliWithTransport("health", rpc, undefined, {
-      defaultTimeoutMs: 3000,
-      sharedStateMode: "read-only",
-    });
     const [{ writeDiagnosticSupportExport }, { gatherDaemonStatus }] = await Promise.all([
       import("../logging/diagnostic-support-export.js"),
       import("../cli/daemon-cli/status.gather.js"),
     ]);
     const result = await writeDiagnosticSupportExport({
-      readHealthSnapshot: async () => health,
+      // The exporter records failed snapshots while preserving local diagnostics.
+      readHealthSnapshot: async () =>
+        await callGatewayFromCliWithTransport("health", rpc, undefined, {
+          defaultTimeoutMs: 3000,
+          sharedStateMode: "read-only",
+        }),
       readStatusSnapshot: async () =>
         await gatherDaemonStatus({ rpc, probe: true, requireRpc: false, deep: false }),
     });
@@ -78,7 +83,10 @@ export async function triageCommand(
 ): Promise<void> {
   const { collectDoctorFindings } = await import("./doctor-lint.js");
   const findings = await collectDoctorFindings(runtime);
-  const redaction = { env: process.env, stateDir: resolveStateDir() };
+  // Doctor has loaded dotenv; capture selectors before agent exec redirects run state.
+  const target = resolveInstallationTarget();
+  const targetEnv = installationTargetEnv(target);
+  const redaction = { env: process.env, stateDir: target.stateDir };
   const bundle = await collectTriageBundle(options.noExport === true);
   const prompt = renderTriagePrompt({ findings, bundle, redaction });
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
@@ -89,10 +97,11 @@ export async function triageCommand(
 
   // Operator-facing paths and shell commands stay real; only agent prompt content is path-redacted.
   const quotedPath = quoteShellArgument(promptPath);
+  const targetPrefix = `env OPENCLAW_STATE_DIR=${quoteShellArgument(target.stateDir)} OPENCLAW_CONFIG_PATH=${quoteShellArgument(target.configPath)} OPENCLAW_WORKSPACE_DIR=${quoteShellArgument(target.defaultWorkspaceDir)}`;
   const suggestedCommands = [
-    `claude "$(cat ${quotedPath})"`,
-    `codex exec - < ${quotedPath}`,
-    "openclaw triage --run",
+    `${targetPrefix} claude "$(cat ${quotedPath})"`,
+    `${targetPrefix} codex exec --skip-git-repo-check - < ${quotedPath}`,
+    `${targetPrefix} openclaw triage --run`,
   ];
   const findingCounts: Record<HealthFindingSeverity, number> = {
     error: 0,
@@ -180,7 +189,10 @@ export async function triageCommand(
     let exitCode: number;
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
-        const child = spawn(handoff.executablePath, [prompt], { stdio: "inherit" });
+        const child = spawn(handoff.executablePath, [prompt], {
+          stdio: "inherit",
+          env: { ...process.env, ...targetEnv },
+        });
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
       });
@@ -205,15 +217,14 @@ export async function triageCommand(
   const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
   if (!inference.ok) {
     const reason = redactSupportString(scrubDoctorErrorMessage(inference.error), redaction);
-    const message = `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`;
-    if (options.run === true) {
-      throw new Error(message);
-    }
-    runtime.log(message);
-    return;
+    throw new Error(
+      `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
+    );
   }
   const { agentExecCommand } = await import("./agent-exec.js");
-  const result = await agentExecCommand(undefined, { messageFile: promptPath }, runtime);
+  const result = await withInstallationTarget(target, () =>
+    agentExecCommand(undefined, { messageFile: promptPath }, runtime),
+  );
   if (result.exitCode !== 0) {
     runtime.exit(result.exitCode);
   }

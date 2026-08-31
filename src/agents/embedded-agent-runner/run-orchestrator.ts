@@ -27,6 +27,7 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveModelFallbackAvailability,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
@@ -62,7 +63,6 @@ import {
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
-import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -393,12 +393,21 @@ async function runEmbeddedAgentInternal(
             model: params.model,
           });
           const normalizedSessionKey = params.sessionKey?.trim();
-          const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
-            cfg: params.config,
-            agentId: params.agentId,
-            sessionKey: normalizedSessionKey,
-            modelFallbacksOverride: params.modelFallbacksOverride,
-          });
+          const modelFallbackAvailability =
+            params.modelFallbackAvailability ??
+            resolveModelFallbackAvailability({
+              cfg: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+              agentId: workspaceResolution.agentId,
+              sessionKey: normalizedSessionKey,
+              hasSessionModelOverride: false,
+              modelFallbacksOverride: params.modelFallbacksOverride,
+            });
+          const fallbackConfigured = modelFallbackAvailability.kind === "active";
+          if (modelFallbackAvailability.kind === "disabled_by_model_override") {
+            log.warn(
+              `[model-fallback] configured fallbacks disabled by user model override run=${params.runId} session=${redactedSessionId}`,
+            );
+          }
           const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
           const hookRunner = getGlobalHookRunner();
           const hookCtx = {

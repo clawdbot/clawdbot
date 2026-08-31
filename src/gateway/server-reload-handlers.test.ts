@@ -64,6 +64,7 @@ import {
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -161,7 +162,7 @@ function createGatewayReloadHandlers(
     broadcast: vi.fn(),
     getState: createDefaultGatewayReloadState,
     setState: vi.fn(),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
@@ -219,7 +220,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     broadcast: vi.fn(),
     getState: createDefaultGatewayReloadState,
     setState: vi.fn(),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     reloadPlugins: vi.fn(async () => makePluginReloadResult()),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -473,6 +474,7 @@ function createRecordedChannelHandlers(events: string[]) {
     }),
     start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
       events.push(`start:${channel}:${accountId}`);
+      return new Map();
     }),
   };
 }
@@ -685,7 +687,7 @@ function createReloadHandlersForTest(
   const handlers = createGatewayReloadHandlers({
     getState: () => state,
     setState,
-    startChannel: channels?.start ?? vi.fn(async () => {}),
+    startChannel: channels?.start ?? vi.fn(async () => new Map()),
     stopChannel: channels?.stop ?? vi.fn(async () => {}),
     ...(channels?.pruneInactiveChannelAccountState
       ? { pruneInactiveChannelAccountState: channels.pruneInactiveChannelAccountState }
@@ -1080,7 +1082,7 @@ async function runManagedOwnershipScenario(params: {
   const staleClose = vi.fn();
   const currentClose = vi.fn();
   const nonSharedClose = vi.fn();
-  const startChannel = vi.fn(async () => {});
+  const startChannel = vi.fn(async () => new Map());
   const stopChannel = vi.fn(async () => {});
   const setState = vi.fn();
   const reloadPlugins = vi.fn(async () => makePluginReloadResult());
@@ -1428,11 +1430,13 @@ describe("managed channel credential publication", () => {
             expect.objectContaining({ ownerId: "mattermost:ada", degradationState: "cold" }),
           );
           await expect(
-            fixture.manager.startChannelAccountForRecovery("mattermost", "ada", {
+            fixture.manager.startChannel("mattermost", "ada", {
               preserveManualStop: true,
               skipUnavailableAccounts: true,
             }),
-          ).resolves.toEqual({ status: "skipped", reason: "secret-unavailable" });
+          ).resolves.toEqual(
+            new Map([["ada", { status: "skipped", reason: "secret-unavailable" }]]),
+          );
           await expect(
             fixture.manager.startChannel("mattermost", "ada", { manual: true }),
           ).rejects.toMatchObject({
@@ -2095,7 +2099,7 @@ describe("gateway hot reload model state", () => {
     "agents.defaults.compaction.maxActiveTranscriptBytes",
   ])("refreshes prepared model runtime without restarting subsystems: %s", async (changedPath) => {
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const channels = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
     const { applyHotReload, heartbeatRunner, cron } = createReloadHandlersForTest(
       logReload,
       channels,
@@ -2881,7 +2885,7 @@ describe("gateway hot reload superseded tail recovery", () => {
       let pendingConfig: OpenClawConfig | null = null;
       const isCurrent = () => pendingConfig === null;
       const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const startChannel = vi.fn(async () => {});
+      const startChannel = vi.fn(async () => new Map());
       const stopChannel = vi.fn(async () => {
         if (surface !== "channel") {
           return;
@@ -2973,7 +2977,7 @@ describe("gateway hot reload superseded tail recovery", () => {
     const releaseStop = createDeferred();
     let current = true;
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {
       stopped.resolve();
       await releaseStop.promise;
@@ -3015,6 +3019,7 @@ describe("gateway hot reload superseded tail recovery", () => {
       const handlers = createReloadHandlersForTest(undefined, {
         start: vi.fn(async () => {
           startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+          return new Map();
         }),
         stop: vi.fn(async () => {}),
       });
@@ -3768,7 +3773,7 @@ describe("gateway restart deferral preflight", () => {
 
   it("defers channel hot reload until active embedded work drains", async () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const setState = vi.fn();
     let runtimePublished = false;
@@ -3833,7 +3838,7 @@ describe("gateway restart deferral preflight", () => {
 
   it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { applyHotReload } = createGatewayReloadHandlers({
@@ -4043,6 +4048,7 @@ describe("gateway channel hot reload handlers", () => {
       start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`start:${channel}:${accountId}`);
         startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+        return new Map();
       }),
     };
     const { applyHotReload } = createReloadHandlersForTest(undefined, channels);
@@ -4086,6 +4092,7 @@ describe("gateway channel hot reload handlers", () => {
       }),
       start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`start:${channel}:${accountId}`);
+        return new Map();
       }),
     };
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
@@ -4150,7 +4157,7 @@ describe("gateway channel hot reload handlers", () => {
   it("requests recovery when account enumeration fails after config commit", async () => {
     const channels = {
       stop: vi.fn(async () => {}),
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
     };
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const { applyHotReload } = createReloadHandlersForTest(
@@ -4203,6 +4210,7 @@ describe("gateway channel hot reload handlers", () => {
       }),
       start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`start:${channel}:${accountId}`);
+        return new Map();
       }),
     };
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
@@ -4315,7 +4323,7 @@ describe("gateway channel hot reload handlers", () => {
   it("refuses channel restarts while crash-loop safe mode suppresses autostart", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => {}),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
@@ -4358,6 +4366,7 @@ describe("gateway channel hot reload handlers", () => {
       }),
       start: vi.fn(async (channel: ChannelKind) => {
         events.push(`start:${channel}`);
+        return new Map();
       }),
     };
 
@@ -4401,6 +4410,7 @@ describe("gateway channel hot reload handlers", () => {
       if (channel === "telegram" && testCase.name === "start") {
         throw new Error("start failed");
       }
+      return new Map();
     });
     const { applyHotReload } = createGatewayReloadHandlers({
       setState,
@@ -5771,6 +5781,7 @@ describe("gateway Gmail hot reload handlers", () => {
     );
     expect(await restartOutcome).toEqual({ status: "started" });
     expect(restartSignal?.aborted).toBe(false);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["reload:config"]);
 
     await reloader.stop();
 
@@ -5890,7 +5901,7 @@ describe("gateway plugin hot reload handlers", () => {
       env: targetEnv,
       previousOwnedEnv: { [envKey]: "1" },
     });
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const handlers = createReloadHandlersForTest(undefined, {
       start: startChannel,
@@ -5949,7 +5960,7 @@ describe("gateway plugin hot reload handlers", () => {
       nextConfig,
       env: targetEnv,
     });
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const stopChannel = vi.fn(async () => {});
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const handlers = createGatewayReloadHandlers({
@@ -6064,6 +6075,7 @@ describe("gateway plugin hot reload handlers", () => {
       subscribeToWrites: captureConfigWriteListener(writeListenerRef, false),
       startChannel: vi.fn(async () => {
         events.push(`channel:${targetEnv[envKey]}`);
+        return new Map();
       }),
       reloadPlugins,
     });
@@ -6120,7 +6132,7 @@ describe("gateway plugin hot reload handlers", () => {
     const handlers = createReloadHandlersForTest(
       undefined,
       {
-        start: vi.fn(async () => {}),
+        start: vi.fn(async () => new Map()),
         stop: vi.fn(async (channel) => {
           events.push(`stop:${channel}`);
         }),
@@ -6231,6 +6243,7 @@ describe("gateway plugin hot reload handlers", () => {
         }),
         start: vi.fn(async (channel) => {
           events.push(`channel:start:${channel}`);
+          return new Map();
         }),
       },
       reloadPlugins,
@@ -6290,6 +6303,7 @@ describe("gateway plugin hot reload handlers", () => {
             }),
             start: vi.fn(async (channel) => {
               events.push(`channel:start:${channel}`);
+              return new Map();
             }),
           },
           reloadPlugins,
@@ -6340,6 +6354,7 @@ describe("gateway plugin hot reload handlers", () => {
         }),
         start: vi.fn(async (channel) => {
           events.push(`start:${channel}`);
+          return new Map();
         }),
       },
       reloadPlugins,
@@ -6402,6 +6417,7 @@ describe("gateway plugin hot reload handlers", () => {
           restartedDispatch = createPluginCommandRuntime()
             .listNativeCandidates("discord")[0]!
             .prepareDispatch();
+          return new Map();
         }),
       },
       vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
@@ -6581,7 +6597,7 @@ describe("gateway plugin hot reload handlers", () => {
       resetGatewayWorkAdmission();
       const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
-      const startChannel = vi.fn(async () => {});
+      const startChannel = vi.fn(async () => new Map());
       const stopChannel = vi.fn(async () => {});
       const reloadPlugins = vi.fn(
         async (params: {
@@ -6652,6 +6668,7 @@ describe("gateway plugin hot reload handlers", () => {
         }),
         start: vi.fn(async (channel, accountId) => {
           events.push(`start:${channel}:${accountId ?? "all"}`);
+          return new Map();
         }),
         pruneInactiveChannelAccountState,
       },
@@ -6700,6 +6717,7 @@ describe("gateway plugin hot reload handlers", () => {
         }),
         start: vi.fn(async (channel, accountId) => {
           events.push(`start:${channel}:${accountId ?? "all"}`);
+          return new Map();
         }),
         pruneInactiveChannelAccountState,
       },
@@ -6726,6 +6744,7 @@ describe("gateway plugin hot reload handlers", () => {
     const startChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`start:${channel}`);
       startRootCounts.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+      return new Map();
     });
     const stopChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`stop:${channel}`);
@@ -6791,7 +6810,7 @@ describe("gateway plugin hot reload handlers", () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
-    const startChannel = vi.fn(async () => {});
+    const startChannel = vi.fn(async () => new Map());
     const events: string[] = [];
     const activeChannels = new Set<ChannelKind>(["slack"]);
     const pruneInactiveChannelAccountState = vi.fn(() => {
@@ -6866,6 +6885,7 @@ describe("gateway plugin hot reload handlers", () => {
     const events: string[] = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`start:${channel}`);
+      return new Map();
     });
     const stopChannel = vi.fn(async (channel: ChannelKind) => {
       events.push(`stop:${channel}`);
@@ -6949,7 +6969,7 @@ describe("deferred channel reload abort generation", () => {
   it("abortPendingChannelReloads cancels a waiting deferred channel reload", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => {}),
     };
     const { applyHotReload } = createTestHandlers(logChannels, channels);
@@ -6979,7 +6999,7 @@ describe("deferred channel reload abort generation", () => {
   it("leaves plugin-prestopped channels down when lifecycle restart aborts", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => abortPendingChannelReloads()),
     };
     const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
@@ -7001,7 +7021,7 @@ describe("deferred channel reload abort generation", () => {
   it("does not roll back a failed plugin pre-stop after lifecycle restart aborts", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => {
         abortPendingChannelReloads();
         throw new Error("stop failed during drain");
@@ -7067,7 +7087,7 @@ describe("deferred channel reload abort generation", () => {
     async (committed, cancellationKind) => {
       const logChannels = { info: vi.fn(), error: vi.fn() };
       const channels = {
-        start: vi.fn(async () => {}),
+        start: vi.fn(async () => new Map()),
         stop: vi.fn(async () => {}),
       };
       const reloadPlugins: ReloadHandlerParams["reloadPlugins"] = async (params) => {
@@ -7173,7 +7193,7 @@ describe("deferred channel reload abort generation", () => {
       const writeListenerRef = createConfigWriteListenerRef();
       const commitTerminalConfig = vi.fn();
       const setState = vi.fn();
-      const startChannel = vi.fn(async () => {});
+      const startChannel = vi.fn(async () => new Map());
       const stopChannel = vi.fn(async () => {});
       const snapshotGate = createDeferred();
       const snapshotStarted = createDeferred();
@@ -7333,7 +7353,7 @@ describe("deferred channel reload abort generation", () => {
       const watcher = new chokidar.FSWatcher();
       const watch = vi.spyOn(chokidar, "watch").mockReturnValue(watcher);
       const writeListenerRef = createConfigWriteListenerRef();
-      const channels = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+      const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
       const commitTerminalConfig = vi.fn();
       const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const watchedConfig = successor === "newer admitted write" ? initialConfig : nextConfig;
@@ -7453,7 +7473,7 @@ describe("deferred channel reload abort generation", () => {
   it("new reload lifecycle is not affected by a previous lifecycle abort", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => {}),
     };
 
@@ -7496,7 +7516,7 @@ describe("deferred channel reload abort generation", () => {
   it("abort inside beforeReplace prevents plugin metadata/runtime replacement and channel restart", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const channels = {
-      start: vi.fn(async () => {}),
+      start: vi.fn(async () => new Map()),
       stop: vi.fn(async () => {}),
     };
     const pruneInactiveChannelAccountState = vi.fn();

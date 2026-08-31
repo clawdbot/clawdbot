@@ -665,6 +665,27 @@ describe("managed service update handoff", () => {
 
   registerManagedSystemdHandoffConvergenceTests(runManagedServiceManagerBoundary, itUnix, expect);
 
+  itUnix.each(["systemd", "launchd"] as const)(
+    "keeps %s parked when the updater reports unsafe recovery",
+    async (kind) => {
+      const { commands, sentinel, state } = await runManagedServiceManagerBoundary(kind, {
+        updaterExitCode: 79,
+      });
+
+      expect(state.parked).toBe(true);
+      expect(state.restored).toBeUndefined();
+      expect(
+        commands.some((command) => /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command)),
+      ).toBe(false);
+      expect(sentinel).toMatchObject({
+        payload: {
+          status: "error",
+          stats: { reason: "managed-service-handoff-unsafe-recovery", steps: [] },
+        },
+      });
+    },
+  );
+
   itUnix("rejects an overdue commit before its delayed deadline callback executes", async () => {
     const { commands, parentSignal, sentinel, state } = await runManagedServiceManagerBoundary(
       "systemd",

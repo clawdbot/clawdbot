@@ -17,15 +17,13 @@ export function createUnitFastVitestConfig(
   options: { argv?: string[]; runner?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
-  const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles());
-  const unitFastTestFiles = getUnitFastTestFiles().filter(
+  const selectedPatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const timerTestFiles = new Set(getUnitFastTimerTestFiles(selectedPatterns));
+  const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles(selectedPatterns));
+  const unitFastTestFiles = getUnitFastTestFiles(selectedPatterns).filter(
     (file) => !timerTestFiles.has(file) && !isolatedTestFiles.has(file),
   );
-  const includeFromEnv = intersectIncludePatterns(
-    unitFastTestFiles,
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
-  );
+  const includeFromEnv = intersectIncludePatterns(unitFastTestFiles, selectedPatterns);
   const cliInclude = narrowIncludePatternsForCli(unitFastTestFiles, options.argv);
 
   return defineConfig({

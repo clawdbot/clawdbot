@@ -179,17 +179,18 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The seven application subprocess entries run as plain Node JavaScript without a
+The nine declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
-route ownership, the service relay, its POSIX and Windows anchors, and the memory
-plugin's KNN child. The same generation also compiles the fake-backend TUI
+route ownership, the service relay, its POSIX and Windows anchors, the memory
+plugin's KNN child, and the session transcript archive and reconciliation workers.
+The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Application/package build entries and Vitest source parents stay unchanged. This
-does not convert Worker-thread entries or arbitrary source CLI fixtures.
+Package build entry paths and Vitest source parents stay unchanged. Other
+Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
@@ -329,6 +330,40 @@ not sweep old directories or infer ownership from names, ages, or PIDs.
 - Selected `plugin-sdk` and `commands` test files route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Base Vitest config defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
+
+### Retained mocked Control UI proof
+
+Ordinary mocked browser screenshots, recordings, and reports use fresh directories
+for each test attempt or standalone capture invocation. The Node-only
+`createControlUiE2eArtifactDir(scope, parentDir?)` helper in
+`ui/src/test-helpers/control-ui-e2e-artifacts.ts` prints the actual allocated path.
+An explicit parent wins; otherwise it uses the trimmed existing
+`OPENCLAW_UI_E2E_ARTIFACT_DIR`, then the repository's `.artifacts/control-ui-e2e`
+parent. Existing feature-specific directory controls and script output arguments
+select parents, with unique children beneath them. Explicit screenshot filename
+controls preserve the basename and print the relocated path.
+
+Keep capture gates independent from allocation: `OPENCLAW_CAPTURE_UI_PROOF`,
+`OPENCLAW_UI_E2E_RECORD`, and output-presence gates retain their existing meanings.
+Allocate during scenario execution or `beforeEach`, and pass the same owner to
+shared capture helpers so screenshots, reports, and video stay together. Distinguish
+stage names within an attempt. Close the browser context before finalizing video.
+
+Successful and failed evidence is retained. Cleanup is manual: remove only exact
+directories that you own and have finished reviewing. Never recursively delete
+the shared parent before a replay. Disposable build/media fixtures and temporary
+raw video have their own cleanup. New captures cannot recover overwritten evidence;
+do not describe a replay as recovery of lost files.
+
+Timeout diagnostics allocate fresh children beneath the existing
+`OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
+JSON report together. Mantis allocates an invocation directory for setup logs,
+capture attempts, and its report; the builder preserves each attempt's relative
+paths and refuses to overwrite an existing report.
+
+Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+`chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
+mocked proof retention guarantee.
 
 ## Gateway and E2E
 

@@ -317,16 +317,18 @@ export function scheduleRequesterSettleWake(
   // Wake turns outlive their spawning attempt; clear its owner before both
   // dispatch and chained re-arms so transcript writes acquire a fresh lock.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithGatewayIndependentRootWorkContinuation(() =>
-      params.maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey,
-        requesterOrigin: entry.requesterOrigin,
-        settledEntry: entry,
-        transitionBatch: (runIds, state) =>
-          transitionRequesterSettleWakeBatch(context, runIds, state),
-        completeBatch: (runIds, rearmGeneration, outcome) =>
-          completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
-      }),
+    void runWithGatewayIndependentRootWorkContinuation(
+      () =>
+        params.maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: entry.requesterOrigin,
+          settledEntry: entry,
+          transitionBatch: (runIds, state) =>
+            transitionRequesterSettleWakeBatch(context, runIds, state),
+          completeBatch: (runIds, rearmGeneration, outcome) =>
+            completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
+        }),
+      "subagents:lifecycle-wake",
     )
       .catch((error: unknown) => {
         params.warn("requester settle wake failed", {
@@ -362,11 +364,13 @@ export function completeCleanupBookkeeping(
   const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
     // These best-effort tails can outlive the durable registry transition,
     // but they still mutate session-owned resources and must block snapshots.
-    void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
-      defaultRuntime.log(
-        `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
-      );
-    });
+    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup").catch(
+      (error: unknown) => {
+        defaultRuntime.log(
+          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
+        );
+      },
+    );
   };
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;

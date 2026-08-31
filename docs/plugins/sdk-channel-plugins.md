@@ -917,6 +917,21 @@ unrelated inbound runtime helpers.
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
     them.
 
+    `config.inspectAccount` is synchronous and returns metadata
+    for read-only diagnostics, including disabled or configured-but-unavailable
+    accounts. Return `enabled`, `configured`, and applicable credential status
+    fields without requiring secret resolution. Its result is not a resolved
+    account: operational hooks such as probes and account status builders receive
+    `config.resolveAccount` results instead.
+    Diagnostics expose only status-safe fields from the inspection result.
+    Include the same account enablement and configuration decisions used by the
+    runtime, including duplicate-account suppression. If `configured` is omitted,
+    diagnostics use a recorded Gateway value when available; otherwise they report
+    that configuration status is unavailable.
+    Selection before secret redemption also reads this metadata directly. Directory
+    auto-selection requires `configured: true`; callers can still select the channel
+    explicitly when configuration status is unknown.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts

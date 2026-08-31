@@ -7,11 +7,21 @@ import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "./manifest-types.js";
-import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import type {
+  PluginRegistrySnapshotDiagnostic,
+  PluginRegistrySnapshotSource,
+} from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {
   key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
+};
+
+export type PluginProviderAuthAliasCandidate = {
+  plugin: PluginManifestRecord;
+  target: string;
+  /** First eligible declaration owns public map order, even if a later candidate wins. */
+  order: number;
 };
 
 export type PluginMetadataSnapshotOwnerMaps = {
@@ -23,6 +33,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   setupProviders: ReadonlyMap<string, readonly string[]>;
   commandAliases: ReadonlyMap<string, readonly string[]>;
   contracts: ReadonlyMap<string, readonly string[]>;
+  providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
@@ -36,15 +47,6 @@ type PluginMetadataSnapshotMetrics = {
   manifestPluginCount: number;
 };
 
-type PluginMetadataSnapshotRegistryDiagnostic = {
-  level: "info" | "warn";
-  code:
-    | "persisted-registry-missing"
-    | "persisted-registry-stale-policy"
-    | "persisted-registry-stale-source";
-  message: string;
-};
-
 export type PluginMetadataSnapshot = {
   policyHash: string;
   configFingerprint?: string;
@@ -54,7 +56,7 @@ export type PluginMetadataSnapshot = {
   index: InstalledPluginIndex;
   /** The original workspace-scoped index described by registrySource, before runtime unions. */
   registryIndex: InstalledPluginIndex;
-  registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
+  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   manifestRegistry: PluginManifestRegistry;
   /** Independently validated bundled owners, including packages shadowed by active plugins. */
   bundledManifestRegistry?: PluginManifestRegistry;

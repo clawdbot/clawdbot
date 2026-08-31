@@ -1170,6 +1170,7 @@ describe("sessions_send gating", () => {
       expect(requireDetails(result)).toMatchObject({
         status: "accepted",
         sessionKey: targetSessionKey,
+        targetDisposition: "queued",
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });

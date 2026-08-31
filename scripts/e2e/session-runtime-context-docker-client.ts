@@ -180,6 +180,7 @@ async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const sessionFile = await seedBrokenSession(stateDir);
+  const originalTranscript = await fs.readFile(sessionFile);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -240,10 +241,17 @@ async function verifyDoctorRepair(root: string) {
     ),
     "doctor repair left runtime context in active transcript",
   );
-  const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
-    name.includes(".pre-doctor-branch-repair-"),
+  const archiveDir = path.join(stateDir, "agents", "main", "session-sqlite-import-archive");
+  const archives = (await fs.readdir(archiveDir)).filter((name) =>
+    name.includes(`.${path.basename(sessionFile)}.imported-`),
   );
-  assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
+  const [archiveName] = archives;
+  assert(
+    archives.length === 1 && archiveName,
+    `expected one doctor transcript archive, got ${archives.length}`,
+  );
+  const archivedTranscript = await fs.readFile(path.join(archiveDir, archiveName));
+  assert(archivedTranscript.equals(originalTranscript), "doctor changed the archived original");
 }
 
 async function main() {

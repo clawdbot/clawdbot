@@ -17,7 +17,7 @@ import type { ChatInputHistoryState } from "./input-history.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ChatScrollHost } from "./scroll.ts";
-import type { ToolStreamHost } from "./tool-stream.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -37,6 +37,8 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    /** Captured once at submit; queued delivery never re-reads the current page. */
+    getWorkContext?: () => string | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;

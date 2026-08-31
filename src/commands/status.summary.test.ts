@@ -845,10 +845,12 @@ describe("getStatusSummary", () => {
     expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/tmp/main/sessions.json",
+      projection: "list",
     });
     expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
       agentId: "ops",
       storePath: "/tmp/ops/sessions.json",
+      projection: "list",
     });
     expect(summary.sessions.count).toBe(2);
     expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([

@@ -16,7 +16,6 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
   resolveEstimatedSessionCostUsd,
   resolvePositiveNumber,
   resolveRuntimeChildSessionKeys,
@@ -39,7 +38,6 @@ export function buildSessionListRowMetadataContext(params: {
 
 export function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
-  storePath: string;
   key: string;
   now: number;
 }): Map<string, string[]> {
@@ -47,10 +45,6 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
     store: params.store,
     keys: [params.key],
     now: params.now,
-    candidates: getSingleRowChildSessionCandidates({
-      storePath: params.storePath,
-      store: params.store,
-    }),
     requireCurrentController: true,
   });
 }

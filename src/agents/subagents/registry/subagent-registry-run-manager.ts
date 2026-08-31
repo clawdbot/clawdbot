@@ -323,7 +323,7 @@ class SubagentRunManager extends SubagentLaunchManager {
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);
-        }).catch((err: unknown) => {
+        }, "subagents:session-finalize").catch((err: unknown) => {
           log.warn("failed to run killed subagent cleanup tail", {
             err,
             runId: entry.runId,

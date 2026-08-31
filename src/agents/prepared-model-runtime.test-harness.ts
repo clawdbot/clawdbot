@@ -196,6 +196,10 @@ const agentScopeMocks = vi.hoisted(() => ({
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => undefined,
   resolveEffectiveModelFallbacks: () => undefined,
+  resolveModelFallbackAvailability: () => ({
+    kind: "none_configured" as const,
+    source: "explicit" as const,
+  }),
   resolveSubagentSpawnModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
@@ -204,7 +208,14 @@ const agentScopeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./agent-scope.js", () => agentScopeMocks);
+// The projection is a pure function; use the real implementation so tests that
+// swap in real availability resolvers (reply-fallback) keep prod semantics.
+vi.mock("./agent-scope.js", async () => ({
+  ...agentScopeMocks,
+  modelFallbackOverrideFromAvailability: (
+    await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")
+  ).modelFallbackOverrideFromAvailability,
+}));
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: agentScopeMocks.listAgentIds,

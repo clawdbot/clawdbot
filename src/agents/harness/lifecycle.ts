@@ -404,9 +404,9 @@ export async function runAgentHarnessLifecycleFinalization(
   try {
     const runAndValidate = async () => {
       phase = "send";
-      const rawResult = await execute();
-      phase = "resolve";
       try {
+        const rawResult = await execute();
+        phase = "resolve";
         return {
           outcome: "answered" as const,
           result: assertSettledTurnFinalizationResult(rawResult),

@@ -396,7 +396,7 @@
 .settings-theme-card--crt,
 .settings-accent-theme--crt {
   --theme-chip-bg: #090a09;
-  --theme-chip-accent: #3aff7d;
+  --theme-chip-accent: #e8e8e8;
   --theme-chip-accent-2: #ffcf5c;
 }
 
@@ -467,7 +467,7 @@
 
 :root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
   --theme-chip-bg: #f5f5f4;
-  --theme-chip-accent: #0a612b;
+  --theme-chip-accent: #1f1f1f;
   --theme-chip-accent-2: #7a5d10;
 }
 

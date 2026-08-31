@@ -1,7 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -13,25 +12,21 @@ import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-placement-move");
 const runnerOfflineProofName = process.env.OPENCLAW_RUNNER_OFFLINE_SCREENSHOT;
-const runnerOfflineProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "runner-offline",
-);
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
-    await page.screenshot({ path: path.join(proofDir, name) });
+    await page.screenshot({
+      path: path.join(suite.artifactDir, "session-placement-move", name),
+    });
   }
 }
 
 async function captureRunnerOffline(page: Page): Promise<void> {
   if (runnerOfflineProofName) {
-    await mkdir(runnerOfflineProofDir, { recursive: true });
-    await page.screenshot({ path: path.join(runnerOfflineProofDir, runnerOfflineProofName) });
+    await page.screenshot({
+      path: path.join(suite.artifactDir, "runner-offline", runnerOfflineProofName),
+    });
   }
 }
 
@@ -40,7 +35,14 @@ function contextOptions() {
     locale: "en-US",
     serviceWorkers: "block" as const,
     viewport: { height: 900, width: 1280 },
-    ...(captureProof ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } } : {}),
+    ...(captureProof
+      ? {
+          recordVideo: {
+            dir: path.join(suite.artifactDir, "session-placement-move"),
+            size: { height: 900, width: 1280 },
+          },
+        }
+      : {}),
   };
 }
 
@@ -73,12 +75,6 @@ function activeSession(placementMove?: {
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
-  });
-
   it("shows authoritative device targets to writers and moves through the exact-source RPC", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();

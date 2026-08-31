@@ -3,12 +3,18 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { readMirrorIdentity, readUpstreamUserText } from "./upstream-prompt-provenance.js";
+import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import {
+  attachCodexMirrorIdentity,
+  readMirrorIdentity,
+  readUpstreamUserText,
+} from "./upstream-prompt-provenance.js";
 
 const tempDirs: string[] = [];
 
@@ -132,6 +138,71 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("rejects oversized settled history before acquiring later transcript payloads", async () => {
+    const { marker, sessionTarget } = await writeSqliteSession();
+    for (let index = 0; index < 201; index += 1) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...sessionTarget,
+        message: { role: "user", content: `prior-${index}`, timestamp: index + 3 },
+      });
+    }
+    const unreadMarker = "synthetic-unread-settled-payload:";
+    await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: unreadMarker + "x".repeat(1024 * 1024), timestamp: 205 },
+    });
+    const settledMessages = [
+      attachCodexMirrorIdentity(
+        { role: "user", content: "Send the synthetic update.", timestamp: 206 },
+        "settled:prompt",
+      ),
+      attachCodexMirrorIdentity(
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "sent", name: "message", arguments: {} }],
+          timestamp: 207,
+        } as AgentMessage,
+        "settled:tool:sent:call",
+      ),
+      attachCodexMirrorIdentity(
+        {
+          role: "toolResult",
+          toolCallId: "sent",
+          toolName: "message",
+          isError: false,
+          content: [{ type: "text", text: "Synthetic update sent." }],
+          timestamp: 208,
+        },
+        "settled:tool:sent:result",
+      ),
+    ];
+    for (const message of settledMessages) {
+      await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+    }
+    const originalParse = JSON.parse;
+    let laterPayloadReads = 0;
+    const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      if (typeof text === "string" && text.includes(unreadMarker)) {
+        laterPayloadReads += 1;
+      }
+      return originalParse(text, reviver);
+    });
+    try {
+      const captured = await captureCodexSettledTurnFinalizationContext({
+        ...sessionTarget,
+        sessionTarget,
+        sessionFile: marker,
+        settledMessages,
+        mirroredMessages: settledMessages,
+        turnId: "settled",
+      });
+      expect(captured === undefined).toBe(true);
+      expect(laterPayloadReads).toBe(0);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("preserves native prompt evidence across explicit model-only reads", async () => {
     const { marker, sessionTarget } = await writeSqliteSession();
     const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);

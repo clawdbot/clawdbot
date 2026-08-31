@@ -1233,6 +1233,7 @@ jobs:
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
+      target_context_ref: ${{ inputs.target_context_ref }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}

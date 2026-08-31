@@ -213,6 +213,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;
@@ -866,6 +867,7 @@ export type ChannelPollContext = Pick<
   | "isAnonymous"
   | "gatewayClientScopes"
   | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 > & {
   content?: string;
   /** Trusted originating turn context for channel-owned delivery correlation. */

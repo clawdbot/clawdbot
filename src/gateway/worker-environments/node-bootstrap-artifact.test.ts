@@ -34,20 +34,32 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     name: "openclaw",
     version,
     type: "module",
-    files: ["dist/", "!dist/extensions/remote-runtime/**", "scripts/preinstall.mjs"],
+    files: [
+      "dist/",
+      "!dist/extensions/remote-runtime/**",
+      "scripts/preinstall.mjs",
+      "scripts/postinstall.mjs",
+    ],
     dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
     ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
     devDependencies: { "typescript-only": "workspace:*" },
-    scripts: { prepare: "exit 91", prepack: "exit 92", preinstall: "node scripts/preinstall.mjs" },
+    scripts: {
+      prepare: "exit 91",
+      prepack: "exit 92",
+      preinstall: "node scripts/preinstall.mjs",
+      postinstall: "node scripts/postinstall.mjs",
+    },
   };
   await write(packageRoot, "package.json", sourcePackage);
-  await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o755);
+  await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
+    mode: 0o755,
+  });
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
+  await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
     packageRoot,
-    "scripts/preinstall.mjs",
-    'import { rmSync } from "node:fs"; rmSync(new URL("../dist/openclaw-install-guard", import.meta.url));',
+    "scripts/postinstall.mjs",
+    'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
   );
   await write(
     packageRoot,
@@ -55,6 +67,8 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "@fixture/ai"; console.log(`${name}:${answer}`);',
   );
   await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
+  await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
+  await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
   await write(packageRoot, "dist/build-info.json", { version, buildId });
   await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
   await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
@@ -134,7 +148,14 @@ describe("node bootstrap distribution", () => {
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
-      const [artifact, concurrent] = await Promise.all([provider.prepare(), provider.prepare()]);
+      // Node's getter temporarily changes the process mask and races parallel file creation.
+      const readUmask = vi.spyOn(process, "umask").mockImplementation(() => {
+        throw new Error("Artifact preparation must not read or mutate the process umask");
+      });
+      const [artifact, concurrent] = await Promise.all([
+        provider.prepare(),
+        provider.prepare(),
+      ]).finally(() => readUmask.mockRestore());
       expect(concurrent).toBe(artifact);
       expect(artifact).toMatchObject({
         buildId,
@@ -161,9 +182,15 @@ describe("node bootstrap distribution", () => {
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),
         ),
       ).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
       if (process.platform !== "win32") {
-        expect(modes.get("package/openclaw.mjs")).toBe(0o755 & ~process.umask());
-        expect(modes.get("package/dist/shared.js")).toBe(0o644 & ~process.umask());
+        for (const [relative, requestedMode] of [
+          ["openclaw.mjs", 0o755],
+          ["dist/shared.js", 0o644],
+        ] as const) {
+          const sourceMode = (await fs.stat(path.join(packageRoot, relative))).mode;
+          expect(modes.get(`package/${relative}`)).toBe(sourceMode & requestedMode);
+        }
       }
       if (mode === "external-plugin") {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
@@ -172,9 +199,17 @@ describe("node bootstrap distribution", () => {
       const manifest = JSON.parse(await fs.readFile(path.join(target, "package.json"), "utf8"));
       expect(manifest.dependencies).toEqual({ "@fixture/ai": version, "native-runtime": "1.2.3" });
       expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
-      expect(manifest.scripts).toEqual({ preinstall: "node scripts/preinstall.mjs" });
+      expect(manifest.scripts).toEqual({
+        preinstall: "node scripts/preinstall.mjs",
+        postinstall: "node scripts/postinstall.mjs",
+      });
       expect(manifest.devDependencies).toBeUndefined();
+      const lifecycleMarker = path.join(target, ".openclaw-lifecycle-pending");
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
       await promisify(execFile)(process.execPath, [path.join(target, "scripts/preinstall.mjs")]);
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
+      await promisify(execFile)(process.execPath, [path.join(target, "scripts/postinstall.mjs")]);
+      await expect(fs.access(lifecycleMarker)).rejects.toHaveProperty("code", "ENOENT");
       const { stdout } = await promisify(execFile)(process.execPath, [
         path.join(target, "openclaw.mjs"),
       ]);

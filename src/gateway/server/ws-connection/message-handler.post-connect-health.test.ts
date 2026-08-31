@@ -29,6 +29,7 @@ import type { HealthSummary } from "../../health/types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -289,7 +290,7 @@ function attachGatewayHarness(options: {
   let onMessage: ((data: string) => void) | undefined;
   const socket = {
     readyState: 1,
-    _receiver: {},
+    _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
     send: socketSend,
     on: vi.fn((event: string, handler: (data: string) => void) => {
       if (event === "message") {

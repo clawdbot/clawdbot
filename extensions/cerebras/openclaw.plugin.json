@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["cerebras"],
+  "modelPricing": {
+    "providers": {
+      "cerebras": { "cerebras": { "provider": "cerebras" } }
+    }
+  },
   "providerEndpoints": [
     {
       "endpointClass": "cerebras-native",
@@ -28,6 +33,7 @@
           {
             "id": "zai-glm-4.7",
             "name": "Z.ai GLM 4.7",
+            "status": "deprecated",
             "input": ["text"],
             "reasoning": true,
             "contextWindow": 131072,
@@ -49,8 +55,8 @@
             "cost": {
               "input": 0.35,
               "output": 0.75,
-              "cacheRead": 0.35,
-              "cacheWrite": 0.75
+              "cacheRead": 0,
+              "cacheWrite": 0
             }
           },
           {
@@ -63,15 +69,15 @@
             "cost": {
               "input": 0.99,
               "output": 1.49,
-              "cacheRead": 0.99,
-              "cacheWrite": 1.49
+              "cacheRead": 0,
+              "cacheWrite": 0
             }
           }
         ]
       }
     },
     "discovery": {
-      "cerebras": "static"
+      "cerebras": "refreshable"
     }
   },
   "setup": {

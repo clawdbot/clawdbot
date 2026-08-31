@@ -460,6 +460,14 @@ failed compaction turn returns a failed operation. Automatic context-pressure
 compaction is Codex's job; OpenClaw only starts native compaction for manually
 requested triggers.
 
+When OpenClaw projects an existing session's continuity into a fresh Codex
+thread, it includes saved compaction and branch summaries, even when no
+earlier user messages remain. Context-engine projections preserve those
+summary entries too. Summaries stay quoted as prior context, separate from
+the current request, and remain subject to the projection's size limits;
+oversized summaries or older context can be truncated. This handoff does not
+change native Codex compaction ownership.
+
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result
 content into the fresh Codex thread. It does not copy raw tool-call argument

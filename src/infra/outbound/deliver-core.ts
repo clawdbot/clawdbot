@@ -100,6 +100,7 @@ export async function deliverOutboundPayloadsCore(
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
       onDirectAdapterHandoff: params.onDirectAdapterHandoff,
+      assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
     });

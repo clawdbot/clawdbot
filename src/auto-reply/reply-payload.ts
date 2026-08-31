@@ -276,6 +276,15 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
+export type SessionWriterDeliveryAuthority = {
+  agentId?: string;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  expectedWriterRunId?: string;
+  sessionKey: string;
+  storePath?: string;
+};
+
 export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
@@ -298,6 +307,8 @@ export type ReplyPayloadMetadata = {
   commandReply?: true;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
+  /** Original session-writer claim that must still hold at final delivery. */
+  sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
@@ -366,6 +377,31 @@ export function setReplyPayloadMetadata<T extends object>(
 /** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Revalidates an authority-bearing payload against a freshly loaded session row. */
+export function isReplyPayloadSessionWriterDeliveryAuthorized(
+  payload: object,
+  entry:
+    | {
+        activeWriterRunId?: string;
+        lifecycleRevision?: string;
+        sessionId?: string;
+      }
+    | undefined,
+): boolean {
+  const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;
+  if (!authority) {
+    return true;
+  }
+  return Boolean(
+    entry &&
+    entry.sessionId === authority.expectedSessionId &&
+    (authority.expectedLifecycleRevision === undefined ||
+      entry.lifecycleRevision === authority.expectedLifecycleRevision) &&
+    (authority.expectedWriterRunId === undefined ||
+      entry.activeWriterRunId === authority.expectedWriterRunId),
+  );
 }
 
 /** Returns true when a payload is the synthesized warning for a non-terminal tool error. */

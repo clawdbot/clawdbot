@@ -95,8 +95,12 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 
-if [ "$SCENARIO" = "sqlite-volume" ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
-  echo "sqlite-volume requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+  echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
+  exit 1
+fi
+if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
+  echo "recovery-cleanup requires the isolated manual-restart fixture without live provider credentials" >&2
   exit 1
 fi
 
@@ -577,6 +581,9 @@ else
   openclaw_test_state_create upgrade-survivor upgrade-survivor
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "cron-scheduled-authority" ]; then
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-cron
+fi
 
 CURRENT_PHASE="install-candidate"
 openclaw_e2e_install_package "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/install.log" "upgrade survivor package" "$npm_config_prefix"

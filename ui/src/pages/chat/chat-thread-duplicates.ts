@@ -1,23 +1,24 @@
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { isPendingSendMessage, readChatThreadMessageIdentity } from "./chat-thread-items.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 
-function collapseDuplicateSourceKey(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return null;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+type PreparedChatItem =
+  | Exclude<ChatItem, { kind: "message" }>
+  | {
+      kind: "message";
+      item: Extract<ChatItem, { kind: "message" }>;
+      normalized: NormalizedMessage;
+    };
+
+function collapseDuplicateSourceKey(
+  identity: ReturnType<typeof readChatThreadMessageIdentity>,
+  role: string,
+): string | null {
   if (role !== "assistant" && role !== "user") {
     return null;
   }
-  const identity = readChatThreadMessageIdentity(message);
   if (!identity?.isImported) {
     return identity?.id ? `${role}:${identity.id}` : null;
   }
@@ -27,26 +28,12 @@ function collapseDuplicateSourceKey(message: unknown): string | null {
   return identity.sequence === null ? null : `${role}:import-seq:${identity.sequence}`;
 }
 
-function prefersNativeChatSurface(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return false;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
-}
-
 function stripSenderLabelPrefix(text: string, senderLabel: string): string {
-  const label = senderLabel.trim();
-  if (!label) {
-    return text;
-  }
-  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`), "");
+  return text.replace(new RegExp(`^${escapeRegExp(senderLabel)}(?::|：|-|—)?[ \\t]+`), "");
 }
 
-function textOnlyMessageParts(message: unknown) {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized || normalized.content.length === 0) {
+function textOnlyMessageParts(normalized: NormalizedMessage, role: string) {
+  if (normalized.content.length === 0) {
     return null;
   }
   const textParts: string[] = [];
@@ -57,7 +44,7 @@ function textOnlyMessageParts(message: unknown) {
     textParts.push(block.text);
   }
   return {
-    role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
+    role,
     senderLabel: (normalized.senderLabel ?? "").trim(),
     senderKey: senderIdentityKey(normalized.sender),
     senderSession: normalized.senderSession,
@@ -65,18 +52,19 @@ function textOnlyMessageParts(message: unknown) {
   };
 }
 
-function sourceDuplicateDisplayParts(message: unknown) {
-  const parts = textOnlyMessageParts(message);
-  return parts?.role === "assistant" && parts.text.trim() ? parts : null;
-}
+type TextOnlyMessageParts = ReturnType<typeof textOnlyMessageParts>;
 
-function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage: unknown): boolean {
-  const previous = sourceDuplicateDisplayParts(previousMessage);
-  const next = sourceDuplicateDisplayParts(nextMessage);
-  if (!previous || !next || previous.role !== next.role) {
-    return false;
-  }
-  if (Boolean(previous.senderLabel) === Boolean(next.senderLabel)) {
+function isSameSourceRelayNativeDuplicate(
+  previous: TextOnlyMessageParts,
+  next: TextOnlyMessageParts,
+): boolean {
+  if (
+    previous?.role !== "assistant" ||
+    next?.role !== "assistant" ||
+    !previous.text.trim() ||
+    !next.text.trim() ||
+    Boolean(previous.senderLabel) === Boolean(next.senderLabel)
+  ) {
     return false;
   }
   const labeled = previous.senderLabel ? previous : next;
@@ -87,11 +75,7 @@ function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage:
   );
 }
 
-function collapseDuplicateDisplaySignature(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const parts = textOnlyMessageParts(message);
+function collapseDuplicateDisplaySignature(parts: TextOnlyMessageParts): string | null {
   if (!parts || !parts.role || parts.role === "tool") {
     return null;
   }
@@ -109,23 +93,29 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   ]);
 }
 
-export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
-  const collapsed: ChatItem[] = [];
-  let previousSignature: string | null = null;
+export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[] {
+  const collapsed: PreparedChatItem[] = [];
+  let previousParts: TextOnlyMessageParts = null;
   let previousSourceKey: string | null = null;
   let previousSourceIsUnprovenImport = false;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
-      previousSignature = null;
+      previousParts = null;
       previousSourceKey = null;
       previousSourceIsUnprovenImport = false;
       continue;
     }
-    const signature = collapseDuplicateDisplaySignature(item.message);
-    const sourceKey = collapseDuplicateSourceKey(item.message);
+    // These facts belong to this grouping pass, after canvas/tool projections
+    // finish changing content. A later build must see fresh message metadata.
+    const normalized = normalizeMessage(item.message);
+    const prepared = { kind: "message" as const, item, normalized };
+    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+    const pending = isPendingSendMessage(item.message);
+    const parts = pending ? null : textOnlyMessageParts(normalized, role);
     const identity = readChatThreadMessageIdentity(item.message);
+    const sourceKey = pending ? null : collapseDuplicateSourceKey(identity, role);
     const sourceIsUnprovenImport =
       sourceKey === null &&
       identity?.isImported === true &&
@@ -136,27 +126,31 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
       sourceKey &&
       previousSourceKey === sourceKey &&
       previous?.kind === "message" &&
-      isSameSourceRelayNativeDuplicate(previous.message, item.message)
+      isSameSourceRelayNativeDuplicate(previousParts, parts)
     ) {
-      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
-        collapsed[collapsed.length - 1] = item;
-        previousSignature = signature;
+      if (!parts?.senderLabel) {
+        collapsed[collapsed.length - 1] = prepared;
+        previousParts = parts;
       }
       continue;
     }
+    // Distinct transcript identities cannot collapse. Compare full display text
+    // only for adjacent candidates whose source and role still permit a replay.
     if (
-      signature &&
-      previousSignature === signature &&
       previous?.kind === "message" &&
       !sourceIsUnprovenImport &&
       !previousSourceIsUnprovenImport &&
-      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
+      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey) &&
+      parts?.role === previousParts?.role
     ) {
-      previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
-      continue;
+      const signature = collapseDuplicateDisplaySignature(parts);
+      if (signature && signature === collapseDuplicateDisplaySignature(previousParts)) {
+        previous.item.duplicateCount = (previous.item.duplicateCount ?? 1) + 1;
+        continue;
+      }
     }
-    collapsed.push(item);
-    previousSignature = signature;
+    collapsed.push(prepared);
+    previousParts = parts;
     previousSourceKey = sourceKey;
     previousSourceIsUnprovenImport = sourceIsUnprovenImport;
   }

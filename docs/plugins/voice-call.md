@@ -220,10 +220,11 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Config parsing normalizes these legacy keys automatically and logs a
-    warning naming the replacement path; the shim is removed in a future
-    release (`2026.6.0`), so run `openclaw doctor --fix` to rewrite committed
-    config to the canonical shape:
+    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
+    shape. The Voice Call plugin owns the migration; runtime config parsing
+    accepts only the current keys. When both old and current settings exist,
+    Doctor keeps the current setting, removes the legacy key, and reports which
+    destination it retained. Legacy values fill only missing current fields:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`
@@ -246,16 +247,16 @@ booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
 Set `sessionScope: "main"` to route every call into the configured agent's main
-session. This honors the core `session.mainKey` setting and resolves to
-`global` when core `session.scope` is `"global"`. Raw call turns then share
-history with the agent's primary session, so use this only when that shared
-context is intentional.
+session, `agent:<agentId>:main`, or `global` when core `session.scope` is
+`"global"`. Custom core `session.mainKey` values are ignored. Raw call turns
+then share history with the agent's primary session, so use this only when
+that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
 integration keys resolve into the same namespace: a canonical
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
-`session.mainKey`/global-scope aliasing; foreign or malformed `agent:*` input
+main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`
 remain global sentinels.
 

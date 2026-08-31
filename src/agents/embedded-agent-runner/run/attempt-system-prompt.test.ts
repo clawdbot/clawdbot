@@ -117,17 +117,18 @@ describe("buildAttemptSystemPrompt", () => {
           ],
         },
       };
+      const attempt = {
+        config,
+        agentId: "marketing",
+        sessionId: "global-system-prompt",
+        sessionKey: "global",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
+        workspaceDir,
+      };
       const result = await prepareEmbeddedAttemptSystemPrompt({
-        attempt: {
-          config,
-          agentId: "marketing",
-          sessionId: "global-system-prompt",
-          sessionKey: "global",
-          provider: "openai",
-          modelId: "gpt-5.5",
-          model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
-          workspaceDir,
-        } as never,
+        attempt: attempt as never,
         bootstrap: {
           ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
           workspaceNotes: [],
@@ -139,7 +140,7 @@ describe("buildAttemptSystemPrompt", () => {
         effectiveCwd: workspaceDir,
         effectiveTools: [],
         effectiveWorkspace: workspaceDir,
-        getProviderRuntimeHandle: () => ({ provider: "openai" }),
+        getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
         isRawModelRun: true,
         markStage: vi.fn(),
         modelToolsEnabled: false,

@@ -339,16 +339,17 @@ export async function healthCommand(
           `  ${plugin.id}: accounts=${accountIds.join(", ") || "(none)"} default=${defaultAccountId}`,
         );
         for (const accountId of accountIds) {
-          const { snapshotAccount, configured, diagnostics } = await resolveHealthAccountContext({
-            plugin,
-            cfg,
-            accountId,
-          });
-          const record = asNullableRecord(snapshotAccount);
+          const { inspectedAccount, probeAccount, configured, diagnostics } =
+            await resolveHealthAccountContext({
+              plugin,
+              cfg,
+              accountId,
+            });
+          const record = asNullableRecord(inspectedAccount ?? probeAccount);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
           runtime.log(
-            `    - ${accountId}: configured=${configured}${tokenSource ? ` tokenSource=${tokenSource}` : ""}`,
+            `    - ${accountId}: configured=${configured ?? "unknown"}${tokenSource ? ` tokenSource=${tokenSource}` : ""}`,
           );
           for (const diagnostic of diagnostics) {
             runtime.log(`      ! ${diagnostic}`);
@@ -448,7 +449,11 @@ export async function healthCommand(
         cfg,
         accountId,
       });
-      if (!accountContext.enabled || !accountContext.configured) {
+      if (
+        accountContext.probeAccount === undefined ||
+        !accountContext.enabled ||
+        accountContext.configured !== true
+      ) {
         continue;
       }
       if (accountContext.diagnostics.length > 0) {

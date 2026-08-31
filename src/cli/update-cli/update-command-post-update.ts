@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -10,6 +11,7 @@ import { compareSemverStrings } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
   readControlPlaneUpdateSentinelMeta,
+  resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -91,13 +93,14 @@ export async function finishUpdate(params: {
   invocationCwd?: string;
 }): Promise<void> {
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
+  const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
+    ...result,
+    durationMs: Math.max(0, Date.now() - params.startedAt),
+  });
   const printFinalResult = (result: UpdateRunResult) =>
-    printResult(
-      { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) },
-      { ...params.opts, hideSteps: params.showProgress },
-    );
+    printResult(result, { ...params.opts, hideSteps: params.showProgress });
   const reportResult = async (result: UpdateRunResult, recoverService = false) => {
-    const finalResult = { ...result, durationMs: Math.max(0, Date.now() - params.startedAt) };
+    const finalResult = completedResult(result);
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
       result: finalResult,
@@ -110,11 +113,18 @@ export async function finishUpdate(params: {
         root: result.root,
         preManagedServiceStop: params.preManagedServiceStop,
         jsonMode: Boolean(params.opts.json),
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+        invocationCwd: params.invocationCwd,
       });
     }
-    printFinalResult(finalResult);
+    // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
+    printFinalResult(recoverService ? completedResult(result) : finalResult);
   };
-  const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
+  const restoreWindowsAutoStart = async (
+    result: UpdateRunResult,
+    failureExitCode = resolveManagedServiceUpdateFailureExitCode(result),
+  ) => {
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop);
       return true;
@@ -127,7 +137,7 @@ export async function finishUpdate(params: {
         status: "error",
         reason: "windows-task-autostart-restore-failed",
       });
-      defaultRuntime.exit(1);
+      defaultRuntime.exit(failureExitCode);
       return false;
     }
   };
@@ -155,7 +165,7 @@ export async function finishUpdate(params: {
         }
       }
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(params.result));
     return;
   }
 
@@ -244,7 +254,7 @@ export async function finishUpdate(params: {
         }),
     );
     if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsAutoStart(params.result))) {
+      if (!(await restoreWindowsAutoStart(params.result, freshProcessResult.exitCode))) {
         return;
       }
       await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
@@ -516,11 +526,9 @@ export async function finishUpdate(params: {
       reason: "restart-unhealthy",
       jsonMode: Boolean(params.opts.json),
     });
-    printFinalResult({
-      ...resultWithPostUpdate,
-      status: "error",
-      reason: "restart-unhealthy",
-    });
+    printFinalResult(
+      completedResult({ ...resultWithPostUpdate, status: "error", reason: "restart-unhealthy" }),
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -558,15 +566,25 @@ export async function finishUpdate(params: {
         reason: "wrapper-retirement-failed",
         jsonMode: Boolean(params.opts.json),
       });
-      printFinalResult({
-        ...resultWithPostUpdate,
-        status: "error",
-        reason: "wrapper-retirement-failed",
-      });
+      printFinalResult(
+        completedResult({
+          ...resultWithPostUpdate,
+          status: "error",
+          reason: "wrapper-retirement-failed",
+        }),
+      );
       defaultRuntime.exit(1);
       return;
     }
   }
 
   await reportResult(resultWithPostUpdate);
+  if (!params.opts.json) {
+    const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
+    defaultRuntime.log(
+      theme.muted(
+        `After verifying your history, preview recovery rollback retirement with ${formatCliCommand("openclaw update cleanup --dry-run", recoveryEnv)} for state ${resolveStateDir(recoveryEnv)}. Keep the same state/config overrides.`,
+      ),
+    );
+  }
 }

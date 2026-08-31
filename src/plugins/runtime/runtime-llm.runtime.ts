@@ -24,6 +24,7 @@ import {
 } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
   isIsolatedAgentRuntimeRequest,
@@ -31,7 +32,6 @@ import {
 } from "./runtime-llm-isolated.js";
 import type {
   LlmCompleteCaller,
-  LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmCompleteResult,
   LlmCompleteUsage,
@@ -100,19 +100,6 @@ function normalizeCaller(
     ...(normalizeOptionalString(source.id) ? { id: source.id!.trim() } : {}),
     ...(normalizeOptionalString(source.name) ? { name: source.name!.trim() } : {}),
   };
-}
-
-function completionError(
-  code: LlmCompleteErrorCode,
-  message: string,
-  cause?: unknown,
-): Error & { code: LlmCompleteErrorCode } {
-  const error = new Error(message, cause === undefined ? undefined : { cause }) as Error & {
-    code: LlmCompleteErrorCode;
-  };
-  error.name = "LlmCompleteError";
-  error.code = code;
-  return error;
 }
 
 function resolveTrustedCaller(authority?: RuntimeLlmAuthority): LlmCompleteCaller {

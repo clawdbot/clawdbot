@@ -427,7 +427,7 @@ export async function compactEmbeddedAgentSessionDirect(
       const fallbackAgentId = resolveSessionAgentIds({
         sessionKey: params.sandboxSessionKey ?? params.sessionKey,
         config: params.config,
-        agentId: params.agentId,
+        agentId: params.sandboxAgentId ?? params.agentId,
       }).sessionAgentId;
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,

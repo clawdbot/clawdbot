@@ -161,10 +161,15 @@ Actual user message`;
     expect(stripInboundMetadata(input)).toBe("Actual message");
   });
 
-  it("preserves leading spaces in user content after stripping", () => {
-    const input = `${CONV_BLOCK}\n\n  Indented message`;
-    expect(stripInboundMetadata(input)).toBe("  Indented message");
-  });
+  it.each(["\n", "\r\n"])(
+    "preserves visible whitespace when stripping metadata with %j newlines",
+    (newline) => {
+      const body = `  Indented message${newline}Second line  `;
+      const input = `${CONV_BLOCK.replaceAll("\n", newline)}${newline}${body}`;
+      expect(stripInboundMetadata(input)).toBe(body);
+      expect(stripLeadingInboundMetadata(input)).toBe(body);
+    },
+  );
 
   it("strips trailing Untrusted context metadata suffix blocks", () => {
     const input = `Actual message body\n\n${UNTRUSTED_CONTEXT_BLOCK}`;
@@ -245,8 +250,11 @@ What should I grab on the way?`;
     );
   });
 
-  it("does not strip lookalike sentinel lines with extra text", () => {
-    const input = `Conversation info: please ignore
+  it.each([
+    "Conversation info: please ignore",
+    `${markInboundContextLabel("Conversation info:")} please ignore`,
+  ])("does not strip lookalike sentinel line %j", (header) => {
+    const input = `${header}
 \`\`\`json
 {"x": 1}
 \`\`\`
@@ -309,13 +317,20 @@ Hello`;
 });
 
 describe("extractInboundSenderLabel", () => {
-  it("returns the sender label block when present", () => {
-    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nHello from user`;
+  it.each(["\n", "\r\n"])("returns the sender label with %j newlines", (newline) => {
+    const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nHello from user`.replaceAll("\n", newline);
     expect(extractInboundSenderLabel(input)).toBe("Alice");
   });
 
-  it("falls back to conversation sender when sender block is absent", () => {
-    const input = `${CONV_BLOCK}\n\nHello from user`;
+  it.each([
+    ["absent", ""],
+    ["empty", `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{}\n\`\`\`\n${SENDER_BLOCK}\n`],
+    [
+      "malformed",
+      `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{invalid}\n\`\`\`\n${SENDER_BLOCK}\n`,
+    ],
+  ])("falls back to conversation sender when the first sender block is %s", (_name, prefix) => {
+    const input = `${prefix}${CONV_BLOCK}\n\nHello from user`;
     expect(extractInboundSenderLabel(input)).toBe("+1555000");
   });
 

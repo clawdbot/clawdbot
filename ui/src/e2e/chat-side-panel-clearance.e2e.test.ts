@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -19,7 +19,13 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:side-panel-clearance";
-const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("chat-side-panel-clearance", proofDirParent)
+    : undefined;
+});
 const limitedScopes = ["operator.read", "operator.write"];
 const historyMessages = [
   {
@@ -196,7 +202,6 @@ async function capturePanel(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, `${name}.png`) });
 }
 

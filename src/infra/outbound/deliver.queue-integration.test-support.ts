@@ -58,6 +58,7 @@ export const matrixOutboundForQueueTest: ChannelOutboundAdapter = {
 export async function drainMatrixReconnect(opts: {
   deliver: DeliverFn;
   stateDir: string;
+  shouldContinue?: () => boolean;
 }): Promise<void> {
   await drainPendingDeliveriesCore({
     drainKey: "matrix:reconnect-test",
@@ -67,5 +68,6 @@ export async function drainMatrixReconnect(opts: {
     stateDir: opts.stateDir,
     deliver: opts.deliver,
     selectEntry: (entry) => ({ match: entry.channel === "matrix", bypassBackoff: true }),
+    ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
   });
 }
