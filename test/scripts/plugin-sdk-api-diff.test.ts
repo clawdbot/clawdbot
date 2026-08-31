@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -27,10 +28,10 @@ describe("Plugin SDK API diff CLI", () => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
     const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
-    const runnerArtifact = join(runnerTemp, "unrelated-runner-artifact");
-    writeFileSync(runnerArtifact, "retained\n");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
+    const runnerSentinel = join(runnerTemp, "runner-owned.txt");
+    writeFileSync(runnerSentinel, "preserve\n");
 
     git(repo, ["init", "--quiet", "--initial-branch=main"]);
     writeFileSync(join(repo, "README.md"), "fixture\n");
@@ -96,7 +97,14 @@ describe("Plugin SDK API diff CLI", () => {
     try {
       await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
       expect(closed, stderr).toBe(false);
-      expect(git(repo, ["worktree", "list"])).toContain(runnerTemp);
+      const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
+        .split("\0")
+        .filter((record) => record.startsWith("worktree "))
+        .map((record) => resolve(record.slice("worktree ".length)))
+        .find((root) => dirname(dirname(root)) === runnerTemp);
+      assert(revisionRoot, "expected a registered revision worktree under runner temp");
+      const temporaryRoot = dirname(revisionRoot);
+      expect(existsSync(temporaryRoot)).toBe(true);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
       const exitCode = await Promise.race([
@@ -109,13 +117,9 @@ describe("Plugin SDK API diff CLI", () => {
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
-      // RUNNER_TEMP is shared with runner tools; the CLI owns only its generated roots.
-      expect(
-        readdirSync(runnerTemp).filter((entry) =>
-          entry.startsWith("openclaw-plugin-sdk-api-diff-"),
-        ),
-      ).toEqual([]);
-      expect(readFileSync(runnerArtifact, "utf8")).toBe("retained\n");
+      // Cleanup owns its temporary root, not runner instrumentation beside it.
+      expect(existsSync(temporaryRoot)).toBe(false);
+      expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
       if (!closed) {
         child.kill("SIGKILL");
