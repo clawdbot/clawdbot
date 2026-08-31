@@ -72,6 +72,14 @@ function startDefaultMonitor(
   });
 }
 
+function markRestartPending(account: Partial<ChannelAccountSnapshot>) {
+  account.running = false;
+  account.connected = false;
+  account.restartPending = true;
+  account.reconnectAttempts = 0;
+  return new Map();
+}
+
 async function startAndRunCheck(
   manager: ChannelManager,
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
@@ -632,13 +640,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-          return new Map();
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager);
@@ -662,13 +664,7 @@ describe("channel-health-monitor", () => {
       },
       {
         // Every start attempt leaves the account stuck in pending restart.
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-          return new Map();
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -694,13 +690,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-          return new Map();
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     // The budgeted restart consumes the only hourly slot; the continuation that
@@ -721,13 +711,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-          return new Map();
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
