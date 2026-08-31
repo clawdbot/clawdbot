@@ -231,6 +231,8 @@ describeLive(
           const toolResultMsg = {
             role: "toolResult" as const,
             toolCallId: toolCall?.id ?? "",
+            toolName: "record_value",
+            isError: false,
             content: [{ type: "text" as const, text: "recorded" }],
             timestamp: 2,
           };
