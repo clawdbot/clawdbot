@@ -186,6 +186,8 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
     const initialCandidate = stageCandidate(cfg, "runtime");
     const initialRoute = await projectRoute(initialCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);
@@ -323,6 +325,8 @@ export async function persistActivatedSetupInference(input: {
         });
         // Once this callback returns, the config writer owns the candidate.
         // Any later throw may be post-commit and needs reconciliation.
+        throwIfSetupInferenceCancelled(params);
+        await params.beforePersistentEffect?.();
         throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.(current);
         commitMayHaveStarted = true;

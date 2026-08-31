@@ -83,6 +83,7 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var authSessionID: String?
     @ObservationIgnored private var authAttemptID = UUID()
     @ObservationIgnored private var authRequestID: UUID?
+    @ObservationIgnored private var providerAuthCancellationRequested = false
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
@@ -1206,6 +1207,7 @@ extension OnboardingAISetupModel {
         let authSessionID = UUID().uuidString
         self.authAttemptID = authAttemptID
         self.authSessionID = authSessionID
+        self.providerAuthCancellationRequested = false
         let requestID = UUID()
         self.authRequestID = requestID
         Task {
@@ -1223,6 +1225,13 @@ extension OnboardingAISetupModel {
                     // A route reset can race the start response. Cancel the
                     // decoded server session so the discarded flow cannot commit.
                     await self.gateway.cancelWizardSession(result.sessionid, on: serverLease)
+                    return
+                }
+                if self.providerAuthCancellationRequested {
+                    // Cancel can race admission before the Gateway registers the requested id.
+                    // Redeem the late response only to release its exact admitted session.
+                    self.authSessionID = result.sessionid
+                    self.cancelProviderAuth()
                     return
                 }
                 if let cancellationSessionID = Self.providerAuthCancellationSessionID(
@@ -1317,6 +1326,7 @@ extension OnboardingAISetupModel {
         let authAttemptID = self.authAttemptID
         let token = self.attemptToken
         let activationState = self.lastDetectedActivationState
+        self.providerAuthCancellationRequested = true
         self.authBusy = true
         Task {
             let cancellation = await self.gateway.cancelWizardSession(
@@ -1565,6 +1575,7 @@ extension OnboardingAISetupModel {
         self.providerWizardKind = nil
         self.authSessionID = nil
         self.authRequestID = nil
+        self.providerAuthCancellationRequested = false
         self.authStep = nil
         self.authError = nil
         self.authBusy = false

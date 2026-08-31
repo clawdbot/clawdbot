@@ -246,7 +246,11 @@ async function activateSetupInferenceUnredacted(
             prompter: params.prompter ?? createQuickstartNotePrompter(params.runtime),
             runtime: params.runtime,
             workspaceDir: tempDir,
-            beforePersistentEffect: () => throwIfSetupInferenceCancelled(params),
+            beforePersistentEffect: async () => {
+              throwIfSetupInferenceCancelled(params);
+              await params.beforePersistentEffect?.();
+              throwIfSetupInferenceCancelled(params);
+            },
           });
           if (!ensured.ok) {
             return {

@@ -1134,6 +1134,81 @@ struct OnboardingAISetupTests {
         ])
     }
 
+    @Test func `activation cancel before admission cancels the late session`() async throws {
+        let startGate = AISetupRequestGate()
+        let cancelCount = LockIsolated(0)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(
+            url: url,
+            handler: { _, request, _ in
+                switch request.method {
+                case "openclaw.setup.detect":
+                    return selectableCandidatesDetectedSetupResponse(id: request.id)
+                case "openclaw.setup.activate.start":
+                    await startGate.wait()
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    return wizardStartResponse(id: request.id, sessionID: sessionID)
+                case "wizard.cancel":
+                    let attempt = cancelCount.withValue { value in
+                        value += 1
+                        return value
+                    }
+                    if attempt == 1 {
+                        return try JSONSerialization.data(withJSONObject: [
+                            "type": "res",
+                            "id": request.id,
+                            "ok": false,
+                            "error": ["code": "INVALID_REQUEST", "message": "wizard not found"],
+                        ])
+                    }
+                    return try JSONSerialization.data(withJSONObject: [
+                        "type": "res",
+                        "id": request.id,
+                        "ok": true,
+                        "payload": ["status": "cancelled", "error": "cancelled"],
+                    ])
+                case "wizard.next":
+                    return try JSONSerialization.data(withJSONObject: [
+                        "type": "res",
+                        "id": request.id,
+                        "ok": true,
+                        "payload": [
+                            "done": true,
+                            "status": "done",
+                            "modelActivation": ["modelRef": "openai/gpt-5.5"],
+                        ],
+                    ])
+                default:
+                    return nil
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.activate", "openclaw.setup.activate.start"],
+                    capabilities: ["openclaw-setup-model-ref"]))
+            })
+        let model = harness.model()
+        let activation = Task { await model.detectAndAutoConnect() }
+        defer { activation.cancel() }
+
+        await startGate.waitUntilStarted()
+        model.cancelProviderAuth()
+        _ = await waitForAISetupRequests(harness.recorder, count: 3)
+        await startGate.release()
+        for _ in 0..<400 where model.activeAuthOption != nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await activation.value
+
+        #expect(!model.connected)
+        #expect(model.activeAuthOption == nil)
+        let requests = await harness.recorder.snapshot().methods
+        #expect(requests.filter { $0 == "wizard.cancel" }.count == 2)
+        #expect(!requests.contains("wizard.next"))
+    }
+
     @Test func `active activation wizard retains candidate ownership`() async throws {
         let startGate = AISetupRequestGate()
         let url = try #require(URL(string: "ws://example.invalid"))
