@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, readdirSync, writeFileSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -27,6 +27,8 @@ describe("Plugin SDK API diff CLI", () => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
     const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
+    const unrelatedParentFile = join(runnerTemp, "unrelated-artifact");
+    writeFileSync(unrelatedParentFile, "preserved\n");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
 
@@ -48,9 +50,10 @@ describe("Plugin SDK API diff CLI", () => {
     ]);
 
     const fakePnpm = join(binDir, "pnpm");
+    // Publish the child directory only after its signal handler is ready.
     writeFileSync(
       fakePnpm,
-      "#!/bin/sh\n: > \"$PNPM_MARKER\"\ntrap 'exit 143' INT TERM\nwhile :; do sleep 1; done\n",
+      '#!/bin/sh\ntrap \'exit 143\' INT TERM\npwd > "$PNPM_MARKER.tmp"\nmv "$PNPM_MARKER.tmp" "$PNPM_MARKER"\nwhile :; do sleep 1; done\n',
     );
     chmodSync(fakePnpm, 0o755);
 
@@ -94,7 +97,11 @@ describe("Plugin SDK API diff CLI", () => {
     try {
       await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
       expect(closed, stderr).toBe(false);
-      expect(git(repo, ["worktree", "list"])).toContain(runnerTemp);
+      const worktree = readFileSync(pnpmMarker, "utf8").trim();
+      const temporaryRoot = dirname(worktree);
+      expect(dirname(temporaryRoot)).toBe(runnerTemp);
+      expect(existsSync(temporaryRoot)).toBe(true);
+      expect(git(repo, ["worktree", "list"])).toContain(worktree);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
       const exitCode = await Promise.race([
@@ -107,7 +114,8 @@ describe("Plugin SDK API diff CLI", () => {
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
-      expect(readdirSync(runnerTemp)).toEqual([]);
+      expect(existsSync(temporaryRoot)).toBe(false);
+      expect(readFileSync(unrelatedParentFile, "utf8")).toBe("preserved\n");
     } finally {
       if (!closed) {
         child.kill("SIGKILL");
