@@ -224,31 +224,18 @@ export function resolveCatalogModelPricing(params: {
   ) {
     return undefined;
   }
-  const pricing = context.catalog.get(modelKey(normalized.provider, normalized.model));
-  return pricing && hasKnownPricing(pricing) ? pricing : undefined;
-}
-
-export function resolveHostedModelPricing(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  model: string;
-}): PricingValue | undefined {
-  const config = params.config ?? EMPTY_CONFIG;
-  const context = getPricingContext(config);
-  const normalized = normalizeModelRef(params.provider, params.model, {
-    manifestPlugins: context.snapshot?.plugins,
-  });
-  if (
-    context.policies.get(normalized.provider)?.external === false ||
-    !allowsHostedPricing(config, normalized.provider, normalized.model, context.snapshot?.plugins)
-  ) {
+  const key = modelKey(normalized.provider, normalized.model);
+  const catalog = context.catalog.get(key);
+  if (catalog && hasKnownPricing(catalog)) {
+    return catalog;
+  }
+  if (context.policies.get(normalized.provider)?.external === false) {
     return undefined;
   }
-  const key = modelKey(normalized.provider, normalized.model);
-  const pricing =
+  const hosted =
     context.hosted[key] ??
     (context.policies.has(normalized.provider) ? undefined : context.normalizedHosted.get(key));
-  return pricing && hasKnownPricing(pricing) ? pricing : undefined;
+  return hosted && hasKnownPricing(hosted) ? hosted : undefined;
 }
 
 export function modelCatalogPricingFingerprint(config?: OpenClawConfig): string {

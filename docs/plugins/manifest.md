@@ -150,7 +150,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                                                                                                                              |
 | `modelSupport`                       | No       | `object`                     | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                                                                                                                                                                      |
 | `modelCatalog`                       | No       | `object`                     | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                                                                                                                                                                      |
-| `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.                                                                                                                                                                             |
+| `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to supported public pricing catalogs without hardcoding provider ids in core.                                                                                                                                                                          |
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                        |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                           |
@@ -1295,11 +1295,13 @@ Use `modelPricing` when the hosted catalog publisher needs provider-specific pri
 
 Provider fields:
 
-| Field        | Type              | What it means                                                                                 |
-| ------------ | ----------------- | --------------------------------------------------------------------------------------------- |
-| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing. |
-| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.   |
-| `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.         |
+| Field        | Type              | What it means                                                                                   |
+| ------------ | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
+| `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
+| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
+| `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.           |
+| `venice`     | `false \| object` | Explicit mapping to the public Venice `/api/v1/models` catalog. Never enabled implicitly.       |
 
 Source fields:
 
@@ -1308,6 +1310,36 @@ Source fields:
 | `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
 | `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
 | `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
+
+A declared provider policy enables only its declared source mappings. Without a
+policy, publication tries OpenRouter, then LiteLLM. Each selected price is a
+complete schedule: base rates and context tiers are never combined across sources.
+OpenRouter's native prompt-length overrides are supported; time-based overrides
+are not represented as static context tiers.
+
+For authoritative native source mappings, use:
+
+```json
+{
+  "providers": ["opencode", "venice"],
+  "modelPricing": {
+    "providers": {
+      "opencode": { "openCode": { "provider": "opencode" } },
+      "venice": { "venice": { "provider": "venice" } }
+    }
+  }
+}
+```
+
+The publisher fetches the fixed OpenCode or Venice public endpoint without
+credentials only when its source is declared, and publishes native prices only
+in explicitly mapped owner namespaces. Venice's lightweight public
+`pricing-api.ts` keeps its payload parsing in the plugin and shares the complete
+schedule parser with runtime discovery. Fetch failure, malformed response
+bodies, or missing or invalid pricing for a paid bundled model stops
+publication, leaving the previous hosted catalog intact rather than publishing
+stale seed rates with a new timestamp. This authoring metadata does not add an
+operator setting or change the Gateway's existing refresh and restart lifecycle.
 
 ### OpenClaw Provider Index
 

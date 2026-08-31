@@ -409,6 +409,13 @@ catalog, API-key auth, and dynamic model resolution.
     Public metadata never establishes account entitlement or expands the
     credential scope of discovery.
 
+    The same subpath exposes `normalizeOpenRouterModelPricing(pricing)` for
+    native OpenRouter pricing objects. It converts per-token rates and static
+    prompt-length overrides into a complete per-million cost schedule, without
+    network access or prices from another source. Missing cache rates become zero;
+    invalid required rates or conflicting context tiers return `undefined`.
+    Time-based overrides are not represented as static context tiers.
+
     When `ctx.providerIds` is present, it contains the normalized provider
     identities selected for that catalog owner. Return `null` before resolving
     credentials or making network requests when the hook serves none of them;

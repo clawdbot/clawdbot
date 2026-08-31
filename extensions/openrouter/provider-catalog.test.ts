@@ -32,6 +32,15 @@ describe("OpenRouter provider catalog", () => {
               prompt: "0.0000015",
               completion: "0.0000075",
               input_cache_read: "0.00000015",
+              overrides: [
+                {
+                  min_prompt_tokens: 272_000,
+                  prompt: "0.000004",
+                  completion: "0.000015",
+                  input_cache_read: "0.0000004",
+                  input_cache_write: "0.000005",
+                },
+              ],
             },
           },
           {
@@ -74,7 +83,22 @@ describe("OpenRouter provider catalog", () => {
       input: ["text", "image"],
       contextWindow: 1_048_576,
       maxTokens: 65_536,
-      cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
+      cost: {
+        input: 1.5,
+        output: 7.5,
+        cacheRead: 0.15,
+        cacheWrite: 0,
+        tieredPricing: [
+          { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0, range: [0, 272_000] },
+          {
+            input: 4,
+            output: 15,
+            cacheRead: expect.closeTo(0.4, 12),
+            cacheWrite: 5,
+            range: [272_000],
+          },
+        ],
+      },
     });
     expect(
       new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("authorization"),

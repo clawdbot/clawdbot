@@ -45,6 +45,73 @@ function writeFixtureManifest(root: string, pluginId: string, providers: Record<
   );
 }
 
+function nativeManifests(source: "OpenCode" | "Venice") {
+  const provider = source === "OpenCode" ? "opencode" : "venice";
+  return [
+    {
+      pluginId: "fixture",
+      manifestPath: "fixture.json",
+      manifest: {
+        providers: ["anthropic", "openai", provider],
+        modelCatalog: {
+          providers: {
+            anthropic: fixtureProvider("claude", 100),
+            openai: fixtureProvider("gpt", 100),
+            [provider]: { models: [{ id: "priced-fixture", cost: { input: 99, output: 99 } }] },
+          },
+        },
+        modelPricing: {
+          providers: {
+            [provider]:
+              source === "OpenCode"
+                ? {
+                    external: true,
+                    openCode: { provider: "upstream-zen" },
+                    openRouter: { provider },
+                    liteLLM: { provider },
+                  }
+                : {
+                    external: true,
+                    venice: { provider },
+                    openRouter: { provider },
+                    liteLLM: { provider },
+                  },
+          },
+        },
+      },
+    },
+  ];
+}
+
+function openCodePrices(cost: Record<string, unknown>) {
+  return {
+    "upstream-zen": {
+      id: "upstream-zen",
+      models: {
+        "priced-fixture": { id: "priced-fixture", cost },
+        "new-priced-fixture": { id: "new-priced-fixture", cost },
+      },
+    },
+  };
+}
+
+function venicePrices(pricing: Record<string, unknown>) {
+  return {
+    data: ["priced-fixture", "new-priced-fixture"].map((id) => ({
+      id,
+      type: "text",
+      model_spec: { pricing },
+    })),
+  };
+}
+
+const OPENCODE_PRICING_URL = "https://models.opencode.ai/api.json";
+const VENICE_PRICING_URL = "https://api.venice.ai/api/v1/models";
+const NATIVE_SOURCES = [
+  { source: "OpenCode", provider: "opencode", url: OPENCODE_PRICING_URL },
+  { source: "Venice", provider: "venice", url: VENICE_PRICING_URL },
+] as const;
+
 describe("publish model catalog", () => {
   it("assembles and validates fixture manifests at the 200-model floor", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-"));
@@ -140,6 +207,7 @@ describe("publish model catalog", () => {
         pluginId: "anthropic",
         manifestPath: "anthropic.json",
         manifest: {
+          providers: ["anthropic"],
           modelCatalog: { providers: { anthropic } },
           modelPricing: {
             providers: { anthropic: { openRouter: { modelIdTransforms: ["version-dots"] } } },
@@ -155,6 +223,7 @@ describe("publish model catalog", () => {
         pluginId: "openrouter",
         manifestPath: "openrouter.json",
         manifest: {
+          providers: ["openrouter"],
           modelPricing: {
             providers: {
               openrouter: {
@@ -169,6 +238,7 @@ describe("publish model catalog", () => {
         pluginId: "mapped",
         manifestPath: "mapped.json",
         manifest: {
+          providers: ["mapped"],
           modelPricing: {
             providers: {
               mapped: { openRouter: { provider: "approved-source" }, liteLLM: false },
@@ -193,7 +263,13 @@ describe("publish model catalog", () => {
             },
             {
               id: "openai/gpt-special",
-              pricing: { prompt: "0.000003", completion: "0.000004" },
+              pricing: {
+                prompt: "0.000003",
+                completion: "0.000004",
+                overrides: [
+                  { min_prompt_tokens: 1000, prompt: "0.000007", completion: "0.000008" },
+                ],
+              },
             },
             { id: "openai/gpt-2", pricing: { prompt: "-1", completion: "0.000004" } },
             { id: "unknown/new-model", pricing: { prompt: "1", completion: "1" } },
@@ -246,10 +322,16 @@ describe("publish model catalog", () => {
       pricingEntries: 11,
     });
     expect(bundle.providers.anthropic?.models[0]?.cost).toMatchObject({ input: 1, output: 2 });
-    expect(bundle.providers.openai?.models[0]?.cost).toMatchObject({
+    const tieredPricing = [
+      { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, range: [0, 1000] },
+      { input: 7, output: 8, cacheRead: 0, cacheWrite: 0, range: [1000] },
+    ];
+    expect(bundle.providers.openai?.models[0]?.cost).toEqual({
       input: 3,
       output: 4,
-      tieredPricing: [{ input: 5, output: 6, range: [1000] }],
+      cacheRead: 0,
+      cacheWrite: 0,
+      tieredPricing,
     });
     expect(bundle.providers.openai?.models[1]?.cost).toEqual({ input: 5, output: 6 });
     expect(bundle.providers.openai?.models[2]?.cost).toBeUndefined();
@@ -261,7 +343,7 @@ describe("publish model catalog", () => {
       "forbidden-model": { input: 9, output: 10 },
       "openrouter/anthropic/claude-3.5-sonnet": { input: 1, output: 2 },
       "openrouter/mapped/wrong-source": { input: 13, output: 14 },
-      "openrouter/openai/gpt-special": { input: 3, output: 4 },
+      "openrouter/openai/gpt-special": { input: 3, output: 4, tieredPricing },
       "openrouter/unknown/new-model": { input: 1_000_000, output: 1_000_000 },
       "secondary-wins": { input: 11, output: 12 },
       "unknown/new-model": { input: 1_000_000, output: 1_000_000 },
@@ -276,6 +358,210 @@ describe("publish model catalog", () => {
       pricingEntries: 11,
     });
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
+  });
+
+  describe.each(NATIVE_SOURCES)("$source native source", ({ source, provider, url }) => {
+    it("refreshes one complete owner schedule and publishes new models in that namespace only", async () => {
+      const manifests = nativeManifests(source);
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture",
+      });
+      const base = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
+      const extended = { input: 4, output: 15, cacheRead: 0.4, cacheWrite: 5 };
+      const payload =
+        source === "OpenCode"
+          ? {
+              ...openCodePrices({
+                input: 2,
+                output: 10,
+                cache_read: 0.2,
+                cache_write: 2.5,
+                tiers: [
+                  {
+                    input: 4,
+                    output: 15,
+                    cache_read: 0.4,
+                    cache_write: 5,
+                    tier: { type: "context", size: 272_000 },
+                  },
+                ],
+                context_over_200k: { input: 88, output: 88 },
+              }),
+              unrelated: {
+                id: "unrelated",
+                models: { hidden: { id: "hidden", cost: { input: 99, output: 99 } } },
+              },
+            }
+          : {
+              data: [
+                ...venicePrices({
+                  input: { usd: 2 },
+                  output: { usd: 10 },
+                  cache_input: { usd: 0.2 },
+                  cache_write: { usd: 2.5 },
+                  extended: {
+                    context_token_threshold: 272_000,
+                    input: { usd: 4 },
+                    output: { usd: 15 },
+                    cache_input: { usd: 0.4 },
+                    cache_write: { usd: 5 },
+                  },
+                }).data,
+                {
+                  id: "unrelated/hidden",
+                  type: "text",
+                  model_spec: { pricing: { input: { usd: 3 }, output: { usd: 4 } } },
+                },
+                {
+                  id: "non-text",
+                  type: "image",
+                  model_spec: { pricing: { input: { usd: 3 }, output: { usd: 4 } } },
+                },
+              ],
+            };
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        const request = requestUrl(input);
+        if (request === url) {
+          return Response.json(payload);
+        }
+        if (request === OPENROUTER_MODELS_URL) {
+          return Response.json({
+            data: [{ id: `${provider}/priced-fixture`, pricing: { prompt: "1", completion: "1" } }],
+          });
+        }
+        expect(request).toBe(LITELLM_PRICING_URL);
+        return Response.json({});
+      });
+
+      await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+
+      const boundary = source === "Venice" ? 272_001 : 272_000;
+      const expectedPricing = {
+        ...base,
+        tieredPricing: [
+          { ...base, range: [0, boundary] },
+          { ...extended, range: [boundary] },
+        ],
+      };
+      expect(bundle.providers[provider]?.models[0]?.cost).toEqual(expectedPricing);
+      expect(bundle.pricing?.[`${provider}/new-priced-fixture`]).toEqual(expectedPricing);
+      expect(fetchImpl.mock.calls.filter(([input]) => requestUrl(input) === url)).toHaveLength(1);
+      expect(bundle.providers).not.toHaveProperty("unrelated");
+      expect(bundle.pricing).not.toHaveProperty("unrelated/hidden");
+      expect(bundle.pricing).not.toHaveProperty("upstream-zen/priced-fixture");
+      expect(bundle.pricing).not.toHaveProperty(`${provider}/priced-fixture`);
+      expect(bundle.pricing).not.toHaveProperty(`${provider}/non-text`);
+      if (source === "Venice") {
+        expect(bundle.pricing?.["venice/unrelated/hidden"]).toEqual({ input: 3, output: 4 });
+      }
+    });
+
+    it("accepts authoritative zero schedules for paid seeds and new models", async () => {
+      const manifests = nativeManifests(source);
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture",
+      });
+      const fetchImpl: typeof fetch = async (input) => {
+        if (requestUrl(input) === url) {
+          return Response.json(
+            source === "OpenCode"
+              ? openCodePrices({ input: 0, output: 0 })
+              : venicePrices({ input: { usd: 0 }, output: { usd: 0 } }),
+          );
+        }
+        return Response.json({ data: [] });
+      };
+      await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+      expect(bundle.providers[provider]?.models[0]?.cost).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+      expect(bundle.pricing?.[`${provider}/new-priced-fixture`]).toEqual({ input: 0, output: 0 });
+    });
+
+    it.each(["unreachable", "malformed JSON", "malformed body", "missing model", "invalid price"])(
+      "rejects %s instead of re-stamping stale paid seed rates",
+      async (scenario) => {
+        const manifests = nativeManifests(source);
+        const bundle = await assembleModelCatalogBundle({
+          manifests,
+          generatedAt: Date.now(),
+          sourceCommit: "fixture",
+        });
+        const fetchImpl: typeof fetch = async (input) => {
+          const request = requestUrl(input);
+          if (request === OPENROUTER_MODELS_URL) {
+            return Response.json({ data: [] });
+          }
+          if (request === LITELLM_PRICING_URL) {
+            return Response.json({});
+          }
+          expect(request).toBe(url);
+          if (scenario === "unreachable") {
+            throw new Error("source unavailable");
+          }
+          if (scenario === "malformed JSON") {
+            return new Response("not JSON");
+          }
+          if (scenario === "malformed body") {
+            return Response.json({});
+          }
+          if (scenario === "missing model") {
+            return Response.json(
+              source === "OpenCode"
+                ? { "upstream-zen": { id: "upstream-zen", models: {} } }
+                : { data: [] },
+            );
+          }
+          return Response.json(
+            source === "OpenCode"
+              ? openCodePrices({ input: -1, output: 2 })
+              : venicePrices({
+                  input: { usd: 2 },
+                  output: { usd: 10 },
+                  extended: { context_token_threshold: 200_000, input: { usd: 4 } },
+                }),
+          );
+        };
+        await expect(enrichModelCatalogPricing({ bundle, manifests, fetchImpl })).rejects.toThrow(
+          `${source} pricing`,
+        );
+      },
+    );
+
+    it.each(["missing policy", "unowned policy", "disabled policy"])(
+      "does not fetch without an owning opt-in: %s",
+      async (scenario) => {
+        const manifests = nativeManifests(source);
+        if (scenario === "missing policy") {
+          delete manifests[0]!.manifest.modelPricing.providers[provider];
+        }
+        if (scenario === "unowned policy") {
+          manifests[0]!.manifest.providers = ["anthropic", "openai"];
+        }
+        if (scenario === "disabled policy") {
+          manifests[0]!.manifest.modelPricing.providers[provider]!.external = false;
+        }
+        const bundle = await assembleModelCatalogBundle({
+          manifests,
+          generatedAt: Date.now(),
+          sourceCommit: "fixture",
+        });
+        const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+          expect(requestUrl(input)).not.toBe(url);
+          return Response.json({ data: [] });
+        });
+        await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+        expect(fetchImpl).toHaveBeenCalledTimes(2);
+      },
+    );
   });
 
   it("fails soft when pricing sources are unreachable or malformed", async () => {
@@ -344,16 +630,65 @@ describe("publish model catalog", () => {
     expect(serializeModelCatalogBundle(left)).toBe(serializeModelCatalogBundle(right));
   });
 
-  it("ends failures with the stable wrapper marker", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/publish-model-catalog.mts"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[publish-model-catalog] FAILED (exit 1)");
-  });
+  it.each([
+    { source: "OpenCode", scenario: "unreachable" },
+    ...["unreachable", "malformed body", "missing model", "invalid price"].map((scenario) => ({
+      source: "Venice",
+      scenario,
+    })),
+  ])(
+    "leaves published output untouched when $source pricing is $scenario",
+    ({ source, scenario }) => {
+      const root = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-failure-")),
+      );
+      tempDirs.push(root);
+      const out = path.join(root, "catalog.json");
+      const preload = path.join(root, "offline.mjs");
+      fs.writeFileSync(out, "previous published catalog\n");
+      fs.writeFileSync(
+        preload,
+        `const manifests = ${JSON.stringify(readModelCatalogManifests().map((entry) => entry.manifest))};
+const openCode = {};
+for (const manifest of manifests) {
+  for (const [provider, policy] of Object.entries(manifest.modelPricing?.providers ?? {})) {
+    if (!policy.openCode) continue;
+    const id = policy.openCode.provider ?? provider;
+    const models = manifest.modelCatalog?.providers?.[provider]?.models ?? [];
+    openCode[id] = { id, models: Object.fromEntries(models.map((model) => [model.id, { id: model.id, cost: { input: 1, output: 2 } }])) };
+  }
+}
+globalThis.fetch = async (url) => {
+  if (${JSON.stringify(source)} === "OpenCode") throw new Error("fixture outage");
+  if (url === ${JSON.stringify(OPENCODE_PRICING_URL)}) return Response.json(openCode);
+  if (url === ${JSON.stringify(VENICE_PRICING_URL)}) {
+    if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
+    if (${JSON.stringify(scenario)} === "malformed body") return Response.json({});
+    if (${JSON.stringify(scenario)} === "invalid price") return Response.json({ data: manifests.flatMap((manifest) => (manifest.modelCatalog?.providers?.venice?.models ?? []).map((model) => ({ id: model.id, type: "text", model_spec: { pricing: { input: { usd: -1 }, output: { usd: 2 } } } }))) });
+  }
+  return Response.json({ data: [] });
+};`,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--import",
+          preload,
+          "scripts/publish-model-catalog.mts",
+          "--pricing",
+          "--out",
+          out,
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`${source} pricing`);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        "[publish-model-catalog] FAILED (exit 1)",
+      );
+      expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
+    },
+  );
 });

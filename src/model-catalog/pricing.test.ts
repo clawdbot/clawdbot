@@ -1,5 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveModelCostConfig,
@@ -26,6 +32,19 @@ beforeEach(() => {
         openai: {
           models: [
             { id: "gpt-catalog", cost: { input: 1, output: 2 } },
+            {
+              id: "gpt-authored",
+              cost: {
+                input: 2,
+                output: 8,
+                cacheRead: 0.5,
+                cacheWrite: 1,
+                tieredPricing: [
+                  { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1, range: [0, 201] },
+                  { input: 4, output: 16, cacheRead: 1, cacheWrite: 2, range: [201] },
+                ],
+              },
+            },
             {
               id: "gpt-zero-tier",
               cost: {
@@ -59,6 +78,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   setRemoteModelCatalogOverlaySourcesForTest();
   resetRemoteModelCatalogOverlayForTest();
 });
@@ -77,6 +97,125 @@ function configFor(baseUrl: string): OpenClawConfig {
 }
 
 describe("hosted model pricing", () => {
+  const catalogRates = { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 1 };
+  const catalogTiers = [
+    { ...catalogRates, range: [0, 201] },
+    { input: 4, output: 16, cacheRead: 1, cacheWrite: 2, range: [201, Infinity] },
+  ];
+
+  it.each([
+    {
+      name: "sizing-only",
+      cost: undefined,
+      expected: { ...catalogRates, tieredPricing: catalogTiers },
+    },
+    { name: "empty cost", cost: {}, expected: { ...catalogRates, tieredPricing: catalogTiers } },
+    { name: "partial cost", cost: { output: 3 }, expected: { ...catalogRates, output: 3 } },
+    {
+      name: "full cost",
+      cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+      expected: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+    },
+    {
+      name: "zero cost",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    { name: "empty tiers", cost: { tieredPricing: [] }, expected: catalogRates },
+    {
+      name: "authored tiers",
+      cost: { tieredPricing: [{ input: 7, output: 9, cacheRead: 1, cacheWrite: 2, range: [0] }] },
+      expected: {
+        ...catalogRates,
+        tieredPricing: [{ input: 7, output: 9, cacheRead: 1, cacheWrite: 2, range: [0, Infinity] }],
+      },
+    },
+  ])(
+    "resolves $name from authored source rather than materialized runtime rates",
+    ({ cost, expected }) => {
+      const source = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-authored",
+                  name: "Authored GPT",
+                  contextWindow: 64_000,
+                  ...(cost ? { cost } : {}),
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const runtime = structuredClone(source);
+      const model = expectDefined(
+        runtime.models?.providers?.openai?.models[0],
+        "materialized model",
+      );
+      model.cost = { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 };
+      setRuntimeConfigSnapshot(runtime, source);
+      const agentDir = tempDirs.make("openclaw-authored-pricing-");
+      for (const config of [runtime, structuredClone(runtime)]) {
+        expect(
+          resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+        ).toEqual(expected);
+        expect(resolveModelCostConfigFingerprint(config, agentDir)).toBe(
+          resolveModelCostConfigFingerprint(source, agentDir),
+        );
+      }
+      expect(model.contextWindow).toBe(64_000);
+    },
+  );
+
+  it.each(["unpaired", "incompatible"] as const)(
+    "preserves independent configured pricing with an %s runtime snapshot",
+    (snapshot) => {
+      const runtime = { agents: { defaults: {} } } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(runtime, snapshot === "unpaired" ? undefined : {});
+      const config = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-authored", name: "Authored GPT", cost: { output: 3 } }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const agentDir = tempDirs.make("openclaw-independent-pricing-");
+      expect(
+        resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+      ).toEqual({ ...catalogRates, output: 3 });
+    },
+  );
+
+  it("invalidates pricing fingerprints when authored empty tiers replace inherited tiers", () => {
+    const cost = {} as ModelDefinitionConfig["cost"];
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-authored", name: "Authored GPT", cost }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const agentDir = tempDirs.make("openclaw-empty-tier-pricing-");
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+    ).toEqual({ ...catalogRates, tieredPricing: catalogTiers });
+    const before = resolveModelCostConfigFingerprint(config, agentDir);
+    cost.tieredPricing = [];
+    expect(resolveModelCostConfigFingerprint(config, agentDir)).not.toBe(before);
+    expect(
+      resolveModelCostConfig({ config, agentDir, provider: "openai", model: "gpt-authored" }),
+    ).toEqual(catalogRates);
+  });
+
   it("resolves a non-catalog model from the stored hosted pricing map", () => {
     const agentDir = tempDirs.make("openclaw-hosted-pricing-");
     expect(
