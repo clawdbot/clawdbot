@@ -178,3 +178,37 @@ Pinned GATES and runtime identities:
 | Node | `/home/figs/.nvm/versions/node/v24.17.0/bin/node`, `v24.17.0` | local executable version receipt |
 | Corepack | `/home/figs/.nvm/versions/node/v24.17.0/bin/corepack`, `0.35.0` | local executable version receipt |
 | pnpm | `12.0.0` via the pinned package-manager contract | lane-local Corepack cache under session state; inherited `~/.local/bin/pnpm` rejected as a stale Actions-cache link |
+
+### Dispatch-time Gate 2.7 and merge envelope
+
+The required comparison was recomputed against the immutable pair
+`0ed59cb64f31971e8659b417fe3fd2ba6a1730c3` and
+`8e32494fcf839181a5f02a1f0649068cd91d2b14`, not moving upstream:
+
+| Measurement | Result |
+| --- | --- |
+| Reviewer-visible feature paths (`8e32494f...0ed59cb6`) | 956 |
+| Candidate paths changed since merge base `43a7cb3c` | 956 |
+| Upstream paths changed since merge base `43a7cb3c` | 4,139 |
+| Paths changed on both sides | 245 |
+| `git merge-tree --write-tree --name-only` textual conflicts | 69 |
+| Read-only virtual merge tree | `9220fadb7c9c4e0fa49dedeccc74a739e857b92c` |
+
+This exactly matches the workorder's `956 / 245 / 69` dispatch envelope.
+
+Pre-merge Gate 2.7 examined all 956 feature-visible paths with merge base
+`43a7cb3c` as the ranking baseline: 0 FROZEN-STALE, 236 MIXED-CLOBBER
+(7,114 ranked dropped-line observations), 405 GENUINE, and 315 SAFE-NEW.
+The frozen count remains zero, so no stacking-complexity pause is required.
+The mixed rows are the explicit upstream-drift queue the back-merge must absorb,
+not post-merge dispositions.
+
+Gate 2.5 enumerated 1,781 upstream-touched test/support paths from `43a7cb3c`
+through `8e32494f`; 96 intersect the accepted feature surface and 94 are in
+the both-sides overlap. The reviewed primitive inventory resolves 35 present
+paths and 3 absent tombstones with no missing live path. The baseline feature
+inventory also identifies 29 generated/protocol/plugin-SDK/snapshot surfaces.
+Proof-sensitive path counts are overlapping owner signals, not additive:
+181 continuation, 61 compaction, 13 tool-event/tool-call, 129
+registry/subagent, 6 return-covenant, 31 queue, 146 session/transcript, 27
+restart/recovery, 78 gateway, 6 Telegram, and 21 schema/migration paths.
