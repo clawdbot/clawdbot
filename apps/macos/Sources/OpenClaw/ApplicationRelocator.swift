@@ -1116,7 +1116,7 @@ extension ApplicationRelocator {
 
     private nonisolated static func removeQuarantineAttribute(at url: URL) throws {
         var attributeErrno: Int32 = 0
-        let result = url.withUnsafeFileSystemRepresentation { path in
+        let result: Int32 = url.withUnsafeFileSystemRepresentation { path in
             guard let path else {
                 attributeErrno = EINVAL
                 return -1
