@@ -209,7 +209,8 @@ export async function runMemorySearch(
     commandName: "memory search",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
-    purpose: "cli",
+    purpose: "cli-search",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const memoryPluginConfig = resolveMemoryPluginConfig(cfg);

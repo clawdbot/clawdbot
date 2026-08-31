@@ -565,7 +565,7 @@ describe("memory index", () => {
     await pendingSync;
   });
 
-  it("keeps the published index searchable while dirty maintenance builds", async () => {
+  it("keeps search available while incremental dirty maintenance settles", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(
       createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
@@ -596,6 +596,7 @@ describe("memory index", () => {
       };
       const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
       vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        expect(syncParams).toMatchObject({ needsFullReindex: false });
         const result = await syncMemoryFiles(syncParams);
         maintenanceReady.resolve();
         await releaseMaintenance.promise;
@@ -613,7 +614,7 @@ describe("memory index", () => {
       expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
       await expect(
         manager.search("current dirty search sync", { maxResults: 5, minScore: 0 }),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual([expect.objectContaining({ path: "memory/search-sync.md" })]);
 
       releaseMaintenance.resolve();
       await firstSearch;
@@ -629,6 +630,32 @@ describe("memory index", () => {
     } finally {
       releaseMaintenance.resolve();
       getSpy.mockRestore();
+    }
+  });
+
+  it("does not refresh a clean one-shot CLI search", async () => {
+    providerFixture.forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      onSearch: true,
+      hybrid: { enabled: true },
+    });
+    const initialManager = await getFreshManager(cfg, "cli");
+    await initialManager.sync({ reason: "test", force: true });
+    await initialManager.close?.();
+
+    const manager = await getFreshManager(cfg, "cli-search", true);
+    const getSpy = vi.spyOn(MemoryIndexManager, "get");
+    try {
+      const results = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+
+      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      expect(manager.status().dirty).toBe(false);
+      expect(getSpy).not.toHaveBeenCalledWith(expect.objectContaining({ purpose: "maintenance" }));
+    } finally {
+      getSpy.mockRestore();
+      await manager.close?.();
     }
   });
 
@@ -648,7 +675,7 @@ describe("memory index", () => {
       "Content published after transient CLI maintenance.",
     );
 
-    const manager = await getFreshManager(cfg, "cli");
+    const manager = await getFreshManager(cfg, "cli-search", true);
     const servingFields = manager as unknown as {
       syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
     };
@@ -688,7 +715,9 @@ describe("memory index", () => {
         sessionKey: "agent:main:cli:memory-search",
       });
       await vi.waitFor(() =>
-        expect(getSpy).toHaveBeenCalledWith(expect.objectContaining({ purpose: "maintenance" })),
+        expect(getSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ purpose: "maintenance", inspectSources: true }),
+        ),
       );
       await maintenanceReady.promise;
       const results = await search;
@@ -742,7 +771,10 @@ describe("memory index", () => {
         ).syncPublishedIndexInBackground({ reason: "search" }),
       ).rejects.toThrow(syncError);
 
-      expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search", force: true });
+      expect(getSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ purpose: "maintenance", inspectSources: true }),
+      );
+      expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search" });
       expect(maintenance.close).toHaveBeenCalledTimes(1);
       expect(manager.status().lastSyncError).toContain("maintenance failed");
       expect(Reflect.get(manager, "dirty")).toBe(true);

@@ -160,7 +160,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           });
           return {
             key,
-            transient: purpose === "status" || purpose === "cli" || purpose === "maintenance",
+            transient:
+              purpose === "status" ||
+              purpose === "cli" ||
+              purpose === "cli-search" ||
+              purpose === "maintenance",
             create: async () => {
               const manager = new MemoryIndexManager({
                 cacheKey: key,
@@ -234,7 +238,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         initialIndexIdentity.status === "mismatched" ||
         (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
       const transient =
-        params.purpose === "status" || params.purpose === "cli" || params.purpose === "maintenance";
+        params.purpose === "status" ||
+        params.purpose === "cli" ||
+        params.purpose === "cli-search" ||
+        params.purpose === "maintenance";
       if (!transient) {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -254,7 +261,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.dirty =
         resolveInitialMemoryDirty({
           hasMemorySource: this.sources.has("memory"),
-          statusOnly: params.purpose === "status",
+          statusOnly: params.purpose === "status" || params.purpose === "cli-search",
           hasIndexedMeta: Boolean(meta),
         }) || this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
@@ -307,6 +314,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
               cfg: this.cfg,
               agentId: this.agentId,
               purpose: "maintenance",
+              inspectSources: true,
               acquireLocalService: this.acquireLocalService,
             }),
         }),

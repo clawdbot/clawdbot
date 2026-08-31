@@ -209,7 +209,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const backgroundSearchSync = startAsyncSearchSync({
         enabled:
           (this.settings.sync.onSearch || sessionStartSync) &&
-          (this.purpose === "default" || this.purpose === "cli"),
+          (this.purpose === "default" || this.purpose === "cli" || this.purpose === "cli-search"),
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),

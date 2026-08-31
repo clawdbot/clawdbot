@@ -110,7 +110,7 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
 
 export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps {
   protected abstract readonly cacheKey: string;
-  protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
+  protected abstract readonly purpose: "default" | "status" | "cli" | "cli-search" | "maintenance";
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected abstract readonly requestedProvider: EmbeddingProviderRequest;
   protected abstract providerInitPromise: Promise<void> | null;
@@ -545,7 +545,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     // CLI request teardown must not wait after a published search result is ready;
     // its detached task owns a separate maintenance manager. Persistent managers
     // still drain maintenance before closing shared resources.
-    while (this.purpose !== "cli" && this.activeBackgroundSearchSyncs.size > 0) {
+    while (
+      this.purpose !== "cli" &&
+      this.purpose !== "cli-search" &&
+      this.activeBackgroundSearchSyncs.size > 0
+    ) {
       await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
     }
   }

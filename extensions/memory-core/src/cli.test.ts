@@ -1962,7 +1962,8 @@ describe("memory cli", () => {
     expect(getMemorySearchManager).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
-      purpose: "cli",
+      purpose: "cli-search",
+      inspectSources: true,
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -1978,7 +1979,8 @@ describe("memory cli", () => {
     expect(getMemorySearchManager).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
-      purpose: "cli",
+      purpose: "cli-search",
+      inspectSources: true,
       acquireLocalService,
     });
   });

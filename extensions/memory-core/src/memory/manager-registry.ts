@@ -19,12 +19,15 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
 );
 const log = createSubsystemLogger("memory");
 
-export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "cli-search" | "maintenance";
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
 ): MemoryIndexManagerPurpose {
-  return purpose === "status" || purpose === "cli" || purpose === "maintenance"
+  return purpose === "status" ||
+    purpose === "cli" ||
+    purpose === "cli-search" ||
+    purpose === "maintenance"
     ? purpose
     : "default";
 }

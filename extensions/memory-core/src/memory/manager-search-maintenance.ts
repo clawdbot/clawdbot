@@ -2,7 +2,7 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
 type MemorySearchMaintenanceManager = {
-  sync(params: { reason: string; force: true }): Promise<void>;
+  sync(params: { reason: string }): Promise<void>;
   status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
 };
@@ -29,9 +29,9 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   let maintenanceError: Error | undefined;
   let incompleteReason: string | undefined;
   try {
-    // The transient manager has no watcher state. Force every source represented
-    // by the handed-off generation while the default manager serves published reads.
-    await manager.sync({ reason: params.reason, force: true });
+    // The transient manager inspects source deltas before acquisition. Apply only
+    // those deltas so routine search refreshes never become full reindexes.
+    await manager.sync({ reason: params.reason });
     const status = manager.status();
     if (status.dirty === true) {
       // A provider fallback may deliberately resolve in keyword-only mode while
