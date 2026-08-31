@@ -73,6 +73,27 @@ describe("readWindowsProcessStartTimeSync", () => {
     }
   });
 
+  it("preserves the default WMIC fallback after PowerShell spends five seconds", () => {
+    vi.useFakeTimers();
+    try {
+      spawnSyncMock
+        .mockImplementationOnce(() => {
+          vi.advanceTimersByTime(5000);
+          return { status: 1, stdout: "" };
+        })
+        .mockReturnValueOnce({
+          status: 0,
+          stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
+        } as never);
+
+      expect(readWindowsProcessStartTimeSync(987)).toBe(Date.parse("2026-07-13T07:20:49.123Z"));
+      expect(spawnSyncMock.mock.calls[0]?.[2]).toMatchObject({ timeout: 5000 });
+      expect(spawnSyncMock.mock.calls[1]?.[2]).toMatchObject({ timeout: 5000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns null when process creation time is unavailable", () => {
     spawnSyncMock
       .mockReturnValueOnce({ status: 1, stdout: "" } as never)

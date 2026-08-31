@@ -12,6 +12,7 @@ import {
 } from "./windows-install-roots.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
 
 export type WindowsListeningPidsResult =
   | { ok: true; pids: number[] }
@@ -139,15 +140,14 @@ function parseWindowsProcessStartTime(raw: Buffer | string): number | null {
 /** Read a stable Windows process creation time for lock-owner identity checks. */
 export function readWindowsProcessStartTimeSync(
   pid: number,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  timeoutMs = DEFAULT_PROCESS_START_TIMEOUT_MS,
 ): number | null {
   if (!Number.isInteger(pid) || pid <= 0) {
     return null;
   }
-  // `timeoutMs` is one end-to-end budget, not a per-probe one. Synchronous
-  // callers block the event loop for however long this takes, so giving the
-  // WMIC fallback its own full timeout would let a single lookup stall for
-  // twice the caller's budget before returning the same null.
+  // Keep the former default availability: PowerShell and WMIC each had 5s.
+  // Explicit callers still get one end-to-end budget, while the default 10s
+  // deadline preserves enough time for WMIC after a stalled primary probe.
   const deadline = Date.now() + timeoutMs;
   const powershell = spawnSync(
     getWindowsPowerShellExePath(),
@@ -159,7 +159,7 @@ export function readWindowsProcessStartTimeSync(
     ],
     {
       encoding: "utf8",
-      timeout: timeoutMs,
+      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
       windowsHide: true,
     },
   );
