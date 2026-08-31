@@ -296,6 +296,57 @@ describe("slack native approval adapter", () => {
     ).toEqual([{ to: "team:T123:user:U123APPROVER" }]);
   });
 
+  it("selects plugin approver DMs for the validated Grid workspace", async () => {
+    const cfg = buildConfig({
+      allowFrom: ["team:T11111111:user:U111OWNER", "U222OWNER"],
+      execApprovals: { enabled: "auto", target: "dm" },
+    });
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const request = {
+      id: "plugin:req-1",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "default",
+        turnSourceTo: "team:T11111111:channel:C11111111",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: "team:T11111111:user:U111OWNER" }, { to: "team:T11111111:user:U222OWNER" }]);
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: {
+          ...request,
+          request: { ...request.request, turnSourceTo: "team:T22222222:channel:C22222222" },
+        },
+      }),
+    ).toEqual([{ to: "team:T22222222:user:U222OWNER" }]);
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: {
+          ...request,
+          request: { ...request.request, turnSourceTo: "channel:C11111111" },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
     installationStates.push(registerSlackInstallationState("default", "enterprise"));
     const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
