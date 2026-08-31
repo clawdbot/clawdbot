@@ -62,6 +62,12 @@ describe("isContextOverflowError with provider patterns", () => {
     ).toBe(true);
   });
 
+  it("detects llama.cpp context-size-exceeded overflow", () => {
+    // Native llama.cpp HTTP server overflow surfaced through openai-completions providers.
+    expect(isContextOverflowError("Context size has been exceeded.")).toBe(true);
+    expect(isContextOverflowError("400 Context size has been exceeded.")).toBe(true);
+  });
+
   it("detects DS4 configured context size overflow", () => {
     expect(
       isContextOverflowError(

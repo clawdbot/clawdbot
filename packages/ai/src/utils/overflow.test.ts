@@ -65,6 +65,8 @@ describe("provider overflow messages", () => {
     'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"input length and `max_tokens` exceed context limit: 176312 + 32000 > 200000"}}',
     "code 1210: tokens in request more than max tokens allowed",
     "code 1261: Prompt exceeds max length",
+    "Context size has been exceeded.",
+    "400 Context size has been exceeded.",
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
@@ -85,6 +87,14 @@ describe("scoped overflow messages", () => {
     (message) => {
       expect(matchesContextOverflowMessage(message, "assistant-error")).toBe(true);
       expect(matchesContextOverflowMessage(message, "failover-explicit")).toBe(false);
+    },
+  );
+
+  it.each(["Context size has been exceeded.", "400 Context size has been exceeded."])(
+    "recognizes llama.cpp context-size-exceeded in assistant and provider-fallback scopes: %s",
+    (message) => {
+      expect(matchesContextOverflowMessage(message, "assistant-error")).toBe(true);
+      expect(matchesContextOverflowMessage(message, "provider-fallback")).toBe(true);
     },
   );
 });
