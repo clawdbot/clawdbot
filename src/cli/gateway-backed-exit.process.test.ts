@@ -973,6 +973,38 @@ describe("gateway-backed CLI process exit", () => {
     expect(result.code, result.stderr).toBe(0);
   });
 
+  it.each([
+    { label: "empty", timeout: "", valid: false },
+    { label: "whitespace", timeout: " \t ", valid: false },
+    { label: "positive", timeout: "10000", valid: true },
+  ])(
+    "validates a $label channels capabilities timeout before probing",
+    async ({ timeout, valid }) => {
+      const root = tempDirs.make("openclaw-capabilities-timeout-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
+        "utf8",
+      );
+
+      const result = await runIsolatedGatewayCli({
+        args: ["channels", "capabilities", "--timeout", timeout, "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result.code, result.stderr).toBe(valid ? 0 : 1);
+      if (!valid) {
+        expect(result.stderr).toContain("Invalid --timeout");
+      }
+    },
+  );
+
   it("preserves pre-hello rate-limit details through the real health entry point", async () => {
     const root = tempDirs.make("openclaw-gateway-rate-limit-json-");
     const stateDir = path.join(root, "state");
