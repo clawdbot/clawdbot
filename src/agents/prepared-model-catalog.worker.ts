@@ -1,5 +1,6 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -164,12 +165,12 @@ export async function runPreparedModelCatalogWorkerRequest(
       pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
-    const ambientCredentials = withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-      },
-      () =>
+    const pluginGenerationScope = {
+      metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: prepared.pluginGeneration.pluginRegistry,
+    };
+    const resolveSyntheticCredentials = (providerIds: readonly string[]) =>
+      withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
         resolveAmbientAgentCredentialsForDiscovery({
           config: value.input.config,
           env: value.input.env,
@@ -177,11 +178,13 @@ export async function runPreparedModelCatalogWorkerRequest(
             prepared.pluginGeneration.pluginMetadataSnapshot.owners.cliBackends.keys(),
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
             resolveRuntimeSyntheticAuthProviderRefs(),
-            value.providerIds,
+            providerIds,
           ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
-    );
+      );
+    const ambientCredentials = resolveSyntheticCredentials(value.providerIds);
+    const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const credentials = {
       ...ambientCredentials,
       ...resolveAgentCredentialMapFromStore(authStore, { config: value.input.config }),
@@ -208,6 +211,13 @@ export async function runPreparedModelCatalogWorkerRequest(
       "live",
       source,
     );
+    // Full discovery can publish routes absent from startup config. Pair those exact rows with
+    // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
+    const catalogCredentials = resolveSyntheticCredentials(
+      [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
+        .map((entry) => entry.provider)
+        .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
+    );
     return {
       status: "ok",
       requestId: request.requestId,
@@ -215,7 +225,7 @@ export async function runPreparedModelCatalogWorkerRequest(
       generationFingerprint: value.generationFingerprint,
       snapshot: facts.modelCatalog,
       authStore,
-      authModes: resolveUsableAgentCredentialModes(credentials),
+      authModes: resolveUsableAgentCredentialModes({ ...catalogCredentials, ...credentials }),
     };
   } catch (error) {
     return {

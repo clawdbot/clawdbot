@@ -1713,6 +1713,7 @@ describe("models.list", () => {
                       },
                       available,
                       tags: ["configured"],
+                      ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                     },
                   ],
                 },
