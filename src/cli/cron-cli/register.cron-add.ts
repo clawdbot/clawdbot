@@ -53,12 +53,33 @@ export function registerCronListCommand(cron: Command) {
       .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
+      .option("--group <name>", "Filter by group")
+      .option("--tag <tag>", "Filter by tag")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: { includeDisabled: boolean; agentId?: string } = {
+          const listParams: {
+            includeDisabled: boolean;
+            agentId?: string;
+            group?: string;
+            tag?: string;
+          } = {
             includeDisabled: Boolean(opts.all),
           };
+          const group = normalizeOptionalString(opts.group);
+          const tag = normalizeOptionalString(opts.tag);
+          if (typeof opts.group === "string" && !group) {
+            throw new Error("--group must not be blank");
+          }
+          if (typeof opts.tag === "string" && !tag) {
+            throw new Error("--tag must not be blank");
+          }
+          if (group) {
+            listParams.group = group;
+          }
+          if (tag) {
+            listParams.tag = tag;
+          }
           const agentId = normalizeOptionalString(opts.agent);
           if (typeof opts.agent === "string" && !agentId) {
             throw new Error("--agent must not be blank");
@@ -360,6 +381,11 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const description = normalizeOptionalString(opts.description);
+            const group = normalizeOptionalString(opts.group);
+            if (typeof opts.group === "string" && !group) {
+              throw new Error("--group must not be blank");
+            }
+            const tags = Array.isArray(opts.tag) ? opts.tag : undefined;
             const declarationKey = normalizeOptionalString(opts.declarationKey);
             if (typeof opts.declarationKey === "string" && !declarationKey) {
               throw new Error("--declaration-key must not be blank");
@@ -406,6 +432,8 @@ export function registerCronAddCommand(cron: Command) {
               declarationKey,
               displayName,
               description,
+              group,
+              tags,
               ...(declarationKey && cmd.getOptionValueSource("disabled") !== "cli"
                 ? {}
                 : { enabled: !opts.disabled }),

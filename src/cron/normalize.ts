@@ -11,6 +11,7 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { normalizeCronGroup, normalizeCronTags } from "./metadata.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -375,6 +376,23 @@ export function normalizeCronJobInput(
       } else {
         delete next[field];
       }
+    }
+  }
+
+  if ("group" in base) {
+    const group = normalizeCronGroup(base.group);
+    if (group) {
+      next.group = group;
+    } else {
+      delete next.group;
+    }
+  }
+  if ("tags" in base) {
+    const tags = normalizeCronTags(base.tags);
+    if (tags) {
+      next.tags = tags;
+    } else {
+      delete next.tags;
     }
   }
 

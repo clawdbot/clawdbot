@@ -29,6 +29,8 @@ export type CronListPageOptions = {
   scheduleKind?: CronJobsScheduleKindFilter;
   lastRunStatus?: CronJobsLastRunStatusFilter;
   trigger?: CronJobsTriggerFilter;
+  group?: string;
+  tag?: string;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
   agentId?: string;

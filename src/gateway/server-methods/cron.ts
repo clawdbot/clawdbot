@@ -34,6 +34,7 @@ import {
 } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
+import { resolveCronJobGroup } from "../../cron/metadata.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
@@ -225,6 +226,9 @@ function compactCronListJob(job: CronJob) {
     name: job.name,
     ...(job.declarationKey ? { declarationKey: job.declarationKey } : {}),
     ...(job.displayName ? { displayName: job.displayName } : {}),
+    ...(job.group ? { group: job.group } : {}),
+    ...(job.tags ? { tags: job.tags } : {}),
+    effectiveGroup: resolveCronJobGroup(job),
     ...(job.owner ? { owner: job.owner } : {}),
     enabled: job.enabled,
     // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.
@@ -601,6 +605,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       scheduleKind: p.scheduleKind,
       lastRunStatus: p.lastRunStatus,
       trigger: p.trigger,
+      group: p.group,
+      tag: p.tag,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       // Owners retain visibility when execution is retargeted to another agent.

@@ -232,6 +232,24 @@
   padding: 0 var(--space-4);
 }
 
+.cron-table__group {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.cron-table__group span:last-child {
+  color: var(--muted);
+  font-weight: 500;
+}
+
 .cron-table__head {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -352,6 +370,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cron-table__group-badge,
+.cron-table__tag {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, var(--border));
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.cron-table__group-badge {
+  color: var(--accent-2);
 }
 
 .cron-table__description {

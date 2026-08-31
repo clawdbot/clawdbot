@@ -12,6 +12,10 @@ export type CronJobBase<TSchedule, TSessionTarget, TWakeMode, TPayload, TDeliver
     sessionKey?: string;
     name: string;
     description?: string;
+    /** Optional user-defined primary grouping label. */
+    group?: string;
+    /** Optional user-defined labels used for filtering and discovery. */
+    tags?: string[];
     enabled: boolean;
     deleteAfterRun?: boolean;
     createdAtMs: number;

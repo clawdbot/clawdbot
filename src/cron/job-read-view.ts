@@ -1,4 +1,5 @@
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { resolveCronJobGroup } from "./metadata.js";
 import { toPublicCronJob } from "./public-job.js";
 import type { CronJob } from "./types.js";
 
@@ -7,6 +8,7 @@ export function cronJobReadView(job: CronJob) {
   return {
     ...publicJob,
     configRevision: resolveCronJobConfigRevision(job),
+    effectiveGroup: resolveCronJobGroup(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
@@ -28,6 +30,7 @@ export function cronJobDefinitionFromReadView(
 ) {
   const {
     effectiveAgentId: _effectiveAgentId,
+    effectiveGroup: _effectiveGroup,
     configRevision: _configRevision,
     nextRunAtMs: _nextRunAtMs,
     lastRunAtMs: _lastRunAtMs,

@@ -11,6 +11,7 @@ import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { resolveCronJobGroup } from "../../cron/metadata.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
@@ -381,6 +382,8 @@ const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
+const CRON_GROUP_PAD = 16;
+const CRON_TAGS_PAD = 24;
 const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
@@ -497,6 +500,8 @@ export function printCronList(
     formatCell("Agent ID", CRON_AGENT_PAD),
     formatCell("Owner", CRON_OWNER_PAD),
     formatCell("Model", CRON_MODEL_PAD),
+    formatCell("Group", CRON_GROUP_PAD),
+    formatCell("Tags", CRON_TAGS_PAD),
   ].join(" ");
 
   const lines = [rich ? theme.heading(header) : header];
@@ -531,6 +536,8 @@ export function printCronList(
       job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
       CRON_MODEL_PAD,
     );
+    const groupLabel = formatCell(resolveCronJobGroup(job), CRON_GROUP_PAD);
+    const tagsLabel = formatCell(job.tags?.join(", "), CRON_TAGS_PAD);
 
     const coloredTarget =
       job.sessionTarget === "main"
@@ -557,6 +564,8 @@ export function printCronList(
       job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
+      colorize(rich, theme.info, groupLabel),
+      colorize(rich, job.tags?.length ? theme.info : theme.muted, tagsLabel),
     ].join(" ");
 
     lines.push(line.trimEnd());
@@ -576,6 +585,8 @@ export function printCronShow(
   runtime.log(`declaration: ${showValue(job.declarationKey)}`);
   runtime.log(`name: ${showValue(job.name)}`);
   runtime.log(`display name: ${showValue(job.displayName)}`);
+  runtime.log(`group: ${showValue(resolveCronJobGroup(job))}`);
+  runtime.log(`tags: ${showValue(job.tags?.join(", "))}`);
   runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);

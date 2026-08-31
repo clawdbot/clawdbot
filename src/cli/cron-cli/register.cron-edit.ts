@@ -63,6 +63,8 @@ export function registerCronEditCommand(cron: Command) {
       "edit",
     )
       .option("--clear-display-name", "Restore the stable name in list and detail views", false)
+      .option("--clear-group", "Remove the primary group", false)
+      .option("--clear-tags", "Remove all automation tags", false)
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
       .option("--clear-agent", "Unset agent and use default", false)
@@ -210,6 +212,28 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;
+          }
+          const group = normalizeOptionalString(opts.group);
+          if (typeof opts.group === "string" && !group) {
+            throw new Error("--group must not be blank");
+          }
+          if (group && opts.clearGroup) {
+            throw new Error("Use --group or --clear-group, not both");
+          }
+          if (group) {
+            patch.group = group;
+          }
+          if (opts.clearGroup) {
+            patch.group = null;
+          }
+          if (opts.clearTags && opts.tag !== undefined) {
+            throw new Error("Use --tag or --clear-tags, not both");
+          }
+          if (opts.tag !== undefined) {
+            patch.tags = Array.isArray(opts.tag) ? opts.tag : [opts.tag];
+          }
+          if (opts.clearTags) {
+            patch.tags = null;
           }
           if (opts.enable && opts.disable) {
             throw new Error("Choose --enable or --disable, not both");

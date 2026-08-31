@@ -90,6 +90,43 @@ describe("applyJobPatch schedule retention", () => {
   });
 });
 
+describe("cron grouping metadata", () => {
+  it("round-trips group and tags through creation and the storage codec", () => {
+    const now = Date.parse("2026-07-30T00:00:00.000Z");
+    const job = createJob(
+      {
+        deps: { nowMs: () => now, defaultAgentId: "main" },
+      } as never,
+      {
+        name: "grouped",
+        group: "Work",
+        tags: ["GitHub", "reports"],
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "check" },
+      },
+    );
+
+    expect(projectCronJobThroughStorageCodec(job)).toMatchObject({
+      group: "Work",
+      tags: ["GitHub", "reports"],
+    });
+  });
+
+  it("updates and clears group and tags without touching the schedule", () => {
+    const job = makeJob({ group: "Work", tags: ["reports"] });
+    applyJobPatch(job, { group: "Personal", tags: ["home", "errands"] });
+    expect(job).toMatchObject({ group: "Personal", tags: ["home", "errands"] });
+
+    applyJobPatch(job, { group: null, tags: null });
+    expect(job.group).toBeUndefined();
+    expect(job.tags).toBeUndefined();
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000 });
+  });
+});
+
 describe("schedule activation ownership", () => {
   it("ignores caller-supplied activation state during creation", () => {
     const now = Date.parse("2026-07-30T00:00:00.000Z");

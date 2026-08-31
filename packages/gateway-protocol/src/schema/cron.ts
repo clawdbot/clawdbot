@@ -140,6 +140,13 @@ const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),
+  group: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()])),
+  tags: Type.Optional(
+    Type.Union([
+      Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 20 }),
+      Type.Null(),
+    ]),
+  ),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
 };
@@ -509,6 +516,8 @@ export const CronJobSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   description: Type.Optional(Type.String()),
+  group: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  tags: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 20 })),
   enabled: Type.Boolean(),
   deleteAfterRun: Type.Optional(Type.Boolean()),
   createdAtMs: CronDateTimestampMsSchema,
@@ -532,6 +541,8 @@ export const CronJobSchema = closedObject({
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastDeliveryError: Type.Optional(Type.String()),
   deliverySuppressionReason: Type.Optional(Type.String()),
+  /** Effective presentation group; Gateway-owned jobs resolve to System. */
+  effectiveGroup: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
   lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
@@ -550,6 +561,8 @@ export const CronListParamsSchema = closedObject({
   sortBy: Type.Optional(CronJobsSortBySchema),
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
+  group: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  tag: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   compact: Type.Optional(Type.Boolean()),
   includeDeliveryPreviews: Type.Optional(Type.Boolean()),
 });

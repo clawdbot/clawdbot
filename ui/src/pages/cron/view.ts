@@ -54,6 +54,7 @@ import type {
   CronFormState,
   CronJobsLastStatusFilter,
 } from "../../lib/cron/index.ts";
+import { getCronJobGroup } from "../../lib/cron/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
@@ -87,6 +88,9 @@ type CronProps = {
   jobsScheduleKindFilter: CronJobsScheduleKindFilter;
   jobsLastStatusFilter: CronJobsLastStatusFilter;
   jobsTriggerFilter: CronJobsTriggerFilter;
+  jobsGroupFilter: string;
+  jobsTagFilter: string;
+  jobsGroupBy: "none" | "group" | "type";
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
@@ -137,6 +141,9 @@ type CronProps = {
     cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
     cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
     cronJobsTriggerFilter?: CronJobsTriggerFilter;
+    cronJobsGroupFilter?: string;
+    cronJobsTagFilter?: string;
+    cronJobsGroupBy?: "none" | "group" | "type";
     cronJobsSortBy?: CronJobsSortBy;
     cronJobsSortDir?: CronSortDir;
   }) => void | Promise<void>;
@@ -462,11 +469,23 @@ const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = 
   stream: "cron.form.repeatStream",
 };
 
+const CRON_TYPE_LABELS: Record<string, string> = {
+  agentTurn: "cron.jobs.typeAgentTurn",
+  command: "cron.jobs.typeCommand",
+  script: "cron.jobs.typeScript",
+  systemEvent: "cron.jobs.typeSystemEvent",
+  heartbeat: "cron.jobs.typeHeartbeat",
+  skillCollectionReview: "cron.jobs.typeSkillCollectionReview",
+};
+
 function renderListView(props: CronProps) {
   const hasAdvancedJobsFilters =
     props.jobsScheduleKindFilter !== "all" ||
     props.jobsLastStatusFilter !== "all" ||
     props.jobsTriggerFilter !== "all" ||
+    props.jobsGroupFilter.trim().length > 0 ||
+    props.jobsTagFilter.trim().length > 0 ||
+    props.jobsGroupBy !== "none" ||
     props.jobsSortBy !== "nextRunAtMs" ||
     props.jobsSortDir !== "asc";
   const hasAnyJobsFilters =
@@ -718,6 +737,46 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
             { value: "unconditional", label: t("cron.jobs.unconditional") },
           ],
         })}
+        <label class="field">
+          <span>${t("cron.jobs.group")}</span>
+          <input
+            class="settings-input"
+            data-test-id="cron-jobs-group-filter"
+            .value=${props.jobsGroupFilter}
+            placeholder=${t("cron.jobs.groupPlaceholder")}
+            @input=${(event: Event) => {
+              const target = event.currentTarget;
+              if (target instanceof HTMLInputElement) {
+                props.onJobsFiltersChange({ cronJobsGroupFilter: target.value });
+              }
+            }}
+          />
+        </label>
+        <label class="field">
+          <span>${t("cron.jobs.tag")}</span>
+          <input
+            class="settings-input"
+            data-test-id="cron-jobs-tag-filter"
+            .value=${props.jobsTagFilter}
+            placeholder=${t("cron.jobs.tagPlaceholder")}
+            @input=${(event: Event) => {
+              const target = event.currentTarget;
+              if (target instanceof HTMLInputElement) {
+                props.onJobsFiltersChange({ cronJobsTagFilter: target.value });
+              }
+            }}
+          />
+        </label>
+        ${renderJobsFilter(props, "cronJobsGroupBy", {
+          label: t("cron.jobs.groupBy"),
+          value: props.jobsGroupBy,
+          testId: "cron-jobs-group-by",
+          options: [
+            { value: "none", label: t("cron.jobs.groupByNone") },
+            { value: "group", label: t("cron.jobs.groupByGroup") },
+            { value: "type", label: t("cron.jobs.groupByType") },
+          ],
+        })}
         ${renderJobsFilter(props, "cronJobsSortBy", {
           label: t("cron.jobs.sort"),
           value: props.jobsSortBy,
@@ -756,6 +815,7 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   const jobs = props.jobs.toSorted(
     (left, right) => Number(isCronJobActiveFailure(right)) - Number(isCronJobActiveFailure(left)),
   );
+  const groupedJobs = groupCronJobs(jobs, props.jobsGroupBy);
   return html`
     <div
       class="cron-table ${props.canManage ? "" : "cron-table--read-only"}"
@@ -797,12 +857,20 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
                   </div>
                 `
               : nothing
-          : repeat(
-              jobs,
-              (job) => job.id,
-              (job) => renderJobRow(job, props),
-            )
-      }
+          : groupedJobs.map(
+              (group) => html`
+                ${group.label
+                  ? html`<div class="cron-table__group" data-test-id="cron-job-group">
+                      <span>${group.label}</span><span>${group.jobs.length}</span>
+                    </div>`
+                  : nothing}
+                ${repeat(
+                  group.jobs,
+                  (job) => job.id,
+                  (job) => renderJobRow(job, props),
+                )}
+              `,
+            )}
       ${renderCronJobsPagination({
         jobsShown: props.jobs.length,
         jobsTotal: props.jobsTotal,
@@ -819,9 +887,25 @@ function isSystemOwnedCronJob(job: CronJob | null | undefined): boolean {
   return isSystemMonitorDeclaration(job?.declarationKey);
 }
 
+function groupCronJobs(jobs: CronJob[], mode: "none" | "group" | "type") {
+  if (mode === "none") {
+    return [{ label: null, jobs }];
+  }
+  const groups = new Map<string, CronJob[]>();
+  for (const job of jobs) {
+    const key = mode === "group" ? getCronJobGroup(job) : job.payload.kind;
+    groups.set(key, [...(groups.get(key) ?? []), job]);
+  }
+  return [...groups].map(([label, groupedJobs]) => ({
+    label: mode === "type" ? t(CRON_TYPE_LABELS[label] ?? "cron.jobs.typeUnknown") : label,
+    jobs: groupedJobs,
+  }));
+}
+
 function renderJobRow(job: CronJob, props: CronProps) {
   const description = job.description?.trim();
   const systemOwned = isSystemOwnedCronJob(job);
+  const group = getCronJobGroup(job);
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   const nextRun = isCronJobRunning(job)
@@ -841,6 +925,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
           <span class="cron-table__name-line">
             <span class="cron-table__name-text">${job.name}</span>
             ${job.trigger ? renderTriggerIndicator() : nothing}
+            <span class="cron-table__group-badge">${group}</span>
           </span>
           ${
             description || !job.enabled
@@ -867,6 +952,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
                   </span>
                 `
               : nothing
+            ${job.tags?.map((tag) => html`<span class="cron-table__tag">${tag}</span>`)}
           }
         </span>
       </button>
@@ -1543,6 +1629,18 @@ function renderGeneralSection(props: CronProps) {
         required: true,
         errorKey: "name",
         placeholder: t("cron.form.namePlaceholder"),
+      })}
+      ${renderCronInputField(props, "group", {
+        label: t("cron.form.group"),
+        help: t("cron.form.groupHelp"),
+        placeholder: t("cron.form.groupPlaceholder"),
+        disabled: props.form.payloadLocked,
+      })}
+      ${renderCronInputField(props, "tags", {
+        label: t("cron.form.tags"),
+        help: t("cron.form.tagsHelp"),
+        placeholder: t("cron.form.tagsPlaceholder"),
+        disabled: props.form.payloadLocked,
       })}
       ${renderCronInputField(props, "agentId", {
         label: t("cron.form.agentId"),

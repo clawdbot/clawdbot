@@ -44,6 +44,8 @@ type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 export type CronFormState = {
   name: string;
   description: string;
+  group: string;
+  tags: string;
   agentId: string;
   sessionKey: string;
   clearAgent: boolean;
@@ -127,6 +129,13 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
   return isCronPayload(payload) ? payload : null;
 }
 
+export function getCronJobGroup(job: CronJob): string {
+  if ("effectiveGroup" in job && typeof job.effectiveGroup === "string") {
+    return job.effectiveGroup;
+  }
+  return isSystemOwnedCronPayloadKind(job.payload.kind) ? "System" : (job.group ?? "Ungrouped");
+}
+
 function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
@@ -134,6 +143,8 @@ function hasCronJobPayload(job: CronJob): boolean {
 const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
+  group: "",
+  tags: "",
   agentId: "",
   sessionKey: "",
   clearAgent: false,
@@ -218,6 +229,9 @@ export type CronState = {
   cronJobsScheduleKindFilter: CronJobsScheduleKindFilter;
   cronJobsLastStatusFilter: CronJobsLastStatusFilter;
   cronJobsTriggerFilter: CronJobsTriggerFilter;
+  cronJobsGroupFilter: string;
+  cronJobsTagFilter: string;
+  cronJobsGroupBy: "none" | "group" | "type";
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
   cronAgentId: string | null;
@@ -274,6 +288,9 @@ export function createInitialCronState(
     cronJobsScheduleKindFilter: "all",
     cronJobsLastStatusFilter: "all",
     cronJobsTriggerFilter: "all",
+    cronJobsGroupFilter: "",
+    cronJobsTagFilter: "",
+    cronJobsGroupBy: "none",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
     cronAgentId: null,
@@ -699,6 +716,8 @@ export async function loadCronJobsPage(
       limit: state.cronJobsLimit,
       offset,
       query: state.cronJobsQuery.trim() || undefined,
+      group: state.cronJobsGroupFilter.trim() || undefined,
+      tag: state.cronJobsTagFilter.trim() || undefined,
       enabled: state.cronJobsEnabledFilter,
       ...(opts?.tableFilters
         ? {
@@ -753,6 +772,9 @@ export function updateCronJobsFilter(
       | "cronJobsScheduleKindFilter"
       | "cronJobsLastStatusFilter"
       | "cronJobsTriggerFilter"
+      | "cronJobsGroupFilter"
+      | "cronJobsTagFilter"
+      | "cronJobsGroupBy"
       | "cronJobsSortBy"
       | "cronJobsSortDir"
     >
@@ -766,8 +788,85 @@ export function updateCronJobsFilter(
     patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
   state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
   state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
+  if (typeof patch.cronJobsGroupFilter === "string") {
+    state.cronJobsGroupFilter = patch.cronJobsGroupFilter;
+  }
+  if (typeof patch.cronJobsTagFilter === "string") {
+    state.cronJobsTagFilter = patch.cronJobsTagFilter;
+  }
+  state.cronJobsGroupBy = patch.cronJobsGroupBy ?? state.cronJobsGroupBy;
   state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
+}
+
+export function getVisibleCronJobs(
+  state: Pick<
+    CronState,
+    | "cronJobs"
+    | "cronJobsScheduleKindFilter"
+    | "cronJobsLastStatusFilter"
+    | "cronJobsTriggerFilter"
+    | "cronJobsGroupFilter"
+    | "cronJobsTagFilter"
+  >,
+): CronJob[] {
+  return state.cronJobs.filter((job) => {
+    const scheduleKind = resolveCronJobScheduleKind(job);
+    if (!scheduleKind) {
+      return false;
+    }
+    if (
+      state.cronJobsScheduleKindFilter !== "all" &&
+      scheduleKind !== state.cronJobsScheduleKindFilter
+    ) {
+      return false;
+    }
+    if (
+      state.cronJobsLastStatusFilter !== "all" &&
+      resolveCronJobLastRunStatus(job) !== state.cronJobsLastStatusFilter
+    ) {
+      return false;
+    }
+    if (state.cronJobsTriggerFilter === "conditional" && !job.trigger) {
+      return false;
+    }
+    if (state.cronJobsTriggerFilter === "unconditional" && job.trigger) {
+      return false;
+    }
+    const group = getCronJobGroup(job);
+    if (
+      state.cronJobsGroupFilter &&
+      normalizeLowercaseStringOrEmpty(group) !==
+        normalizeLowercaseStringOrEmpty(state.cronJobsGroupFilter)
+    ) {
+      return false;
+    }
+    if (
+      state.cronJobsTagFilter &&
+      !job.tags?.some(
+        (tag) =>
+          normalizeLowercaseStringOrEmpty(tag) ===
+          normalizeLowercaseStringOrEmpty(state.cronJobsTagFilter),
+      )
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function resolveCronJobScheduleKind(job: CronJob): string | null {
+  const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
+  if (
+    scheduleKind === "at" ||
+    scheduleKind === "every" ||
+    scheduleKind === "cron" ||
+    scheduleKind === "on-exit" ||
+    scheduleKind === "stream"
+  ) {
+    return scheduleKind;
+  }
+  return null;
 }
 
 function clearCronEditState(state: CronState) {
@@ -878,6 +977,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     ...prev,
     name: job.name,
     description: job.description ?? "",
+    group: job.group ?? "",
+    tags: job.tags?.join(", ") ?? "",
     agentId: job.agentId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
@@ -1232,6 +1333,11 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const job: Record<string, unknown> = {
       name: form.name.trim(),
       description: form.description.trim(),
+      group: form.group.trim() || (editingJob?.group ? null : undefined),
+      tags: form.tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,

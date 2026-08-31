@@ -4,7 +4,7 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { add, update } from "./ops-mutations.js";
-import { list } from "./ops-read.js";
+import { list, listPage } from "./ops-read.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-disable-list-" });
 
@@ -37,6 +37,48 @@ describe("cron service ops: disable + list round-trip", () => {
       expect(await list(state)).toContainEqual(
         expect.objectContaining({ id: job.id, enabled: true }),
       );
+    } finally {
+      if (state.timer) {
+        clearTimeout(state.timer);
+      }
+    }
+  });
+
+  it("filters the paginated inventory by group and tag", async () => {
+    const { storePath } = fixtures.makeStorePath();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    try {
+      await add(state, {
+        name: "work report",
+        group: "Work",
+        tags: ["github", "reports"],
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "report" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+      });
+      await add(state, {
+        name: "personal reminder",
+        group: "Personal",
+        tags: ["home"],
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "remind" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+      });
+
+      expect((await listPage(state, { group: "Work" })).jobs).toHaveLength(1);
+      expect((await listPage(state, { tag: "reports" })).jobs).toHaveLength(1);
+      expect((await listPage(state, { tag: "HOME" })).jobs).toHaveLength(1);
     } finally {
       if (state.timer) {
         clearTimeout(state.timer);
