@@ -597,6 +597,98 @@ describe("historical transcript directive migration", () => {
     releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
   });
 
+  it("preserves a published archive when maintenance expires before rename", async () => {
+    const stateDir = makeTempDir(tempDirs, "transcript-directive-expired-archive-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const archived = messageEvent({
+      content: [{ type: "text", text: "[[reply_to_current]] Archived" }],
+      id: "archived-expired",
+      role: "assistant",
+      timestamp: 1,
+    });
+    const archiveBytes = Buffer.from(`${JSON.stringify(archived)}\n`, "utf8");
+    const archiveName = "expired.jsonl.deleted.2026-01-01T00-00-00.000Z.generation";
+    opened.db
+      .prepare(
+        `INSERT INTO session_transcript_archives(
+          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+          archive_name,created_at,published_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        "archived-expired",
+        "generation",
+        "agent:main:archived-expired",
+        "deleted",
+        "identity",
+        archiveBytes,
+        createHash("sha256").update(archiveBytes).digest("hex"),
+        archiveName,
+        1,
+        1,
+      );
+    opened.db
+      .prepare(
+        `INSERT INTO schema_meta(
+          meta_key,schema_version,app_version,created_at,updated_at,role,agent_id
+        ) VALUES(?,?,?,?,?,?,?)`,
+      )
+      .run(
+        "historical-transcript-directives-v1",
+        1,
+        JSON.stringify({ generation: "", phase: "archives", sessionId: "" }),
+        1,
+        1,
+        "agent",
+        "main",
+      );
+    const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
+      agentId: "main",
+      path: opened.path,
+    });
+    fs.mkdirSync(archiveDirectory, { recursive: true });
+    const archivePath = path.join(archiveDirectory, archiveName);
+    fs.writeFileSync(archivePath, archiveBytes);
+    closeOpenClawAgentDatabasesForTest();
+
+    let competingLeaseId: string | undefined;
+    const originalAssert = assertAgentDatabaseMaintenanceAuthority;
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    vi.spyOn(agentDatabaseLease, "assertAgentDatabaseMaintenanceAuthority").mockImplementation(
+      () => {
+        if (!competingLeaseId && new Error().stack?.includes("beforeRename")) {
+          openOpenClawStateDatabase({ env })
+            .db.prepare("UPDATE state_leases SET expires_at = ? WHERE scope = ? AND lease_key = ?")
+            .run(
+              Date.now() - 1,
+              AGENT_DATABASE_MAINTENANCE_LEASE.scope,
+              AGENT_DATABASE_MAINTENANCE_LEASE.key,
+            );
+          competingLeaseId = claimOpenClawAgentDatabaseLease({
+            agentId: "competitor",
+            path: path.join(stateDir, "competitor.sqlite"),
+            env,
+          });
+        }
+        originalAssert();
+      },
+    );
+
+    const result = await migrateHistoricalTranscriptDirectives({ env });
+
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.every((warning) => warning.includes("maintenance lease"))).toBe(true);
+    expect(competingLeaseId).toBeDefined();
+    expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
+    expect(readMigrationCursor(opened.path)).toEqual({
+      generation: "",
+      phase: "archives",
+      sessionId: "",
+    });
+    releaseOpenClawAgentDatabaseLease(competingLeaseId as string, { env });
+  });
+
   it("renews maintenance beyond its original lifetime and fences writers through final mutation", async () => {
     vi.useFakeTimers();
     const stateDir = makeTempDir(tempDirs, "transcript-directive-lease-renewal-");
