@@ -512,7 +512,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(advertisedStderr.path)}`);
       } else {
         defaultRuntime.error(
-          `${errorText("Errors:")} suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance()}`,
+          `${errorText("Errors:")} suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(serviceEnv)}`,
         );
       }
     }

@@ -649,6 +649,69 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("gateway.err.log");
   });
 
+  it("scopes suppressed-stderr rewrite commands to the inspected named profile", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    launchdStdioMocks.readPersistedLaunchdStderrPath.mockReturnValue("/dev/null");
+    try {
+      withEnv(
+        {
+          OPENCLAW_PROFILE: "ambient",
+        },
+        () => {
+          printDaemonStatus(
+            {
+              service: {
+                label: "LaunchAgent",
+                loadState: { status: "loaded" },
+                loadedText: "loaded",
+                notLoadedText: "not loaded",
+                runtime: { status: "running", pid: 8000 },
+                command: {
+                  programArguments: [],
+                  environment: { HOME: "/Users/test", OPENCLAW_PROFILE: "proofstderr22575" },
+                },
+              },
+              gateway: {
+                bindMode: "loopback",
+                bindHost: "127.0.0.1",
+                port: 18789,
+                portSource: "env/config",
+                probeUrl: "ws://127.0.0.1:18789",
+              },
+              port: {
+                port: 18789,
+                status: "free",
+                listeners: [],
+                hints: [],
+              },
+              rpc: {
+                ok: false,
+                kind: "connect",
+                capability: "unknown",
+                error: "gateway closed (1000): ",
+                url: "ws://127.0.0.1:18789",
+              },
+              extraServices: [],
+            },
+            { json: false },
+          );
+        },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    const serviceEnv = { OPENCLAW_PROFILE: "proofstderr22575" };
+    expect(errors).toContain(formatCliCommand("openclaw gateway restart", serviceEnv));
+    expect(errors).toContain(formatCliCommand("openclaw gateway install --force", serviceEnv));
+    expect(errors).not.toContain(
+      formatCliCommand("openclaw gateway restart", { OPENCLAW_PROFILE: "ambient" }),
+    );
+    expect(errors).not.toMatch(/\bopenclaw gateway restart\b/);
+  });
+
   it("does not claim an indeterminate port is not listening", () => {
     printDaemonStatus(
       {

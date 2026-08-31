@@ -472,7 +472,7 @@ export async function appendStatusAllDiagnosis(params: {
         }
       } else {
         lines.push(
-          `  ${muted(`# stderr: suppressed (/dev/null); ${formatLaunchdStderrRewriteGuidance()}`)}`,
+          `  ${muted(`# stderr: suppressed (/dev/null); ${formatLaunchdStderrRewriteGuidance(process.env)}`)}`,
         );
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
