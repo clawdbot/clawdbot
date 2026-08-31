@@ -271,12 +271,18 @@ export function renderAttachmentFileIcon(options: {
   unavailable?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
-  const compactLight = resolved.compact
-    ? fileIconAssetPath(`compact/light/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-light");
-  const compactDark = resolved.compact
-    ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
-    : fileIconAssetPath("compact/unknown-dark");
+  const large = options.mode === "large-placeholder";
+  const size = large ? "44px" : "20px";
+  const light = large
+    ? fileIconAssetPath("large/shell-light")
+    : resolved.compact
+      ? fileIconAssetPath(`compact/light/${resolved.compact}`)
+      : fileIconAssetPath("compact/unknown-light");
+  const dark = large
+    ? fileIconAssetPath("large/shell-dark")
+    : resolved.compact
+      ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
+      : fileIconAssetPath("compact/unknown-dark");
   return html`<span
     class="chat-attachment-file-icon ${options.unavailable
       ? "chat-attachment-file-icon--unavailable"
@@ -285,16 +291,14 @@ export function renderAttachmentFileIcon(options: {
     data-mode=${options.mode}
     aria-hidden="true"
     style=${styleMap({
-      "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
-      "--chat-file-icon-shell-dark": `url("${fileIconAssetPath("large/shell-dark")}")`,
+      width: size,
+      height: size,
+      "--chat-file-icon-light": `url("${light}")`,
+      "--chat-file-icon-dark": `url("${dark}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
       "--chat-file-icon-accent": resolved.accent,
-      "--chat-file-icon-compact-light": `url("${compactLight}")`,
-      "--chat-file-icon-compact-dark": `url("${compactDark}")`,
     })}
   >
-    ${options.mode === "large-placeholder"
-      ? html`<span class="chat-attachment-file-icon__overlay"></span>`
-      : null}
+    ${large ? html`<span class="chat-attachment-file-icon__overlay"></span>` : null}
   </span>`;
 }
