@@ -5,16 +5,33 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-function isSocatPortListener(command: string, commandLine: string): boolean {
-  // Executable identity only. A Gateway launched from a path that merely
-  // contains `/socat/` must still classify as the Gateway; matching any
-  // command-line token hid those listeners from status and restart.
-  const hasSocatCommand = command === "socat" || /(?:^|[/\\])socat(?:\.exe)?$/.test(command);
-  if (hasSocatCommand) {
-    return true;
+function readFirstCommandLineToken(commandLine: string): string {
+  const trimmed = commandLine.trim();
+  if (!trimmed) {
+    return "";
   }
-  return /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?socat(?:\.exe)?(?:[\s"']|$)/.test(
-    commandLine,
+  if (trimmed.startsWith('"')) {
+    const end = trimmed.indexOf('"', 1);
+    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
+  }
+  if (trimmed.startsWith("'")) {
+    const end = trimmed.indexOf("'", 1);
+    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
+  }
+  return trimmed.split(/\s/, 1)[0] ?? "";
+}
+
+function isSocatExecutableIdentity(value: string): boolean {
+  // argv[0] / lsof command only. `socat` is a valid profile name, so a later
+  // `--profile socat` token must not hide a real Gateway listener.
+  // macOS lsof may suffix a digit when two socat processes share a name.
+  return /(?:^|[/\\])socat(?:\d+)?(?:\.exe)?$/.test(value);
+}
+
+function isSocatPortListener(command: string, commandLine: string): boolean {
+  return (
+    isSocatExecutableIdentity(command) ||
+    isSocatExecutableIdentity(readFirstCommandLineToken(commandLine))
   );
 }
 

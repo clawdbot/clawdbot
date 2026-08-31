@@ -45,6 +45,7 @@ describe("ports-format", () => {
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
     [{ command: "node", commandLine: "node /tmp/socat/openclaw/dist/index.js gateway" }, "gateway"],
     [{ command: "socat" }, "non_gateway"],
+    [{ command: "socat1" }, "non_gateway"],
     [
       {
         commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789",
@@ -59,11 +60,26 @@ describe("ports-format", () => {
     ],
     [
       {
+        commandLine:
+          '"C:\\Program Files\\socat\\socat.exe" TCP-LISTEN:18789,fork TCP:127.0.0.1:18789',
+      },
+      "non_gateway",
+    ],
+    [
+      {
         command: "socat",
         commandLine: "socat TCP-LISTEN:18789,fork EXEC:openclaw",
       },
       "non_gateway",
     ],
+    [
+      {
+        command: "node",
+        commandLine: "node /Users/me/Projects/openclaw/dist/index.js gateway --profile socat",
+      },
+      "gateway",
+    ],
+    [{ commandLine: "openclaw gateway --profile socat" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
@@ -99,6 +115,15 @@ describe("ports-format", () => {
     const hints = buildPortHints([listener], 18789);
     expect(hints).not.toContain(gatewayAlreadyRunningHint);
     expect(hints).toContain("Another process is listening on this port.");
+  });
+
+  it("keeps a Gateway launched with --profile socat as the gateway", () => {
+    const listener = {
+      command: "node",
+      commandLine: "node /Users/me/Projects/openclaw/dist/index.js gateway --profile socat",
+    };
+    expect(classifyPortListener(listener, 18789)).toBe("gateway");
+    expect(buildPortHints([listener], 18789)).toContain(gatewayAlreadyRunningHint);
   });
 
   it("does not emit the SSH tunnel hint for an ssh-named non-tunnel process", () => {
