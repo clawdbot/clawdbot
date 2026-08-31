@@ -34,10 +34,7 @@ import {
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import {
-  MAX_TOOL_SEARCH_BATCH_QUERIES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
-  MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -256,13 +253,6 @@ export function addClientToolsToToolSearchCatalog(params: {
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
-  const modelBatchMaxQueries = Math.max(
-    1,
-    Math.min(
-      MAX_TOOL_SEARCH_BATCH_QUERIES,
-      Math.floor(MAX_TOOL_SEARCH_RESULTS / config.maxSearchLimit),
-    ),
-  );
   return [
     {
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -309,32 +299,18 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Submit one or more independent English queries; matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Batch results stay grouped in request order. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog with one English query; matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object(
         {
-          queries: Type.Array(
-            Type.Object(
-              {
-                query: Type.String({
-                  minLength: 1,
-                  maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                  description: "Search query, in English. Describe the capability you need.",
-                }),
-                limit: Type.Optional(
-                  Type.Integer({
-                    minimum: 1,
-                    maximum: config.maxSearchLimit,
-                    description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
-                  }),
-                ),
-              },
-              { additionalProperties: false },
-            ),
-            {
-              minItems: 1,
-              maxItems: modelBatchMaxQueries,
-              description: `Independent searches. Submit at most ${modelBatchMaxQueries} so their effective limits cannot exceed ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}.`,
-            },
+          query: Type.String({
+            description: "Search query, in English. Describe the capability you need.",
+          }),
+          limit: Type.Optional(
+            Type.Integer({
+              minimum: 1,
+              maximum: config.maxSearchLimit,
+              description: `Maximum results. Defaults to ${config.searchDefaultLimit} when omitted.`,
+            }),
           ),
         },
         { additionalProperties: false },

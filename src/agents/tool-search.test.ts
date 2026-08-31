@@ -199,44 +199,41 @@ describe("Tool Search", () => {
     { limit: 0, valid: false },
     { limit: -1, valid: false },
   ])("validates schema limit $limit", ({ limit, valid }) => {
-    const item = limit === undefined ? { query: "test" } : { query: "test", limit };
-    const input = { queries: [item] };
+    const input = limit === undefined ? { query: "test" } : { query: "test", limit };
     expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
   });
 
-  it("advertises one closed batch-capable request shape", () => {
-    expect(
-      Value.Check(limitSearchTool.parameters, {
-        queries: [
-          { query: "today's calendar events", limit: 3 },
-          { query: "Slack messages needing attention", limit: 3 },
-        ],
-      }),
-    ).toBe(true);
+  it("advertises one closed provider-portable scalar request shape", () => {
+    expect(Value.Check(limitSearchTool.parameters, { query: "calendar", limit: 3 })).toBe(true);
     expect(limitSearchTool.parameters).toMatchObject({
       additionalProperties: false,
-      required: ["queries"],
-      properties: { queries: expect.any(Object) },
+      required: ["query"],
+      properties: { query: expect.any(Object), limit: expect.any(Object) },
     });
     expect(Value.Check(limitSearchTool.parameters, {})).toBe(false);
-    expect(Value.Check(limitSearchTool.parameters, { query: "calendar" })).toBe(false);
+    expect(Value.Check(limitSearchTool.parameters, { queries: [{ query: "calendar" }] })).toBe(
+      false,
+    );
     expect(
       Value.Check(limitSearchTool.parameters, {
         query: "calendar",
         queries: [{ query: "Slack" }],
       }),
     ).toBe(false);
-    expect(Value.Check(limitSearchTool.parameters, { queries: [] })).toBe(false);
-    expect(
-      Value.Check(limitSearchTool.parameters, {
-        queries: Array.from({ length: 3 }, (_, index) => ({ query: `query ${index}`, limit: 1 })),
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(limitSearchTool.parameters, {
-        queries: [{ query: "calendar", legacy: true }],
-      }),
-    ).toBe(false);
+    expect(Value.Check(limitSearchTool.parameters, { query: "calendar", legacy: true })).toBe(
+      false,
+    );
+    const schemaJson = JSON.stringify(limitSearchTool.parameters);
+    for (const keyword of [
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+      "minContains",
+      "maxContains",
+    ]) {
+      expect(schemaJson).not.toContain(`"${keyword}"`);
+    }
   });
 
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
@@ -300,20 +297,6 @@ describe("Tool Search", () => {
       }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
       "batch budget search tool",
     );
-    expect(
-      Value.Check(searchTool.parameters, {
-        queries: [
-          { query: "calendar", limit: 25 },
-          { query: "Slack", limit: 25 },
-        ],
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(searchTool.parameters, {
-        queries: [{ query: "calendar", limit: 50 }],
-      }),
-    ).toBe(true);
-
     await expect(
       searchTool.execute("call-batch-budget", {
         queries: [
@@ -331,7 +314,7 @@ describe("Tool Search", () => {
     );
   });
 
-  it("preserves scalar compatibility and bounds each batch query", async () => {
+  it("preserves scalar query length compatibility while bounding batch query echo", async () => {
     const longScalarQuery = "q".repeat(4097);
     const catalogRef = createToolSearchCatalogRef();
     registerHeadlessToolSearchCatalog({
@@ -346,15 +329,15 @@ describe("Tool Search", () => {
       searchTool.execute("call-long-query", { query: longScalarQuery }),
     ).resolves.toBeDefined();
     await expect(
-      searchTool.execute("call-long-batch-query", {
+      limitSearchTool.execute("call-long-batch-query", {
         queries: [{ query: "q".repeat(512) }, { query: "r" }],
       }),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
     await expect(
-      searchTool.execute("call-multibyte-batch-query", {
+      limitSearchTool.execute("call-multibyte-batch-query", {
         queries: [{ query: "😀".repeat(128) }],
       }),
-    ).resolves.toBeDefined();
+    ).rejects.toThrow("serialized batch query text may use at most 512 UTF-8 bytes");
     await expect(
       limitSearchTool.execute("call-too-long-batch-query", {
         queries: [{ query: "q".repeat(513) }],
