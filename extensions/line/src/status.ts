@@ -16,7 +16,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasLineCredentials } from "./account-helpers.js";
 import type { LineProbeWebhookState, ResolvedLineAccount } from "./types.js";
-import { LINE_DEFAULT_WEBHOOK_PATH, resolveLineWebhookPath } from "./webhook-utils.js";
+import { resolveLineWebhookPath } from "./webhook-utils.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
@@ -85,9 +85,10 @@ function collectLineWebhookIssues(accounts: ChannelAccountSnapshot[]): ChannelSt
     collectIssues: ({ account, accountId, issues }) => {
       const delivery = describeLineWebhookDelivery({
         webhook: readProbeWebhookState(account.probe),
-        // resolveAccountSnapshot publishes the resolved route; snapshots built
-        // elsewhere may not carry it, so the account's own default stands in.
-        webhookPath: account.webhookPath?.trim() ? account.webhookPath : LINE_DEFAULT_WEBHOOK_PATH,
+        // resolveAccountSnapshot publishes the resolved route, but resolving again is
+        // what keeps a snapshot built elsewhere from naming a route the gateway would
+        // not serve — an absent, blank or unnormalized value lands on the same answer.
+        webhookPath: resolveLineWebhookPath(account.webhookPath),
       });
       if (delivery) {
         issues.push({ channel: "line", accountId, kind: "config", ...delivery });
