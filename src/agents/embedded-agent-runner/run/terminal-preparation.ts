@@ -235,7 +235,7 @@ export function prepareEmbeddedRunTerminal(input: {
     toolAutoDeliveryMediaUrls: getCoreTtsAttemptResultMediaUrls(
       attempt,
       attempt.toolMediaUrls,
-      runParams.admittedRunContext.operationalRunInstance,
+      runParams.admittedRunContext?.operationalRunInstance,
     ),
     toolAudioAsVoice: attempt.toolAudioAsVoice,
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
