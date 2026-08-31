@@ -218,6 +218,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
+    { key: "COREPACK_HOME", value: process.env.COREPACK_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
@@ -235,6 +236,18 @@ function resolveRestoreEntries(): RestoreEntry[] {
 }
 
 function initializeIsolatedTestEnv(tempHome: string): void {
+  // Corepack's installed toolchain is independent of application state. Bind its
+  // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
+  setTestEnvValue(
+    "COREPACK_HOME",
+    process.env.COREPACK_HOME ??
+      path.join(
+        process.env.XDG_CACHE_HOME ??
+          process.env.LOCALAPPDATA ??
+          path.join(os.homedir(), process.platform === "win32" ? "AppData/Local" : ".cache"),
+        "node/corepack",
+      ),
+  );
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);

@@ -1,13 +1,15 @@
 // Regression coverage for the non-isolated runner's cross-file cleanup. Keep
 // every producer/observer pair in one child run: the contract is file-to-file
 // cleanup, not five independent Vitest process boots.
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess, type ExecFileException } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import type { JsonTestResults } from "vitest/node";
+import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const execFileAsync = promisify(execFile);
@@ -389,12 +391,88 @@ it("reloads the redirected mock after a real import", () => {
   };
 }
 
+type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> & {
+  rejection: unknown;
+  output: string;
+};
+
+async function assertCompletion(
+  child: ChildCompletion,
+  expected: { root: string; pid: number | undefined; files: string[]; reportPath: string },
+) {
+  expect(child.exitCode).toBe(1);
+  expect(child.signalCode).toBeNull();
+  expect(child.killed).toBe(false);
+  expect(child.rejection).toBeInstanceOf(Error);
+  expect(child.rejection).toMatchObject({ code: 1, signal: null, killed: false });
+
+  // JSON success/suite totals are not completion evidence: skips look like passed
+  // files, and unhandled errors or process teardown timeouts need native hooks.
+  const capture: VitestReportCapture = JSON.parse(
+    await fs.readFile(`${expected.reportPath}.capture.json`, "utf8"),
+  );
+  expect(expected.pid).toEqual(expect.any(Number));
+  expect(capture).toMatchObject({
+    pid: expected.pid,
+    root: expected.root,
+    processTimedOut: false,
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 1 },
+  });
+  const project = {
+    name: "non-isolated-runner",
+    root: expected.root,
+    config: `${expected.root}/vitest.config.ts`,
+    pool: "forks",
+  };
+  expect(capture.projects).toEqual([project]);
+  expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected.files);
+  for (const module of capture.modules) {
+    expect(module).toMatchObject(project);
+  }
+
+  const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
+  expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
+  expect(report).toMatchObject({
+    numTotalTests: 46,
+    numPassedTests: 45,
+    numPendingTests: 1,
+    numFailedTests: 0,
+    numTodoTests: 0,
+  });
+  for (const file of report.testResults) {
+    const name = path.basename(file.name);
+    const crashed = name === "01-a-crash.test.ts";
+    const skipped = name === "09-f-test-api-skipped.test.ts";
+    const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
+      name,
+    );
+    const count = crashed ? 0 : lifecycle ? 2 : 1;
+    expect(file.status, name).toBe(crashed ? "failed" : "passed");
+    expect(file.message, name).toBe(crashed ? "synthetic collect failure" : "");
+    expect(file.assertionResults, name).toHaveLength(count);
+    expect(new Set(file.assertionResults.map((test) => test.fullName)).size, name).toBe(count);
+    for (const test of file.assertionResults) {
+      expect(test, name).toMatchObject({
+        fullName: expect.stringMatching(/\S/u),
+        status: skipped ? "skipped" : "passed",
+        failureMessages: [],
+      });
+    }
+  }
+  for (const generation of ["producer", "observer"]) {
+    expect(child.output).toContain(`test API lifecycle: ${generation} afterAll passed`);
+    expect(child.output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+  }
+  expect(child.output).not.toContain("first-file");
+}
+
 it("cleans every shared runner surface between files", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-non-isolated-runner-"));
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    for (const [name, content] of Object.entries(fixtureFiles())) {
+    const files = fixtureFiles();
+    for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
@@ -413,6 +491,7 @@ export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   resolve: sharedVitestConfig.resolve,
   test: {
+    name: "non-isolated-runner",
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,
@@ -430,7 +509,8 @@ export default defineConfig({
       "utf8",
     );
 
-    const result = await execFileAsync(
+    const reportPath = path.join(root, "report.json");
+    const run = execFileAsync(
       process.execPath,
       [
         path.join(vitestPackageDir, "vitest.mjs"),
@@ -442,21 +522,204 @@ export default defineConfig({
         "--configLoader",
         "runner",
         "--reporter=verbose",
+        "--reporter=json",
+        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
+        `--outputFile.json=${reportPath}`,
       ],
       { cwd: repoRoot, env: childEnv(), maxBuffer: 16 * 1024 * 1024 },
-    ).catch((error: unknown) => error as { stdout?: string; stderr?: string });
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    );
+    let rejection: unknown;
+    const result = await run.catch(
+      (error: ExecFileException & { stdout?: string; stderr?: string }) => {
+        rejection = error;
+        return error;
+      },
+    );
+    const completion: ChildCompletion = {
+      exitCode: run.child.exitCode,
+      signalCode: run.child.signalCode,
+      killed: run.child.killed,
+      rejection,
+      output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    };
+    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+    const expected = {
+      root: canonicalRoot,
+      pid: run.child.pid,
+      files: Object.keys(files)
+        .filter((name) => name.endsWith(".test.ts"))
+        .map((name) => `${canonicalRoot}/${name}`)
+        .toSorted(),
+      reportPath,
+    };
+    await assertCompletion(completion, expected);
 
-    // The collection failure is intentional. Every behavior test after it must
-    // pass; any leaked surface turns the summary into a second failure.
-    expect(output).toContain("synthetic collect failure");
-    expect(output, output).toContain("1 failed | 43 passed | 1 skipped");
-    expect(output, output).toContain("45 passed | 1 skipped");
-    for (const generation of ["producer", "observer"]) {
-      expect(output).toContain(`test API lifecycle: ${generation} afterAll passed`);
-      expect(output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+    // Replay faults against this one completed child, not new fixture executions.
+    // The same assertion path must reject incomplete proof even with a good summary.
+    const capturePath = `${reportPath}.capture.json`;
+    const originals = [
+      await fs.readFile(reportPath, "utf8"),
+      await fs.readFile(capturePath, "utf8"),
+    ];
+    for (const [index, artifact] of [reportPath, capturePath].entries()) {
+      for (const contents of [null, "{", "null", "{}"]) {
+        if (contents === null) await fs.rm(artifact);
+        else await fs.writeFile(artifact, contents);
+        await expect(
+          assertCompletion(completion, expected),
+          `rejects missing/corrupt ${path.basename(artifact)}: ${contents}`,
+        ).rejects.toThrow();
+        await fs.writeFile(artifact, originals[index]!);
+      }
     }
-    expect(output).not.toContain("first-file");
+    type Replay = { child: ChildCompletion; report: JsonTestResults; capture: VitestReportCapture };
+    const faults: [string, (replay: Replay) => void][] = [
+      ["missing project", ({ capture }) => capture.projects.pop()],
+      [
+        "wrong module project",
+        ({ capture }) => Object.assign(capture.modules[0]!, { name: "other" }),
+      ],
+      ["omitted module", ({ capture }) => capture.modules.pop()],
+      ["duplicated module", ({ capture }) => capture.modules.splice(1, 1, capture.modules[0]!)],
+      ["unexpected module", ({ capture }) => Object.assign(capture.modules[0]!, { file: "other" })],
+      ["omitted file", ({ report }) => report.testResults.pop()],
+      ["duplicated file", ({ report }) => report.testResults.splice(1, 1, report.testResults[0]!)],
+      ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
+      [
+        "extra collection error",
+        ({ report }) => Object.assign(report.testResults[1]!, { message: "other" }),
+      ],
+      [
+        "extra failed file",
+        ({ report }) => Object.assign(report.testResults[1]!, { status: "failed" }),
+      ],
+      [
+        "wrong collection error",
+        ({ report }) => Object.assign(report.testResults[0]!, { message: "other" }),
+      ],
+      ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
+    ];
+    for (const patch of [
+      { ended: undefined },
+      { processTimedOut: true },
+      { pid: run.child.pid! + 1 },
+      { root: "other" },
+    ]) {
+      faults.push([
+        `invalid native capture: ${JSON.stringify(patch)}`,
+        ({ capture }) => Object.assign(capture, patch),
+      ]);
+    }
+    for (const patch of [
+      { reason: "interrupted" },
+      { reason: "passed" },
+      { unhandledErrors: 1 },
+      { failedModules: 0 },
+      { failedModules: 2 },
+      { suiteErrors: 0 },
+      { suiteErrors: 2 },
+    ]) {
+      faults.push([
+        `invalid native end: ${JSON.stringify(patch)}`,
+        ({ capture }) => Object.assign(capture.ended!, patch),
+      ]);
+    }
+    for (const patch of [
+      { exitCode: 0 },
+      { exitCode: 2 },
+      { exitCode: null },
+      { signalCode: "SIGTERM" },
+      { killed: true },
+      { rejection: undefined },
+    ] satisfies Partial<ChildCompletion>[]) {
+      faults.push([
+        `abnormal child completion: ${JSON.stringify(patch)}`,
+        ({ child }) => Object.assign(child, patch),
+      ]);
+    }
+    for (const patch of [
+      { code: "ENOENT" },
+      { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
+      { code: 2 },
+      { signal: "SIGTERM" },
+      { killed: true },
+    ]) {
+      faults.push([
+        `abnormal exec rejection: ${JSON.stringify(patch)}`,
+        ({ child }) => {
+          child.rejection = Object.assign(
+            new Error("synthetic exec rejection"),
+            { code: 1, signal: null, killed: false },
+            patch,
+          );
+        },
+      ]);
+    }
+    const nativeReport: JsonTestResults = JSON.parse(originals[0]!);
+    for (const [index, file] of nativeReport.testResults.entries()) {
+      if (!file.assertionResults.length) continue;
+      const name = path.basename(file.name);
+      for (const status of ["pending", "skipped", "todo", "failed", "passed"] as const) {
+        if (status === file.assertionResults[0]!.status) continue;
+        faults.push([
+          `${name}: unexpected ${status} assertion`,
+          ({ report }) => {
+            report.testResults[index]!.assertionResults.at(-1)!.status = status;
+          },
+        ]);
+      }
+      faults.push(
+        [
+          `${name}: omitted assertion`,
+          ({ report }) => report.testResults[index]!.assertionResults.pop(),
+        ],
+        [
+          `${name}: extra assertion`,
+          ({ report }) =>
+            report.testResults[index]!.assertionResults.push(file.assertionResults[0]!),
+        ],
+        [
+          `${name}: failure messages`,
+          ({ report }) =>
+            Object.assign(report.testResults[index]!.assertionResults[0]!, {
+              failureMessages: ["unexpected failure"],
+            }),
+        ],
+      );
+      if (file.assertionResults.length > 1) {
+        faults.push([
+          `${name}: duplicated assertion replacing its sibling`,
+          ({ report }) => {
+            report.testResults[index]!.assertionResults[1] =
+              report.testResults[index]!.assertionResults[0]!;
+          },
+        ]);
+      }
+    }
+    for (const generation of ["producer", "observer"]) {
+      for (const phase of ["afterAll", "resource teardown"]) {
+        faults.push([
+          `missing ${generation} ${phase} marker`,
+          ({ child }) => {
+            child.output = child.output.replace(
+              `test API lifecycle: ${generation} ${phase} passed`,
+              "",
+            );
+          },
+        ]);
+      }
+    }
+    for (const [label, mutate] of faults) {
+      const replay: Replay = {
+        child: { ...completion },
+        report: JSON.parse(originals[0]!),
+        capture: JSON.parse(originals[1]!),
+      };
+      mutate(replay);
+      await fs.writeFile(reportPath, JSON.stringify(replay.report));
+      await fs.writeFile(capturePath, JSON.stringify(replay.capture));
+      await expect(assertCompletion(replay.child, expected), label).rejects.toThrow();
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

@@ -2390,7 +2390,10 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   text-decoration: none;
 }
 
-.sidebar-customize-menu__item:hover {
+/* Keep expanded state separate from :hover so hover media scoping preserves
+   the parent highlight for keyboard and touch navigation too. */
+.sidebar-customize-menu__item:hover,
+.sidebar-customize-menu__item[aria-expanded="true"] {
   background: var(--bg-hover);
 }
 
@@ -2587,6 +2590,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .session-menu__item:hover:not(:disabled):not([aria-disabled="true"]),
+.session-menu__item[aria-expanded="true"],
 .session-menu__item:focus-visible,
 .sidebar-session-sort-menu__item:hover,
 .sidebar-session-sort-menu__item:focus-visible {

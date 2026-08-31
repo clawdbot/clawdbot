@@ -103,6 +103,7 @@ function buildResetParams(
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp/openclaw-commands",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",

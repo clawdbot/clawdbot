@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 

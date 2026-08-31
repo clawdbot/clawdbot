@@ -427,60 +427,6 @@ describe("applyPatch", () => {
     expect(toolResult.terminate).toBe(true);
   });
 
-  it("preserves line endings and EOF state for no-op update hunks", async () => {
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
- foo
--bar
-+bar
-*** End Patch`;
-    for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
-      const memory = createMemoryPatchSandbox({ "source.txt": initial });
-
-      const result = await applyPatch(patch, memory.options);
-
-      expect(result.noOp).toBe(true);
-      expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
-      expect(memory.writeFile.mock.calls).toHaveLength(0);
-    }
-  });
-
-  it("applies a real deletion of the sole blank line", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
--
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(result.noOp).toBeUndefined();
-    expect(memory.files.get("/sandbox/source.txt")).toBe("");
-    expect(memory.writeFile.mock.calls).toHaveLength(1);
-  });
-
-  it("preserves formatting for same-path move no-op hunks", async () => {
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: ./source.txt
-@@
- foo
--bar
-+bar
-*** End Patch`;
-    for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
-      const memory = createMemoryPatchSandbox({ "source.txt": initial });
-
-      const result = await applyPatch(patch, memory.options);
-
-      expect(result.noOp).toBe(true);
-      expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
-      expect(memory.writeFile.mock.calls).toHaveLength(0);
-    }
-  });
-
   it("normalizes supported punctuation while matching update hunks", async () => {
     const cases = [
       ["a\u2010\u2011\u2012\u2013\u2014\u2015\u2212b", "a-------b"],

@@ -124,6 +124,7 @@ export async function handleAcpSpawnAction(
   const spawn = parsed.value;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg: params.cfg,
+    requesterAgentId: params.agentId,
     requesterSessionKey: params.sessionKey,
   });
   if (runtimePolicyError) {

@@ -12,7 +12,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
   prepareProviderDynamicModel: async () => {},
-  resolveExternalAuthProfilesWithPlugins: () => [],
   runProviderDynamicModel: () => undefined,
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));

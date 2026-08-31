@@ -1168,7 +1168,7 @@ Recommended sequence:
    stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
-provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
+provider's worldview. See [Adding capabilities](/plugins/adding-capabilities)
 for a concrete file checklist and worked example.
 
 ### Capability checklist

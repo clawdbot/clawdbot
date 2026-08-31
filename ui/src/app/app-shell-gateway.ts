@@ -29,20 +29,10 @@ export type StoredOutboxScopeHost = {
   hello?: { snapshot?: unknown } | null;
 };
 
-export type OutboxStoreRuntime = {
-  summarizeStoredChatOutboxes: (state: StoredOutboxScopeHost) => {
-    countsByScope: ReadonlyMap<string, number>;
-    attentionCountsByScope: ReadonlyMap<string, number>;
-    draftScopes: ReadonlySet<string>;
-    total: number;
-  };
-  resolveStoredChatOutboxScope: (
-    state: StoredOutboxScopeHost,
-    sessionKey: string,
-  ) => { sessionKey: string; agentId?: string };
-  storedChatOutboxScopeKey: (scope: { sessionKey: string; agentId?: string }) => string;
-  subscribeStoredChatOutboxChanges: (listener: () => void) => () => void;
-};
+export type OutboxStoreRuntime = Pick<
+  typeof import("../lib/chat/outbox-store-projection.ts"),
+  "summarizeStoredChatOutboxes" | "subscribeStoredChatOutboxChanges"
+>;
 
 export interface ShellGatewayHost {
   readonly context: ApplicationContext<RouteId> | undefined;

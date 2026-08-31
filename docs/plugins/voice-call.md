@@ -246,16 +246,16 @@ booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
 Set `sessionScope: "main"` to route every call into the configured agent's main
-session. This honors the core `session.mainKey` setting and resolves to
-`global` when core `session.scope` is `"global"`. Raw call turns then share
-history with the agent's primary session, so use this only when that shared
-context is intentional.
+session, `agent:<agentId>:main`, or `global` when core `session.scope` is
+`"global"`. Custom core `session.mainKey` values are ignored. Raw call turns
+then share history with the agent's primary session, so use this only when
+that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
 integration keys resolve into the same namespace: a canonical
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
-`session.mainKey`/global-scope aliasing; foreign or malformed `agent:*` input
+main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`
 remain global sentinels.
 

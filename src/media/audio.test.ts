@@ -3,24 +3,6 @@ import { describe, expect, it } from "vitest";
 import { isVoiceCompatibleAudio } from "./audio.js";
 
 describe("isVoiceCompatibleAudio", () => {
-  function expectVoiceCompatibilityCase(
-    opts: Parameters<typeof isVoiceCompatibleAudio>[0],
-    expected: boolean,
-  ) {
-    expect(isVoiceCompatibleAudio(opts)).toBe(expected);
-  }
-
-  function expectVoiceCompatibilityCases(
-    cases: ReadonlyArray<{
-      opts: Parameters<typeof isVoiceCompatibleAudio>[0];
-      expected: boolean;
-    }>,
-  ) {
-    cases.forEach(({ opts, expected }) => {
-      expectVoiceCompatibilityCase(opts, expected);
-    });
-  }
-
   it.each([
     {
       name: "returns true for supported MIME types",
@@ -78,6 +60,8 @@ describe("isVoiceCompatibleAudio", () => {
       ],
     },
   ])("$name", ({ cases }) => {
-    expectVoiceCompatibilityCases(cases);
+    for (const { opts, expected } of cases) {
+      expect(isVoiceCompatibleAudio(opts)).toBe(expected);
+    }
   });
 });

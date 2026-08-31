@@ -77,6 +77,7 @@ function createFixture() {
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
     getPendingToolMediaReply: vi.fn(() => undefined),
+    getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
     getSuccessfulCronAdds: vi.fn(() => []),
     getUsageTotals: vi.fn(() => ({ input: 1, output: 2, total: 3 })),

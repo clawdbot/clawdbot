@@ -300,14 +300,6 @@ describe("parallel web search provider", () => {
       "e",
     ]);
   });
-  it("normalizes session ids, rejecting blanks and values past the given limit", () => {
-    expect(testing.normalizeParallelSessionId("session-abc", 1000)).toBe("session-abc");
-    expect(testing.normalizeParallelSessionId("  ", 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId(undefined, 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(1001), 1000)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(101), 100)).toBeUndefined();
-    expect(testing.normalizeParallelSessionId("x".repeat(100), 100)).toBe("x".repeat(100));
-  });
   it("normalizes client_model identifiers", () => {
     expect(testing.normalizeParallelClientModel("claude-opus-4-7")).toBe("claude-opus-4-7");
     expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");

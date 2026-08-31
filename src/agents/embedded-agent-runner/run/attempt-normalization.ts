@@ -257,6 +257,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     ? formatAssistantErrorText(sessionAssistantForCandidate, {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
+        agentId: params.agentId,
         provider: activeErrorContext.provider,
         providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,

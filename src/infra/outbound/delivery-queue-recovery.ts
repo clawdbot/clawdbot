@@ -1,3 +1,4 @@
+import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 // Delivery queue recovery drains pending outbound sends with backoff, crash
 // replay protection, unknown-send reconciliation, and failed-entry pruning.
 import type {
@@ -256,6 +257,10 @@ function buildRecoveryDeliverParams(
 ) {
   const conversationCompletion =
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
+  const pendingFinalWriterAuthority =
+    entry.deliveryCompletion?.kind === "pending-final"
+      ? entry.deliveryCompletion.sessionWriterDeliveryAuthority
+      : undefined;
   return {
     cfg,
     channel: entry.channel,
@@ -293,6 +298,22 @@ function buildRecoveryDeliverParams(
             ...(conversationCompletion.routeFingerprint
               ? { routeFingerprint: conversationCompletion.routeFingerprint }
               : {}),
+          },
+        }
+      : {}),
+    // Recovery owns durable terminal settlement, so it cannot forward the
+    // completion itself. Reconstruct only its writer fence at the two final
+    // transport boundaries used by normal live delivery.
+    ...(pendingFinalWriterAuthority
+      ? {
+          onDirectAdapterHandoff: async () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
+          },
+          assertDirectAdapterHandoff: () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
+          },
+          onPlatformSendDispatch: async () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
           },
         }
       : {}),

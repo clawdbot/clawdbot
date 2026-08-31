@@ -66,6 +66,15 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it("keeps the bundled root build ahead of adjacent source output", () => {
+    const fixture = createBundledPluginFixture();
+    fs.writeFileSync(path.join(fixture.rootDir, "index.js"), 'module.exports = { id: "stale" };\n');
+
+    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
+      fixture.builtSource,
+    );
+  });
+
   it.each([
     { firstPreference: false, firstArtifact: "source" },
     { firstPreference: true, firstArtifact: "built" },

@@ -58,6 +58,7 @@ describe("check-package-patches", () => {
     ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
     ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
     ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
+    ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
   ])("allows approved pnpm patch %s", (specifier, patchPath) => {
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
@@ -84,7 +85,11 @@ patchedDependencies:
     expect(collectPackagePatchViolations(dir)).toEqual([]);
   });
 
-  it("rejects new workspace patchedDependencies and patch files", () => {
+  it.each([
+    ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
+    ["matrix-js-sdk@42.2.1", "patches/matrix-js-sdk@42.2.1.patch"],
+    ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0-other.patch"],
+  ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
     mkdirSync(path.join(dir, "fixtures"), { recursive: true });
@@ -93,11 +98,11 @@ patchedDependencies:
       `packages:
   - .
 patchedDependencies:
-  "left-pad@1.3.0": "patches/left-pad@1.3.0.patch"
+  "${specifier}": "${patchPath}"
 `,
       "utf8",
     );
-    writeFileSync(path.join(dir, "patches", "left-pad@1.3.0.patch"), "diff\n", "utf8");
+    writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
     writeFileSync(path.join(dir, "fixtures", "fixture.patch"), "diff\n", "utf8");
     git(dir, ["add", "pnpm-workspace.yaml", "patches", "fixtures"]);
 
@@ -105,7 +110,7 @@ patchedDependencies:
       {
         file: "pnpm-workspace.yaml",
         kind: "patchedDependency",
-        detail: "left-pad@1.3.0 -> patches/left-pad@1.3.0.patch",
+        detail: `${specifier} -> ${patchPath}`,
       },
       {
         file: "fixtures/fixture.patch",
@@ -113,7 +118,7 @@ patchedDependencies:
         detail: "new package patch file",
       },
       {
-        file: "patches/left-pad@1.3.0.patch",
+        file: patchPath,
         kind: "patchFile",
         detail: "new package patch file",
       },

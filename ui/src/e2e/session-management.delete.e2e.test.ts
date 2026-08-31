@@ -2,13 +2,13 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   uiProofArtifactDir,
   waitForConfirmModal,

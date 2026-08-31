@@ -128,6 +128,50 @@ describe("plugin npm publish verifier command limits", () => {
 });
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
+  it.each([".ts", ".tsx", ".mts", ".cts"])(
+    "rejects source-only %s runtime and setup entries",
+    (extension) => {
+      const errors = collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "entry-fixture",
+          openclaw: {
+            extensions: [`./src/index${extension}`],
+            setupEntry: `./src/setup${extension}`,
+          },
+        },
+        files: ["openclaw.plugin.json", `src/index${extension}`, `src/setup${extension}`],
+      });
+      expect(errors).toEqual([
+        expect.stringContaining(
+          `compiled runtime output for TypeScript entry ./src/index${extension}`,
+        ),
+        expect.stringContaining(
+          `compiled runtime output for TypeScript entry ./src/setup${extension}`,
+        ),
+      ]);
+    },
+  );
+
+  it.each([
+    [".ts", ".js"],
+    [".tsx", ".js"],
+    [".mts", ".mjs"],
+    [".cts", ".cjs"],
+  ])("accepts nested compiler output for %s entries without source", (source, output) => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "entry-fixture",
+          openclaw: {
+            extensions: [`./src/index${source}`],
+            setupEntry: `./src/setup${source}`,
+          },
+        },
+        files: ["openclaw.plugin.json", `dist/src/index${output}`, `dist/src/setup${output}`],
+      }),
+    ).toEqual([]);
+  });
+
   it("flags published plugin packages with TypeScript entries and no compiled runtime output", () => {
     expect(
       collectPluginNpmPublishedRuntimeErrors({
