@@ -12,10 +12,7 @@ export function redactResponsesInputImage(entry: Record<string, unknown>): boole
     return false;
   }
   let changed = false;
-  if (
-    typeof entry.image_url === "string" &&
-    isInlineDataUrl(entry.image_url)
-  ) {
+  if (typeof entry.image_url === "string" && isInlineDataUrl(entry.image_url)) {
     const imageUrl = entry.image_url;
     delete entry.image_url;
     entry.omitted = true;
