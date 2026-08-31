@@ -33,7 +33,6 @@ type WorkerNodeEnrollmentManagerOptions = {
     record: WorkerEnvironmentRecord,
     signal?: AbortSignal,
   ) => Promise<NodeBootstrapArtifact>;
-  prepareBundle: () => Promise<TransferArtifact>;
   transfer: WorkerBootstrapArtifactTransferService;
   now?: () => number;
 };
@@ -163,13 +162,12 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
 
   const prepareRuntime = async (
     record: WorkerEnvironmentRecord,
+    bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
-      current();
-      const bundle = await options.prepareBundle();
       const owner = current();
       const isAuthorized = () => {
         const live = current();

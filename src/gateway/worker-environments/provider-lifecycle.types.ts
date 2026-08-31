@@ -48,6 +48,7 @@ export type WorkerProviderLifecycleInputOptions = {
   prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<void>;
   prepareNodeRuntime?: (
     record: WorkerEnvironmentRecord,
+    bundle: Extract<WorkerInstallationArtifact, { install: "bundle" }>,
     signal?: AbortSignal,
   ) => Promise<WorkerNodeRuntimePreparation>;
   closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;

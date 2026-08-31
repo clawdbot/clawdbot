@@ -147,7 +147,11 @@ describe("Crabbox project snapshot provisioning", () => {
         options.prepareNodeRuntime.mockImplementationOnce(async () => {
           entered.resolve();
           await release.promise;
-          return { nodeBootstrap: createNodeBootstrapFixture(), signal: options.project.signal };
+          return {
+            nodeBootstrap: createNodeBootstrapFixture(),
+            workerBundle: createWorkerArchiveFixture(),
+            signal: options.project.signal,
+          };
         });
       }
       let settled = false;

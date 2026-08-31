@@ -39,6 +39,23 @@ type WorkerNodeProvisioningOptions = Pick<
 };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
+  const prepareBundle = async (
+    preparedInstallation?: WorkerInstallationArtifact,
+    signal?: AbortSignal,
+  ) => {
+    // Packaging belongs to the service; runtime grants and node installation consume
+    // the same prepared artifact without retaining a cancelled packaging wait.
+    const artifact =
+      preparedInstallation?.install === "bundle"
+        ? preparedInstallation
+        : await options.prepareInstallation("bundle", signal);
+    signal?.throwIfAborted();
+    if (artifact.install !== "bundle") {
+      throw new Error("Worker bundle preparation returned the wrong install channel");
+    }
+    return artifact;
+  };
+
   const prepare = async (
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
@@ -87,6 +104,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     signal?: AbortSignal,
+    preparedInstallation?: WorkerInstallationArtifact,
   ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
@@ -136,26 +154,29 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         throw new DOMException("Worker provisioning operation is closed", "AbortError");
       }
     };
+    const assertRuntimeCurrent = () => {
+      assertCurrent();
+      if (pending) {
+        throw new Error("Worker node enrollment has already begun");
+      }
+    };
     return {
       prepareRuntime: prepareNodeRuntime
         ? async () => {
-            assertCurrent();
-            if (pending) {
-              throw new Error("Worker node enrollment has already begun");
-            }
-            pendingRuntime ??= prepareNodeRuntime(record, controller.signal).then((prepared) => {
+            assertRuntimeCurrent();
+            pendingRuntime ??= (async () => {
+              const artifact = await prepareBundle(preparedInstallation, controller.signal);
+              assertRuntimeCurrent();
+              const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
-                assertCurrent();
-                if (pending) {
-                  throw new Error("Worker node enrollment has already begun");
-                }
+                assertRuntimeCurrent();
               } catch (error) {
                 options.closeNodeRuntime?.(prepared);
                 throw error;
               }
               runtime = prepared;
               return prepared;
-            });
+            })();
             return await pendingRuntime;
           }
         : undefined,
@@ -200,14 +221,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
-      const artifact =
-        preparedInstallation?.install === "bundle"
-          ? preparedInstallation
-          : await options.prepareInstallation("bundle", cancellation?.signal);
+      const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
       cancellation?.assertActive();
-      if (artifact.install !== "bundle") {
-        throw new Error("Worker bundle preparation returned the wrong install channel");
-      }
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,

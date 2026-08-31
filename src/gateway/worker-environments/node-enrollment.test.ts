@@ -82,7 +82,6 @@ describe("worker node enrollment", () => {
       getConfig: () => createConfig(),
       resolveAvailability: async () => ({ available: false }),
       prepareArtifact: async () => artifact(),
-      prepareBundle: async () => bundle(),
       transfer,
       ...overrides,
     });
@@ -246,7 +245,7 @@ describe("worker node enrollment", () => {
     const manager = createManager();
     const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
     vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
-    const runtime = await manager.prepareRuntime(record);
+    const runtime = await manager.prepareRuntime(record, bundle());
     expect(ensureEnrollment).not.toHaveBeenCalled();
     expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
     expect(store.get(record.environmentId)).toMatchObject({
@@ -294,7 +293,7 @@ describe("worker node enrollment", () => {
       const record = createProvisioning();
       const manager = createManager();
       const operation = new AbortController();
-      const runtime = await manager.prepareRuntime(record, operation.signal);
+      const runtime = await manager.prepareRuntime(record, bundle(), operation.signal);
       const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
         token: descriptor.token,
         artifactKey: descriptor.sha256,
@@ -307,7 +306,7 @@ describe("worker node enrollment", () => {
       } else if (reason === "operation-abort") {
         operation.abort();
       } else if (reason === "replacement") {
-        await manager.prepareRuntime(record);
+        await manager.prepareRuntime(record, bundle());
       } else {
         store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
@@ -344,11 +343,11 @@ describe("worker node enrollment", () => {
           ...artifact(),
           tarballSha256: createHash("sha256").update("x").digest("hex"),
         }),
-        prepareBundle: async () => ({
-          ...bundle(),
-          tarballSha256: createHash("sha256").update("worker").digest("hex"),
-        }),
       });
+      const preparedBundle = {
+        ...bundle(),
+        tarballSha256: createHash("sha256").update("worker").digest("hex"),
+      };
       const record = createProvisioning();
       const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
       vi.mocked(ensureDevicePairSetupBootstrapToken).mockClear();
@@ -368,12 +367,12 @@ describe("worker node enrollment", () => {
           }
         }
       };
-      await requestPair(await manager.prepareRuntime(record), 200);
-      const closed = await manager.prepareRuntime(record);
+      await requestPair(await manager.prepareRuntime(record, preparedBundle), 200);
+      const closed = await manager.prepareRuntime(record, preparedBundle);
       manager.closeRuntime(closed);
       await requestPair(closed, 404);
-      const previous = await manager.prepareRuntime(record);
-      const current = await manager.prepareRuntime(record);
+      const previous = await manager.prepareRuntime(record, preparedBundle);
+      const current = await manager.prepareRuntime(record, preparedBundle);
       await requestPair(previous, 404);
       await requestPair(current, 200);
       expect(ensureEnrollment).not.toHaveBeenCalled();
@@ -390,54 +389,46 @@ describe("worker node enrollment", () => {
     }
   });
 
-  it.each(
-    ["artifact", "bundle"].flatMap((stage) =>
-      ["enrollment", "operation-abort", "destroy"].map((reason) => ({ stage, reason })),
-    ),
-  )("rejects late $stage preparation after $reason", async ({ stage, reason }) => {
-    const record = createProvisioning();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    let preparations = 0;
-    const manager = createManager({
-      prepareArtifact: async () => {
-        if (stage === "artifact" && ++preparations === 1) {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      },
-      prepareBundle: async () => {
-        if (stage === "bundle") {
-          entered.resolve();
-          await resume.promise;
-        }
-        return bundle();
-      },
-    });
-    const operation = new AbortController();
-    const pending = manager.prepareRuntime(record, operation.signal);
-    const rejected = expect(pending).rejects.toThrow();
-    await entered.promise;
-    const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
-    if (reason === "operation-abort") {
-      operation.abort();
-    }
-    if (reason === "destroy") {
-      store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-    }
-    resume.resolve();
-    await rejected;
-    if (enrollment) {
-      expect(enrollment.signal?.aborted).toBe(false);
-      expect(
-        transfer.authorize({
-          token: enrollment.nodeBootstrap.token,
-          artifactKey: enrollment.nodeBootstrap.sha256,
-        }),
-      ).toBeDefined();
-    }
-  });
+  it.each(["enrollment", "operation-abort", "destroy"] as const)(
+    "rejects late artifact preparation after %s",
+    async (reason) => {
+      const record = createProvisioning();
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let preparations = 0;
+      const manager = createManager({
+        prepareArtifact: async () => {
+          if (++preparations === 1) {
+            entered.resolve();
+            await resume.promise;
+          }
+          return artifact();
+        },
+      });
+      const operation = new AbortController();
+      const pending = manager.prepareRuntime(record, bundle(), operation.signal);
+      const rejected = expect(pending).rejects.toThrow();
+      await entered.promise;
+      const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
+      if (reason === "operation-abort") {
+        operation.abort();
+      }
+      if (reason === "destroy") {
+        store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+      }
+      resume.resolve();
+      await rejected;
+      if (enrollment) {
+        expect(enrollment.signal?.aborted).toBe(false);
+        expect(
+          transfer.authorize({
+            token: enrollment.nodeBootstrap.token,
+            artifactKey: enrollment.nodeBootstrap.sha256,
+          }),
+        ).toBeDefined();
+      }
+    },
+  );
 
   it.each(
     [

@@ -293,13 +293,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),
     workspaceTransfer: nodeWorkspaceTransfer,
   });
-  const prepareBundle = async () => {
-    const artifact = await prepareInstallation("bundle");
-    if (artifact.install !== "bundle") {
-      throw new Error("Worker bundle preparation returned the wrong install channel");
-    }
-    return artifact;
-  };
   const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
     gatewayNamespace: nodeWorkerGatewayNamespace,
     getTransport: () => deviceRuntime.getNodeTransport(),
@@ -311,7 +304,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     getLocalTlsFingerprint: () => params.resolveGatewayContext()?.gatewayTlsFingerprint,
     resolveAvailability: deviceRuntime.resolveAvailability,
     transfer: nodeBootstrapTransfer,
-    prepareBundle,
     prepareArtifact: async (record, signal) => {
       const mode =
         record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn";

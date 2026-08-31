@@ -181,7 +181,7 @@ describe("node worker provider provisioning", () => {
         },
       };
       let runtimeSignal: AbortSignal | undefined;
-      const prepareNodeRuntime = vi.fn(async (_record, signal?: AbortSignal) => {
+      const prepareNodeRuntime = vi.fn(async (_record, _bundle, signal?: AbortSignal) => {
         runtimeSignal = signal;
         return outcome === "runtime-timeout" ? await finishRuntime.promise : runtime;
       });

@@ -254,6 +254,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         record,
         provider,
         cancellation?.signal,
+        preparedInstallation,
       );
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
