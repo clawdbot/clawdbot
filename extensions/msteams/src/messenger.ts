@@ -30,6 +30,7 @@ import {
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
+import { readMSTeamsPresentationCard } from "./presentation.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -85,6 +86,8 @@ type MSTeamsReplyRenderOptions = {
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  /** Adaptive Card carrying the controls a reply offers; sent as the activity's attachment. */
+  card?: Record<string, unknown>;
 };
 
 type MSTeamsSendRetryOptions = {
@@ -229,6 +232,15 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
+    // A prepared presentation already carries its text inside the card, so the card is
+    // the whole message - the same thing `sendPayload` does on the outbound path. It is
+    // also content in its own right: a controls-only reply has no text or media and
+    // would otherwise be skipped, producing no Teams activity at all.
+    const card = readMSTeamsPresentationCard(payload);
+    if (card) {
+      out.push({ card });
+      continue;
+    }
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: formatMSTeamsMarkdown(payload.text ?? "", tableMode),
     });
@@ -296,6 +308,13 @@ async function buildActivity(
     activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
   } else {
     activity.entities = [AI_GENERATED_ENTITY];
+  }
+
+  if (msg.card) {
+    activity.attachments = [
+      { contentType: "application/vnd.microsoft.card.adaptive", content: msg.card },
+    ];
+    return activity;
   }
 
   if (msg.mediaUrl) {
@@ -408,8 +427,10 @@ export async function sendMSTeamsMessages(params: {
   feedbackLoopEnabled?: boolean;
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
+  // A card is content on its own: it carries both the reply's text and its controls,
+  // so a card-only message must not be filtered out as empty.
   const messages = params.messages.filter(
-    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
+    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl || m.card,
   );
   if (messages.length === 0) {
     return [];

@@ -37,6 +37,8 @@ vi.mock("./revoked-context.js", () => ({
   withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
 
+const { readMSTeamsPresentationCard } = await import("./presentation.js");
+
 /**
  * Mock for the SDK's `ctx.stream` (IStreamer). The migration uses
  * `ctx.stream.update()` for informative status, `.emit()` for token chunks,
@@ -1038,5 +1040,25 @@ describe("createMSTeamsReplyDispatcher", () => {
     const finalization = expect(result?.finalization).rejects.toBe(failure);
     await dispatcher.dispatcherOptions.onSettled?.();
     await finalization;
+  });
+
+  it("resolves a reply's presentation into a Teams card before delivering it", async () => {
+    // The turn adapter owns this preparation: core renders presentations inside the
+    // outbound send pipeline, which replies delivered here never enter.
+    const dispatcher = createDispatcher();
+
+    const prepared = await dispatcher.delivery.preparePayload?.(
+      {
+        text: "Deploy finished",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(readMSTeamsPresentationCard(prepared ?? {})?.actions).toEqual([
+      { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
+    ]);
   });
 });

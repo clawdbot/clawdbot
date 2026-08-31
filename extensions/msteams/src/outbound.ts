@@ -19,7 +19,10 @@ import {
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
 import { createMSTeamsPollStoreState } from "./polls.js";
-import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import {
+  MSTEAMS_PRESENTATION_CAPABILITIES,
+  renderMSTeamsPresentationPayload,
+} from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
@@ -101,26 +104,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     },
   },
   presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
-  renderPresentation: ({ payload, presentation }) => {
-    if (payload.mediaUrl || payload.mediaUrls?.length) {
-      return null;
-    }
-    const card = buildMSTeamsPresentationCard({
-      presentation,
-      text: payload.text,
-    });
-    const msteamsData = asOptionalRecord(payload.channelData?.msteams) ?? {};
-    return {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        msteams: {
-          ...msteamsData,
-          presentationCard: card,
-        },
-      },
-    };
-  },
+  renderPresentation: renderMSTeamsPresentationPayload,
   sendPayload: async ({
     cfg,
     to,
