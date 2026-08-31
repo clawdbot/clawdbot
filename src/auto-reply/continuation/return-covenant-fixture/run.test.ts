@@ -126,6 +126,7 @@ describe("product return-covenant fixture run", () => {
       await gateway.start();
       let checkedNegativeControls = false;
       const capturedGenerations: string[] = [];
+      const forbiddenCurrentGenerations: string[] = [];
       try {
         for (const casePlan of plan.cases) {
           for (const form of casePlan.forms) {
@@ -269,6 +270,11 @@ describe("product return-covenant fixture run", () => {
               generationAdvanced: casePlan.kind === "forbidden",
               effectiveAuthorityUnchanged: casePlan.kind === "allowed",
             });
+            if (casePlan.kind === "forbidden") {
+              forbiddenCurrentGenerations.push(
+                stringField(observation.authorityDiagnostic, "currentAuthorityGeneration"),
+              );
+            }
             expect(observation.scans).toMatchObject({
               successorTranscript: { matches: 0 },
               trustedSystemEvents: { matches: 0 },
@@ -337,6 +343,9 @@ describe("product return-covenant fixture run", () => {
           caseHandles: expect.arrayContaining([expect.stringMatching(/^case-[0-9a-f]{40}$/u)]),
         });
         expect(new Set(capturedGenerations).size).toBe(24);
+        expect(new Set([...capturedGenerations, ...forbiddenCurrentGenerations]).size).toBe(
+          capturedGenerations.length + forbiddenCurrentGenerations.length,
+        );
         expect(gateway.restarts).toBe(2);
       } finally {
         await gateway.stopAll();

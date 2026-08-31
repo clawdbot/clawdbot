@@ -523,7 +523,7 @@ export async function cleanupReturnCovenantCase(params: {
         storeKeys: [state.casePlan.logicalSessionKey],
       },
     });
-  } else if (state.casePlan.kind === "allowed") {
+  } else {
     // Each form is an independent accepted dispatch. Rotate only after its
     // observation and cleanup so the sibling form cannot reuse proof authority.
     runOpenClawAgentWriteTransaction(
