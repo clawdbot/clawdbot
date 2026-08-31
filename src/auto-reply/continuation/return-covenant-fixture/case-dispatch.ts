@@ -93,6 +93,7 @@ async function invokeReturnCovenantDelegateForm(params: {
     });
     await tool.execute(returnCovenantReceiptId("tool-call", state.caseHandle), {
       task,
+      delaySeconds: HOLD_WINDOW_MS / 1000,
       mode: state.casePlan.returnMode,
       targetSessionKey: state.casePlan.logicalSessionKey,
     });
@@ -100,7 +101,7 @@ async function invokeReturnCovenantDelegateForm(params: {
   }
 
   const raw =
-    `fixture output\n[[CONTINUE_DELEGATE: ${task} | ` +
+    `fixture output\n[[CONTINUE_DELEGATE: ${task} +${HOLD_WINDOW_MS / 1000}s | ` +
     `target=${state.casePlan.logicalSessionKey} | ${state.casePlan.returnMode}]]`;
   const payloads = [{ text: raw }];
   const extracted = extractContinuationSignal({
