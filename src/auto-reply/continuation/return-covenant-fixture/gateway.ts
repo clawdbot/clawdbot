@@ -135,10 +135,7 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
       statePath: string;
     };
     launchAuthority: {
-      gatewayToken: string;
-      phaseSigningKey: string;
-      productTreeSha: string;
-      runtimeArtifactManifestSha256: string;
+      environment: NodeJS.ProcessEnv;
     };
     plan: ReturnCovenantPlan;
     runtimeConfig: { gateway?: { port?: number } };
@@ -148,13 +145,9 @@ export class ProductReturnCovenantGatewayControl implements ReturnCovenantGatewa
     this.#gatewayArgs = params.plan.driver.gatewayCommand.args;
     this.#gatewayExpectedSha256 = params.plan.driver.gatewayCommand.sha256;
     this.#gatewayEnvironment = {
+      ...params.launchAuthority.environment,
       HOME: params.isolation.homePath,
       OPENCLAW_CONFIG_PATH: params.isolation.configPath,
-      OPENCLAW_GATEWAY_TOKEN: params.launchAuthority.gatewayToken,
-      OPENCLAW_PRODUCT_TREE_SHA: params.launchAuthority.productTreeSha,
-      OPENCLAW_RETURN_COVENANT_PHASE_KEY: params.launchAuthority.phaseSigningKey,
-      OPENCLAW_RETURN_COVENANT_RUNTIME_ARTIFACT_SHA256:
-        params.launchAuthority.runtimeArtifactManifestSha256,
       OPENCLAW_STATE_DIR: params.isolation.statePath,
     };
     this.#port = params.runtimeConfig.gateway?.port ?? DEFAULT_GATEWAY_PORT;

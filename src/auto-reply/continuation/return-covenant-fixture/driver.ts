@@ -45,6 +45,7 @@ type ReturnCovenantLaunchEnvironment = {
   attestationPath?: string;
   candidateSha?: string;
   docsHarnessSha?: string;
+  gatewayEnvironment?: NodeJS.ProcessEnv;
   gatewayToken?: string;
   launchNonce?: string;
   phaseKeyFingerprint?: string;
@@ -226,16 +227,31 @@ export async function runReturnCovenantFixtureDriver(
     launchEnvironment: options.launchEnvironment,
     plan,
   });
-  const { attestationPath, gatewayToken, launchNonce, phaseKeyFingerprint, phaseSigningKey } =
-    options.launchEnvironment;
+  const {
+    attestationPath,
+    gatewayEnvironment,
+    gatewayToken,
+    launchNonce,
+    phaseKeyFingerprint,
+    phaseSigningKey,
+  } = options.launchEnvironment;
+  const gatewayAuthorityValues = Object.values(gatewayEnvironment ?? {});
   if (
     !launchNonce ||
     launchNonce.length < 24 ||
+    !gatewayEnvironment ||
+    Object.keys(gatewayEnvironment).length !== 4 ||
     !gatewayToken ||
     gatewayToken.length < 24 ||
     !phaseSigningKey ||
     phaseSigningKey.length < 32 ||
     phaseKeyFingerprint !== sha256ReturnCovenant(phaseSigningKey) ||
+    ![
+      gatewayToken,
+      phaseSigningKey,
+      plan.target.productTreeSha,
+      plan.target.runtimeArtifactManifestSha256,
+    ].every((value) => gatewayAuthorityValues.includes(value)) ||
     !attestationPath
   ) {
     throw new Error("return-covenant launcher challenge environment is incomplete");
@@ -251,10 +267,7 @@ export async function runReturnCovenantFixtureDriver(
       statePath: runtime.statePath,
     },
     launchAuthority: {
-      gatewayToken,
-      phaseSigningKey,
-      productTreeSha: plan.target.productTreeSha,
-      runtimeArtifactManifestSha256: plan.target.runtimeArtifactManifestSha256,
+      environment: gatewayEnvironment,
     },
     plan,
     runtimeConfig: runtime.config,
