@@ -166,6 +166,25 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it.each([
+    "src/agents/shell-utils.ts",
+    "src/agents/shell-utils.test.ts",
+    "src/agents/shell-snapshot.ts",
+    "src/agents/shell-snapshot.test.ts",
+  ])("runs zsh proof on macOS without Swift for %s", (changedPath) => {
+    expect(detectChangedScope([changedPath])).toMatchObject({
+      runNode: true,
+      runMacosNode: true,
+      runMacos: false,
+      runIosBuild: false,
+      runAndroid: false,
+    });
+    const scripts = JSON.parse(fs.readFileSync("package.json", "utf8")).scripts;
+    expect(scripts["test:macos:ci"].split(/\s+/)).toContain(
+      changedPath.replace(/(?:\.test)?\.ts$/, ".test.ts"),
+    );
+  });
+
   it("keeps node lane off for native-only changes", () => {
     expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
       runNode: false,

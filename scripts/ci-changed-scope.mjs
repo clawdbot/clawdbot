@@ -48,6 +48,7 @@ const APPLE_SHARED_CONTRACT_FIXTURE_RE =
   /^test\/fixtures\/(?:device-identity-coordinator|talk-config)-contract\.json$/;
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
+const MACOS_NODE_SHELL_SCOPE_RE = /^src\/agents\/shell-(?:utils|snapshot)(?:\.test)?\.ts$/;
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/ci-platform-checkout\.mjs)$)/;
 const MACOS_SCRIPT_SCOPE_RE =
@@ -163,6 +164,7 @@ export function detectChangedScope(changedPaths) {
 
   let runNode = false;
   let runMacos = false;
+  let runMacosNode = false;
   let hasGitOwnerChanges = false;
   let runIosBuild = false;
   let runAndroid = false;
@@ -189,6 +191,7 @@ export function detectChangedScope(changedPaths) {
 
     hasNonDocs = true;
     hasGitOwnerChanges ||= GIT_OWNER_SCOPE_RE.test(path);
+    runMacosNode ||= MACOS_NODE_SHELL_SCOPE_RE.test(path);
 
     if (SKILLS_PYTHON_SCOPE_RE.test(path)) {
       runSkillsPython = true;
@@ -272,7 +275,7 @@ export function detectChangedScope(changedPaths) {
   return {
     runNode,
     runMacos,
-    runMacosNode: runMacos || hasGitOwnerChanges,
+    runMacosNode: runMacos || hasGitOwnerChanges || runMacosNode,
     runIosBuild,
     runAndroid,
     runWindows: runWindows || hasGitOwnerChanges,
