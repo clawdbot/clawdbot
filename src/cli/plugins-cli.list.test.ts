@@ -955,4 +955,38 @@ describe("plugins cli list", () => {
       /demo: persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
     );
   });
+
+  it("returns registry differences when a JSON refresh stays stale", async () => {
+    refreshPluginRegistryMock.mockResolvedValue({ plugins: [] });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "registry", "--refresh", "--json"]),
+    ).rejects.toThrow();
+    expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
+      ok: false,
+      refreshed: false,
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+    });
+  });
 });

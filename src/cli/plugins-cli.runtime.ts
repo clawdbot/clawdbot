@@ -21,7 +21,8 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
@@ -365,13 +366,22 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
       const inspection = await inspectPluginRegistry({ config });
       if (inspection.state !== "fresh") {
         const differenceLines = formatDifferences(inspection.differences);
-        throw new Error(
-          [
-            "Plugin registry refresh could not verify the persisted replacement.",
-            ...differenceLines.map((difference) => `- ${difference}`),
-            "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
-          ].join("\n"),
-        );
+        const message = [
+          "Plugin registry refresh could not verify the persisted replacement.",
+          ...differenceLines.map((difference) => `- ${difference}`),
+          "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+        ].join("\n");
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            ...formatCliJsonFailure(message),
+            refreshed: false,
+            state: inspection.state,
+            refreshReasons: inspection.refreshReasons,
+            differences: inspection.differences,
+          });
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
+        throw new Error(message);
       }
       if (opts.json) {
         defaultRuntime.writeJson({
