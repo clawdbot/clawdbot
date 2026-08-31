@@ -3,10 +3,11 @@
 import os from "node:os";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { GatewayServiceReadOptions } from "./service-types.js";
+import { mockSystemAccountHome } from "./service.test-helpers.js";
 
 vi.mock("../config/paths.js", async () => {
   const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
@@ -37,6 +38,10 @@ vi.mock("./systemd.js", async (importOriginal) => ({
 }));
 
 import { startGatewayServiceAfterFailedUpdate } from "./service.js";
+
+beforeEach(() => {
+  mockSystemAccountHome();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -72,7 +77,7 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
 
     await expect(
       startGatewayServiceAfterFailedUpdate({
-        env: {},
+        env: process.env,
         stdout: process.stdout,
         expectedCommandFingerprint: commandFingerprint(programArguments),
       }),
@@ -88,7 +93,7 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
 
     await expect(
       startGatewayServiceAfterFailedUpdate({
-        env: {},
+        env: process.env,
         stdout: process.stdout,
         expectedCommandFingerprint: commandFingerprint(stopped),
       }),
@@ -108,7 +113,7 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
 
     await expect(
       startGatewayServiceAfterFailedUpdate({
-        env: {},
+        env: process.env,
         stdout: process.stdout,
         expectedCommandFingerprint: commandFingerprint(programArguments),
       }),
@@ -134,7 +139,7 @@ describe("startGatewayServiceAfterFailedUpdate", () => {
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     const recovery = startGatewayServiceAfterFailedUpdate({
-      env: {},
+      env: process.env,
       stdout: process.stdout,
       expectedCommandFingerprint: commandFingerprint(stopped),
     });

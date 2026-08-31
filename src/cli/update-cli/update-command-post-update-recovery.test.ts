@@ -9,7 +9,9 @@ const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
   restart: vi.fn(async () => undefined),
   restoreWindowsAutoStart: vi.fn(async () => true),
-  writeSentinel: vi.fn(async () => undefined),
+  writeSentinel: vi.fn<
+    typeof import("./update-command-result.js").writeControlPlaneUpdateRestartSentinelBestEffort
+  >(async () => undefined),
 }));
 
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
