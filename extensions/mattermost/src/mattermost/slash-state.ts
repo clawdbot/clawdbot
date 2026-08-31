@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
+  createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   sendHttpRequestRejection,
@@ -32,6 +33,8 @@ import {
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+const slashRouteInFlightLimiter = createWebhookInFlightLimiter();
+const SLASH_ROUTE_IN_FLIGHT_KEY = "mattermost:slash";
 type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
 type SlashHandlerMatchSource = "token" | "command";
 type SlashHandlerMatch =
@@ -291,7 +294,11 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     addCallbackPaths(accountCommandsRaw);
   }
 
-  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+  const dispatchRoute = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    onRequestAuthenticated: () => void,
+  ) => {
     if (accountStates.size === 0) {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -322,7 +329,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         );
         return;
       }
-      await state.handler(req, res);
+      await state.handler(req, res, undefined, onRequestAuthenticated);
       return;
     }
 
@@ -406,7 +413,30 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // Routing already enforced the body limit. Retain the original transport
     // and pass those bytes forward instead of replaying a socket-less request.
-    await match.handler(req, res, bodyStr);
+    await match.handler(req, res, bodyStr, onRequestAuthenticated);
+  };
+
+  const routeHandler = async (req: IncomingMessage, res: ServerResponse) => {
+    // Mattermost commonly fans all users through shared provider addresses, so one
+    // route-global key bounds ingress without partitioning capacity by source IP.
+    if (!slashRouteInFlightLimiter.tryAcquire(SLASH_ROUTE_IN_FLIGHT_KEY)) {
+      await sendHttpRequestRejection(req, res, 429, "Too Many Requests");
+      return;
+    }
+
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      slashRouteInFlightLimiter.release(SLASH_ROUTE_IN_FLIGHT_KEY);
+    };
+    try {
+      await dispatchRoute(req, res, release);
+    } finally {
+      release();
+    }
   };
 
   for (const callbackPath of callbackPaths) {
