@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 @testable import OpenClaw
 import Testing
@@ -81,37 +80,6 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
-    func `installed app quarantine is removed recursively without following symlinks`() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ApplicationRelocatorQuarantineTests-\(UUID().uuidString)")
-        let bundleURL = root.appendingPathComponent("OpenClaw.app", isDirectory: true)
-        let nestedURL = bundleURL.appendingPathComponent("Contents/MacOS/OpenClaw")
-        let outsideURL = root.appendingPathComponent("outside")
-        let linkURL = bundleURL.appendingPathComponent("Contents/outside-link")
-        try FileManager.default.createDirectory(
-            at: nestedURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try Data().write(to: nestedURL)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nestedURL.path)
-        try Data().write(to: outsideURL)
-        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: outsideURL)
-        try setQuarantineAttribute(at: bundleURL)
-        try setQuarantineAttribute(at: nestedURL)
-        try setQuarantineAttribute(at: outsideURL)
-        let reference = try #require(ApplicationRelocator.bundleFileReference(
-            bundleURL: bundleURL,
-            executableURL: nestedURL
-        ))
-
-        try ApplicationRelocator.releaseQuarantine(from: reference)
-
-        #expect(!hasQuarantineAttribute(at: bundleURL))
-        #expect(!hasQuarantineAttribute(at: nestedURL))
-        #expect(hasQuarantineAttribute(at: outsideURL))
-    }
-
-    @Test
     func `equal or newer installed build receives handoff`() {
         let destination = URL(fileURLWithPath: "/Applications/OpenClaw.app")
         for build in ["100", "110"] {
@@ -127,6 +95,31 @@ struct ApplicationRelocatorTests {
             )
             #expect(recommendation == .handOff(destination))
         }
+    }
+
+    @Test
+    func `relaunch marker stops a repeated transient handoff`() {
+        let destination = URL(fileURLWithPath: "/Applications/OpenClaw.app")
+        let markedArguments = [
+            "/private/var/folders/x/AppTranslocation/y/d/OpenClaw.app/Contents/MacOS/OpenClaw",
+            ApplicationRelocator.relocationRelaunchArgument,
+        ]
+
+        let repeatedRecommendations: [ApplicationRelocator.Recommendation] = [
+            .handOff(destination),
+            .offerInstall(destination: destination, replacing: true),
+        ]
+        for recommendation in repeatedRecommendations {
+            #expect(ApplicationRelocator.shouldStopRelocationRelaunch(
+                recommendation: recommendation,
+                arguments: markedArguments))
+        }
+        #expect(!ApplicationRelocator.shouldStopRelocationRelaunch(
+            recommendation: .continueLaunch,
+            arguments: markedArguments))
+        #expect(!ApplicationRelocator.shouldStopRelocationRelaunch(
+            recommendation: .handOff(destination),
+            arguments: []))
     }
 
     @Test
@@ -354,7 +347,7 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
-    func `quarantine release stays bound after canonical path replacement`() throws {
+    func `bundle file reference stays bound after canonical path replacement`() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ApplicationRelocatorFileReferenceTests-\(UUID().uuidString)")
         let canonicalBundle = root.appendingPathComponent("OpenClaw.app", isDirectory: true)
@@ -369,8 +362,6 @@ struct ApplicationRelocatorTests {
 
         try Data("validated".utf8).write(to: canonicalExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: canonicalExecutable.path)
-        try setQuarantineAttribute(at: canonicalBundle)
-        try setQuarantineAttribute(at: canonicalExecutable)
         let reference = try #require(ApplicationRelocator.bundleFileReference(
             bundleURL: canonicalBundle,
             executableURL: canonicalExecutable
@@ -383,17 +374,9 @@ struct ApplicationRelocatorTests {
         )
         try Data("unvalidated".utf8).write(to: canonicalExecutable)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: canonicalExecutable.path)
-        try setQuarantineAttribute(at: canonicalBundle)
-        try setQuarantineAttribute(at: canonicalExecutable)
-
-        try ApplicationRelocator.releaseQuarantine(from: reference)
 
         #expect(try Data(contentsOf: reference.executableURL) == Data("validated".utf8))
         #expect(try Data(contentsOf: canonicalExecutable) == Data("unvalidated".utf8))
-        #expect(!hasQuarantineAttribute(at: reference.bundleURL))
-        #expect(!hasQuarantineAttribute(at: reference.executableURL))
-        #expect(hasQuarantineAttribute(at: canonicalBundle))
-        #expect(hasQuarantineAttribute(at: canonicalExecutable))
         #expect(ApplicationRelocator.bundleFileReference(
             bundleURL: canonicalBundle,
             executableURL: canonicalExecutable
@@ -588,31 +571,5 @@ struct ApplicationRelocatorTests {
             options: 0
         )
         try data.write(to: url, options: .atomic)
-    }
-
-    private func setQuarantineAttribute(at url: URL) throws {
-        let value = Array("0083;00000000;OpenClawTests;".utf8)
-        let result: Int32 = value.withUnsafeBytes { bytes in
-            url.withUnsafeFileSystemRepresentation { path in
-                guard let path else { return -1 }
-                return setxattr(
-                    path,
-                    "com.apple.quarantine",
-                    bytes.baseAddress,
-                    bytes.count,
-                    0,
-                    XATTR_NOFOLLOW)
-            }
-        }
-        guard result == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-        }
-    }
-
-    private func hasQuarantineAttribute(at url: URL) -> Bool {
-        url.withUnsafeFileSystemRepresentation { path in
-            guard let path else { return false }
-            return getxattr(path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) >= 0
-        }
     }
 }
