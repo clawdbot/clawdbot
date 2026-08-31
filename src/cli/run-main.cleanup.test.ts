@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import readline from "node:readline";
@@ -28,7 +29,10 @@ vi.mock("../entry.compile-cache.js", () => ({
 vi.mock("../entry.respawn.js", () => ({ buildCliRespawnPlan: () => null }));
 vi.mock("../infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess() {} }));
 vi.mock("../infra/warning-filter.js", () => ({ installProcessWarningFilter() {} }));
-vi.mock("../infra/unhandled-rejections.js", () => ({ installUnhandledRejectionHandler() {} }));
+vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),
+  installUnhandledRejectionHandler() {},
+}));
 vi.mock("../logging.js", () => ({ enableConsoleCapture() {}, routeLogsToStderr() {} }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath() {} }));
 vi.mock("./dotenv.js", () => ({ loadCliDotEnv() {} }));
@@ -394,13 +398,23 @@ describe("CLI process harness cleanup", () => {
         registryApi.registerAgentHarness(resource.harness),
       );
       pluginLoaderCacheState.set("cleanup-used", registry);
+      let retainedLookup:
+        | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
+        | undefined;
       dispatch.run = () =>
-        scopes.withPluginRuntimeRegistryScope(registry, () => acquire("sequential"));
+        scopes.withPluginRuntimeRegistryScope(registry, async () => {
+          await acquire("sequential");
+          retainedLookup = AsyncLocalStorage.bind(() =>
+            registryApi.getRegisteredAgentHarness("sequential"),
+          );
+        });
       try {
         await withCliProcessScope(() => runCli(argv));
         expect(pluginLoaderCacheState.get("cleanup-used")).toBeUndefined();
         expect(pluginLoaderCacheState.get("cleanup-unused")).toBe(unused);
         expect(resource.snapshot()).toEqual({ disposeCalls: 1, exitCode: 0, signalCode: null });
+        expect(retainedLookup).toBeDefined();
+        expect(retainedLookup!()).toBeUndefined();
       } finally {
         await resource.closeAndJoin();
       }

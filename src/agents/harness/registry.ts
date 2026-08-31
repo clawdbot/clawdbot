@@ -3,6 +3,7 @@
  */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import {
   assertDirectPluginRegistrationReplacement,
   getPluginRegistryForContext,
@@ -23,12 +24,15 @@ const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
 
 function getAgentHarnesses() {
   const registry = getPluginRegistryForContext();
-  if (registry) {
-    retainCliRegistryHarnesses(registry, (harness) =>
-      withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
-    );
+  // Retained request scopes keep their registry after cleanup; they must not
+  // reacquire disposed harnesses or fall through to a different active registry.
+  if (!registry || isPluginRegistryRetired(registry)) {
+    return [];
   }
-  return registry?.agentHarnesses ?? [];
+  retainCliRegistryHarnesses(registry, (harness) =>
+    withPluginRuntimeRegistryScope(registry, () => disposeAgentHarness(harness)),
+  );
+  return registry.agentHarnesses;
 }
 
 /** Registers or replaces an agent harness under its trimmed id. */
