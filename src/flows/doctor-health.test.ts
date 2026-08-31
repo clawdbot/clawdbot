@@ -52,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   service: vi.fn(),
   packageRoot: vi.fn<() => string | undefined>(),
   restartedHealthy: true,
+  taskDefinitelyStopped: vi.fn(() => true),
+  startupFallbackRuntime: vi.fn<() => Promise<{ status: string } | null>>(async () => null),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -71,6 +73,12 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => mocks.service(),
+}));
+
+vi.mock("../daemon/schtasks-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-runtime.js")>()),
+  isScheduledTaskDefinitelyNotRunning: mocks.taskDefinitelyStopped,
+  readWindowsStartupFallbackRuntimeForUpdate: mocks.startupFallbackRuntime,
 }));
 
 vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
@@ -132,10 +140,194 @@ describe("runDoctorHealthFlow", () => {
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.service.mockReset();
     mocks.restartedHealthy = true;
+    mocks.taskDefinitelyStopped.mockReset().mockReturnValue(true);
+    mocks.startupFallbackRuntime.mockReset().mockResolvedValue(null);
     mocks.outro.mockClear();
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
+
+  it.each([
+    "inspection-failed",
+    "owned-unknown",
+    "foreign-running",
+    "foreign-unknown",
+    "foreign-stopped",
+    "foreign-stopped-loaded",
+    "foreign-stopped-loaded-disabled",
+    "foreign-stopped-loaded-unknown",
+    "foreign-respawning",
+    "unresolved-running",
+    "unresolved-unknown",
+    "unresolved-stopped",
+    "unresolved-stopped-loaded",
+    "unresolved-respawning",
+    "absent",
+    "absent-unknown",
+    "windows-ready",
+    "windows-disabled",
+    "windows-queued",
+    "windows-running",
+    "windows-startup-stopped",
+    "windows-startup-unknown",
+  ] as const)(
+    "admits offline state repair only after safe service inspection: %s",
+    async (kind) => {
+      const windows = kind.startsWith("windows");
+      const platform = windows
+        ? vi.spyOn(process, "platform", "get").mockReturnValue("win32")
+        : undefined;
+      try {
+        await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          const cfg: OpenClawConfig = {
+            agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+          };
+          await state.writeConfig(cfg);
+          fs.mkdirSync(state.workspaceDir, { recursive: true });
+          const sourcePath = path.join(state.workspaceDir, "openclaw-workspace-state.json");
+          const completedAt = "2026-07-15T00:00:00.000Z";
+          fs.writeFileSync(
+            sourcePath,
+            JSON.stringify({ version: 1, setupCompletedAt: completedAt }),
+          );
+          const sourceBefore = fs.readFileSync(sourcePath);
+          const configBefore = fs.readFileSync(state.configPath);
+          const databasePath = resolveOpenClawStateSqlitePath(state.env);
+          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+            databasePath,
+            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+            uid: process.getuid?.(),
+          });
+          expect(fs.existsSync(databasePath)).toBe(false);
+          expect(fs.existsSync(coordinatorPath)).toBe(false);
+
+          const foreign = kind.startsWith("foreign") || windows;
+          const foreignRoot = state.path("foreign-install");
+          if (foreign) {
+            fs.mkdirSync(foreignRoot);
+            fs.writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}');
+          }
+          const entrypoint = kind.startsWith("unresolved")
+            ? "operator-wrapper"
+            : path.join(foreign ? foreignRoot : process.cwd(), "openclaw.mjs");
+          const stop = vi.fn();
+          const restart = vi.fn();
+          mocks.packageRoot.mockReturnValue(process.cwd());
+          mocks.config.mockClear().mockReturnValue(cfg);
+          mocks.service.mockReturnValue({
+            readCommand: async () => {
+              if (kind === "inspection-failed") {
+                throw new Error("synthetic manager inspection failure");
+              }
+              return kind.startsWith("absent")
+                ? null
+                : {
+                    programArguments: [process.execPath, entrypoint, "gateway"],
+                    environment: {
+                      OPENCLAW_STATE_DIR: foreign ? state.path("foreign-state") : state.stateDir,
+                      OPENCLAW_CONFIG_PATH: foreign ? state.path("foreign.json") : state.configPath,
+                    },
+                  };
+            },
+            readRuntime: async () => ({
+              status:
+                (kind.endsWith("unknown") && !kind.endsWith("loaded-unknown")) ||
+                (kind.endsWith("respawning") && process.platform === "linux")
+                  ? "unknown"
+                  : kind.endsWith("running") && !windows
+                    ? "running"
+                    : "stopped",
+              ...(kind.startsWith("absent") ? { missingUnit: true } : {}),
+            }),
+            isLoaded: async () => {
+              if (kind === "absent-unknown") {
+                throw new Error("synthetic manager unavailable");
+              }
+              return (
+                windows ||
+                kind.includes("stopped-loaded") ||
+                kind.endsWith("running") ||
+                kind.endsWith("loaded") ||
+                kind.endsWith("respawning")
+              );
+            },
+            isEnabled: async () => {
+              if (kind.endsWith("loaded-unknown")) {
+                throw new Error("synthetic enabled-state inspection failure");
+              }
+              return !kind.endsWith("loaded-disabled");
+            },
+            stop,
+            restart,
+          });
+          mocks.taskDefinitelyStopped.mockReturnValue(
+            windows
+              ? kind === "windows-ready" || kind === "windows-disabled"
+              : !kind.endsWith("respawning"),
+          );
+          if (kind === "windows-startup-stopped") {
+            mocks.startupFallbackRuntime.mockResolvedValue({ status: "stopped" });
+          } else if (kind === "windows-startup-unknown") {
+            mocks.startupFallbackRuntime.mockRejectedValue(
+              new Error("synthetic task inspection failure"),
+            );
+          }
+          mocks.runContributions.mockImplementation(async (ctx) => {
+            const result = await migrateLegacyWorkspaceState({
+              stateDir: state.stateDir,
+              env: state.env,
+              detected: detectLegacyWorkspaceState({
+                cfg: ctx.cfg,
+                stateDir: state.stateDir,
+                env: state.env,
+                homedir: () => state.home,
+                doctorOnlyStateMigrations: true,
+              }),
+            });
+            expect(result.warnings).toEqual([]);
+          });
+          const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+          if (
+            kind.endsWith("stopped") ||
+            (kind.includes("stopped-loaded") && process.platform !== "darwin") ||
+            kind === "absent" ||
+            kind === "windows-ready" ||
+            kind === "windows-disabled" ||
+            kind.endsWith("loaded-disabled")
+          ) {
+            await run;
+            expect(readWorkspaceStateSnapshot(state.workspaceDir).setup.setupCompletedAt).toBe(
+              completedAt,
+            );
+            expect(fs.existsSync(sourcePath)).toBe(false);
+            expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+            if (kind !== "absent") {
+              expect(runtime.log).toHaveBeenCalledWith(
+                expect.stringContaining("stopped Gateway service was left unchanged"),
+              );
+            }
+          } else {
+            await expect(run).rejects.toThrow("Doctor could not enter maintenance");
+            await expect(run).rejects.toThrow("gateway status --deep");
+            await expect(run).rejects.toThrow("openclaw doctor --fix");
+            await expect(run).rejects.not.toThrow(/--no-restart|before the update/);
+            expect(mocks.config).not.toHaveBeenCalled();
+            expect(mocks.runContributions).not.toHaveBeenCalled();
+            expect(fs.readFileSync(sourcePath)).toEqual(sourceBefore);
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.existsSync(databasePath)).toBe(false);
+            expect(fs.existsSync(coordinatorPath)).toBe(false);
+            expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+          }
+          expect(stop).not.toHaveBeenCalled();
+          expect(restart).not.toHaveBeenCalled();
+        });
+      } finally {
+        platform?.mockRestore();
+      }
+    },
+  );
 
   it.each([
     "ready",

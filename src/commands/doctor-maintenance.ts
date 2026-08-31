@@ -90,6 +90,27 @@ function assertDoctorServiceSelection(env: NodeJS.ProcessEnv, serviceEnv: NodeJS
   }
 }
 
+function assertDoctorMaintenanceInspection(
+  inspection: PreManagedServiceStop,
+  env: NodeJS.ProcessEnv,
+): void {
+  const kind = inspection.serviceUpdateVerdict?.kind;
+  // Non-owned services grant no stop authority. The native lifecycle owner
+  // must prove them offline before Doctor can repair its own selected state.
+  if (
+    !inspection.blockMessage &&
+    inspection.inspected &&
+    (kind === "owned" || kind === "absent" || inspection.offline === true)
+  ) {
+    return;
+  }
+  throw new Error(
+    kind === "owned" && inspection.blockMessage
+      ? inspection.blockMessage
+      : `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
+  );
+}
+
 export async function beginDoctorMaintenance(params: {
   options: DoctorOptions;
   root: string | null;
@@ -128,10 +149,11 @@ export async function beginDoctorMaintenance(params: {
         jsonMode: true,
         phase: "inspect",
       });
-      if (inspection.serviceEnv) {
-        assertDoctorServiceSelection(env, inspection.serviceEnv);
-      }
+      assertDoctorMaintenanceInspection(inspection, env);
       if (inspection.serviceUpdateVerdict?.kind === "owned") {
+        if (inspection.serviceEnv) {
+          assertDoctorServiceSelection(env, inspection.serviceEnv);
+        }
         // Doctor never rewrites the launcher: pin its complete definition through
         // stop and restart, including operator-owned environment overrides.
         inspection.serviceUpdateVerdict.refreshDefinition = false;
@@ -142,12 +164,14 @@ export async function beginDoctorMaintenance(params: {
           jsonMode: true,
           expectedService: inspection,
         });
-        if (stopped.blockMessage) {
-          throw new Error(stopped.blockMessage);
-        }
+        assertDoctorMaintenanceInspection(stopped, env);
         if (stopped.stopped) {
           params.runtime.log("Stopped the managed Gateway for Doctor state migration.");
         }
+      } else if (inspection.serviceUpdateVerdict?.kind !== "absent") {
+        params.runtime.log(
+          "The stopped Gateway service was left unchanged; repairing Doctor's selected state only.",
+        );
       }
     }
     const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));

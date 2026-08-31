@@ -1199,6 +1199,17 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
+  it.each([
+    ["activating", "auto-restart"],
+    ["deactivating", "stop-sigterm"],
+    ["reloading", "reload"],
+  ])("does not report %s/%s as a stopped service", async (state, subState) => {
+    const runtime = await readRuntimeFromShowOutput(
+      `ActiveState=${state}\nSubState=${subState}\nMainPID=0`,
+    );
+    expect(runtime).toMatchObject({ status: "unknown", state, subState });
+  });
+
   it.each(["exit", "timeout", "signal"] as const)(
     "reports a missing unit only after a completed show command (%s)",
     async (termination) => {

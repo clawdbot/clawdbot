@@ -171,7 +171,14 @@ export async function readSystemdServiceRuntime(
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  // Restart and shutdown transitions can still own or respawn the process.
+  // Only terminal native states establish that offline maintenance is safe.
+  const status =
+    activeState === "active"
+      ? "running"
+      : activeState === "inactive" || activeState === "failed"
+        ? "stopped"
+        : "unknown";
   return {
     status,
     state: parsed.activeState,

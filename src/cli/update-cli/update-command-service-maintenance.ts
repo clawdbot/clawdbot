@@ -14,6 +14,10 @@ import {
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import {
+  isScheduledTaskDefinitelyNotRunning,
+  readWindowsStartupFallbackRuntimeForUpdate,
+} from "../../daemon/schtasks-runtime.js";
+import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
@@ -55,6 +59,7 @@ export type PreManagedServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
@@ -94,7 +99,10 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
     message: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE,
   });
   if (!command) {
-    return !state.installed && !state.running && state.runtime?.missingUnit
+    return !state.installed &&
+      state.loadState.status === "not-loaded" &&
+      !state.running &&
+      state.runtime?.missingUnit
       ? { kind: "absent" }
       : unavailable();
   }
@@ -405,6 +413,22 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     inspected: true,
     runtimeInspected: ["running", "stopped"].includes(serviceState.runtime?.status ?? ""),
     running: serviceState.running,
+    // Enabled systemd units may be manually stopped; loaded LaunchAgents can
+    // respawn. Windows needs the live numeric task state, not its last result.
+    offline:
+      (serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "unresolved") &&
+      serviceState.runtime?.status === "stopped" &&
+      (process.platform === "darwin"
+        ? serviceState.loadState.status === "not-loaded" ||
+          (serviceState.loadState.status === "loaded" &&
+            (await service
+              .isEnabled?.({ env: serviceState.env, timeoutMs: params.timeoutMs })
+              .catch(() => undefined)) === false)
+        : process.platform === "win32"
+          ? isScheduledTaskDefinitelyNotRunning(resolveTaskName(serviceState.env)) ||
+            (await readWindowsStartupFallbackRuntimeForUpdate(serviceState.env).catch(() => null))
+              ?.status === "stopped"
+          : process.platform === "linux"),
     serviceEnv: serviceState.env,
     serviceUpdateVerdict,
   };

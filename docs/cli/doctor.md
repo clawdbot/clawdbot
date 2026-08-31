@@ -52,6 +52,12 @@ not start a service that was already stopped. Run repair from a shell outside th
 Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.
 
+If service inspection is unavailable or an unmatched service can still run,
+Doctor refuses maintenance before changing config or state. Inspect it with
+`openclaw gateway status --deep`, restore service-manager access, and stop the
+service through its owner. Once the native manager confirms it is offline,
+Doctor can repair its selected state without changing or starting that service.
+
 If migration or config repair cannot finish, Doctor leaves the stopped service
 stopped and reports an incomplete repair. Resolve the reported blocker, rerun
 `openclaw doctor --fix`, then start the service through its owner.
