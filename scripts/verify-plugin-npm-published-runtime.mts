@@ -16,8 +16,6 @@ import {
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
 import { sleep } from "./lib/sleep.mjs";
 
-export { readPositiveIntEnv };
-
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
