@@ -4805,9 +4805,8 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     const errors = getErrorOutput();
-    expect(errors).toContain(
-      "openclaw update detected it is running inside the gateway process tree.",
-    );
+    expect(errors).toContain("This command is running inside the gateway process tree.");
+    expect(errors).toContain("Run this command from a shell outside the gateway service");
     expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -4830,9 +4829,8 @@ describe("update-cli", () => {
     );
 
     const errors = getErrorOutput();
-    expect(errors).toContain(
-      "openclaw update detected it is running inside the gateway process tree.",
-    );
+    expect(errors).toContain("This command is running inside the gateway process tree.");
+    expect(errors).toContain("Run this command from a shell outside the gateway service");
     expect(errors).toContain(`Gateway PID ${gatewayFixturePid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();

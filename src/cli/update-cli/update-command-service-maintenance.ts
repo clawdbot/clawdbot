@@ -28,8 +28,6 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
-import { formatCliCommand } from "../command-format.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -42,7 +40,6 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 
-const CLI_NAME = resolveCliName();
 const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
   "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
@@ -226,9 +223,9 @@ function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   if (!inherited && !getSelfAndAncestorPidsSync().has(gatewayPid)) {
     return undefined;
   }
-  return `openclaw update detected it is running inside the gateway process tree.
-Gateway PID ${gatewayPid} is an ancestor of this process, so this updater cannot safely stop or restart the gateway that owns it.
-Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
+  return `This command is running inside the gateway process tree.
+Gateway PID ${gatewayPid} is an ancestor of this process, so this command cannot safely stop or restart the gateway that owns it.
+Run this command from a shell outside the gateway service, or stop the gateway service first and retry.`;
 }
 
 function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {

@@ -143,6 +143,7 @@ describe("runDoctorHealthFlow", () => {
     "config-refused",
     "workspace-cleanup-failed",
     "restart-unhealthy",
+    "ancestor-blocked",
   ] as const)(
     "coordinates the matching managed writer through legacy multi-agent repair: %s",
     async (outcome) => {
@@ -216,7 +217,10 @@ describe("runDoctorHealthFlow", () => {
         });
         mocks.service.mockReturnValue({
           readCommand: async () => command,
-          readRuntime: async () => ({ status: running ? "running" : "stopped" }),
+          readRuntime: async () => ({
+            status: running ? "running" : "stopped",
+            ...(outcome === "ancestor-blocked" ? { pid: process.pid } : {}),
+          }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
           isLoaded: async () => running,
           isEnabled: async () => running,
@@ -275,6 +279,16 @@ describe("runDoctorHealthFlow", () => {
         try {
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
           const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+          if (outcome === "ancestor-blocked") {
+            await expect(run).rejects.toThrow("openclaw doctor --fix");
+            await expect(run).rejects.toThrow("from a shell outside the gateway service");
+            await expect(run).rejects.not.toThrow("openclaw update");
+            expect(events).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+            return;
+          }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
           } else if (outcome === "workspace-cleanup-failed") {
