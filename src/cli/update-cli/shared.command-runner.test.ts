@@ -8,6 +8,7 @@ import {
   createGlobalCommandRunner,
   ensureGitCheckout,
   parseTimeoutMsOrExit,
+  resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
 } from "./shared.js";
@@ -162,6 +163,23 @@ describe("update CLI shared helpers", () => {
       });
     },
   );
+
+  it("refuses a package root without a proven manager owner", async () => {
+    runCommandWithTimeout.mockResolvedValue({
+      ...successfulCommandResult,
+      code: 1,
+      stderr: "not owned",
+    });
+
+    await expect(
+      resolveGlobalManager({
+        root: "/shared/store/openclaw",
+        installKind: "package",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("Update refused: package manager owner is unknown; no changes were made.");
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
+  });
 
   it("publishes a successful fresh clone only after the clone completes", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {

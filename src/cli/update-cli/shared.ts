@@ -375,9 +375,10 @@ export async function resolveGlobalManager(params: {
       params.root,
       params.timeoutMs,
     );
-    if (detected) {
-      return detected;
+    if (!detected) {
+      throw new Error("Update refused: package manager owner is unknown; no changes were made.");
     }
+    return detected;
   }
 
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
