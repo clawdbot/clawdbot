@@ -343,6 +343,54 @@ describe("local-check-runtime", () => {
   });
 
   it.each([
+    { name: "small CI runner", ci: "true", cpus: 4, gib: 16, throttled: true },
+    { name: "memory-constrained CI runner", ci: "true", cpus: 16, gib: 16, throttled: true },
+    { name: "CPU-constrained CI runner", ci: "true", cpus: 4, gib: 32, throttled: true },
+    { name: "parallel CI boundary", ci: "true", cpus: 8, gib: 24, throttled: false },
+    { name: "large CI runner", ci: "true", cpus: 16, gib: 32, throttled: false },
+    { name: "disabled local policy", ci: undefined, cpus: 4, gib: 16, throttled: false },
+  ])("applies compiler memory policy for $name", ({ ci, cpus, gib, throttled }) => {
+    const inputEnv = makeEnv({
+      CI: ci,
+      OPENCLAW_LOCAL_CHECK: "0",
+      GOMAXPROCS: "2",
+      GOGC: undefined,
+      GOMEMLIMIT: undefined,
+    });
+    const { args, env } = applyLocalOxlintPolicy(["--threads=1"], inputEnv, {
+      logicalCpuCount: cpus,
+      totalMemoryBytes: gib * GIB,
+    });
+
+    expect(env.GOMAXPROCS).toBe("2");
+    expect(env.GOGC).toBe(throttled ? "30" : undefined);
+    expect(env.GOMEMLIMIT).toBe(throttled ? "3GiB" : undefined);
+    expect(inputEnv.GOGC).toBeUndefined();
+    expect(inputEnv.GOMEMLIMIT).toBeUndefined();
+    expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=1"]);
+    expect(args).toContain("--type-aware");
+  });
+
+  it("preserves explicit compiler limits on constrained GitHub Actions runners", () => {
+    const { args, env } = applyLocalOxlintPolicy(
+      ["--threads=3"],
+      makeEnv({
+        CI: undefined,
+        GITHUB_ACTIONS: "true",
+        OPENCLAW_LOCAL_CHECK: "0",
+        GOMAXPROCS: "3",
+        GOGC: "80",
+        GOMEMLIMIT: "5GiB",
+      }),
+      { logicalCpuCount: 4, totalMemoryBytes: 16 * GIB },
+    );
+    expect(env.GOMAXPROCS).toBe("3");
+    expect(env.GOGC).toBe("80");
+    expect(env.GOMEMLIMIT).toBe("5GiB");
+    expect(args.filter((arg) => arg.startsWith("--threads"))).toEqual(["--threads=3"]);
+  });
+
+  it.each([
     {
       name: "default Go settings",
       goEnv: { GOMAXPROCS: undefined, GOGC: undefined, GOMEMLIMIT: undefined },

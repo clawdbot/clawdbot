@@ -275,6 +275,11 @@ and Android at two because those runner pools are narrower. Compact whole-config
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 
+Type-aware lint on CI runners with fewer than 8 CPUs or 24 GiB of RAM uses the
+existing Go compiler memory policy (`GOGC=30`, `GOMEMLIMIT=3GiB`) to reduce swap
+pressure. Explicit Go settings remain authoritative. The limit is soft and
+applies only to the lint child; declaration preparation retains its own policy.
+
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push. Each current Gradle task has one protected sticky disk; PR jobs use disposable clones, while protected runs refresh content-addressed Gradle entries in place.
 
 Robolectric resolves Android SDK artifacts outside Gradle's dependency cache, so every Android `test-*` task receives a workflow-owned Gradle init script that points test JVMs at a dedicated Maven-local repository. Actions cache restores are task-, platform-, and Android-contract-scoped; a prefix restore can seed a changed contract, but only a successful trusted run may publish the completed exact cache after a miss. Cold runs may download missing SDK artifacts, while warm runs reuse the exact archive. Build and lint tasks do not receive the Robolectric init script.
