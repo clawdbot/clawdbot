@@ -82,7 +82,7 @@ export async function handleAssistantFailover(params: {
   isProbeSession: boolean;
   overloadProfileRotations: number;
   overloadProfileRotationLimit: number;
-  transientRetryCount: number;
+  getTransientRetryCount: () => number;
   previousRetryFailoverReason: FailoverReason | null;
   logAssistantFailoverDecision: (
     decision:
@@ -147,7 +147,7 @@ export async function handleAssistantFailover(params: {
     }))
   ) {
     params.logAssistantFailoverDecision("retry_same_model", {
-      retryCount: params.transientRetryCount,
+      retryCount: params.getTransientRetryCount(),
       profileRotationCount: overloadProfileRotations,
     });
     return sameModelTransientRetry();
@@ -185,7 +185,7 @@ export async function handleAssistantFailover(params: {
         await markFailedProfile();
         params.logAssistantFailoverDecision("fallback_model", {
           status,
-          retryCount: params.transientRetryCount,
+          retryCount: params.getTransientRetryCount(),
           profileRotationCount: overloadProfileRotations,
         });
         return {
@@ -242,7 +242,7 @@ export async function handleAssistantFailover(params: {
       // retry can proceed with the next profile while the failure record settles.
       void markFailedProfilePromise;
       params.logAssistantFailoverDecision("rotate_profile", {
-        retryCount: params.transientRetryCount,
+        retryCount: params.getTransientRetryCount(),
         profileRotationCount: overloadProfileRotations,
       });
       return {
@@ -276,7 +276,7 @@ export async function handleAssistantFailover(params: {
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", {
       status,
-      retryCount: params.transientRetryCount,
+      retryCount: params.getTransientRetryCount(),
       profileRotationCount: overloadProfileRotations,
     });
     const shouldSuspend =
@@ -301,7 +301,7 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "surface_error") {
     params.logAssistantFailoverDecision("surface_error", {
-      retryCount: params.transientRetryCount,
+      retryCount: params.getTransientRetryCount(),
       profileRotationCount: overloadProfileRotations,
     });
     // Only current provider failures throw here. External aborts, timeout
@@ -333,7 +333,7 @@ export async function handleAssistantFailover(params: {
   }
 
   params.logAssistantFailoverDecision("continue_normal", {
-    retryCount: params.transientRetryCount,
+    retryCount: params.getTransientRetryCount(),
     profileRotationCount: overloadProfileRotations,
   });
   return {

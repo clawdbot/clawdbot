@@ -39,7 +39,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     logAssistantFailoverDecision: vi.fn(),
     warn: vi.fn(),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    transientRetryCount: 0,
+    getTransientRetryCount: () => 0,
     maybeRetryTransient: vi.fn(async () => false),
     advanceAuthProfile: vi.fn(async () => false),
     advanceRateLimitAuthProfile: vi.fn(async () => false),
@@ -518,6 +518,30 @@ describe("handleAssistantFailover", () => {
   });
 
   describe("surface_error branch (openclaw#70124)", () => {
+    it("logs the incremented count after a successful transient retry", async () => {
+      let transientRetryCount = 0;
+      const logAssistantFailoverDecision = vi.fn();
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "server_error" },
+          failoverReason: "server_error",
+          billingFailure: false,
+          maybeRetryTransient: vi.fn(async () => {
+            transientRetryCount += 1;
+            return true;
+          }),
+          getTransientRetryCount: () => transientRetryCount,
+          logAssistantFailoverDecision,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(logAssistantFailoverDecision).toHaveBeenCalledWith("retry_same_model", {
+        retryCount: 1,
+        profileRotationCount: 0,
+      });
+    });
+
     it("throws a billing FailoverError so the webchat can render the provider failure", async () => {
       const logDecision = vi.fn();
       const outcome = await handleAssistantFailover(

@@ -307,7 +307,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     isProbeSession: input.isProbeSession,
     overloadProfileRotations: input.overloadProfileRotations,
     overloadProfileRotationLimit: input.overloadProfileRotationLimit,
-    transientRetryCount: input.getTransientRetryCount(),
+    getTransientRetryCount: input.getTransientRetryCount,
     previousRetryFailoverReason: input.previousRetryFailoverReason,
     logAssistantFailoverDecision: logFailoverDecision,
     warn: (message) => log.warn(message),
