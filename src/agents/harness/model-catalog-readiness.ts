@@ -4,6 +4,7 @@ import {
   resolveMergedModelProviderConfig,
   resolveModelProviderRouteOverridePresence,
 } from "../../config/model-provider-config.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ModelAuthAvailabilityEvaluation } from "../model-auth-availability.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
@@ -17,6 +18,7 @@ export function createAgentHarnessCatalogEvaluator(
   params: AgentHarnessModelCatalogParams & {
     preferredProfileId?: string;
     lockedProfileId?: string;
+    pluginRegistry?: PluginRegistry;
     isCurrent?: () => boolean;
   },
 ) {
@@ -72,7 +74,8 @@ export function createAgentHarnessCatalogEvaluator(
     ) {
       return host;
     }
-    const registry = getActivePluginRegistry();
+    const resolveRegistry = () => params.pluginRegistry ?? getActivePluginRegistry();
+    const registry = resolveRegistry();
     const harness = registry?.agentHarnesses.find(
       (registration) => registration.harness.id === runtime,
     )?.harness;
@@ -92,7 +95,7 @@ export function createAgentHarnessCatalogEvaluator(
         }).supported &&
         harness.readModelCatalogReadiness?.({ ...params, provider, modelId: entry.id }) !==
           undefined &&
-        getActivePluginRegistry() === registry;
+        resolveRegistry() === registry;
     } catch {
       // A failed/disposed owner supplies no account observation; do not infer host readiness.
     }

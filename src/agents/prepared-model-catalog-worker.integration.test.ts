@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
 import {
@@ -14,11 +10,6 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
@@ -55,6 +46,7 @@ import {
   EXTERNAL_AUTH_PATH_ENV,
   createJwtWithExp,
   writeCodexAuth,
+  expectNativeHarnessModelsPublished,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import {
@@ -538,92 +530,11 @@ describe("prepared model catalog worker boundary", () => {
       { [EXTERNAL_AUTH_PATH_ENV]: "" },
       { nativeCatalog: true },
     );
-    const registry = fixture.snapshot.pluginRegistry;
-    if (!registry) {
-      throw new Error("expected prepared plugin registry");
-    }
-    const previousRegistry = captureActivePluginRegistrySnapshot();
-    setActivePluginRegistry(registry);
-    try {
-      const catalog = await fixture.snapshot.loadFullModelCatalog?.();
-      const nativeEntry = catalog?.entries.find(({ id }) => id === "account-scoped-model");
-      expect(nativeEntry).toMatchObject({
-        provider: PROVIDER_ID,
-        nativeRuntime: HARNESS_ID,
-      });
-      if (!catalog) {
-        throw new Error("expected full prepared catalog");
-      }
-      const fullAuth = getPreparedModelFullCatalogAuth(catalog);
-      if (!fullAuth) {
-        throw new Error("expected prepared full-catalog auth");
-      }
-      const context = {
-        getRuntimeConfig: () => fixture.config,
-        logGateway: {
-          debug: vi.fn(),
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-      } as unknown as GatewayRequestContext;
-      const projector = createGatewayAgentModelCatalogProjector({
-        cfg: fixture.config,
-        agentId: "main",
-        snapshot: catalog,
-        metadataSnapshot: fixture.pluginMetadataSnapshot,
-        preparedAuthStore: fullAuth.authStore,
-        preparedRuntimeAuthModes: fullAuth.authModes,
-      });
-      const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
-      expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
-        availability: true,
-      });
-      const preparedModels = await buildModelsListResult({
-        context,
-        agentId: "main",
-        params: { view: "configured" },
-        preloadedCatalog: {
-          agentId: "main",
-          config: fixture.config,
-          snapshot: catalog,
-        },
-        preloadedOnly: true,
-        catalogProjector: projector,
-      });
-      expect(preparedModels.models).toContainEqual(
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "account-scoped-model",
-          available: true,
-        }),
-      );
-
-      const chatMetadata = createGatewayChatMetadataRuntime({
-        getConfig: () => fixture.config,
-        getContext: () => context,
-        log: context.logGateway,
-        deps: {
-          getPreparedOwner: () => fixture.snapshot,
-          getPreparedAuthStore: () => fullAuth.authStore,
-          getAuthStoreRevision: () => 1,
-          getSkillsVersion: () => 1,
-          getPluginRegistryVersion: () => 1,
-          buildCommands: async () => ({ commands: [] }),
-        },
-      });
-      await chatMetadata.refresh();
-      const metadata = await chatMetadata.read({ agentId: "main" });
-      expect(metadata.models).toContainEqual(
-        expect.objectContaining({
-          provider: PROVIDER_ID,
-          id: "account-scoped-model",
-          available: true,
-        }),
-      );
-    } finally {
-      restoreActivePluginRegistrySnapshot(previousRegistry);
-    }
+    await expectNativeHarnessModelsPublished({
+      config: fixture.config,
+      metadataSnapshot: fixture.pluginMetadataSnapshot,
+      snapshot: fixture.snapshot,
+    });
   });
 
   it("pairs full catalog native routes with exact-generation auth", async () => {

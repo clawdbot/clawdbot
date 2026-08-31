@@ -48,6 +48,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
@@ -164,6 +165,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   preparedAuthStore: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  pluginRegistry?: PluginRegistry;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -180,6 +182,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     workspaceDir,
     preferredProfileId: params.preferredProfileId,
     lockedProfileId: params.lockedProfileId,
+    pluginRegistry: params.pluginRegistry,
   });
   const projectionCatalog =
     params.snapshot.routeVariants.length > 0
@@ -231,6 +234,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     authStore: params.preparedAuthStore,
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
+    pluginRegistry: params.pluginRegistry,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
         logicalEntries.map(async (entry) => {
@@ -542,6 +546,7 @@ export async function prepareModelsListResult(
       agentId,
       agentDir: ownerSnapshot?.agentDir ?? resolveAgentDir(cfg, agentId),
       workspaceDir,
+      pluginRegistry: params.catalogProjector?.pluginRegistry,
       isCurrent: () => params.context.getRuntimeConfig() === initialConfig,
     });
   const evaluateNative: typeof nativeEvaluator = (entry, host) => {
@@ -600,6 +605,7 @@ export async function prepareModelsListResult(
       preparedAuthStore,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
+      pluginRegistry: params.catalogProjector?.pluginRegistry,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();

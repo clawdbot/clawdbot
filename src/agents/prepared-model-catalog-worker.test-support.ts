@@ -1,5 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
+import {
+  buildModelsListResult,
+  createGatewayAgentModelCatalogProjector,
+} from "../gateway/server-methods/models-list-result.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
@@ -249,4 +266,86 @@ module.exports = {
     "utf8",
   );
   return pluginFile;
+}
+
+export async function expectNativeHarnessModelsPublished(params: {
+  config: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  snapshot: PreparedModelRuntimeSnapshot;
+}): Promise<void> {
+  const registry = params.snapshot.pluginRegistry;
+  if (!registry) {
+    throw new Error("expected prepared plugin registry");
+  }
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  try {
+    const catalog = await params.snapshot.loadFullModelCatalog?.();
+    const nativeEntry = catalog?.entries.find(({ id }) => id === "account-scoped-model");
+    expect(nativeEntry).toMatchObject({ provider: PROVIDER_ID, nativeRuntime: HARNESS_ID });
+    if (!catalog) {
+      throw new Error("expected full prepared catalog");
+    }
+    const fullAuth = getPreparedModelFullCatalogAuth(catalog);
+    if (!fullAuth) {
+      throw new Error("expected prepared full-catalog auth");
+    }
+    const context = {
+      getRuntimeConfig: () => params.config,
+      logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } as unknown as GatewayRequestContext;
+    const projector = createGatewayAgentModelCatalogProjector({
+      cfg: params.config,
+      agentId: "main",
+      snapshot: catalog,
+      metadataSnapshot: params.metadataSnapshot,
+      preparedAuthStore: fullAuth.authStore,
+      preparedRuntimeAuthModes: fullAuth.authModes,
+      pluginRegistry: registry,
+    });
+    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
+    expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
+      availability: true,
+    });
+    const preparedModels = await buildModelsListResult({
+      context,
+      agentId: "main",
+      params: { view: "configured" },
+      preloadedCatalog: { agentId: "main", config: params.config, snapshot: catalog },
+      preloadedOnly: true,
+      catalogProjector: projector,
+    });
+    expect(preparedModels.models).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "account-scoped-model",
+        available: true,
+      }),
+    );
+
+    const chatMetadata = createGatewayChatMetadataRuntime({
+      getConfig: () => params.config,
+      getContext: () => context,
+      log: context.logGateway,
+      deps: {
+        getPreparedOwner: () => params.snapshot,
+        getPreparedAuthStore: () => fullAuth.authStore,
+        getAuthStoreRevision: () => 1,
+        getSkillsVersion: () => 1,
+        getPluginRegistryVersion: () => 1,
+        buildCommands: async () => ({ commands: [] }),
+      },
+    });
+    await chatMetadata.refresh();
+    const metadata = await chatMetadata.read({ agentId: "main" });
+    expect(metadata.models).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "account-scoped-model",
+        available: true,
+      }),
+    );
+  } finally {
+    restoreActivePluginRegistrySnapshot(previousRegistry);
+  }
 }
