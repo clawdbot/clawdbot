@@ -6,7 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv } from "../../src/test-utils/env.js";
 
 const {
   applyParallelVitestCachePaths,
