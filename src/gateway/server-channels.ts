@@ -236,6 +236,7 @@ type ChannelManagerOptions = {
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
   tryRecoverAutostartSuppression?: () => boolean;
+  isClosing?: () => boolean;
 };
 
 type StopChannelOptions = {
@@ -823,7 +824,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
-            if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+            if (abort.signal.aborted || manuallyStopped.has(rKey) || opts.isClosing?.()) {
               return;
             }
             const gatewayApprovalRuntime = opts.getNativeApprovalRuntime?.();
@@ -855,7 +856,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
-              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+              if (abort.signal.aborted || manuallyStopped.has(rKey) || opts.isClosing?.()) {
                 return;
               }
               const runStartAccount = () => {
@@ -917,7 +918,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           // Only the task that still owns the store slot may write lifecycle state.
           const trackedPromise = task
             .then(() => {
-              if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
+              if (
+                abort.signal.aborted ||
+                manuallyStopped.has(rKey) ||
+                opts.isClosing?.() ||
+                !isCurrentTask()
+              ) {
                 return;
               }
               if (getRuntime(channelId, id).terminalDisconnect) {
@@ -930,7 +936,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err: unknown) => {
-              if (!isCurrentTask() || store.stops.has(id)) {
+              if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
                 return;
               }
               const message = formatErrorMessage(err);
@@ -948,7 +954,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
               // stopChannel owns the failed-teardown snapshot until a later
               // successful stop proves replacement is safe.
-              if (!isCurrentTask() || store.stops.has(id)) {
+              if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
                 return;
               }
               setStoppedRuntime(channelId, id, {
@@ -956,7 +962,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             })
             .then(async () => {
-              if (!isCurrentTask() || store.stops.has(id)) {
+              if (!isCurrentTask() || store.stops.has(id) || opts.isClosing?.()) {
                 return;
               }
               if (manuallyStopped.has(rKey)) {
@@ -1052,7 +1058,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
-                if (manuallyStopped.has(rKey)) {
+                if (manuallyStopped.has(rKey) || opts.isClosing?.()) {
                   return;
                 }
                 if (store.tasks.get(id) === trackedPromise) {
@@ -1350,7 +1356,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannels = async () => await startChannelsWithOptions();
 
   const recoverAutostartSuppression = async (): Promise<boolean> => {
-    if (!autostartSuppression || !opts.tryRecoverAutostartSuppression?.()) {
+    if (
+      !autostartSuppression ||
+      opts.isClosing?.() ||
+      !opts.tryRecoverAutostartSuppression?.() ||
+      opts.isClosing?.()
+    ) {
       return false;
     }
     autostartSuppression = null;

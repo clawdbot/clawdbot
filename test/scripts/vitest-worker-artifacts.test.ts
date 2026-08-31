@@ -556,38 +556,39 @@ describe("fresh compiled subprocess invocation", () => {
 
   it("uses the prepared Anthropic failover hook in a fresh process without global activation", (context) =>
     fixtureLifetime.run(async () => {
-      const { node } = createFixtureCommands(context);
-      const probe = writeFixture(
-        fixtureDirectory(),
-        "anthropic-hook.mts",
-        `
-          import assert from 'node:assert/strict';
-          import {coerceToFailoverError} from ${JSON.stringify(pathToFileURL(path.join(root, "src/agents/failover-error.ts")).href)};
-          import {getActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
-          import {loadPluginRegistryHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/loader.ts")).href)};
-          import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
-          assert.equal(getActivePluginRegistry(), null);
-          const classify = () => coerceToFailoverError(
-            {code: 'API_ERROR', message: 'provider failure'}, {provider: 'anthropic'},
-          );
-          assert.equal(classify(), null, 'error handling must not discover a provider');
-          const registry = loadPluginRegistryHandle({
-            config: {plugins:{entries:{anthropic:{enabled:true}}}},
-            onlyPluginIds: ['anthropic'],
-          });
-          assert.ok(registry.providers.some(entry=>entry.provider.id==='anthropic'));
-          const result = withPluginRuntimeRegistryScope(registry,classify);
-          assert.equal(result?.reason, 'server_error');
-          assert.equal(result?.provider, 'anthropic');
-          assert.equal(getActivePluginRegistry(), null);
-        `,
-      );
-      const result = await node(resolveRuntimeWorkerArgv(pathToFileURL(probe)), root, {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      });
-      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const { node, prepareWorkers } = createFixtureCommands(context);
+      const owner = createVitestWorkerRun();
+      try {
+        const manifest = await prepareWorkers(owner);
+        const directory = fixtureDirectory();
+        const bundled = path.join(directory, "bundled");
+        const pluginRoot = path.join(bundled, "anthropic");
+        writeFixture(
+          pluginRoot,
+          "openclaw.plugin.json",
+          fs.readFileSync(path.join(root, "extensions/anthropic/openclaw.plugin.json"), "utf8"),
+        );
+        writeFixture(
+          pluginRoot,
+          "index.mjs",
+          `export {default} from ${JSON.stringify(pathToFileURL(path.join(owner.descriptor.directory, "dist/extensions/anthropic/index.js")).href)};`,
+        );
+        const result = await node(
+          [path.join(owner.descriptor.directory, "dist/test-support/anthropic-preparation.js")],
+          root,
+          {
+            ...process.env,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundled,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          },
+        );
+        console.log(JSON.stringify({ preparationMs: manifest.durationMs }));
+        console.log(result.stdout);
+        expect(result.code, result.stderr + result.stdout).toBe(0);
+      } finally {
+        await owner.dispose();
+      }
+      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
   it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", (context) =>
@@ -641,11 +642,11 @@ describe("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
-            import {resolveProviderRuntimePluginHandle} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/provider-hook-runtime.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
             const {buildEmbeddedRunPayloads} = await import(process.argv[2]);
+            const {resolveProviderRuntimePluginHandle} = await import(process.argv[3]);
             const imported = performance.now();
             assert.deepEqual(observed(),[], 'importing classifier code must not materialize the provider');
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null);
@@ -670,7 +671,13 @@ describe("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
-            const call = () => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const call = () => {
+              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              if (${scope === "scoped"}) {
+                assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
+              }
+              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+            };
             const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
             const callMs = performance.now()-callStarted;
             const records = observed();
@@ -697,7 +704,18 @@ describe("fresh compiled subprocess invocation", () => {
                   ),
             );
             const result = await node(
-              [...resolveRuntimeWorkerArgv(pathToFileURL(probe)), url.href],
+              [
+                ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
+                url.href,
+                pathToFileURL(
+                  mode === "source"
+                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
+                    : path.join(
+                        owner.descriptor.directory,
+                        "dist/plugins/provider-hook-runtime.js",
+                      ),
+                ).href,
+              ],
               root,
               {
                 ...process.env,

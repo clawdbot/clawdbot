@@ -136,12 +136,12 @@ describe("package lifecycle completion", () => {
             await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
             if (script.name === "preinstall") {
               await fs.rm(legacyGuardPath);
-            } else {
-              await fs.rm(markerPath);
             }
           },
         }),
       ).resolves.toBe(true);
+      await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(legacyGuardPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

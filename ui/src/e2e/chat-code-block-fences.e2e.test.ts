@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -17,7 +17,12 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofStage = process.env.OPENCLAW_CODE_FENCE_PROOF_STAGE ?? "after";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-code-block-fences");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    artifactDir = createControlUiE2eArtifactDir("chat-code-block-fences");
+  }
+});
 
 function fencedJson(lineCount: number): string {
   const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
@@ -61,9 +66,6 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    if (captureProof) {
-      await mkdir(artifactDir, { recursive: true });
     }
     server = await startControlUiE2eServer(undefined, { source: true });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });

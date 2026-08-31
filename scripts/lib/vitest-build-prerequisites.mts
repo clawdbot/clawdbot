@@ -25,6 +25,12 @@ const runtimeConsumers = [
     dir: "extensions",
   },
   {
+    file: "src/cli/update-dry-run-state.process.test.ts",
+    configs: ["test/vitest/vitest.cli.config.ts"],
+    mode: "runtime",
+    dir: "src/cli",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "runtime",

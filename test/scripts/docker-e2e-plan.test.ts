@@ -986,7 +986,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
-  it.each(["prerelease-plugin-registry", "auth-profile-v2026-7-2-beta-5"])(
+  it.each(["prerelease-plugin-registry", "auth-profile-v2026-7-2-beta-5", "recovery-cleanup"])(
     "plans %s only when explicitly requested",
     (scenario) => {
       const laneName = `published-upgrade-survivor-2026.7.1-2-${scenario}`;
@@ -999,6 +999,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
         publishedUpgradeSurvivorLane(laneName, "openclaw@2026.7.1-2", scenario),
       ]);
+      if (scenario === "recovery-cleanup") {
+        expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([
+          "@openclaw/codex",
+          "@openclaw/discord",
+          "@openclaw/whatsapp",
+        ]);
+      }
 
       for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
         const aggregateLaneNames = planFor({

@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -34,15 +33,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const bubble = page.locator(".chat-group.user .chat-bubble");
       await bubble.waitFor({ state: "visible", timeout: 10_000 });
-      const proofDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "control-ui-e2e",
-        "user-bubble-clamp",
-      );
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
-        await bubble.screenshot({ path: path.join(proofDir, "short-message.png") });
+        await bubble.screenshot({
+          path: path.join(suite.artifactDir, "user-bubble-clamp", "short-message.png"),
+        });
       }
 
       expect(await bubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
@@ -88,15 +82,10 @@ suite.define(() => {
       expect(await content.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
         true,
       );
-      const proofDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "control-ui-e2e",
-        "user-bubble-clamp",
-      );
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
-        await bubble.screenshot({ path: path.join(proofDir, "long-message-collapsed.png") });
+        await bubble.screenshot({
+          path: path.join(suite.artifactDir, "user-bubble-clamp", "long-message-collapsed.png"),
+        });
       }
 
       await toggle.click();

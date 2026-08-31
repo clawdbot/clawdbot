@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,9 +15,15 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const artifactDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_PROOF_DIR ?? ".artifacts/control-ui-e2e/model-providers-progressive",
-);
+let artifactDir: string;
+beforeEach(() => {
+  if (recordVisuals) {
+    artifactDir = createControlUiE2eArtifactDir(
+      "model-providers-progressive",
+      process.env.OPENCLAW_UI_E2E_PROOF_DIR,
+    );
+  }
+});
 
 describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   let browser: Browser;
@@ -29,9 +35,6 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    if (recordVisuals) {
-      await mkdir(artifactDir, { recursive: true });
-    }
   });
 
   afterAll(async () => {

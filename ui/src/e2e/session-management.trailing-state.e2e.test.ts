@@ -51,7 +51,7 @@ suite.define(() => {
       const pin = row.getByRole("button", { name: "Unpin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
-      await captureUiProof(page, "sidebar-session-actions-centered.png");
+      await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
       const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
         row.boundingBox(),
@@ -79,7 +79,7 @@ suite.define(() => {
           return title && details ? title.y + title.height - details.y : Number.POSITIVE_INFINITY;
         })
         .toBeLessThanOrEqual(0.5);
-      await captureUiProof(page, "sidebar-session-text-scale-140.png");
+      await captureUiProof(suite, page, "sidebar-session-text-scale-140.png");
     } finally {
       await context.close();
     }
@@ -352,9 +352,9 @@ suite.define(() => {
       const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
       const unreadDot = pullRequestRow.locator(".session-unread-dot");
       const trailingState = pullRequestRow.locator(".session-row-state");
-      await captureUiProof(page, "sidebar-pr-before-hover.png");
+      await captureUiProof(suite, page, "sidebar-pr-before-hover.png");
       await pullRequestRow.hover();
-      await captureUiProof(page, "sidebar-pr-hover.png");
+      await captureUiProof(suite, page, "sidebar-pr-hover.png");
       await pullRequestIcon.waitFor({ state: "hidden" });
       await unreadDot.waitFor({ state: "hidden" });
       await trailingState.waitFor({ state: "hidden" });

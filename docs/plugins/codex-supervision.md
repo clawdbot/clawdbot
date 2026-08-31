@@ -481,6 +481,16 @@ Gateway-local stored and idle rows offer **Continue as branch** instead of
 unsafe exact-thread takeover. A row that already has a supervised Chat offers
 **Open Chat**.
 
+**Session eligibility could not be verified:** for filesystem-backed local
+sources, transcript, Continue, Archive, and terminal actions verify the selected
+thread directly, check non-archived native index membership, and validate its
+rollout metadata in the selected Codex home. These checks share one request
+budget and do not scan the full catalog. Missing, unreadable, inconsistent, or
+OpenClaw-managed metadata is not accepted. Refresh the catalog, verify the session
+in its native Codex home, and retry. This error does not prove that the thread
+does not exist. Ordinary discovery keeps its existing behavior; remote sources
+continue to use native catalog verification.
+
 **Archive is disabled:** archive is available for stored/activity-unknown and
 idle Gateway-local rows after no-other-runner confirmation. Active, error,
 offline, paired-node, pending-branch, and known exact-binding-owner rows remain

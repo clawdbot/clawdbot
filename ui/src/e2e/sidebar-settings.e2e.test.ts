@@ -211,6 +211,7 @@ suite.define(() => {
         )
         .toBe(webChrome);
       await captureSettingsSidebarUiProof(
+        suite,
         settingsSidebar,
         `settings-search-alignment-${mode.replaceAll(" ", "-")}.png`,
       );
@@ -251,6 +252,7 @@ suite.define(() => {
         )
         .toBe("1");
       await captureSettingsSidebarUiProof(
+        suite,
         settingsSidebar,
         `settings-search-scrolled-${mode.replaceAll(" ", "-")}.png`,
       );
