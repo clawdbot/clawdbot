@@ -750,7 +750,10 @@ async function resolvePendingApproval(
   }
 
   const expiresInDaysRaw =
-    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
+    opts.expiresInDays === undefined ? undefined : parseStrictPositiveInteger(opts.expiresInDays);
+  if (opts.expiresInDays !== undefined && expiresInDaysRaw === undefined) {
+    exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
+  }
   if (
     expiresInDaysRaw !== undefined &&
     (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)

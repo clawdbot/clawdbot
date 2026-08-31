@@ -164,6 +164,61 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(call?.[2]).toEqual({ limit: 25 });
   });
 
+  it.each(["10junk", "1.5", "0", "-1"])(
+    "rejects malformed approval grant lifetime before resolving (%s)",
+    async (expiresInDays) => {
+      callGatewayFromCli.mockResolvedValueOnce(pendingApprovalSnapshot({ id: "approval-expiry" }));
+
+      await expect(
+        runApprovalsCommand([
+          "approvals",
+          "resolve",
+          "approval-expiry",
+          "allow-always",
+          "--expires-in-days",
+          expiresInDays,
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+      expect(runtimeErrors[0]).toContain(
+        "--expires-in-days must be a whole number of days between 1 and 3650.",
+      );
+    },
+  );
+
+  it("forwards a valid approval grant lifetime as a number", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "approval.get") {
+        return pendingApprovalSnapshot({ id: "approval-expiry-valid" });
+      }
+      return {
+        applied: true,
+        approval: terminalApprovalSnapshot({
+          id: "approval-expiry-valid",
+          decision: "allow-always",
+        }),
+      };
+    });
+
+    await runApprovalsCommand([
+      "approvals",
+      "resolve",
+      "approval-expiry-valid",
+      "allow-always",
+      "--expires-in-days",
+      "30",
+      "--json",
+    ]);
+
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      id: "approval-expiry-valid",
+      kind: "exec",
+      decision: "allow-always",
+      grantExpiresInDays: 30,
+    });
+  });
+
   it("renders pending approvals from all three approval kinds", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {
