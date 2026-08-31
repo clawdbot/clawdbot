@@ -2,6 +2,19 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountSnapshot } from "../api.js";
 import { lineStatusAdapter } from "./status.js";
+import type { ResolvedLineAccount } from "./types.js";
+
+async function buildSnapshot(account: ResolvedLineAccount): Promise<ChannelAccountSnapshot> {
+  const build = lineStatusAdapter.buildAccountSnapshot;
+  if (!build) {
+    throw new Error("LINE plugin status snapshot builder is unavailable");
+  }
+  return await build({
+    cfg: {},
+    account,
+    probe: { ok: true, webhook: { status: "unset" } },
+  });
+}
 
 function collectIssues(accounts: ChannelAccountSnapshot[]) {
   const collect = lineStatusAdapter.collectStatusIssues;
@@ -16,24 +29,19 @@ describe("linePlugin status.collectStatusIssues", () => {
   // collector. Every other case writes the field onto a fixture, so a rename on either
   // side would fall back to the default in silence; this one goes through both.
   it("carries the account's configured route from the snapshot into the warning", async () => {
-    const snapshot = await lineStatusAdapter.buildAccountSnapshot?.({
-      cfg: {},
-      account: {
-        accountId: "default",
-        enabled: true,
-        configured: true,
-        channelAccessToken: "token",
-        channelSecret: "secret",
-        tokenSource: "config",
-        signingSecretSource: "config",
-        tokenStatus: "available",
-        signingSecretStatus: "available",
-        config: { webhookPath: "hooks/line-primary/" },
-      } as never,
-      probe: { ok: true, webhook: { status: "unset" } },
+    const snapshot = await buildSnapshot({
+      accountId: "default",
+      enabled: true,
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      tokenSource: "config",
+      signingSecretSource: "config",
+      tokenStatus: "available",
+      signingSecretStatus: "available",
+      config: { webhookPath: "hooks/line-primary/" },
     });
 
-    expect(collectIssues([snapshot as ChannelAccountSnapshot])).toEqual([
+    expect(collectIssues([snapshot])).toEqual([
       {
         channel: "line",
         accountId: "default",

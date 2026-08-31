@@ -17,13 +17,15 @@ import { probeLineBot } from "./probe.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
+const { getBotInfoMock, getWebhookEndpointMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMockLocal = vi.fn();
+  const getWebhookEndpointMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
-    return { getBotInfo: getBotInfoMockLocal };
+    return { getBotInfo: getBotInfoMockLocal, getWebhookEndpoint: getWebhookEndpointMockLocal };
   });
   return {
     getBotInfoMock: getBotInfoMockLocal,
+    getWebhookEndpointMock: getWebhookEndpointMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
   };
 });
@@ -112,7 +114,7 @@ describe("probeLineBot", () => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
-      return { getBotInfo: getBotInfoMock };
+      return { getBotInfo: getBotInfoMock, getWebhookEndpoint: getWebhookEndpointMock };
     });
   });
 
@@ -154,7 +156,7 @@ describe("linePlugin status.probeAccount", () => {
     const { lineStatusAdapter } = await import("./status.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
-      return { getBotInfo: getBotInfoMock };
+      return { getBotInfo: getBotInfoMock, getWebhookEndpoint: getWebhookEndpointMock };
     });
     getBotInfoMock.mockResolvedValue({
       displayName: "OpenClaw",

@@ -4,7 +4,7 @@ import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 export { validateLineSignature } from "./signature.js";
 
 /** Route the gateway serves when an account configures no `webhookPath`. */
-export const LINE_DEFAULT_WEBHOOK_PATH = "/line/webhook";
+const LINE_DEFAULT_WEBHOOK_PATH = "/line/webhook";
 
 /** The route this account's monitor serves, which is the one an operator has to register
  *  with LINE. Every surface resolves it here so a warning cannot name a path the gateway

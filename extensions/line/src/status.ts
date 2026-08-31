@@ -35,8 +35,9 @@ function readProbeWebhookState(probe: unknown): LineProbeWebhookState | undefine
   if (status === "unset") {
     return { status };
   }
-  // An empty endpoint would render "turn Use webhook on for  in ..." — a state LINE
-  // cannot actually return, but the fix text is only useful when it names a URL.
+  // An empty endpoint would render "turn Use webhook on for  in ...". LINE cannot return
+  // one: `endpoint` and `active` are both non-optional in the SDK's response type
+  // (@line/bot-sdk dist/messaging-api/model/getWebhookEndpointResponse.d.ts).
   return (status === "active" || status === "disabled") && typeof endpoint === "string" && endpoint
     ? { status, endpoint }
     : undefined;
