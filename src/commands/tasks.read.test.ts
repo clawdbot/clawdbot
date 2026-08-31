@@ -1,5 +1,6 @@
-// Tasks command tests cover filter rejection before registry queries.
-import { describe, expect, it, vi } from "vitest";
+// Tasks command tests cover read-only list output and filter rejection before registry queries.
+import { stripVTControlCharacters } from "node:util";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
@@ -11,12 +12,20 @@ import type {
 } from "../tasks/task-system-audit.types.js";
 import { tasksAuditCommand, tasksListCommand } from "./tasks.js";
 
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
+  };
 }
 
 describe("tasks command filter validation", () => {
@@ -122,4 +131,95 @@ describe("tasks command filter validation", () => {
       query.mockRestore();
     }
   });
+});
+
+describe("tasks list output", () => {
+  afterEach(() => {
+    mocks.callGateway.mockReset();
+  });
+
+  it.each([
+    {
+      name: "ASCII cells and their headings",
+      runId: "run-ascii",
+      childSessionKey: "agent:main:main",
+      expectedRun: "run-ascii ",
+      expectedChild: "agent:main:main                     ",
+    },
+    {
+      name: "a wide run id",
+      runId: "界界界",
+      childSessionKey: "agent:main:main",
+      expectedRun: "界界界    ",
+      expectedChild: "agent:main:main                     ",
+    },
+    {
+      name: "a wide child session key",
+      runId: "run-ascii",
+      childSessionKey: "agent:main:界界界",
+      expectedRun: "run-ascii ",
+      expectedChild: "agent:main:界界界                   ",
+    },
+    {
+      name: "an exactly fitting combining run id",
+      runId: "A".repeat(9) + "e\u0301",
+      childSessionKey: "agent:main:main",
+      expectedRun: "AAAAAAAAAe\u0301",
+      expectedChild: "agent:main:main                     ",
+    },
+    {
+      name: "an exactly fitting combining child session key",
+      runId: "run-ascii",
+      childSessionKey: "agent:main:" + "x".repeat(24) + "e\u0301",
+      expectedRun: "run-ascii ",
+      expectedChild: "agent:main:xxxxxxxxxxxxxxxxxxxxxxxxe\u0301",
+    },
+  ])(
+    "aligns task list columns for $name",
+    async ({ runId, childSessionKey, expectedRun, expectedChild }) => {
+      const task = Object.freeze({
+        taskId: "00000000-0000-4000-8000-000000000001",
+        runtime: "cli",
+        requesterSessionKey: childSessionKey,
+        ownerKey: childSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        agentId: "main",
+        runId,
+        task: "Inspect output",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 1,
+        startedAt: 1,
+        lastEventAt: 1,
+      } satisfies TaskRecord);
+      const query = vi
+        .spyOn(taskRegistryReconcile, "reconcileInspectableTasks")
+        .mockReturnValue([task]);
+      const runtime = createRuntime();
+      try {
+        await tasksListCommand({}, runtime);
+        const lines = vi
+          .mocked(runtime.log)
+          .mock.calls.map(([line]) => stripVTControlCharacters(String(line)));
+        const expectedRow =
+          "00000000-… cli      running    not_applicable " +
+          `${expectedRun} ${expectedChild} Inspect output`;
+        expect(lines.at(-1)).toBe(expectedRow);
+        expect(lines).toEqual([
+          "Background tasks: 1",
+          "Task pressure: 0 queued · 1 running · 0 issues",
+          "Task       Kind     Status     Delivery       Run        " +
+            "Child Session                        Summary",
+          expectedRow,
+        ]);
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+      } finally {
+        query.mockRestore();
+      }
+    },
+  );
 });
