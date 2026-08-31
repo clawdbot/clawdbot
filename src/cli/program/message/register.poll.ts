@@ -1,7 +1,9 @@
+// Poll command registration for channel-backed poll creation.
 import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
+/** Register `message poll` and validate poll-specific flags through the shared action path. */
 export function registerMessagePollCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
@@ -16,7 +18,7 @@ export function registerMessagePollCommand(message: Command, helpers: MessageCli
     )
     .option("--poll-multi", "Allow multiple selections", false)
     .option("--poll-duration-hours <n>", "Poll duration in hours (Discord)")
-    .option("--poll-duration-seconds <n>", "Poll duration in seconds (Telegram; 5-600)")
+    .option("--poll-duration-seconds <n>", "Poll duration in seconds (Telegram; 5-604800)")
     .option("--poll-anonymous", "Send an anonymous poll (Telegram)", false)
     .option("--poll-public", "Send a non-anonymous poll (Telegram)", false)
     .option("-m, --message <text>", "Optional message body")
@@ -26,7 +28,5 @@ export function registerMessagePollCommand(message: Command, helpers: MessageCli
       false,
     )
     .option("--thread-id <id>", "Thread id (Telegram forum topic / Slack thread ts)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("poll", opts);
-    });
+    .action((opts) => helpers.runMessageAction("poll", opts));
 }

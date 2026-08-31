@@ -1,4 +1,6 @@
+// Normalizes executable tokens used by wrapper and policy analysis.
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const WINDOWS_EXECUTABLE_SUFFIXES = [".exe", ".cmd", ".bat", ".com"] as const;
 
@@ -11,13 +13,15 @@ function stripWindowsExecutableSuffix(value: string): string {
   return value;
 }
 
-export function basenameLower(token: string): string {
+/** Return a lowercase basename using the shorter POSIX/Windows interpretation. */
+function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
   const base = win.length < posix.length ? win : posix;
-  return base.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(base);
 }
 
+/** Normalize an executable token for wrapper and policy matching. */
 export function normalizeExecutableToken(token: string): string {
   return stripWindowsExecutableSuffix(basenameLower(token));
 }

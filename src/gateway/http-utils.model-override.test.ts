@@ -1,3 +1,6 @@
+/**
+ * Tests HTTP model override parsing from gateway request headers and URLs.
+ */
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -6,7 +9,11 @@ const loadConfigMock = vi.fn();
 const loadGatewayModelCatalogMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  getRuntimeConfig: () => loadConfigMock(),
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => loadConfigMock(),
 }));
 
 vi.mock("./server-model-catalog.js", () => ({

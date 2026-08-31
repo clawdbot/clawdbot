@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover inbound.authz plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -86,10 +87,7 @@ describe("nextcloud-talk inbound authz", () => {
       runtime: createTestRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledWith({
-      channel: "nextcloud-talk",
-      accountId: "default",
-    });
+    expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(buildMentionRegexes).not.toHaveBeenCalled();
   });
 

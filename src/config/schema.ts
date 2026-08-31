@@ -1,33 +1,27 @@
+// Builds and validates the canonical OpenClaw configuration schema.
 import crypto from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
   asSchemaObject,
   cloneSchema,
+  type ConfigJsonSchemaObject as JsonSchemaObject,
   findWildcardHintMatch,
   schemaHasChildren,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
-export type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-
-export type ConfigSchema = Record<string, unknown>;
+type ConfigSchema = Record<string, unknown>;
 
 type JsonSchemaNode = Record<string, unknown>;
-
-type JsonSchemaObject = JsonSchemaNode & {
-  type?: string | string[];
-  properties?: Record<string, JsonSchemaObject>;
-  required?: string[];
-  additionalProperties?: JsonSchemaObject | boolean;
-  items?: JsonSchemaObject | JsonSchemaObject[];
-};
-
-const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
-  asSchemaObject<JsonSchemaObject>(value);
 
 const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
@@ -61,6 +55,8 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "writeOnly",
 ]);
 const MAX_LOOKUP_PATH_SEGMENTS = 32;
+const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
+const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
@@ -100,19 +96,31 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type ConfigSchemaLookupChild = {
+type ConfigSchemaLookupChild = {
   key: string;
   path: string;
   type?: string | string[];
   required: boolean;
   hasChildren: boolean;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
 };
 
-export type ConfigSchemaLookupResult = {
+type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+
+type ConfigSchemaReloadMetadata = {
+  kind: ConfigSchemaReloadKind;
+};
+
+type ConfigSchemaReloadMetadataResolver = (
+  path: string,
+) => ConfigSchemaReloadMetadata | null | undefined;
+
+type ConfigSchemaLookupResult = {
   path: string;
   schema: JsonSchemaNode;
+  reloadKind?: ConfigSchemaReloadKind;
   hint?: ConfigUiHint;
   hintPath?: string;
   children: ConfigSchemaLookupChild[];
@@ -124,7 +132,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };
@@ -136,6 +147,71 @@ export type ChannelUiMetadata = {
   configSchema?: JsonSchemaNode;
   configUiHints?: Record<string, ConfigUiHint>;
 };
+
+const EXTENSION_SCHEMA_MAX_BYTES = 256 * 1024;
+const EXTENSION_SCHEMA_TOTAL_MAX_BYTES = 2 * 1024 * 1024;
+const EXTENSION_SCHEMA_MAX_ITEMS = 256;
+
+function schemaJsonBytes(schema: JsonSchemaNode): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(schema), "utf-8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function buildOmittedExtensionConfigSchema(kind: "plugin" | "channel", id: string): JsonSchemaNode {
+  return {
+    type: "object",
+    additionalProperties: true,
+    description: `${kind} config schema for ${id} was omitted from the full config.schema response because installed extension schemas exceeded the Gateway response budget.`,
+  };
+}
+
+function limitExtensionSchemas(params: {
+  plugins: PluginUiMetadata[];
+  channels: ChannelUiMetadata[];
+}): { plugins: PluginUiMetadata[]; channels: ChannelUiMetadata[] } {
+  let totalBytes = 0;
+  let includedItems = 0;
+
+  const keepSchema = (schema: JsonSchemaNode): boolean => {
+    const bytes = schemaJsonBytes(schema);
+    if (
+      !Number.isFinite(bytes) ||
+      bytes > EXTENSION_SCHEMA_MAX_BYTES ||
+      totalBytes + bytes > EXTENSION_SCHEMA_TOTAL_MAX_BYTES ||
+      includedItems >= EXTENSION_SCHEMA_MAX_ITEMS
+    ) {
+      return false;
+    }
+    totalBytes += bytes;
+    includedItems += 1;
+    return true;
+  };
+
+  const plugins = params.plugins.map((plugin) => {
+    if (!plugin.configSchema || keepSchema(plugin.configSchema)) {
+      return plugin;
+    }
+    return {
+      ...plugin,
+      configSchema: buildOmittedExtensionConfigSchema("plugin", plugin.id),
+    };
+  });
+
+  const channels = params.channels.map((channel) => {
+    if (!channel.configSchema || keepSchema(channel.configSchema)) {
+      return channel;
+    }
+    return {
+      ...channel,
+      configSchema: buildOmittedExtensionConfigSchema("channel", channel.id),
+    };
+  });
+
+  return { plugins, channels };
+}
 
 function collectExtensionHintKeys(
   hints: ConfigUiHints,
@@ -152,7 +228,7 @@ function collectExtensionHintKeys(
   };
 
   const collectSchemaKeys = (schema: unknown, basePath: string) => {
-    const node = asJsonSchemaObject(schema);
+    const node = asSchemaObject(schema);
     if (!node) {
       return;
     }
@@ -279,7 +355,7 @@ function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
   for (const id of CHANNEL_IDS) {
-    const normalized = id.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(id);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -287,7 +363,7 @@ function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
     ordered.push(normalized);
   }
   for (const channel of channels) {
-    const normalized = channel.id.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(channel.id);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -304,14 +380,14 @@ function applyHeartbeatTargetHints(
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"];
+  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
+  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
       ...current,
       help: current.help ?? help,
-      placeholder: current.placeholder ?? "last",
+      placeholder: current.placeholder ?? "owner",
     };
   }
   return next;
@@ -319,14 +395,14 @@ function applyHeartbeatTargetHints(
 
 function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): ConfigSchema {
   const next = cloneSchema(schema);
-  const root = asJsonSchemaObject(next);
-  const pluginsNode = asJsonSchemaObject(root?.properties?.plugins);
-  const entriesNode = asJsonSchemaObject(pluginsNode?.properties?.entries);
+  const root = asSchemaObject(next);
+  const pluginsNode = asSchemaObject(root?.properties?.plugins);
+  const entriesNode = asSchemaObject(pluginsNode?.properties?.entries);
   if (!entriesNode) {
     return next;
   }
 
-  const entryBase = asJsonSchemaObject(entriesNode.additionalProperties);
+  const entryBase = asSchemaObject(entriesNode.additionalProperties);
   const entryProperties = entriesNode.properties ?? {};
   entriesNode.properties = entryProperties;
 
@@ -337,9 +413,9 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
     const entrySchema = entryBase
       ? cloneSchema(entryBase)
       : ({ type: "object" } as JsonSchemaObject);
-    const entryObject = asJsonSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
-    const baseConfigSchema = asJsonSchemaObject(entryObject.properties?.config);
-    const pluginSchema = asJsonSchemaObject(plugin.configSchema);
+    const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
+    const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
+    const pluginSchema = asSchemaObject(plugin.configSchema);
     const nextConfigSchema =
       baseConfigSchema &&
       pluginSchema &&
@@ -360,8 +436,8 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
 
 function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]): ConfigSchema {
   const next = cloneSchema(schema);
-  const root = asJsonSchemaObject(next);
-  const channelsNode = asJsonSchemaObject(root?.properties?.channels);
+  const root = asSchemaObject(next);
+  const channelsNode = asSchemaObject(root?.properties?.channels);
   if (!channelsNode) {
     return next;
   }
@@ -372,8 +448,8 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     if (!channel.configSchema) {
       continue;
     }
-    const existing = asJsonSchemaObject(channelProps[channel.id]);
-    const incoming = asJsonSchemaObject(channel.configSchema);
+    const existing = asSchemaObject(channelProps[channel.id]);
+    const incoming = asSchemaObject(channel.configSchema);
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
       channelProps[channel.id] = mergeObjectSchema(existing, incoming);
     } else {
@@ -431,23 +507,18 @@ function buildMergedSchemaCacheKey(params: {
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
-  if (mergedSchemaCache.size >= MERGED_SCHEMA_CACHE_MAX) {
-    const oldest = mergedSchemaCache.keys().next();
-    if (!oldest.done) {
-      mergedSchemaCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
   mergedSchemaCache.set(key, value);
 }
 
 function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => {
-    const metadata: ChannelUiMetadata = {
-      id: entry.channelId,
-      ...(entry.label ? { label: entry.label } : {}),
-      ...(entry.description ? { description: entry.description } : {}),
-      configSchema: entry.schema,
-    };
+    const metadata: ChannelUiMetadata = Object.assign(
+      { id: entry.channelId },
+      entry.label ? { label: entry.label } : {},
+      entry.description ? { description: entry.description } : {},
+      { configSchema: entry.schema },
+    );
     if ("uiHints" in entry) {
       metadata.configUiHints = entry.uiHints as ChannelUiMetadata["configUiHints"];
     }
@@ -455,11 +526,26 @@ function getBundledChannelSchemaMetadata(): ChannelUiMetadata[] {
   });
 }
 
+/**
+ * Materialize the presentation hints that need the merged schema: tiers resolve
+ * per path, then shared channel leaves get their help, then tags derive.
+ */
+function resolveMergedUiHints(schema: ConfigSchema, hints: ConfigUiHints): ConfigUiHints {
+  return applyDerivedTags(
+    applySharedChannelFieldHelp(
+      applyResolvedConfigTierHints(
+        schema,
+        applyConfigTierHints(hints, { includePluginOwnedChannels: true }),
+      ),
+    ),
+  );
+}
+
 function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) {
     return cachedBase;
   }
-  const generated = GENERATED_BASE_CONFIG_SCHEMA as unknown as ConfigSchemaResponse;
+  const generated = computeBaseConfigSchemaResponse();
   const bundledChannels = getBundledChannelSchemaMetadata();
   const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
     applyChannelHints(generated.uiHints, bundledChannels),
@@ -471,23 +557,26 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
+  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
-    uiHints: mergedHints,
+    schema: mergedSchema,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   cachedBase = next;
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;
 }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
-  const plugins = params?.plugins ?? [];
-  const channels = params?.channels ?? [];
+  const { plugins, channels } = limitExtensionSchemas({
+    plugins: params?.plugins ?? [],
+    channels: params?.channels ?? [],
+  });
   if (plugins.length === 0 && channels.length === 0) {
     return base;
   }
@@ -518,7 +607,7 @@ export function buildConfigSchema(params?: {
   const merged = {
     ...base,
     schema: mergedSchema,
-    uiHints: mergedHints,
+    uiHints: resolveMergedUiHints(mergedSchema, mergedHints),
   };
   if (cacheKey) {
     setMergedSchemaCache(cacheKey, merged);
@@ -571,13 +660,27 @@ function resolveLookupChildSchema(
 
   const properties = schema.properties;
   if (properties && Object.hasOwn(properties, segment)) {
-    return asJsonSchemaObject(properties[segment]);
+    return asSchemaObject(properties[segment]);
   }
 
-  const itemIndex = /^\d+$/.test(segment) ? Number.parseInt(segment, 10) : undefined;
+  const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
     return items;
+  }
+
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const resolved = variantSchema ? resolveLookupChildSchema(variantSchema, segment) : null;
+      if (resolved) {
+        return resolved;
+      }
+    }
   }
 
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
@@ -587,7 +690,130 @@ function resolveLookupChildSchema(
   return null;
 }
 
-function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
+type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
+
+function classifyLookupChildSchema(
+  schema: JsonSchemaObject,
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  if (schema.properties && Object.hasOwn(schema.properties, segment)) {
+    return "property";
+  }
+  if (parseConfigPathArrayIndex(segment) !== undefined && resolveItemsSchema(schema)) {
+    return "array-index";
+  }
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const kind = variantSchema ? classifyLookupChildSchema(variantSchema, segment) : null;
+      if (kind) {
+        return kind;
+      }
+    }
+  }
+  if (schema.additionalProperties === true || typeof schema.additionalProperties === "object") {
+    return propertyNameSchemaAllows(schema.propertyNames, segment)
+      ? "record-key"
+      : "invalid-record-key";
+  }
+  return null;
+}
+
+const PROPERTY_NAME_SCHEMA_KEYS = new Set([
+  "$id",
+  "$schema",
+  "title",
+  "description",
+  "type",
+  "const",
+  "enum",
+  "pattern",
+  "minLength",
+  "maxLength",
+  "anyOf",
+  "oneOf",
+  "allOf",
+]);
+
+function propertyNameSchemaAllows(schema: unknown, value: string): boolean {
+  if (schema === undefined || schema === true) {
+    return true;
+  }
+  if (schema === false) {
+    return false;
+  }
+  const object = asSchemaObject(schema);
+  if (!object || Object.keys(object).some((key) => !PROPERTY_NAME_SCHEMA_KEYS.has(key))) {
+    return false;
+  }
+  const types = Array.isArray(object.type) ? object.type : [object.type];
+  if (object.type !== undefined && !types.includes("string")) {
+    return false;
+  }
+  if (object.const !== undefined && object.const !== value) {
+    return false;
+  }
+  if (Array.isArray(object.enum) && !object.enum.includes(value)) {
+    return false;
+  }
+  if (typeof object.minLength === "number" && value.length < object.minLength) {
+    return false;
+  }
+  if (typeof object.maxLength === "number" && value.length > object.maxLength) {
+    return false;
+  }
+  if (typeof object.pattern === "string") {
+    try {
+      if (!new RegExp(object.pattern).test(value)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  if (object.allOf?.some((candidate) => !propertyNameSchemaAllows(candidate, value))) {
+    return false;
+  }
+  if (
+    object.anyOf &&
+    !object.anyOf.some((candidate) => propertyNameSchemaAllows(candidate, value))
+  ) {
+    return false;
+  }
+  if (
+    object.oneOf &&
+    object.oneOf.filter((candidate) => propertyNameSchemaAllows(candidate, value)).length !== 1
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Classify one already-parsed path segment without losing dots inside record keys. */
+export function classifyConfigSchemaPathSegment(
+  response: ConfigSchemaResponse,
+  parentParts: readonly string[],
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  let current = asSchemaObject(response.schema);
+  if (!current) {
+    return null;
+  }
+  for (const parentPart of parentParts) {
+    const next = resolveLookupChildSchema(current, parentPart);
+    if (!next) {
+      return null;
+    }
+    current = next;
+  }
+  return classifyLookupChildSchema(current, segment);
+}
+
+function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
   const next: JsonSchemaNode = {};
 
   for (const [key, value] of Object.entries(schema)) {
@@ -635,6 +861,41 @@ function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
     }
   }
 
+  if (
+    schema.properties &&
+    ((nestedFormDepth > 0 && nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) ||
+      (schema.additionalProperties && typeof schema.additionalProperties === "object"))
+  ) {
+    next.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, child]) => [
+        key,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
+    );
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    next.additionalProperties = stripSchemaForLookup(
+      schema.additionalProperties,
+      nestedFormDepth + 1,
+    );
+  }
+  if (Array.isArray(schema.items)) {
+    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+  } else if (schema.items && typeof schema.items === "object") {
+    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+  }
+  if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
+    for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+      const variants = schema[key];
+      if (!Array.isArray(variants)) {
+        continue;
+      }
+      next[key] = variants
+        .filter((variant) => variant && typeof variant === "object")
+        .map((variant) => stripSchemaForLookup(variant, nestedFormDepth + 1));
+    }
+  }
+
   return next;
 }
 
@@ -642,6 +903,7 @@ function buildLookupChildren(
   schema: JsonSchemaObject,
   path: string,
   uiHints: ConfigUiHints,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
   const required = new Set(schema.required ?? []);
@@ -649,12 +911,14 @@ function buildLookupChildren(
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
     const resolvedHint = resolveUiHintMatch(uiHints, childPath);
+    const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
       path: childPath,
       type: childSchema.type,
       required: isRequired,
       hasChildren: schemaHasChildren(childSchema),
+      reloadKind: reloadMetadata?.kind,
       hint: resolvedHint?.hint,
       hintPath: resolvedHint?.path,
     });
@@ -680,17 +944,19 @@ function buildLookupChildren(
 export function lookupConfigSchema(
   response: ConfigSchemaResponse,
   path: string,
+  resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupResult | null {
+  const wantsRoot = path.trim() === ".";
   const normalizedPath = normalizeLookupPath(path);
-  if (!normalizedPath) {
+  if (!normalizedPath && !wantsRoot) {
     return null;
   }
   const parts = splitLookupPath(normalizedPath);
-  if (parts.length === 0 || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
+  if ((!wantsRoot && parts.length === 0) || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
     return null;
   }
 
-  let current = asJsonSchemaObject(response.schema);
+  let current = asSchemaObject(response.schema);
   if (!current) {
     return null;
   }
@@ -703,11 +969,19 @@ export function lookupConfigSchema(
   }
 
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
+  const reloadMetadata = resolveReloadMetadata?.(normalizedPath);
   return {
-    path: normalizedPath,
+    path: wantsRoot ? "." : normalizedPath,
     schema: stripSchemaForLookup(current),
+    reloadKind: reloadMetadata?.kind,
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
-    children: buildLookupChildren(current, normalizedPath, response.uiHints),
+    children: buildLookupChildren(
+      current,
+      wantsRoot ? "" : normalizedPath,
+      response.uiHints,
+      resolveReloadMetadata,
+    ),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,15 +1,26 @@
+// Run command helpers execute plugin commands with normalized errors and captured output.
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
+/** Captured process result returned by plugin command execution helpers. */
 export type PluginCommandRunResult = {
+  /** Process exit code, with `1` used when the command failed before spawning or did not report one. */
   code: number;
+  /** Captured standard output as UTF-8 text. */
   stdout: string;
+  /** Captured standard error, normalized to include timeout or thrown-error messages. */
   stderr: string;
 };
 
+/** Options for commands that are launched on behalf of a plugin runtime. */
 export type PluginCommandRunOptions = {
+  /** Executable and arguments, with the command name in the first slot. */
   argv: string[];
+  /** Hard execution limit in milliseconds before the command is terminated. */
   timeoutMs: number;
+  /** Working directory for the child process. Defaults to the current process directory. */
   cwd?: string;
+  /** Environment passed to the child process. Defaults to the current process environment. */
   env?: NodeJS.ProcessEnv;
 };
 
@@ -40,7 +51,7 @@ export async function runPluginCommandWithTimeout(
     return {
       code: 1,
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: formatErrorMessage(error),
     };
   }
 }

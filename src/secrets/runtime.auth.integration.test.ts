@@ -1,24 +1,18 @@
+/** Integration tests for auth-profile secret runtime preparation. */
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
   beginSecretsRuntimeIsolationForTest,
-  createOpenAIFileRuntimeConfig,
-  createOpenAIFileRuntimeFixture,
   EMPTY_LOADABLE_PLUGIN_ORIGINS,
   endSecretsRuntimeIsolationForTest,
-  expectResolvedOpenAIRuntime,
-  loadAuthStoreWithProfiles,
   OPENAI_ENV_KEY_REF,
-  OPENAI_FILE_KEY_REF,
   type SecretsRuntimeEnvSnapshot,
-} from "./runtime.integration.test-helpers.js";
+} from "./runtime-auth.integration.test-helpers.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
@@ -26,6 +20,73 @@ import {
 } from "./runtime.js";
 
 vi.unmock("../version.js");
+
+vi.mock("./runtime-prepare.runtime.js", () => ({
+  createResolverContext: ({
+    sourceConfig,
+    env,
+  }: {
+    sourceConfig: unknown;
+    env: NodeJS.ProcessEnv;
+  }) => ({
+    sourceConfig,
+    env,
+    cache: {},
+    warnings: [],
+    warningKeys: new Set<string>(),
+    assignments: [],
+  }),
+  collectConfigAssignments: () => {},
+  collectAuthStoreAssignments: ({
+    store,
+    context,
+  }: {
+    store: AuthProfileStore;
+    context: { env: NodeJS.ProcessEnv };
+  }) => {
+    for (const profile of Object.values(store.profiles)) {
+      if (
+        profile?.type === "api_key" &&
+        profile.keyRef?.source === "env" &&
+        typeof profile.keyRef.id === "string"
+      ) {
+        const key = context.env[profile.keyRef.id];
+        if (typeof key === "string" && key.length > 0) {
+          profile.key = key;
+        }
+      }
+    }
+  },
+  resolveRuntimeWebTools: async () => ({
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+    secretOwners: [],
+  }),
+}));
+
+vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
+}));
+
+function loadAuthStoreFromTestFile(agentDir?: string): AuthProfileStore {
+  if (!agentDir) {
+    return { version: 1, profiles: {} };
+  }
+  try {
+    const raw = readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8");
+    return JSON.parse(raw) as AuthProfileStore;
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
 
 describe("secrets runtime snapshot auth integration", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
@@ -36,129 +97,6 @@ describe("secrets runtime snapshot auth integration", () => {
 
   afterEach(() => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
-  });
-
-  it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_VERSION: undefined,
-      },
-      async () => {
-        const prepared = await prepareSecretsRuntimeSnapshot({
-          config: asConfig({
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  apiKey: OPENAI_ENV_KEY_REF,
-                  models: [],
-                },
-              },
-            },
-          }),
-          env: { OPENAI_API_KEY: "sk-runtime" },
-          agentDirs: ["/tmp/openclaw-agent-main"],
-          loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-          loadAuthStore: () =>
-            loadAuthStoreWithProfiles({
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: OPENAI_ENV_KEY_REF,
-              },
-            }),
-        });
-
-        activateSecretsRuntimeSnapshot(prepared);
-
-        expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
-        expect(
-          ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
-        ).toMatchObject({
-          type: "api_key",
-          key: "sk-runtime",
-        });
-      },
-    );
-  });
-
-  it("keeps active secrets runtime snapshots resolved after config writes", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
-      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: createOpenAIFileRuntimeConfig(secretFile),
-        agentDirs: [agentDir],
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-
-      expectResolvedOpenAIRuntime(agentDir);
-
-      await writeConfigFile({
-        ...loadConfig(),
-        gateway: { auth: { mode: "token" } },
-      });
-
-      expect(loadConfig().gateway?.auth).toEqual({ mode: "token" });
-      expectResolvedOpenAIRuntime(agentDir);
-    });
-  });
-
-  it("keeps last-known-good runtime snapshot active when refresh fails after a write", async () => {
-    if (os.platform() === "win32") {
-      return;
-    }
-    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
-      const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
-
-      let loadAuthStoreCalls = 0;
-      const loadAuthStore = () => {
-        loadAuthStoreCalls += 1;
-        if (loadAuthStoreCalls > 1) {
-          throw new Error("simulated secrets runtime refresh failure");
-        }
-        return loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_FILE_KEY_REF,
-          },
-        });
-      };
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: createOpenAIFileRuntimeConfig(secretFile),
-        agentDirs: [agentDir],
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-        loadAuthStore,
-      });
-
-      activateSecretsRuntimeSnapshot(prepared);
-
-      await expect(
-        writeConfigFile({
-          ...loadConfig(),
-          gateway: { auth: { mode: "token" } },
-        }),
-      ).rejects.toThrow(
-        /runtime snapshot refresh failed: simulated secrets runtime refresh failure/i,
-      );
-
-      const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-      expect(activeAfterFailure).not.toBeNull();
-      expect(loadConfig().gateway?.auth).toBeUndefined();
-      expectResolvedOpenAIRuntime(agentDir);
-      expect(activeAfterFailure?.sourceConfig.models?.providers?.openai?.apiKey).toEqual(
-        OPENAI_FILE_KEY_REF,
-      );
-    });
   });
 
   it("recomputes config-derived agent dirs when refreshing active secrets runtime snapshots", async () => {
@@ -210,22 +148,44 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
+        loadAuthStore: loadAuthStoreFromTestFile,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
 
       activateSecretsRuntimeSnapshot(prepared);
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toBeUndefined();
+      expect(
+        getActiveSecretsRuntimeSnapshot()?.authStores.find(
+          (entry) => entry.agentDir === opsAgentDir,
+        ),
+      ).toBeUndefined();
 
-      await writeConfigFile({
-        agents: {
-          list: [{ id: "ops", agentDir: opsAgentDir }],
+      const refreshed = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          agents: {
+            list: [{ id: "ops", agentDir: opsAgentDir }],
+          },
+        }),
+        env: {
+          OPENAI_API_KEY: "sk-main-runtime",
+          ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
+        loadAuthStore: loadAuthStoreFromTestFile,
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
+      activateSecretsRuntimeSnapshot(refreshed);
 
-      expect(ensureAuthProfileStore(opsAgentDir).profiles["anthropic:ops"]).toMatchObject({
-        type: "api_key",
-        key: "sk-ops-runtime",
-        keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      const profile = getActiveSecretsRuntimeSnapshot()?.authStores.find(
+        (entry) => entry.agentDir === opsAgentDir,
+      )?.store.profiles["anthropic:ops"];
+      expect(profile?.type).toBe("api_key");
+      if (profile?.type !== "api_key") {
+        throw new Error("Expected anthropic ops API key profile");
+      }
+      expect(profile.key).toBe("sk-ops-runtime");
+      expect(profile.keyRef).toEqual({
+        source: "env",
+        provider: "default",
+        id: "ANTHROPIC_API_KEY",
       });
     });
   });

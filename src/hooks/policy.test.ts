@@ -1,3 +1,4 @@
+// Hook policy tests cover allow/deny decisions from hook configuration.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHookEnableState, resolveHookEntries } from "./policy.js";

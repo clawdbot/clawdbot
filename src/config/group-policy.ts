@@ -1,7 +1,14 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import type { OpenClawConfig } from "./config.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import { resolveMergedAccountConfig } from "./channel-account-config.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   parseToolsBySenderTypedKey,
   type GroupToolPolicyBySenderConfig,
@@ -9,9 +16,9 @@ import {
   type ToolsBySenderKeyType,
 } from "./types.tools.js";
 
-export type GroupPolicyChannel = ChannelId;
+type GroupPolicyChannel = ChannelId;
 
-export type ChannelGroupConfig = {
+type ChannelGroupConfig = {
   requireMention?: boolean;
   ingest?: boolean;
   tools?: GroupToolPolicyConfig;
@@ -42,28 +49,38 @@ function resolveChannelGroupConfig(
   if (!caseInsensitive) {
     return undefined;
   }
-  const target = groupId.toLowerCase();
-  const matchedKey = Object.keys(groups).find((key) => key !== "*" && key.toLowerCase() === target);
+  const target = normalizeLowercaseStringOrEmpty(groupId);
+  const matchedKey = Object.keys(groups).find(
+    (key) => key !== "*" && normalizeLowercaseStringOrEmpty(key) === target,
+  );
   if (!matchedKey) {
     return undefined;
   }
   return groups[matchedKey];
 }
 
-export type GroupToolPolicySender = {
+type GroupToolPolicySender = {
+  /** Skip sender-specific overlays for trusted non-ingress executions. */
+  senderPolicyMode?: "always" | "never";
+  messageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
 };
 
-type SenderKeyType = "id" | "e164" | "username" | "name";
+type SenderKeyType = ToolsBySenderKeyType;
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
 };
 
-const warnedLegacyToolsBySenderKeys = new Set<string>();
+const MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS = 4096;
+// Warning state spans fresh config snapshots; bounding it means evicted legacy keys can re-warn.
+const warnedLegacyToolsBySenderKeys = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS,
+});
 const compiledToolsBySenderCache = new WeakMap<
   GroupToolPolicyBySenderConfig,
   CompiledSenderPolicy
@@ -86,13 +103,38 @@ function normalizeSenderKey(
     return "";
   }
   const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return withoutAt.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
 function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
+  if (type === "channel") {
+    return normalizeChannelSenderKey(value);
+  }
   return normalizeSenderKey(value, {
     stripLeadingAt: type === "username",
   });
+}
+
+function normalizeSenderPolicyChannel(value: string | null | undefined): string {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return "";
+  }
+  return normalizeMessageChannel(trimmed) ?? normalizeSenderKey(trimmed);
+}
+
+function normalizeChannelSenderKey(value: string): string {
+  const trimmed = value.trim();
+  const separatorIndex = trimmed.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
+    return "";
+  }
+  const channel = normalizeSenderPolicyChannel(trimmed.slice(0, separatorIndex));
+  const senderId = normalizeTypedSenderKey(trimmed.slice(separatorIndex + 1), "id");
+  if (!channel || !senderId) {
+    return "";
+  }
+  return `${channel}:${senderId}`;
 }
 
 function normalizeLegacySenderKey(value: string): string {
@@ -103,12 +145,11 @@ function normalizeLegacySenderKey(value: string): string {
 
 function warnLegacyToolsBySenderKey(rawKey: string) {
   const trimmed = rawKey.trim();
-  if (!trimmed || warnedLegacyToolsBySenderKeys.has(trimmed)) {
+  if (!trimmed || warnedLegacyToolsBySenderKeys.check(trimmed)) {
     return;
   }
-  warnedLegacyToolsBySenderKeys.add(trimmed);
   process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
+    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (channel:, id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
     {
       type: "DeprecationWarning",
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
@@ -152,6 +193,7 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
 
 function createSenderPolicyBuckets(): SenderPolicyBuckets {
   return {
+    channel: new Map<string, GroupToolPolicyConfig>(),
     id: new Map<string, GroupToolPolicyConfig>(),
     e164: new Map<string, GroupToolPolicyConfig>(),
     username: new Map<string, GroupToolPolicyConfig>(),
@@ -207,7 +249,7 @@ function resolveCompiledToolsBySenderPolicy(
 }
 
 function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "";
   }
@@ -215,7 +257,7 @@ function normalizeCandidate(value: string | null | undefined, type: SenderKeyTyp
 }
 
 function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return [];
   }
@@ -234,7 +276,17 @@ function matchToolsBySenderPolicy(
   compiled: CompiledSenderPolicy,
   params: GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
+  const senderIdCandidates = normalizeSenderIdCandidates(params.senderId);
+  const channel = normalizeSenderPolicyChannel(params.messageProvider);
+  if (channel) {
+    for (const senderIdCandidate of senderIdCandidates) {
+      const match = compiled.buckets.channel.get(`${channel}:${senderIdCandidate}`);
+      if (match) {
+        return match;
+      }
+    }
+  }
+  for (const senderIdCandidate of senderIdCandidates) {
     const match = compiled.buckets.id.get(senderIdCandidate);
     if (match) {
       return match;
@@ -280,7 +332,7 @@ export function resolveToolsBySender(
   return matchToolsBySenderPolicy(compiled, params);
 }
 
-function resolveChannelGroups(
+export function resolveChannelGroups(
   cfg: OpenClawConfig,
   channel: GroupPolicyChannel,
   accountId?: string | null,
@@ -295,8 +347,14 @@ function resolveChannelGroups(
   if (!channelConfig) {
     return undefined;
   }
-  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  return accountGroups ?? channelConfig.groups;
+  // Single-account empty maps inherit; in multi-account setups they opt out.
+  return resolveMergedAccountConfig({
+    channelConfig,
+    accounts: channelConfig.accounts,
+    accountId: normalizedAccountId,
+    inheritEmptyKeys:
+      Object.keys(channelConfig.accounts ?? {}).length > 1 ? {} : { groups: "object" },
+  }).groups;
 }
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
@@ -366,6 +424,7 @@ export function resolveChannelGroupRequireMention(params: {
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
+  configuredGroupDefaultsToNoMention?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
@@ -386,6 +445,9 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
+  if (params.configuredGroupDefaultsToNoMention && groupConfig) {
+    return false;
+  }
   return true;
 }
 
@@ -394,31 +456,57 @@ export function resolveChannelGroupToolsPolicy(
     cfg: OpenClawConfig;
     channel: GroupPolicyChannel;
     groupId?: string | null;
+    groupIdCandidates?: Array<string | null | undefined>;
     accountId?: string | null;
     groupIdCaseInsensitive?: boolean;
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
-  const groupSenderPolicy = resolveToolsBySender({
-    toolsBySender: groupConfig?.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const groups = resolveChannelGroups(params.cfg, params.channel, params.accountId);
+  const groupIds = [
+    params.groupId,
+    ...(Array.isArray(params.groupIdCandidates) ? params.groupIdCandidates : []),
+  ];
+  let groupConfig: ChannelGroupConfig | undefined;
+  for (const rawGroupId of groupIds) {
+    const groupId = rawGroupId?.trim();
+    if (!groupId) {
+      continue;
+    }
+    // Scoped ids can collapse to a parent group; try all exact matches before wildcard fallback.
+    groupConfig = resolveChannelGroupConfig(groups, groupId, params.groupIdCaseInsensitive);
+    if (groupConfig) {
+      break;
+    }
+  }
+  const defaultConfig = groups?.["*"];
+  const groupSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: groupConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (groupSenderPolicy) {
     return groupSenderPolicy;
   }
   if (groupConfig?.tools) {
     return groupConfig.tools;
   }
-  const defaultSenderPolicy = resolveToolsBySender({
-    toolsBySender: defaultConfig?.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const defaultSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: defaultConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (defaultSenderPolicy) {
     return defaultSenderPolicy;
   }

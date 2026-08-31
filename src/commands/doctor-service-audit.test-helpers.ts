@@ -1,15 +1,24 @@
+// Doctor service audit test helpers normalize expected service environment-source labels.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEnvironmentFileOnlySource } from "../daemon/service-managed-env.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
+
 export const testServiceAuditCodes = {
+  gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
+  gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
+  gatewayPortMismatch: "gateway-port-mismatch",
+  gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
 } as const;
 
 export function readEmbeddedGatewayTokenForTest(
   command: {
     environment?: Record<string, string>;
-    environmentValueSources?: Record<string, "inline" | "file">;
+    environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
   } | null,
 ) {
-  return command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
+  return isEnvironmentFileOnlySource(command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN)
     ? undefined
-    : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+    : normalizeOptionalString(command?.environment?.OPENCLAW_GATEWAY_TOKEN);
 }

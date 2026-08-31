@@ -2,10 +2,51 @@ name: CodeQL
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: CodeQL security profile to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - security
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/actions/**"
+      - ".github/codeql/**"
+      - ".github/workflows/**"
+      - "extensions/acpx/src/**"
+      - "extensions/bonjour/src/advertiser.ts"
+      - "extensions/browser/src/browser/chrome-mcp.ts"
+      - "extensions/browser/src/browser/chrome.executables.ts"
+      - "extensions/browser/src/browser/chrome.ts"
+      - "extensions/codex/src/app-server/sandbox-exec-server/**"
+      - "extensions/codex/src/app-server/transport-stdio.ts"
+      - "extensions/codex/src/node-cli-sessions.ts"
+      - "extensions/file-transfer/src/**"
+      - "extensions/google-meet/src/**"
+      - "extensions/imessage/src/**"
+      - "extensions/memory-wiki/src/obsidian.ts"
+      - "extensions/microsoft-foundry/cli.ts"
+      - "extensions/ollama/src/wsl2-crash-loop-check.ts"
+      - "extensions/qa-lab/src/**"
+      - "extensions/signal/src/daemon.ts"
+      - "extensions/tts-local-cli/speech-provider.ts"
+      - "extensions/voice-call/src/**"
+      - "packages/**"
+      - "scripts/**"
+      - "src/**"
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -16,122 +57,74 @@ permissions:
   security-events: write
 
 jobs:
-  analyze:
-    name: Analyze (${{ matrix.language }})
+  security-high:
+    name: Security High (${{ matrix.category }})
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
     runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - language: javascript-typescript
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: true
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ./.github/codeql/codeql-javascript-typescript.yml
+            category: core-auth-secrets
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
+          - language: javascript-typescript
+            category: channel-runtime-boundary
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: network-ssrf-boundary
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: mcp-process-tool-boundary
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: process-exec-boundary
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-process-exec-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: plugin-trust-boundary
+            runs_on: ubuntu-24.04
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-plugin-trust-boundary-critical-security.yml
           - language: actions
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ""
-          - language: python
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: true
-            needs_java: false
-            needs_swift_tools: false
-            needs_manual_build: false
-            needs_autobuild: false
-            config_file: ""
-          - language: java-kotlin
-            runs_on: blacksmith-16vcpu-ubuntu-2404
-            needs_node: false
-            needs_python: false
-            needs_java: true
-            needs_swift_tools: false
-            needs_manual_build: true
-            needs_autobuild: false
-            config_file: ""
-          - language: swift
-            runs_on: macos-latest
-            needs_node: false
-            needs_python: false
-            needs_java: false
-            needs_swift_tools: true
-            needs_manual_build: true
-            needs_autobuild: false
-            config_file: ""
+            category: actions
+            runs_on: ubuntu-24.04
+            timeout_minutes: 10
+            config_file: ./.github/codeql/codeql-actions-critical-security.yml
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        if: ${{ matrix.category != 'actions' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
-      - name: Setup Node environment
-        if: matrix.needs_node
-        uses: ./.github/actions/setup-node-env
+      - name: Checkout Actions security sources
+        if: ${{ matrix.category == 'actions' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Setup Python
-        if: matrix.needs_python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Setup Java
-        if: matrix.needs_java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Setup Swift build tools
-        if: matrix.needs_swift_tools
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-          brew install xcodegen swiftlint swiftformat
-          swift --version
+          submodules: false
+          sparse-checkout: |
+            .github/actions
+            .github/workflows
+            .github/codeql
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
-          queries: security-and-quality
-          config-file: ${{ matrix.config_file || '' }}
-
-      - name: Autobuild
-        if: matrix.needs_autobuild
-        uses: github/codeql-action/autobuild@v4
-
-      - name: Build Android for CodeQL
-        if: matrix.language == 'java-kotlin'
-        working-directory: apps/android
-        run: ./gradlew --no-daemon :app:assemblePlayDebug
-
-      - name: Build Swift for CodeQL
-        if: matrix.language == 'swift'
-        run: |
-          set -euo pipefail
-          swift build --package-path apps/macos --configuration release
-          cd apps/ios
-          xcodegen generate
-          xcodebuild build \
-            -project OpenClaw.xcodeproj \
-            -scheme OpenClaw \
-            -destination "generic/platform=iOS Simulator" \
-            CODE_SIGNING_ALLOWED=NO
+          config-file: ${{ matrix.config_file }}
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
-          category: "/language:${{ matrix.language }}"
+          category: "/codeql-security-high/${{ matrix.category }}"

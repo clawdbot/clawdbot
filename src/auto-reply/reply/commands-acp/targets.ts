@@ -1,9 +1,11 @@
+// Resolves ACP command target sessions from user text and active state.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { callGateway } from "../../../gateway/call.js";
+import { SESSION_ID_RE } from "../../../sessions/session-id.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
-import { SESSION_ID_RE } from "./shared.js";
 
 async function resolveSessionKeyByToken(token: string): Promise<string | null> {
   const trimmed = token.trim();
@@ -18,12 +20,12 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 
   for (const params of attempts) {
     try {
-      const resolved = await callGateway<{ key?: string }>({
+      const resolved = await callGateway({
         method: "sessions.resolve",
         params,
         timeoutMs: 8_000,
       });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+      const key = normalizeOptionalString(resolved?.key) ?? "";
       if (key) {
         return key;
       }
@@ -35,11 +37,9 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 }
 
 export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
-  const commandTargetSessionKey =
-    typeof params.ctx.CommandTargetSessionKey === "string"
-      ? params.ctx.CommandTargetSessionKey.trim()
-      : "";
-  const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
+  const commandTargetSessionKey = normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? "";
+  const activeSessionKey =
+    commandTargetSessionKey || (normalizeOptionalString(params.sessionKey) ?? "");
   const bindingContext = resolveAcpCommandBindingContext(params);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
@@ -57,16 +57,16 @@ export async function resolveAcpTargetSessionKey(params: {
   commandParams: HandleCommandsParams;
   token?: string;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; error: string }> {
-  const token = params.token?.trim() || "";
+  const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
     const resolved = await resolveSessionKeyByToken(token);
-    if (!resolved) {
-      return {
-        ok: false,
-        error: `Unable to resolve session target: ${token}`,
-      };
+    if (resolved) {
+      return { ok: true, sessionKey: resolved };
     }
-    return { ok: true, sessionKey: resolved };
+    // Token was supplied but could not be resolved as a session key/id/label.
+    // Fall through to thread-bound resolution so that callers that auto-fill
+    // the current thread ID as the token (e.g. Discord slash commands) still
+    // reach the correct session via the binding context.
   }
 
   const threadBound = resolveBoundAcpThreadSessionKey(params.commandParams);
@@ -74,6 +74,13 @@ export async function resolveAcpTargetSessionKey(params: {
     return {
       ok: true,
       sessionKey: threadBound,
+    };
+  }
+
+  if (token) {
+    return {
+      ok: false,
+      error: `Unable to resolve session target: ${token}`,
     };
   }
 

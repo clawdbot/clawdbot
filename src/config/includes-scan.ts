@@ -1,8 +1,17 @@
-import * as fs from "node:fs/promises";
+// Scans included config files and resolves include graphs.
+import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
-import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "./includes.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import {
+  createConfigIncludeResolutionSession,
+  INCLUDE_KEY,
+  MAX_INCLUDE_DEPTH,
+  readConfigIncludeFileWithGuards,
+  type IncludeResolver,
+} from "./includes.js";
+import { resolveIncludeRoots } from "./paths.js";
 
+// Include discovery walks nested config objects because include blocks may be embedded.
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
   const visit = (value: unknown) => {
@@ -37,51 +46,69 @@ function listDirectIncludes(parsed: unknown): string[] {
   return out;
 }
 
-function resolveIncludePath(baseConfigPath: string, includePath: string): string {
-  return path.normalize(
-    path.isAbsolute(includePath)
-      ? includePath
-      : path.resolve(path.dirname(baseConfigPath), includePath),
-  );
-}
-
+/** Collects recursively referenced config include files without requiring a valid full config. */
 export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;
+  env?: NodeJS.ProcessEnv;
+  allowedRoots?: readonly string[];
 }): Promise<string[]> {
-  const visited = new Set<string>();
-  const result: string[] = [];
+  const includedPaths = new Set<string>();
+  // Canonical paths dedupe permission targets; lexical bases preserve relative
+  // include contexts and may need revisiting when first reached too deeply.
+  const walkedDepthByBase = new Map<string, number>();
+  const allowedRoots = params.allowedRoots ?? resolveIncludeRoots(params.env);
+  const resolveInclude = createConfigIncludeResolutionSession(params.configPath, allowedRoots);
 
-  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
-    if (depth > MAX_INCLUDE_DEPTH) {
+  const walk = (basePath: string, parsed: unknown, depth: number): void => {
+    if (depth >= MAX_INCLUDE_DEPTH) {
       return;
     }
-    for (const raw of listDirectIncludes(parsed)) {
-      const resolved = resolveIncludePath(basePath, raw);
-      if (visited.has(resolved)) {
-        continue;
-      }
-      visited.add(resolved);
-      result.push(resolved);
+    for (const includePath of listDirectIncludes(parsed)) {
+      let openedBasePath: string | undefined;
+      let nestedInclude: { basePath: string; parsed: unknown } | undefined;
+      const resolver: IncludeResolver = {
+        readFile: (candidate) => fs.readFileSync(candidate, "utf-8"),
+        readFileWithGuards: (readParams) => {
+          return readConfigIncludeFileWithGuards({
+            ...readParams,
+            onResolvedPath: (resolvedIncludePath) => {
+              includedPaths.add(resolvedIncludePath);
+              const lexicalBasePath = path.normalize(readParams.resolvedPath);
+              const nextDepth = depth + 1;
+              const walkedDepth = walkedDepthByBase.get(lexicalBasePath);
+              if (walkedDepth !== undefined && walkedDepth <= nextDepth) {
+                return;
+              }
+              walkedDepthByBase.set(lexicalBasePath, nextDepth);
+              openedBasePath = lexicalBasePath;
+            },
+          });
+        },
+        parseJson: (raw) => {
+          const nestedParsed = parseJsonWithJson5Fallback(raw);
+          if (openedBasePath) {
+            nestedInclude = { basePath: openedBasePath, parsed: nestedParsed };
+          }
+          // The scanner owns nested traversal so one malformed sibling cannot
+          // hide later guarded files. The production resolver still owns each
+          // path, root, symlink, file-type, hardlink, and byte-limit decision.
+          return {};
+        },
+      };
 
-      const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
-      if (!rawText) {
-        continue;
+      try {
+        resolveInclude({ [INCLUDE_KEY]: includePath }, basePath, resolver);
+      } catch {
+        // Invalid includes are reported by config validation. Permission repair
+        // only retains files that reached the production guarded-open boundary.
       }
-      const nestedParsed = (() => {
-        try {
-          return JSON5.parse(rawText);
-        } catch {
-          return null;
-        }
-      })();
-      if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
-        await walk(resolved, nestedParsed, depth + 1);
+      if (nestedInclude) {
+        walk(nestedInclude.basePath, nestedInclude.parsed, depth + 1);
       }
     }
   };
 
-  await walk(params.configPath, params.parsed, 0);
-  return result;
+  walk(params.configPath, params.parsed, 0);
+  return [...includedPaths];
 }

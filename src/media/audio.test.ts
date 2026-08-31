@@ -1,34 +1,21 @@
+// Audio media tests cover audio type normalization and extension mapping.
 import { describe, expect, it } from "vitest";
-import {
-  isVoiceCompatibleAudio,
-  TELEGRAM_VOICE_AUDIO_EXTENSIONS,
-  TELEGRAM_VOICE_MIME_TYPES,
-} from "./audio.js";
+import { isVoiceCompatibleAudio } from "./audio.js";
 
 describe("isVoiceCompatibleAudio", () => {
-  function expectVoiceCompatibilityCase(
-    opts: Parameters<typeof isVoiceCompatibleAudio>[0],
-    expected: boolean,
-  ) {
-    expect(isVoiceCompatibleAudio(opts)).toBe(expected);
-  }
-
-  function expectVoiceCompatibilityCases(
-    cases: ReadonlyArray<{
-      opts: Parameters<typeof isVoiceCompatibleAudio>[0];
-      expected: boolean;
-    }>,
-  ) {
-    cases.forEach(({ opts, expected }) => {
-      expectVoiceCompatibilityCase(opts, expected);
-    });
-  }
-
   it.each([
     {
       name: "returns true for supported MIME types",
       cases: [
-        ...Array.from(TELEGRAM_VOICE_MIME_TYPES, (contentType) => ({
+        ...[
+          "audio/ogg",
+          "audio/opus",
+          "audio/mpeg",
+          "audio/mp3",
+          "audio/mp4",
+          "audio/x-m4a",
+          "audio/m4a",
+        ].map((contentType) => ({
           opts: { contentType, fileName: null },
           expected: true,
         })),
@@ -38,7 +25,7 @@ describe("isVoiceCompatibleAudio", () => {
     },
     {
       name: "returns true for supported extensions",
-      cases: Array.from(TELEGRAM_VOICE_AUDIO_EXTENSIONS, (ext) => ({
+      cases: [".oga", ".ogg", ".opus", ".mp3", ".m4a"].map((ext) => ({
         opts: { fileName: `voice${ext}` },
         expected: true,
       })),
@@ -73,6 +60,8 @@ describe("isVoiceCompatibleAudio", () => {
       ],
     },
   ])("$name", ({ cases }) => {
-    expectVoiceCompatibilityCases(cases);
+    for (const { opts, expected } of cases) {
+      expect(isVoiceCompatibleAudio(opts)).toBe(expected);
+    }
   });
 });

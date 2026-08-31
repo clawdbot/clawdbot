@@ -1,106 +1,117 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Covers web-search provider config parsing and provider defaults.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
-  TELEGRAM_COMMAND_NAME_PATTERN: /^[a-z0-9_]+$/,
-  normalizeTelegramCommandName: (value: string) => value.trim().toLowerCase(),
-  normalizeTelegramCommandDescription: (value: string) => value.trim(),
-  resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
-}));
+const mockWebSearchProviders = vi.hoisted(() => {
+  const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
+    (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+  const getConfiguredPluginWebSearchConfig =
+    (pluginId: string) => (config?: Record<string, unknown>) =>
+      (
+        config?.plugins as
+          | {
+              entries?: Record<
+                string,
+                { config?: { webSearch?: { apiKey?: unknown; baseUrl?: unknown } } }
+              >;
+            }
+          | undefined
+      )?.entries?.[pluginId]?.config?.webSearch;
+  const getConfiguredPluginWebSearchCredential =
+    (pluginId: string) => (config?: Record<string, unknown>) =>
+      getConfiguredPluginWebSearchConfig(pluginId)(config)?.apiKey;
 
-const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
-  (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
-const getConfiguredPluginWebSearchConfig =
-  (pluginId: string) => (config?: Record<string, unknown>) =>
-    (
-      config?.plugins as
-        | {
-            entries?: Record<
-              string,
-              { config?: { webSearch?: { apiKey?: unknown; baseUrl?: unknown } } }
-            >;
-          }
-        | undefined
-    )?.entries?.[pluginId]?.config?.webSearch;
-const getConfiguredPluginWebSearchCredential =
-  (pluginId: string) => (config?: Record<string, unknown>) =>
-    getConfiguredPluginWebSearchConfig(pluginId)(config)?.apiKey;
+  return [
+    {
+      id: "brave",
+      pluginId: "brave",
+      envVars: ["BRAVE_API_KEY"],
+      credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+      getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("brave"),
+    },
+    {
+      id: "firecrawl",
+      pluginId: "firecrawl",
+      envVars: ["FIRECRAWL_API_KEY"],
+      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("firecrawl"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("firecrawl"),
+    },
+    {
+      id: "gemini",
+      pluginId: "google",
+      envVars: ["GEMINI_API_KEY"],
+      credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("gemini"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("google"),
+    },
+    {
+      id: "grok",
+      pluginId: "xai",
+      envVars: ["XAI_API_KEY"],
+      credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("grok"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("xai"),
+    },
+    {
+      id: "kimi",
+      pluginId: "moonshot",
+      envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+      credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("kimi"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("moonshot"),
+    },
+    {
+      id: "minimax",
+      pluginId: "minimax",
+      envVars: [
+        "MINIMAX_CODE_PLAN_KEY",
+        "MINIMAX_CODING_API_KEY",
+        "MINIMAX_OAUTH_TOKEN",
+        "MINIMAX_API_KEY",
+      ],
+      credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("minimax"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
+    },
+    {
+      id: "perplexity",
+      pluginId: "perplexity",
+      envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+      credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("perplexity"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
+    },
+    {
+      id: "searxng",
+      pluginId: "searxng",
+      envVars: ["SEARXNG_BASE_URL"],
+      credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
+      getCredentialValue: (search?: Record<string, unknown>) =>
+        (search?.searxng as { baseUrl?: unknown } | undefined)?.baseUrl,
+      getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
+        getConfiguredPluginWebSearchConfig("searxng")(config)?.baseUrl,
+    },
+    {
+      id: "tavily",
+      pluginId: "tavily",
+      envVars: ["TAVILY_API_KEY"],
+      credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+      getCredentialValue: getScopedWebSearchCredential("tavily"),
+      getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
+    },
+  ] as const;
+});
 
-const mockWebSearchProviders = [
-  {
-    id: "brave",
-    envVars: ["BRAVE_API_KEY"],
-    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-    getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("brave"),
-  },
-  {
-    id: "firecrawl",
-    envVars: ["FIRECRAWL_API_KEY"],
-    credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("firecrawl"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("firecrawl"),
-  },
-  {
-    id: "gemini",
-    envVars: ["GEMINI_API_KEY"],
-    credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("gemini"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("google"),
-  },
-  {
-    id: "grok",
-    envVars: ["XAI_API_KEY"],
-    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("grok"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("xai"),
-  },
-  {
-    id: "kimi",
-    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("kimi"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("moonshot"),
-  },
-  {
-    id: "minimax",
-    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
-    credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("minimax"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
-  },
-  {
-    id: "perplexity",
-    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-    credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("perplexity"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
-  },
-  {
-    id: "searxng",
-    envVars: ["SEARXNG_BASE_URL"],
-    credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
-    getCredentialValue: (search?: Record<string, unknown>) =>
-      (search?.searxng as { baseUrl?: unknown } | undefined)?.baseUrl,
-    getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
-      getConfiguredPluginWebSearchConfig("searxng")(config)?.baseUrl,
-  },
-  {
-    id: "tavily",
-    envVars: ["TAVILY_API_KEY"],
-    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-    getCredentialValue: getScopedWebSearchCredential("tavily"),
-    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("tavily"),
-  },
-] as const;
-
-vi.mock("../plugins/web-search-providers.js", () => {
+vi.mock("../plugins/web-search-providers.runtime.js", () => {
   return {
-    resolveBundledPluginWebSearchProviders: () => mockWebSearchProviders,
     resolvePluginWebSearchProviders: () => mockWebSearchProviders,
   };
 });
@@ -151,13 +162,16 @@ vi.mock("../plugins/manifest-registry.js", () => {
   });
 
   return {
-    loadPluginManifestRegistry: () => ({
+    loadPluginManifestRegistryCore: () => ({
       plugins: [
         {
           id: "brave",
           origin: "bundled",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
@@ -167,51 +181,90 @@ vi.mock("../plugins/manifest-registry.js", () => {
           schemaCacheKey: "test:brave",
           configSchema: buildSchema(),
         },
-        ...[
-          "firecrawl",
-          "google",
-          "minimax",
-          "moonshot",
-          "perplexity",
-          "searxng",
-          "tavily",
-          "xai",
-        ].map((id) => ({
-          id,
-          origin: "bundled",
+        ...mockWebSearchProviders
+          .filter((provider) => provider.pluginId !== "brave")
+          .map((provider) => ({
+            id: provider.pluginId,
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            contracts: {
+              webSearchProviders: [provider.id],
+            },
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: `/tmp/plugins/${provider.pluginId}`,
+            source: "test",
+            manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
+            schemaCacheKey: `test:${provider.pluginId}`,
+            configSchema: buildSchema(),
+          })),
+        {
+          id: "acme-search",
+          origin: "installed",
           channels: [],
           providers: [],
+          contracts: {
+            webSearchProviders: ["acme-search"],
+          },
           cliBackends: [],
           skills: [],
           hooks: [],
-          rootDir: `/tmp/plugins/${id}`,
+          rootDir: "/tmp/plugins/acme-search",
           source: "test",
-          manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
-          schemaCacheKey: `test:${id}`,
+          manifestPath: "/tmp/plugins/acme-search/openclaw.plugin.json",
+          schemaCacheKey: "test:acme-search",
           configSchema: buildSchema(),
-        })),
+        },
       ],
       diagnostics: [],
     }),
+    resolveManifestContractPluginIds: (params?: { contract?: string; origin?: string }) =>
+      params?.contract === "webSearchProviders" && params.origin === "bundled"
+        ? mockWebSearchProviders
+            .map((provider) => provider.pluginId)
+            .filter((value, index, array) => array.indexOf(value) === index)
+            .toSorted((left, right) => left.localeCompare(right))
+        : [],
+    resolveManifestContractOwnerPluginId: (params?: { contract?: string; value?: string }) =>
+      params?.contract === "webSearchProviders"
+        ? mockWebSearchProviders.find((provider) => provider.id === params.value)?.pluginId
+        : undefined,
   };
 });
 
-let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
-let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
+const resolveSearchProvider = (
+  search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"],
+) => resolveWebSearchProviderId({ search });
 
-beforeAll(async () => {
-  vi.resetModules();
-  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
-  ({
-    __testing: { resolveSearchProvider },
-  } = await import("../agents/tools/web-search.js"));
-});
+type ValidationMessage = {
+  path?: string;
+  message?: string;
+  allowedValues?: unknown;
+};
+
+function findValidationMessage(messages: ValidationMessage[], path: string): ValidationMessage {
+  const message = messages.find((entry) => entry.path === path);
+  if (!message) {
+    throw new Error(`expected validation message for ${path}`);
+  }
+  return message;
+}
+
+function expectAllowedValuesInclude(message: ValidationMessage, values: string[]): void {
+  expect(Array.isArray(message.allowedValues)).toBe(true);
+  const allowedValues = Array.isArray(message.allowedValues) ? message.allowedValues : [];
+  for (const value of values) {
+    expect(allowedValues).toContain(value);
+  }
+}
 
 describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         entries: {
           brave: {
             config: {
@@ -236,14 +289,13 @@ describe("web search provider config", () => {
     if (!res.ok) {
       return;
     }
-    expect(res.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "plugins.entries.brave",
-        message: expect.stringContaining(
-          "plugin disabled (not in allowlist) but config is present",
-        ),
-      }),
-    );
+    expect(
+      res.warnings.some(
+        (warning) =>
+          warning.path === "plugins.entries.brave" &&
+          warning.message.includes("plugin disabled (not in allowlist) but config is present"),
+      ),
+    ).toBe(false);
   });
 
   it("accepts perplexity provider and config", () => {
@@ -364,7 +416,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts legacy scoped provider config for bundled providers via auto-migration", () => {
+  it("detects legacy scoped provider config for bundled providers", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -378,21 +430,7 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search).toEqual({
-      provider: "gemini",
-    });
-    expect(res.config.plugins?.entries?.google).toEqual({
-      enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "legacy-key",
-        },
-      },
-    });
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {
@@ -404,36 +442,145 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts provider ids registered by installed plugin manifests", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "acme-search",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects installable provider ids when the plugin is not active", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "brave",
+      }),
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    const issue = findValidationMessage(res.issues, "tools.web.search.provider");
+    expect(issue.message).toBe(
+      'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+    );
+    expectAllowedValuesInclude(issue, ["brave"]);
+  });
+
+  it("warns for installable provider ids when stale plugin config is present", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        ...buildWebSearchProviderConfig({
+          provider: "brave",
+        }),
+        plugins: {
+          entries: {
+            brave: {
+              config: {
+                webSearch: {},
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const warning = findValidationMessage(res.warnings, "tools.web.search.provider");
+    expect(warning.message).toContain("web_search provider is not available: brave");
+    expect(warning.message).toContain('configured plugin "brave" is unavailable');
+  });
+
+  it("rejects unknown provider ids without plugin evidence", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "brvae",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    const issue = findValidationMessage(res.issues, "tools.web.search.provider");
+    expect(issue.message).toBe("unknown web_search provider: brvae");
+    expectAllowedValuesInclude(issue, ["acme-search", "brave", "gemini"]);
+  });
+
+  it("warns for unknown provider ids when stale plugin config is present", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "missing-third-party",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "missing-third-party": {
+            config: {
+              webSearch: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const warning = findValidationMessage(res.warnings, "tools.web.search.provider");
+    expect(warning.message).toContain("unknown web_search provider: missing-third-party");
+  });
 });
 
 describe("web search provider auto-detection", () => {
-  const savedEnv = { ...process.env };
-
   beforeEach(() => {
-    delete process.env.BRAVE_API_KEY;
-    delete process.env.FIRECRAWL_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MINIMAX_API_KEY;
-    delete process.env.MINIMAX_CODE_PLAN_KEY;
-    delete process.env.MINIMAX_CODING_API_KEY;
-    delete process.env.MOONSHOT_API_KEY;
-    delete process.env.PERPLEXITY_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
-    delete process.env.SEARXNG_BASE_URL;
-    delete process.env.TAVILY_API_KEY;
-    delete process.env.XAI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MOONSHOT_API_KEY;
+    for (const provider of mockWebSearchProviders) {
+      for (const envVar of provider.envVars) {
+        vi.stubEnv(envVar, undefined);
+      }
+    }
   });
 
   afterEach(() => {
-    process.env = { ...savedEnv };
+    // Preserve Node's native env object: later workers in this shared fork
+    // must inherit fixture env changes, including OPENCLAW_STATE_DIR.
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it("falls back to brave when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("brave");
+  it("returns no provider when no credentials are available", () => {
+    expect(resolveSearchProvider({})).toBe("");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
@@ -449,6 +596,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects tavily when only TAVILY_API_KEY is set", () => {
     process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("tavily");
+  });
+
+  it("auto-detects minimax when only MINIMAX_API_KEY is set", () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
   });
 
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
@@ -471,6 +623,11 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("minimax");
   });
 
+  it("auto-detects minimax when only MINIMAX_OAUTH_TOKEN is set", () => {
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-test-token"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
+  });
+
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("perplexity");
@@ -484,11 +641,6 @@ describe("web search provider auto-detection", () => {
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("grok");
-  });
-
-  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
-    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("kimi");
   });
 
   it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {

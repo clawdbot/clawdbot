@@ -1,3 +1,5 @@
+// Signal tests cover format.chunking plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markdownToSignalTextChunks } from "./format.js";
 
@@ -9,6 +11,34 @@ function expectChunkStyleRangesInBounds(chunks: ReturnType<typeof markdownToSign
       expect(style.length).toBeGreaterThan(0);
     }
   }
+}
+
+type SignalTextChunk = ReturnType<typeof markdownToSignalTextChunks>[number];
+type SignalTextStyle = SignalTextChunk["styles"][number];
+
+function requireFirstChunk(chunks: ReturnType<typeof markdownToSignalTextChunks>): SignalTextChunk {
+  return expectDefined(chunks[0], "first Signal text chunk");
+}
+
+function requireChunkWithStyle(
+  chunks: ReturnType<typeof markdownToSignalTextChunks>,
+  styleName: SignalTextStyle["style"],
+): SignalTextChunk {
+  const chunk = chunks.find((candidate) =>
+    candidate.styles.some((style) => style.style === styleName),
+  );
+  if (!chunk) {
+    throw new Error(`chunk with ${styleName} style missing`);
+  }
+  return chunk;
+}
+
+function requireStyle(chunk: SignalTextChunk, styleName: SignalTextStyle["style"]) {
+  const style = chunk.styles.find((candidate) => candidate.style === styleName);
+  if (!style) {
+    throw new Error(`${styleName} style missing`);
+  }
+  return style;
 }
 
 describe("splitSignalFormattedText", () => {
@@ -38,7 +68,7 @@ describe("splitSignalFormattedText", () => {
     it("empty text returns empty array", () => {
       // Empty input produces no chunks (not an empty chunk)
       const chunks = markdownToSignalTextChunks("", 100);
-      expect(chunks).toEqual([]);
+      expect(chunks).toStrictEqual([]);
     });
 
     it("text under limit returns single chunk unchanged", () => {
@@ -46,7 +76,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, 100);
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].text).toBe("short text");
+      expect(requireFirstChunk(chunks).text).toBe("short text");
     });
   });
 
@@ -59,14 +89,13 @@ describe("splitSignalFormattedText", () => {
 
       expect(chunks.length).toBeGreaterThan(1);
       // First chunk should contain the bold style
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       expect(firstChunk.text).toContain("bold");
-      expect(firstChunk.styles.some((s) => s.style === "BOLD")).toBe(true);
+      expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       // The bold style should start at position 0 in the first chunk
-      const boldStyle = firstChunk.styles.find((s) => s.style === "BOLD");
-      expect(boldStyle).toBeDefined();
-      expect(boldStyle!.start).toBe(0);
-      expect(boldStyle!.length).toBe(4); // "bold"
+      const boldStyle = requireStyle(firstChunk, "BOLD");
+      expect(boldStyle.start).toBe(0);
+      expect(boldStyle.length).toBe(4); // "bold"
     });
 
     it("style fully within second chunk has offset adjusted to chunk-local position", () => {
@@ -78,16 +107,17 @@ describe("splitSignalFormattedText", () => {
       expect(chunks.length).toBeGreaterThan(1);
       // Find the chunk containing "bold"
       const chunkWithBold = chunks.find((c) => c.text.includes("bold"));
-      expect(chunkWithBold).toBeDefined();
-      expect(chunkWithBold!.styles.some((s) => s.style === "BOLD")).toBe(true);
+      if (!chunkWithBold) {
+        throw new Error("chunk containing bold text missing");
+      }
+      expect(chunkWithBold.styles.map((style) => style.style)).toContain("BOLD");
 
       // The bold style should have chunk-local offset (not original text offset)
-      const boldStyle = chunkWithBold!.styles.find((s) => s.style === "BOLD");
-      expect(boldStyle).toBeDefined();
+      const boldStyle = requireStyle(chunkWithBold, "BOLD");
       // The offset should be the position within this chunk, not the original text
-      const boldPos = chunkWithBold!.text.indexOf("bold");
-      expect(boldStyle!.start).toBe(boldPos);
-      expect(boldStyle!.length).toBe(4);
+      const boldPos = chunkWithBold.text.indexOf("bold");
+      expect(boldStyle.start).toBe(boldPos);
+      expect(boldStyle.length).toBe(4);
     });
 
     it("style spanning chunk boundary is split into two ranges", () => {
@@ -122,14 +152,12 @@ describe("splitSignalFormattedText", () => {
       expect(chunks.length).toBeGreaterThan(1);
 
       // Find chunk with bold
-      const chunkWithBold = chunks.find((c) => c.styles.some((s) => s.style === "BOLD"));
-      expect(chunkWithBold).toBeDefined();
+      const chunkWithBold = requireChunkWithStyle(chunks, "BOLD");
 
       // Verify the bold style is valid within its chunk
-      const boldStyle = chunkWithBold!.styles.find((s) => s.style === "BOLD");
-      expect(boldStyle).toBeDefined();
-      expect(boldStyle!.start).toBeGreaterThanOrEqual(0);
-      expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(chunkWithBold!.text.length);
+      const boldStyle = requireStyle(chunkWithBold, "BOLD");
+      expect(boldStyle.start).toBeGreaterThanOrEqual(0);
+      expect(boldStyle.start + boldStyle.length).toBeLessThanOrEqual(chunkWithBold.text.length);
     });
 
     it("style ending exactly at split point stays entirely in first chunk", () => {
@@ -138,11 +166,10 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       // First chunk should have the complete bold style
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       if (firstChunk.text.includes("bold")) {
-        const boldStyle = firstChunk.styles.find((s) => s.style === "BOLD");
-        expect(boldStyle).toBeDefined();
-        expect(boldStyle!.start + boldStyle!.length).toBeLessThanOrEqual(firstChunk.text.length);
+        const boldStyle = requireStyle(firstChunk, "BOLD");
+        expect(boldStyle.start + boldStyle.length).toBeLessThanOrEqual(firstChunk.text.length);
       }
     });
 
@@ -179,7 +206,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].text).toBe("1234567890");
+      expect(requireFirstChunk(chunks).text).toBe("1234567890");
     });
 
     it("preserves style through whitespace trimming", () => {
@@ -188,9 +215,9 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       // Bold should be preserved in first chunk
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       if (firstChunk.text.includes("bold")) {
-        expect(firstChunk.styles.some((s) => s.style === "BOLD")).toBe(true);
+        expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       }
     });
 
@@ -274,6 +301,30 @@ describe("splitSignalFormattedText", () => {
 });
 
 describe("markdownToSignalTextChunks", () => {
+  it("marks a transcript-role header promoted to a chunk boundary", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.startsWith(header));
+
+    expect(roleChunk).toBeDefined();
+    expect(roleChunk?.styles).toContainEqual({
+      start: 0,
+      length: header.length,
+      style: "MONOSPACE",
+    });
+    expect(chunks.every((chunk) => chunk.text.length <= 25)).toBe(true);
+  });
+
+  it("treats Infinity as unbounded for media captions", () => {
+    const markdown = "Here's **another** photo from today's walk.";
+
+    const chunks = markdownToSignalTextChunks(markdown, Number.POSITIVE_INFINITY);
+
+    expect(chunks).toHaveLength(1);
+    expect(requireFirstChunk(chunks)?.text).toBe("Here's another photo from today's walk.");
+    expect(requireFirstChunk(chunks)?.styles.map((style) => style.style)).toContain("BOLD");
+  });
+
   describe("link expansion chunk limit", () => {
     it("does not exceed chunk limit after link expansion", () => {
       // Create text that is close to limit, with a link that will expand
@@ -374,14 +425,12 @@ describe("markdownToSignalTextChunks", () => {
       }
 
       // Spoiler style should exist and be valid
-      const chunkWithSpoiler = chunks.find((c) => c.styles.some((s) => s.style === "SPOILER"));
-      expect(chunkWithSpoiler).toBeDefined();
+      const chunkWithSpoiler = requireChunkWithStyle(chunks, "SPOILER");
 
-      const spoilerStyle = chunkWithSpoiler!.styles.find((s) => s.style === "SPOILER");
-      expect(spoilerStyle).toBeDefined();
-      expect(spoilerStyle!.start).toBeGreaterThanOrEqual(0);
-      expect(spoilerStyle!.start + spoilerStyle!.length).toBeLessThanOrEqual(
-        chunkWithSpoiler!.text.length,
+      const spoilerStyle = requireStyle(chunkWithSpoiler, "SPOILER");
+      expect(spoilerStyle.start).toBeGreaterThanOrEqual(0);
+      expect(spoilerStyle.start + spoilerStyle.length).toBeLessThanOrEqual(
+        chunkWithSpoiler.text.length,
       );
     });
   });

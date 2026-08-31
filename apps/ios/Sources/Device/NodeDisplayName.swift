@@ -2,31 +2,49 @@ import Foundation
 import UIKit
 
 enum NodeDisplayName {
-    private static let genericNames: Set<String> = ["iOS Node", "iPhone Node", "iPad Node"]
+    private static let genericNames: Set<String> = [
+        "iOS Node",
+        "iPhone",
+        "iPhone Node",
+        "iPad",
+        "iPad Node",
+        "OpenClaw Mac App",
+    ]
 
     static func isGeneric(_ name: String) -> Bool {
-        Self.genericNames.contains(name)
+        self.genericNames.contains(name)
     }
 
-    static func defaultValue(for interfaceIdiom: UIUserInterfaceIdiom) -> String {
-        switch interfaceIdiom {
+    static func defaultValue(
+        for interfaceIdiom: UIUserInterfaceIdiom,
+        isIOSAppOnMac: Bool = ProcessInfo.processInfo.isiOSAppOnMac) -> String
+    {
+        if isIOSAppOnMac {
+            return "OpenClaw Mac App"
+        }
+        return switch interfaceIdiom {
         case .phone:
-            return "iPhone Node"
+            "iPhone Node"
         case .pad:
-            return "iPad Node"
+            "iPad Node"
         default:
-            return "iOS Node"
+            "iOS Node"
         }
     }
 
     static func resolve(
         existing: String?,
         deviceName: String,
-        interfaceIdiom: UIUserInterfaceIdiom
-    ) -> String {
+        interfaceIdiom: UIUserInterfaceIdiom,
+        isIOSAppOnMac: Bool = ProcessInfo.processInfo.isiOSAppOnMac) -> String
+    {
         let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedExisting.isEmpty, !Self.isGeneric(trimmedExisting) {
             return trimmedExisting
+        }
+
+        if isIOSAppOnMac {
+            return Self.defaultValue(for: interfaceIdiom, isIOSAppOnMac: true)
         }
 
         let trimmedDevice = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,7 +52,7 @@ enum NodeDisplayName {
             return normalized
         }
 
-        return Self.defaultValue(for: interfaceIdiom)
+        return Self.defaultValue(for: interfaceIdiom, isIOSAppOnMac: false)
     }
 
     private static func normalizedDeviceName(_ deviceName: String) -> String? {

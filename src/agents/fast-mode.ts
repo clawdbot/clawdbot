@@ -1,43 +1,48 @@
+/**
+ * Resolves fast-mode state from agent config and runtime defaults.
+ */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  type FastModeSource,
+  resolveFastModeModelAutoOnSeconds,
+  resolveFastModeModelParams,
+} from "../shared/fast-mode.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
-export type FastModeState = {
-  enabled: boolean;
-  source: "session" | "agent" | "config" | "default";
-};
+export {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  formatFastModeAutoProgressText,
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+  formatFastModeSourceSuffix,
+  formatFastModeStatusValue,
+  formatFastModeValue,
+  resolveFastModeForElapsed,
+} from "../shared/fast-mode.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 
-export function resolveFastModeParam(
-  extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
-  return normalizeFastMode(
-    (extraParams?.fastMode ?? extraParams?.fast_mode) as string | boolean | null | undefined,
-  );
-}
+// Resolves effective fast-mode state from session, agent, model config, then
+// default. Callers keep the source for diagnostics and prompt explanations.
+type FastModeState = {
+  mode: FastMode;
+  enabled: boolean;
+  source: FastModeSource;
+  fastAutoOnSeconds: number;
+};
 
 function resolveConfiguredFastModeRaw(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
 }): unknown {
-  const modelKey = `${params.provider}/${params.model}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params?.fastMode ?? modelConfig?.params?.fast_mode;
+  const modelParams = resolveFastModeModelParams(params);
+  return modelParams?.fastMode ?? modelParams?.fast_mode;
 }
 
-export function resolveConfiguredFastMode(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-}): boolean {
-  return (
-    normalizeFastMode(
-      resolveConfiguredFastModeRaw(params) as string | boolean | null | undefined,
-    ) ?? false
-  );
-}
-
+/** Resolve the effective fast-mode setting and its source. */
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -45,24 +50,46 @@ export function resolveFastModeState(params: {
   agentId?: string;
   sessionEntry?: Pick<SessionEntry, "fastMode"> | undefined;
 }): FastModeState {
+  const fastAutoOnSeconds = resolveFastModeModelAutoOnSeconds(params);
   const sessionOverride = normalizeFastMode(params.sessionEntry?.fastMode);
   if (sessionOverride !== undefined) {
-    return { enabled: sessionOverride, source: "session" };
+    return {
+      mode: sessionOverride,
+      enabled: sessionOverride === "auto" ? true : sessionOverride,
+      source: "session",
+      fastAutoOnSeconds,
+    };
   }
 
   const agentDefault =
     params.agentId && params.cfg
       ? resolveAgentConfig(params.cfg, params.agentId)?.fastModeDefault
       : undefined;
-  if (typeof agentDefault === "boolean") {
-    return { enabled: agentDefault, source: "agent" };
+  const normalizedAgentDefault = normalizeFastMode(agentDefault);
+  if (normalizedAgentDefault !== undefined) {
+    return {
+      mode: normalizedAgentDefault,
+      enabled: normalizedAgentDefault === "auto" ? true : normalizedAgentDefault,
+      source: "agent",
+      fastAutoOnSeconds,
+    };
   }
 
   const configuredRaw = resolveConfiguredFastModeRaw(params);
   const configured = normalizeFastMode(configuredRaw as string | boolean | null | undefined);
   if (configured !== undefined) {
-    return { enabled: configured, source: "config" };
+    return {
+      mode: configured,
+      enabled: configured === "auto" ? true : configured,
+      source: "config",
+      fastAutoOnSeconds,
+    };
   }
 
-  return { enabled: false, source: "default" };
+  return {
+    mode: false,
+    enabled: false,
+    source: "default",
+    fastAutoOnSeconds,
+  };
 }

@@ -1,0 +1,25 @@
+{
+  "name": "protocol leak retries on smaller chunks",
+  "mode": "doc_body_chunked",
+  "rel_path": "gateway/configuration-reference.md",
+  "source_file": "source.txt",
+  "expected_file": "expected.txt",
+  "expected_output_not_contains": ["<frontmatter>", "<body>", "[[[FM_"],
+  "rules": [
+    {
+      "method": "raw",
+      "match_all": ["First chunk", "Second chunk"],
+      "response_file": "raw-leaked.txt"
+    },
+    {
+      "method": "raw",
+      "match_all": ["First chunk"],
+      "response_file": "raw-first.txt"
+    },
+    {
+      "method": "raw",
+      "match_all": ["Second chunk"],
+      "response_file": "raw-second.txt"
+    }
+  ]
+}

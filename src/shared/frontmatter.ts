@@ -1,36 +1,33 @@
+// Shared frontmatter helpers parse Markdown frontmatter blocks and body text.
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
+/** Normalizes comma-delimited or loose array metadata fields into string lists. */
 export function normalizeStringList(input: unknown): string[] {
-  if (!input) {
-    return [];
-  }
-  if (Array.isArray(input)) {
-    return input.map((value) => String(value).trim()).filter(Boolean);
-  }
-  if (typeof input === "string") {
-    return input
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-  }
-  return [];
+  return normalizeCsvOrLooseStringList(input);
 }
 
+/** Reads a frontmatter field only when it is represented as a string value. */
 export function getFrontmatterString(
   frontmatter: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  const raw = frontmatter[key];
-  return typeof raw === "string" ? raw : undefined;
+  return readStringValue(frontmatter[key]);
 }
 
+/** Parses boolean frontmatter strings while preserving the caller's default for missing values. */
 export function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
   const parsed = parseBooleanValue(value);
   return parsed === undefined ? fallback : parsed;
 }
 
+/** Parses the JSON5 OpenClaw manifest block embedded inside a string frontmatter field. */
 export function resolveOpenClawManifestBlock(params: {
   frontmatter: Record<string, unknown>;
   key?: string;
@@ -47,6 +44,7 @@ export function resolveOpenClawManifestBlock(params: {
     }
 
     const manifestKeys = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
+    // Prefer the current manifest key, but still read legacy names for existing skill/hook files.
     for (const key of manifestKeys) {
       const candidate = (parsed as Record<string, unknown>)[key];
       if (candidate && typeof candidate === "object") {
@@ -59,13 +57,18 @@ export function resolveOpenClawManifestBlock(params: {
   }
 }
 
-export type OpenClawManifestRequires = {
+type OpenClawManifestRequires = {
+  /** All binaries that must be available. */
   bins: string[];
+  /** Alternative binaries where any one match is enough. */
   anyBins: string[];
+  /** Environment variables required by the entry. */
   env: string[];
+  /** Config paths required by the entry. */
   config: string[];
 };
 
+/** Extracts normalized runtime requirement lists from an OpenClaw manifest block. */
 export function resolveOpenClawManifestRequires(
   metadataObj: Record<string, unknown>,
 ): OpenClawManifestRequires | undefined {
@@ -84,6 +87,7 @@ export function resolveOpenClawManifestRequires(
   };
 }
 
+/** Parses manifest install entries with a caller-owned parser and drops unsupported specs. */
 export function resolveOpenClawManifestInstall<T>(
   metadataObj: Record<string, unknown>,
   parseInstallSpec: (input: unknown) => T | undefined,
@@ -94,18 +98,25 @@ export function resolveOpenClawManifestInstall<T>(
     .filter((entry): entry is T => Boolean(entry));
 }
 
+/** Extracts normalized OS allowlist entries from an OpenClaw manifest block. */
 export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>): string[] {
   return normalizeStringList(metadataObj.os);
 }
 
-export type ParsedOpenClawManifestInstallBase = {
+type ParsedOpenClawManifestInstallBase = {
+  /** Original install entry for caller-specific parsing. */
   raw: Record<string, unknown>;
+  /** Normalized install kind accepted by the caller. */
   kind: string;
+  /** Optional stable package/tool id from the manifest entry. */
   id?: string;
+  /** Optional human-facing package/tool label. */
   label?: string;
+  /** Optional binaries expected after installation. */
   bins?: string[];
 };
 
+/** Parses kind/type plus common install fields shared by package-manager install specs. */
 export function parseOpenClawManifestInstallBase(
   input: unknown,
   allowedKinds: readonly string[],
@@ -116,7 +127,7 @@ export function parseOpenClawManifestInstallBase(
   const raw = input as Record<string, unknown>;
   const kindRaw =
     typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
-  const kind = kindRaw.trim().toLowerCase();
+  const kind = normalizeOptionalLowercaseString(kindRaw) ?? "";
   if (!allowedKinds.includes(kind)) {
     return undefined;
   }
@@ -138,6 +149,7 @@ export function parseOpenClawManifestInstallBase(
   return spec;
 }
 
+/** Copies optional common install fields onto a caller-specific install spec object. */
 export function applyOpenClawManifestInstallCommonFields<
   T extends { id?: string; label?: string; bins?: string[] },
 >(spec: T, parsed: Pick<ParsedOpenClawManifestInstallBase, "id" | "label" | "bins">): T {

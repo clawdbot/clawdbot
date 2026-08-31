@@ -1,3 +1,4 @@
+/** Normalizes ACP conversation identifiers from loose metadata values. */
 export function normalizeConversationText(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();

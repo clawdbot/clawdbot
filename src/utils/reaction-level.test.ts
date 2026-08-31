@@ -1,3 +1,4 @@
+// Reaction level tests cover normalization of reaction intensity values.
 import { describe, expect, it } from "vitest";
 import { resolveReactionLevel } from "./reaction-level.js";
 

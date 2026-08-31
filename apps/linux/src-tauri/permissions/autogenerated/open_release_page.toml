@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-release-page"
+description = "Enables the open_release_page command without any pre-configured scope."
+commands.allow = ["open_release_page"]
+
+[[permission]]
+identifier = "deny-open-release-page"
+description = "Denies the open_release_page command without any pre-configured scope."
+commands.deny = ["open_release_page"]

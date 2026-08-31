@@ -1,75 +1,38 @@
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
-import { type NormalizedPluginsConfig } from "./config-state.js";
+// Shares web-search provider loading helpers across runtime paths.
 import type { PluginLoadOptions } from "./loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { sortPluginEntriesById, sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
-
-function resolveBundledWebSearchCompatPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] {
-  return resolveBundledWebSearchPluginIds({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-}
-
-function compareWebSearchProvidersAlphabetically(
-  left: Pick<PluginWebSearchProviderEntry, "id" | "pluginId">,
-  right: Pick<PluginWebSearchProviderEntry, "id" | "pluginId">,
-): number {
-  return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
-}
+import { resolveBundledWebProviderResolutionConfig } from "./web-provider-resolution-shared.js";
 
 export function sortWebSearchProviders(
   providers: PluginWebSearchProviderEntry[],
 ): PluginWebSearchProviderEntry[] {
-  return providers.toSorted(compareWebSearchProvidersAlphabetically);
+  return sortPluginEntriesById(providers);
 }
 
 export function sortWebSearchProvidersForAutoDetect(
   providers: PluginWebSearchProviderEntry[],
 ): PluginWebSearchProviderEntry[] {
-  return providers.toSorted((left, right) => {
-    const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return compareWebSearchProvidersAlphabetically(left, right);
-  });
+  return sortPluginEntriesForAutoDetect(providers);
 }
 
 export function resolveBundledWebSearchResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): {
   config: PluginLoadOptions["config"];
-  normalized: NormalizedPluginsConfig;
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
+  manifestRecords?: readonly PluginManifestRecord[];
 } {
-  const activation = resolveBundledPluginCompatibleActivationInputs({
-    rawConfig: params.config,
-    env: params.env,
+  return resolveBundledWebProviderResolutionConfig({
+    contract: "webSearchProviders",
+    config: params.config,
     workspaceDir: params.workspaceDir,
-    applyAutoEnable: true,
-    compatMode: {
-      allowlist: params.bundledAllowlistCompat,
-      enablement: "always",
-      vitest: true,
-    },
-    resolveCompatPluginIds: resolveBundledWebSearchCompatPluginIds,
+    env: params.env,
+    manifestRecords: params.manifestRecords,
   });
-
-  return {
-    config: activation.config,
-    normalized: activation.normalized,
-    activationSourceConfig: activation.activationSourceConfig,
-    autoEnabledReasons: activation.autoEnabledReasons,
-  };
 }

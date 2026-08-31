@@ -1,8 +1,14 @@
+/** Reads and enables systemd user linger for headless daemon sessions. */
 import os from "node:os";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
 function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
+  const fromEnv = normalizeOptionalString(env.USER) || normalizeOptionalString(env.LOGNAME);
   if (fromEnv) {
     return fromEnv;
   }
@@ -13,15 +19,17 @@ function resolveLoginctlUser(env: Record<string, string | undefined>): string | 
   }
 }
 
-export type SystemdUserLingerStatus = {
+type SystemdUserLingerStatus = {
   user: string;
   linger: "yes" | "no";
 };
 
-export async function readSystemdUserLingerStatus(
-  env: Record<string, string | undefined>,
-): Promise<SystemdUserLingerStatus | null> {
-  const user = resolveLoginctlUser(env);
+/** Reads systemd user linger status through loginctl when available. */
+export async function readSystemdUserLingerStatus(params: {
+  env: Record<string, string | undefined>;
+  user?: string;
+}): Promise<SystemdUserLingerStatus | null> {
+  const user = params.user ?? resolveLoginctlUser(params.env);
   if (!user) {
     return null;
   }
@@ -33,7 +41,7 @@ export async function readSystemdUserLingerStatus(
       .split("\n")
       .map((entry) => entry.trim())
       .find((entry) => entry.startsWith("Linger="));
-    const value = line?.split("=")[1]?.trim().toLowerCase();
+    const value = normalizeOptionalLowercaseString(line?.split("=")[1]);
     if (value === "yes" || value === "no") {
       return { user, linger: value };
     }
@@ -43,6 +51,7 @@ export async function readSystemdUserLingerStatus(
   return null;
 }
 
+/** Enables systemd user linger through loginctl, with optional sudo mode. */
 export async function enableSystemdUserLinger(params: {
   env: Record<string, string | undefined>;
   user?: string;
@@ -53,6 +62,8 @@ export async function enableSystemdUserLinger(params: {
     return { ok: false, stdout: "", stderr: "Missing user", code: 1 };
   }
   const needsSudo = typeof process.getuid === "function" ? process.getuid() !== 0 : true;
+  // Non-root callers need sudo for loginctl, but tests and automation can force
+  // non-interactive sudo to avoid hanging on password prompts.
   const sudoArgs =
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]
@@ -67,7 +78,7 @@ export async function enableSystemdUserLinger(params: {
       code: result.code ?? 1,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     return { ok: false, stdout: "", stderr: message, code: 1 };
   }
 }

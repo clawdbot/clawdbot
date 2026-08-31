@@ -1,7 +1,12 @@
-import { normalizeAccountId } from "../../utils/account-id.js";
+/**
+ * Resolves channel/account/thread run context for agent command execution.
+ */
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
+/** Merges explicit run context with command routing options. */
 export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext {
   const merged: AgentRunContext = opts.runContext ? { ...opts.runContext } : {};
 
@@ -13,7 +18,7 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.messageChannel = normalizedChannel;
   }
 
-  const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);
+  const normalizedAccountId = normalizeOptionalAccountId(merged.accountId ?? opts.accountId);
   if (normalizedAccountId) {
     merged.accountId = normalizedAccountId;
   }
@@ -39,7 +44,10 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     opts.threadId !== "" &&
     opts.threadId !== null
   ) {
-    merged.currentThreadTs = String(opts.threadId);
+    const threadId = stringifyRouteThreadId(opts.threadId);
+    if (threadId) {
+      merged.currentThreadTs = threadId;
+    }
   }
 
   // Populate currentChannelId from the outbound target so channel threading

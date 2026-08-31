@@ -1,0 +1,26 @@
+title: Control UI fresh-document static asset recovery
+
+scenario:
+  id: control-ui-static-asset-recovery
+  surface: control-ui
+  coverage:
+    primary:
+      - control-ui.static-asset-recovery
+  objective: >-
+    Prove the Control UI replaces a document whose initial application module
+    is unavailable with a fresh document that mounts successfully.
+  successCriteria:
+    - Chromium receives a transient failure for the initial application module.
+    - The mount deadline triggers exactly one fresh-document navigation.
+    - The replacement document mounts the connected Control UI shell and Chat welcome state.
+    - The recovery marker is removed from the final browser URL.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/e2e/mount-recovery.e2e.test.ts
+    - ui/index.html
+  execution:
+    kind: playwright
+    path: ui/src/e2e/mount-recovery.e2e.test.ts
+    testNamePattern: reloads a fresh document after the initial app module is unavailable
+    summary: Real Chromium proof for fresh-document recovery after an initial module failure.

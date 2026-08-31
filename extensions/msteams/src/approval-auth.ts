@@ -1,7 +1,6 @@
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
+// Msteams plugin module implements approval auth behavior.
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
@@ -9,29 +8,31 @@ const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 function normalizeMSTeamsApproverId(value: string | number): string | undefined {
   const normalized = normalizeMSTeamsMessagingTarget(String(value));
-  if (!normalized?.startsWith("user:")) {
-    return undefined;
-  }
-  const id = normalized.slice("user:".length).trim().toLowerCase();
-  return MSTEAMS_ID_RE.test(id) ? id : undefined;
+  const id = normalizeOptionalLowercaseString(
+    normalized?.startsWith("user:") ? normalized.slice("user:".length) : normalized,
+  );
+  return id && MSTEAMS_ID_RE.test(id) ? id : undefined;
 }
 
 function resolveMSTeamsChannelConfig(cfg: OpenClawConfig) {
   return cfg.channels?.msteams;
 }
 
-export const msTeamsApprovalAuth = createResolvedApproverActionAuthAdapter({
+const msTeamsApproval = createChannelApprovalAuth({
   channelLabel: "Microsoft Teams",
-  resolveApprovers: ({ cfg }) => {
+  resolveInputs: ({ cfg }) => {
     const channel = resolveMSTeamsChannelConfig(cfg);
-    return resolveApprovalApprovers({
-      allowFrom: channel?.allowFrom,
-      defaultTo: channel?.defaultTo,
-      normalizeApprover: normalizeMSTeamsApproverId,
-    });
+    return { allowFrom: channel?.allowFrom, defaultTo: channel?.defaultTo };
   },
+  normalizeApprover: normalizeMSTeamsApproverId,
   normalizeSenderId: (value) => {
-    const trimmed = value.trim().toLowerCase();
+    const trimmed = normalizeOptionalLowercaseString(value);
+    if (!trimmed) {
+      return undefined;
+    }
     return MSTEAMS_ID_RE.test(trimmed) ? trimmed : undefined;
   },
 });
+
+export const getMSTeamsApprovalApprovers = msTeamsApproval.resolveApprovers;
+export const msTeamsApprovalAuth = msTeamsApproval.approvalAuth;

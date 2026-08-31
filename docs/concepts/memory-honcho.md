@@ -1,33 +1,31 @@
 ---
-title: "Honcho Memory"
 summary: "AI-native cross-session memory via the Honcho plugin"
+title: "Honcho memory"
 read_when:
   - You want persistent memory that works across sessions and channels
   - You want AI-powered recall and user modeling
 ---
 
-# Honcho Memory
-
-[Honcho](https://honcho.dev) adds AI-native memory to OpenClaw. It persists
-conversations to a dedicated service and builds user and agent models over time,
-giving your agent cross-session context that goes beyond workspace Markdown
-files.
+[Honcho](https://honcho.dev) adds AI-native memory to OpenClaw through an
+external plugin. It persists conversations to a dedicated service and builds
+user and agent models over time, giving your agent cross-session context that
+goes beyond workspace Markdown files.
 
 ## What it provides
 
-- **Cross-session memory** -- conversations are persisted after every turn, so
+- **Cross-session memory** - conversations persist after every turn, so
   context carries across session resets, compaction, and channel switches.
-- **User modeling** -- Honcho maintains a profile for each user (preferences,
+- **User modeling** - Honcho maintains a profile for each user (preferences,
   facts, communication style) and for the agent (personality, learned
   behaviors).
-- **Semantic search** -- search over observations from past conversations, not
+- **Semantic search** - search over observations from past conversations, not
   just the current session.
-- **Multi-agent awareness** -- parent agents automatically track spawned
+- **Multi-agent awareness** - parent agents automatically track spawned
   sub-agents, with parents added as observers in child sessions.
 
 ## Available tools
 
-Honcho registers tools that the agent can use during conversation:
+Honcho registers tools the agent can use during conversation:
 
 **Data retrieval (fast, no LLM call):**
 
@@ -89,38 +87,37 @@ For self-hosted instances, point `baseUrl` to your local server (for example
 ## Migrating existing memory
 
 If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
-`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
-offers to migrate them.
+`IDENTITY.md`, `memory/`), `openclaw honcho setup` detects and offers to
+migrate them.
 
 <Info>
-Migration is non-destructive -- files are uploaded to Honcho. Originals are
+Migration is non-destructive - files are uploaded to Honcho. Originals are
 never deleted or moved.
 </Info>
 
 ## How it works
 
 After every AI turn, the conversation is persisted to Honcho. Both user and
-agent messages are observed, allowing Honcho to build and refine its models over
+agent messages are observed, letting Honcho build and refine its models over
 time.
 
-During conversation, Honcho tools query the service in the `before_prompt_build`
-phase, injecting relevant context before the model sees the prompt. This ensures
-accurate turn boundaries and relevant recall.
+During conversation, Honcho tools query the service during OpenClaw's
+`before_prompt_build` plugin hook, injecting relevant context before the model
+sees the prompt.
 
 ## Honcho vs builtin memory
 
-|                   | Builtin / QMD                | Honcho                              |
-| ----------------- | ---------------------------- | ----------------------------------- |
-| **Storage**       | Workspace Markdown files     | Dedicated service (local or hosted) |
-| **Cross-session** | Via memory files             | Automatic, built-in                 |
-| **User modeling** | Manual (write to MEMORY.md)  | Automatic profiles                  |
-| **Search**        | Vector + keyword (hybrid)    | Semantic over observations          |
-| **Multi-agent**   | Not tracked                  | Parent/child awareness              |
-| **Dependencies**  | None (builtin) or QMD binary | Plugin install                      |
+|                   | Builtin memory              | Honcho                              |
+| ----------------- | --------------------------- | ----------------------------------- |
+| **Storage**       | Workspace Markdown files    | Dedicated service (local or hosted) |
+| **Cross-session** | Via memory files            | Automatic, built-in                 |
+| **User modeling** | Manual (write to MEMORY.md) | Automatic profiles                  |
+| **Search**        | Vector + keyword (hybrid)   | Semantic over observations          |
+| **Multi-agent**   | Not tracked                 | Parent/child awareness              |
+| **Dependencies**  | None                        | Plugin install                      |
 
-Honcho and the builtin memory system can work together. When QMD is configured,
-additional tools become available for searching local Markdown files alongside
-Honcho's cross-session memory.
+Honcho and the builtin memory system can work together. Builtin search keeps
+local Markdown available alongside Honcho's cross-session memory.
 
 ## CLI commands
 
@@ -136,5 +133,9 @@ openclaw honcho search <query> [-k N] [-d D] # Semantic search over memory
 - [Plugin source code](https://github.com/plastic-labs/openclaw-honcho)
 - [Honcho documentation](https://docs.honcho.dev)
 - [Honcho OpenClaw integration guide](https://docs.honcho.dev/v3/guides/integrations/openclaw)
-- [Memory](/concepts/memory) -- OpenClaw memory overview
-- [Context Engines](/concepts/context-engine) -- how plugin context engines work
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Context Engines](/concepts/context-engine)

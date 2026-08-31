@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Browser tests cover control service.plugin disabled plugin behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ generatedToken: false })),
@@ -21,6 +22,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
+    getRuntimeConfig: mocks.loadConfig,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -42,13 +44,14 @@ vi.mock("./runtime-lifecycle.js", () => ({
   stopBrowserRuntime: vi.fn(async () => {}),
 }));
 
-let startBrowserControlServiceFromConfig: typeof import("../control-service.js").startBrowserControlServiceFromConfig;
+vi.mock("./server-context.js", () => ({
+  createBrowserRouteContext: vi.fn(),
+}));
+
+const { startBrowserControlServiceFromConfig } = await import("../control-service.js");
+vi.doUnmock("./server-context.js");
 
 describe("startBrowserControlServiceFromConfig", () => {
-  beforeAll(async () => {
-    ({ startBrowserControlServiceFromConfig } = await import("../control-service.js"));
-  });
-
   beforeEach(() => {
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.createBrowserRuntimeState.mockClear();

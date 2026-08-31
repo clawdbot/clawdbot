@@ -1,0 +1,203 @@
+// Telegram dispatch dedupe: a PERMANENT second layer above the ingress spool,
+// not a leftover to delete on drain adoption. The spool tombstones transport
+// update_ids; debounce/media-group flushes merge N update_ids into one
+// dispatched turn, so a constituent message re-arriving under a *fresh*
+// update_id is invisible to the update_id tombstone. This guard keys the
+// logical (bot_id, chat_id, message_id) — the only identity that catches that replay
+// without colliding when state is reused after rotating to a different bot.
+import type { Message } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createChannelReplayGuard,
+  runClaimableDedupeClaimLoop,
+  type ChannelReplayClaimHandle,
+} from "openclaw/plugin-sdk/persistent-dedupe";
+
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "global";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
+
+type TelegramMessageDispatchClaim =
+  | { kind: "claimed"; handle: ChannelReplayClaimHandle }
+  | { kind: "duplicate" }
+  | { kind: "invalid" };
+
+export type TelegramMessageDispatchReplayClaim = ChannelReplayClaimHandle;
+
+type TelegramMessageDispatchReplayForgetFailure = {
+  key: string;
+  error?: unknown;
+};
+
+class TelegramMessageDispatchReplayForgetError extends Error {
+  readonly failures: TelegramMessageDispatchReplayForgetFailure[];
+  override readonly cause: unknown;
+
+  constructor(failures: readonly TelegramMessageDispatchReplayForgetFailure[]) {
+    const count = failures.length;
+    super(`telegram message dispatch dedupe rollback failed for ${count} key(s)`, {
+      cause: failures.find((failure) => failure.error !== undefined)?.error,
+    });
+    this.name = "TelegramMessageDispatchReplayForgetError";
+    this.failures = [...failures];
+    this.cause = failures.find((failure) => failure.error !== undefined)?.error;
+  }
+}
+
+export function isTelegramMessageDispatchReplayForgetError(
+  error: unknown,
+): error is TelegramMessageDispatchReplayForgetError {
+  return error instanceof TelegramMessageDispatchReplayForgetError;
+}
+
+function buildTelegramMessageDispatchStoredReplayKey(params: {
+  accountId: string;
+  botUserId: number;
+  msg: Message;
+}): string | null {
+  const chatId = params.msg.chat?.id;
+  const messageId = params.msg.message_id;
+  if (chatId == null || typeof messageId !== "number" || messageId <= 0) {
+    return null;
+  }
+  // Legacy keys omitted bot identity, so they cannot be attributed safely after
+  // state is reused for another bot. This shape intentionally starts a fresh TTL window.
+  return JSON.stringify([
+    "account",
+    params.accountId,
+    "bot",
+    String(params.botUserId),
+    "message",
+    String(chatId),
+    messageId,
+  ]);
+}
+
+type TelegramMessageDispatchReplayEvent =
+  | { accountId: string; botUserId: number; msg: Message }
+  | { keys?: readonly string[] };
+
+export function createTelegramMessageDispatchReplayGuard(
+  params: {
+    onDiskError?: (error: unknown) => void;
+  } = {},
+) {
+  return createChannelReplayGuard<TelegramMessageDispatchReplayEvent>({
+    dedupe: {
+      ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+      memoryMaxSize: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES,
+      pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
+      namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
+      stateMaxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+      ...(params.onDiskError ? { onDiskError: params.onDiskError } : {}),
+    },
+    buildReplayKey: (event) =>
+      "msg" in event ? buildTelegramMessageDispatchStoredReplayKey(event) : (event.keys ?? []),
+    namespace: () => TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
+  });
+}
+
+type TelegramMessageDispatchReplayGuard = Pick<
+  ReturnType<typeof createTelegramMessageDispatchReplayGuard>,
+  "claim" | "forget" | "warmup"
+>;
+
+export async function claimTelegramMessageDispatchReplay(params: {
+  guard: TelegramMessageDispatchReplayGuard;
+  accountId: string;
+  botUserId: number;
+  msg: Message;
+}): Promise<TelegramMessageDispatchClaim> {
+  return await runClaimableDedupeClaimLoop(
+    () =>
+      params.guard.claim({
+        accountId: params.accountId,
+        botUserId: params.botUserId,
+        msg: params.msg,
+      }),
+    (_error, rejectionCount) => rejectionCount <= 1,
+  );
+}
+
+export async function commitTelegramMessageDispatchReplay(params: {
+  guard: TelegramMessageDispatchReplayGuard;
+  claims?: readonly TelegramMessageDispatchReplayClaim[];
+  /** Require every claim to reach SQLite before the caller acknowledges durable adoption. */
+  requirePersistent?: boolean;
+}): Promise<void> {
+  const claims = [...new Set(params.claims ?? [])];
+  const committedKeys: string[] = [];
+  // Commit serially so a later failure has no still-running sibling write that
+  // can race rollback and recreate a key after it was forgotten.
+  for (const [index, claim] of claims.entries()) {
+    let diskError: unknown;
+    try {
+      const recorded = await claim.commit(
+        params.requirePersistent === true
+          ? {
+              onDiskError: (error) => {
+                diskError = error;
+              },
+            }
+          : undefined,
+      );
+      if (params.requirePersistent === true && diskError !== undefined) {
+        throw diskError instanceof Error
+          ? diskError
+          : new Error(formatErrorMessage(diskError), { cause: diskError });
+      }
+      if (recorded) {
+        committedKeys.push(...claim.keys);
+      }
+    } catch (error) {
+      for (const pendingClaim of claims.slice(index + 1)) {
+        pendingClaim.release({ error });
+      }
+
+      const failures: TelegramMessageDispatchReplayForgetFailure[] = [];
+      for (const committedKey of committedKeys) {
+        try {
+          const forgotten = await params.guard.forget({ keys: [committedKey] });
+          if (!forgotten) {
+            failures.push({ key: committedKey });
+          }
+        } catch (rollbackError) {
+          failures.push({ key: committedKey, error: rollbackError });
+        }
+      }
+
+      let failedKeyCleanupError: unknown;
+      try {
+        await params.guard.forget(
+          { keys: claim.keys },
+          {
+            onDiskError: (rollbackError) => {
+              failedKeyCleanupError = rollbackError;
+            },
+          },
+        );
+      } catch (rollbackError) {
+        failedKeyCleanupError = rollbackError;
+      }
+      if (failedKeyCleanupError !== undefined) {
+        failures.push(...claim.keys.map((key) => ({ key, error: failedKeyCleanupError })));
+      }
+      if (failures.length > 0) {
+        throw new TelegramMessageDispatchReplayForgetError(failures);
+      }
+      throw error;
+    }
+  }
+}
+
+export function releaseTelegramMessageDispatchReplay(params: {
+  claims?: readonly TelegramMessageDispatchReplayClaim[];
+  error?: unknown;
+}): void {
+  for (const claim of new Set(params.claims ?? [])) {
+    claim.release({ error: params.error });
+  }
+}

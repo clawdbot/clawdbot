@@ -1,11 +1,17 @@
-import { ErrorCodes, type ErrorShape } from "../../protocol/index.js";
+// Unauthorized flood guard rate-limits repeated unauthorized role errors on one WebSocket connection.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
 
-export type UnauthorizedFloodGuardOptions = {
+/**
+ * Per-connection guard that suppresses noisy unauthorized-role retries.
+ */
+type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;
   logEvery?: number;
 };
 
-export type UnauthorizedFloodDecision = {
+/** Decision returned after recording one unauthorized role failure. */
+type UnauthorizedFloodDecision = {
   shouldClose: boolean;
   shouldLog: boolean;
   count: number;
@@ -15,6 +21,7 @@ export type UnauthorizedFloodDecision = {
 const DEFAULT_CLOSE_AFTER = 10;
 const DEFAULT_LOG_EVERY = 100;
 
+/** Counts unauthorized failures and decides when to log or close the socket. */
 export class UnauthorizedFloodGuard {
   private readonly closeAfter: number;
   private readonly logEvery: number;
@@ -22,8 +29,8 @@ export class UnauthorizedFloodGuard {
   private suppressedSinceLastLog = 0;
 
   constructor(options?: UnauthorizedFloodGuardOptions) {
-    this.closeAfter = Math.max(1, Math.floor(options?.closeAfter ?? DEFAULT_CLOSE_AFTER));
-    this.logEvery = Math.max(1, Math.floor(options?.logEvery ?? DEFAULT_LOG_EVERY));
+    this.closeAfter = resolveIntegerOption(options?.closeAfter, DEFAULT_CLOSE_AFTER, { min: 1 });
+    this.logEvery = resolveIntegerOption(options?.logEvery, DEFAULT_LOG_EVERY, { min: 1 });
   }
 
   registerUnauthorized(): UnauthorizedFloodDecision {
@@ -57,6 +64,7 @@ export class UnauthorizedFloodGuard {
   }
 }
 
+/** Identifies role-auth failures that should feed the flood guard. */
 export function isUnauthorizedRoleError(error?: ErrorShape): boolean {
   if (!error) {
     return false;

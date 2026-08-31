@@ -1,4 +1,6 @@
+// Matrix tests cover onboarding.resolve plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardPrompter } from "../runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -10,11 +12,21 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-let runMatrixAddAccountAllowlistConfigure: typeof import("./onboarding.test-harness.js").runMatrixAddAccountAllowlistConfigure;
+let promptMatrixAllowFrom: NonNullable<
+  NonNullable<typeof import("./onboarding.js").matrixOnboardingAdapter.dmPolicy>["promptAllowFrom"]
+>;
 
 describe("matrix onboarding account-scoped resolution", () => {
   beforeAll(async () => {
-    ({ runMatrixAddAccountAllowlistConfigure } = await import("./onboarding.test-harness.js"));
+    const { matrixOnboardingAdapter } = await import("./onboarding.js");
+    if (!matrixOnboardingAdapter.dmPolicy) {
+      throw new Error("expected Matrix onboarding DM policy");
+    }
+    const promptAllowFrom = matrixOnboardingAdapter.dmPolicy.promptAllowFrom;
+    if (!promptAllowFrom) {
+      throw new Error("expected Matrix onboarding allowlist prompt");
+    }
+    promptMatrixAllowFrom = promptAllowFrom;
   });
 
   beforeEach(() => {
@@ -27,26 +39,35 @@ describe("matrix onboarding account-scoped resolution", () => {
   });
 
   it("passes accountId into Matrix allowlist target resolution during onboarding", async () => {
-    const result = await runMatrixAddAccountAllowlistConfigure({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              default: {
-                homeserver: "https://matrix.main.example.org",
-                accessToken: "main-token",
-              },
+    const prompter = {
+      note: vi.fn(async () => {}),
+      text: vi.fn(async () => "Alice"),
+    } as unknown as WizardPrompter;
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.main.example.org",
+              accessToken: "main-token",
+            },
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
             },
           },
         },
-      } as CoreConfig,
-      allowFromInput: "Alice",
-      roomsAllowlistInput: "",
+      },
+    } as CoreConfig;
+    const result = await promptMatrixAllowFrom({
+      cfg,
+      prompter,
+      accountId: "ops",
     });
 
-    expect(result).not.toBe("skip");
+    expect(result.channels?.matrix?.accounts?.ops?.dm?.allowFrom).toEqual(["@alice:example.org"]);
     expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+      cfg,
       accountId: "ops",
       inputs: ["Alice"],
       kind: "user",

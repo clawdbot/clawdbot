@@ -1,3 +1,4 @@
+// Secret input normalization tests cover trimming and empty-value handling.
 import { describe, expect, it } from "vitest";
 import { normalizeOptionalSecretInput, normalizeSecretInput } from "./normalize-secret-input.js";
 
@@ -11,6 +12,11 @@ describe("normalizeSecretInput", () => {
 
   it("strips embedded line breaks and surrounding whitespace", () => {
     expect(normalizeSecretInput("  sk-\r\nabc\n123  ")).toBe("sk-abc123");
+  });
+
+  it("strips embedded control characters while preserving ordinary spaces", () => {
+    expect(normalizeSecretInput("  sk-\u0000ab\tc\u007f\u0085  ")).toBe("sk-abc");
+    expect(normalizeSecretInput("  Bearer token value  ")).toBe("Bearer token value");
   });
 
   it("drops non-Latin1 code points that can break HTTP ByteString headers", () => {

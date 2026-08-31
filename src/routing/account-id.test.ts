@@ -1,3 +1,4 @@
+// Account id tests cover account id normalization and validation.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,

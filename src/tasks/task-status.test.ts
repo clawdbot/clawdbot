@@ -1,3 +1,4 @@
+// Covers task status snapshots and user-facing task status formatting.
 import { describe, expect, it } from "vitest";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
@@ -54,6 +55,25 @@ describe("task status snapshot", () => {
 
     expect(snapshot.totalCount).toBe(0);
     expect(snapshot.focus).toBeUndefined();
+  });
+
+  it("focuses blocked completions ahead of ordinary successes", () => {
+    const completed = makeTask({
+      taskId: "completed",
+      status: "succeeded",
+      endedAt: NOW - 100,
+    });
+    const blocked = makeTask({
+      taskId: "blocked",
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      endedAt: NOW - 200,
+    });
+
+    const snapshot = buildTaskStatusSnapshot([completed, blocked], { now: NOW });
+
+    expect(snapshot.focus?.taskId).toBe("blocked");
+    expect(snapshot.recentFailureCount).toBe(1);
   });
 });
 

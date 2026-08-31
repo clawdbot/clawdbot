@@ -1,7 +1,9 @@
+// Telegram plugin module implements bot message dispatch.agent behavior.
 export {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
+  resolveHumanDelayConfig,
 } from "openclaw/plugin-sdk/agent-runtime";

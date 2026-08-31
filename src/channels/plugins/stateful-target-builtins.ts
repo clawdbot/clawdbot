@@ -1,29 +1,26 @@
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+/**
+ * Built-in stateful binding target registration.
+ *
+ * Lazily registers ACP target drivers so non-ACP channel flows avoid ACP runtime imports.
+ */
+import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
-let builtinsRegisteredPromise: Promise<void> | null = null;
+const loadAcpStatefulTargetDriverModule = createLazyRuntimeModule(
+  () => import("./acp-stateful-target-driver.js"),
+);
 
-export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
-  if (builtinsRegisteredPromise) {
-    await builtinsRegisteredPromise;
-    return;
-  }
-  builtinsRegisteredPromise = (async () => {
-    const { acpStatefulBindingTargetDriver } = await import("./acp-stateful-target-driver.js");
-    registerStatefulBindingTargetDriver(acpStatefulBindingTargetDriver);
-  })();
-  try {
-    await builtinsRegisteredPromise;
-  } catch (error) {
-    builtinsRegisteredPromise = null;
-    throw error;
-  }
+export function isStatefulTargetBuiltinDriverId(id: string): boolean {
+  return id.trim() === "acp";
 }
 
-export async function resetStatefulTargetBuiltinsForTesting(): Promise<void> {
-  builtinsRegisteredPromise = null;
-  const { acpStatefulBindingTargetDriver } = await import("./acp-stateful-target-driver.js");
-  unregisterStatefulBindingTargetDriver(acpStatefulBindingTargetDriver.id);
+export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
+  try {
+    const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
+    registerStatefulBindingTargetDriver(acpStatefulBindingTargetDriver);
+  } catch (error) {
+    // A rejected lazy import is cached; clear it so a later setup or binding attempt can retry.
+    loadAcpStatefulTargetDriverModule.clear();
+    throw error;
+  }
 }

@@ -1,5 +1,6 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import type { SsrFPolicy } from "../../runtime-api.js";
+// Matrix type declarations define plugin contracts.
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MatrixResolvedConfig = {
   homeserver: string;
@@ -42,7 +43,6 @@ export type MatrixStoragePaths = {
   rootDir: string;
   storagePath: string;
   cryptoPath: string;
-  metaPath: string;
   recoveryKeyPath: string;
   idbSnapshotPath: string;
   accountKey: string;

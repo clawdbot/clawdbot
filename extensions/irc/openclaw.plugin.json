@@ -1,5 +1,11 @@
 {
   "id": "irc",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["irc"],
   "configSchema": {
     "type": "object",

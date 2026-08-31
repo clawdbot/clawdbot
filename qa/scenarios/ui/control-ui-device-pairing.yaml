@@ -1,0 +1,31 @@
+title: Control UI mobile device pairing
+
+scenario:
+  id: control-ui-device-pairing
+  surface: control-ui
+  category: control-ui.browser-access-and-trust
+  coverage:
+    primary:
+      - control-ui.device-pairing
+  objective: >-
+    Prove an operator can open mobile pairing, choose full or limited access,
+    create a setup code, observe pending device requests, and continue to
+    device management through the Control UI.
+  successCriteria:
+    - Real Chromium opens mobile pairing from the operator identity menu and the Security page.
+    - Full access is the default before issuance and reopening resets the choice to full.
+    - Setup-code requests preserve the selected full or limited access profile.
+    - The UI renders a QR code, Gateway URL, pending-device count, and device-management action.
+    - Browser screenshots, video, and a credential-free behavior summary are retained as artifacts.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/e2e/mobile-pairing.e2e.test.ts
+    - ui/src/lib/device-pair-setup.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/mobile-pairing.e2e.test.ts
+    testNamePattern: retires exact setup credentials across success, expiry, regeneration, and errors
+    summary: >-
+      Real Chromium coverage for the operator mobile-pairing flow and its
+      observable setup-code access selections.

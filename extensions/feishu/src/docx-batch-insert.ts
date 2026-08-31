@@ -7,6 +7,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { cleanBlocksForDescendant } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 
@@ -25,7 +26,8 @@ function normalizeChildIds(children: string[] | string | undefined): string[] | 
   if (Array.isArray(children)) {
     return children;
   }
-  return typeof children === "string" ? [children] : undefined;
+  const child = readStringValue(children);
+  return child ? [child] : undefined;
 }
 
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
@@ -48,11 +50,15 @@ function collectDescendants(
   const visited = new Set<string>();
 
   function collect(blockId: string) {
-    if (visited.has(blockId)) return;
+    if (visited.has(blockId)) {
+      return;
+    }
     visited.add(blockId);
 
     const block = blockMap.get(blockId);
-    if (!block) return;
+    if (!block) {
+      return;
+    }
 
     result.push(block);
 
@@ -84,7 +90,7 @@ async function insertBatch(
   blocks: FeishuDocxBlock[],
   firstLevelBlockIds: string[],
   parentBlockId: string = docToken,
-  index: number = -1,
+  index = -1,
 ): Promise<FeishuDocxBlockChild[]> {
   const descendants = cleanBlocksForDescendant(blocks);
 
@@ -131,7 +137,7 @@ export async function insertBlocksInBatches(
   firstLevelBlockIds: string[],
   logger?: Logger,
   parentBlockId: string = docToken,
-  startIndex: number = -1,
+  startIndex = -1,
 ): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
   const allChildren: FeishuDocxBlockChild[] = [];
 
@@ -191,8 +197,7 @@ export async function insertBlocksInBatches(
   // When startIndex == -1 (append to end), each batch appends after the previous.
   // When startIndex >= 0, each batch starts at startIndex + count of first-level IDs already inserted.
   let currentIndex = startIndex;
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
+  for (const [i, batch] of batches.entries()) {
     logger?.info?.(
       `feishu_doc: Inserting batch ${i + 1}/${batches.length} (${batch.blocks.length} blocks)...`,
     );

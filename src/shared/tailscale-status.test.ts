@@ -1,7 +1,23 @@
+// Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
-import { resolveTailnetHostWithRunner } from "./tailscale-status.js";
+import {
+  inspectTailscaleServeGatewayUrlsWithRunner,
+  resolveTailnetHostWithRunner,
+  resolveTailscalePublishedHost,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
+    expect(
+      resolveTailscalePublishedHost({
+        tailscaleMode: "serve",
+        tailnetHost: "node.tailnet.ts.net",
+        serviceName: "svc:openclaw",
+      }),
+    ).toBe("openclaw.tailnet.ts.net");
+  });
+
   it("returns null when no runner is provided", async () => {
     await expect(resolveTailnetHostWithRunner()).resolves.toBeNull();
   });
@@ -81,5 +97,92 @@ describe("shared/tailscale-status", () => {
       stdout: "not-json",
     });
     await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+  });
+
+  it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+          "mac.tail.ts.net:8443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
+      "wss://mac.tail.ts.net:8443",
+    ]);
+    expect(run).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+      timeoutMs: 5000,
+    });
+  });
+
+  it("ignores non-root, non-HTTPS, and non-loopback Serve handlers", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "80": { HTTP: true }, "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:80": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "mac.tail.ts.net:443": {
+            Handlers: { "/openclaw": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "other.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://192.168.1.20:18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it("ignores load-balanced Tailscale Services and public Funnel routes", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+          },
+        },
+        AllowFunnel: { "mac.tail.ts.net:443": true },
+        Services: {
+          "svc:openclaw": {
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "openclaw.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it("distinguishes malformed Serve status from an empty valid configuration", async () => {
+    const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });
+
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual({
+      status: "invalid",
+    });
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, empty)).resolves.toEqual({
+      status: "ok",
+      urls: [],
+    });
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual([]);
   });
 });

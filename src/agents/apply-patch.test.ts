@@ -1,3 +1,8 @@
+/**
+ * Tests apply_patch execution and path safety.
+ * Covers host/sandbox file operations, workspace guards, symlink races, and
+ * update hunk behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +11,13 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
-import { applyPatch } from "./apply-patch.js";
+import { createApplyPatchTool } from "./apply-patch.js";
+import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  // realpath: production sandbox checks compare against canonical paths; on macOS
+  // os.tmpdir() is a /var -> /private/var symlink, which otherwise trips the guard.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-")));
   try {
     return await fn(dir);
   } finally {
@@ -33,6 +41,40 @@ function buildAddFilePatch(targetPath: string): string {
 *** End Patch`;
 }
 
+it("fences apply_patch after a file read when permissions change", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "permission.txt");
+    await fs.writeFile(target, "original\n");
+    const generation = new AbortController();
+    const readFile = fs.readFile.bind(fs);
+    const read = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof readFile>) => {
+        const value = await readFile(...args);
+        if (args[0] === target) {
+          generation.abort(new Error("Permission change"));
+        }
+        return value;
+      });
+    try {
+      const tool = createApplyPatchTool({ cwd: dir, workspaceOnly: false });
+      await expect(
+        tool.execute(
+          "permission-patch",
+          {
+            input:
+              "*** Begin Patch\n*** Update File: permission.txt\n@@\n-original\n+replacement\n*** End Patch",
+          },
+          generation.signal,
+        ),
+      ).rejects.toThrow("Permission change");
+    } finally {
+      read.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf8")).toBe("original\n");
+  });
+});
+
 async function expectOutsideWriteRejected(params: {
   dir: string;
   patchTargetPath: string;
@@ -40,31 +82,179 @@ async function expectOutsideWriteRejected(params: {
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
   await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
-  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
+  await expectMissingPath(fs.readFile(params.outsidePath, "utf8"));
+}
+
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
 }
 
 describe("applyPatch", () => {
-  it("adds a file", async () => {
+  const priceUpdatePatch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`;
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("preserves a valid UTF-8 BOM in $name updates", async ({ workspaceOnly }) => {
     await withTempDir(async (dir) => {
-      const patch = `*** Begin Patch
+      const filePath = path.join(dir, "source.txt");
+      await fs.writeFile(filePath, Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"));
+
+      await applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly });
+
+      await expect(fs.readFile(filePath)).resolves.toEqual(
+        Buffer.from("\uFEFFheading\nprice: 7\n", "utf8"),
+      );
+    });
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])("rejects invalid UTF-8 in $name updates without changing bytes", async ({ workspaceOnly }) => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+
+      await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+        /not valid UTF-8/,
+      );
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
+  it("preserves a valid UTF-8 BOM in sandbox updates", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": Buffer.from("\uFEFFheading\nprice: 5\n", "utf8"),
+    });
+
+    await applyPatch(priceUpdatePatch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("\uFEFFheading\nprice: 7\n");
+  });
+
+  it("rejects invalid sandbox UTF-8 before writing or changing bytes", async () => {
+    const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
+    const memory = createMemoryPatchSandbox({ "source.txt": original });
+
+    await expect(applyPatch(priceUpdatePatch, memory.options)).rejects.toThrow(/not valid UTF-8/);
+
+    expect(memory.writeFile).not.toHaveBeenCalled();
+    expect(memory.files.get("/sandbox/source.txt")).toEqual(original);
+  });
+
+  it("adds a file", async () => {
+    const memory = createMemoryPatchSandbox();
+    const patch = `*** Begin Patch
 *** Add File: hello.txt
 +hello
 *** End Patch`;
 
-      const result = await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(path.join(dir, "hello.txt"), "utf8");
+    const result = await applyPatch(patch, memory.options);
 
-      expect(contents).toBe("hello\n");
-      expect(result.summary.added).toEqual(["hello.txt"]);
-    });
+    expect(memory.files.get("/sandbox/hello.txt")).toBe("hello\n");
+    expect(result.summary.added).toEqual(["hello.txt"]);
   });
 
-  it("updates and moves a file", async () => {
-    await withTempDir(async (dir) => {
-      const source = path.join(dir, "source.txt");
-      await fs.writeFile(source, "foo\nbar\n", "utf8");
+  it("rejects an add hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "keep me\n" });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
 
-      const patch = `*** Begin Patch
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("keep me\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "keeps existing contents in $name when an add hunk targets them",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        const target = path.join(dir, "notes.txt");
+        await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
+        const tool = createApplyPatchTool({ cwd: dir, workspaceOnly });
+        const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+        await expect(
+          tool.execute("call-add-existing", { input: patch }, undefined),
+        ).rejects.toThrow(/Cannot create notes\.txt: the file already exists/);
+        expect(await fs.readFile(target, "utf8")).toBe("IMPORTANT USER DATA\nsecond line\n");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses existing symlinks in both host modes without changing their targets",
+    async () => {
+      for (const workspaceOnly of [true, false]) {
+        await withWorkspaceTempDir(async (dir) => {
+          const target = path.join(dir, "target.txt");
+          const link = path.join(dir, "notes.txt");
+          await fs.writeFile(target, "keep me\n", "utf8");
+          await fs.symlink("target.txt", link);
+          const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+          await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+            /Cannot create notes\.txt: the file already exists/,
+          );
+          await expect(fs.readFile(target, "utf8")).resolves.toBe("keep me\n");
+          await expect(fs.readlink(link)).resolves.toBe("target.txt");
+        });
+      }
+    },
+  );
+
+  it("refuses an add hunk when a competing writer creates the target mid-patch", async () => {
+    const memory = createMemoryPatchSandbox();
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/notes.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++replacement
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create notes\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("written by another writer\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+  });
+
+  it("refuses a move hunk when a competing writer creates the destination mid-patch", async () => {
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    memory.mkdirp.mockImplementation(async () => {
+      memory.files.set("/sandbox/dest.txt", "written by another writer\n");
+    });
+    const patch = `*** Begin Patch
 *** Update File: source.txt
 *** Move to: dest.txt
 @@
@@ -73,32 +263,196 @@ describe("applyPatch", () => {
 +baz
 *** End Patch`;
 
-      const result = await applyPatch(patch, { cwd: dir });
-      const dest = path.join(dir, "dest.txt");
-      const contents = await fs.readFile(dest, "utf8");
-
-      expect(contents).toBe("foo\nbaz\n");
-      await expect(fs.stat(source)).rejects.toBeDefined();
-      expect(result.summary.modified).toEqual(["dest.txt"]);
-    });
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("written by another writer\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
   });
 
-  it("supports end-of-file inserts", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "end.txt");
-      await fs.writeFile(target, "line1\n", "utf8");
-
-      const patch = `*** Begin Patch
-*** Update File: end.txt
-@@
-+line2
-*** End of File
+  it("allows an add hunk after the same path is deleted in the patch", async () => {
+    const memory = createMemoryPatchSandbox({ "notes.txt": "old\n" });
+    const patch = `*** Begin Patch
+*** Delete File: notes.txt
+*** Add File: notes.txt
++new
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("line1\nline2\n");
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
+    expect(result.summary.added).toEqual(["notes.txt"]);
+  });
+
+  it("rejects a move hunk that targets an existing file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+      "dest.txt": "keep me\n",
     });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /Cannot create dest\.txt: the file already exists/,
+    );
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("keep me\n");
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+  });
+
+  it.each([
+    { name: "workspace-confined host", workspaceOnly: true },
+    { name: "unconfined host", workspaceOnly: false },
+  ])(
+    "preserves source and destination when a move target exists in $name",
+    async ({ workspaceOnly }) => {
+      await withWorkspaceTempDir(async (dir) => {
+        await fs.writeFile(path.join(dir, "source.txt"), "foo\nbar\n", "utf8");
+        await fs.writeFile(path.join(dir, "dest.txt"), "keep me\n", "utf8");
+        const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+        await expect(applyPatch(patch, { cwd: dir, workspaceOnly })).rejects.toThrow(
+          /Cannot create dest\.txt: the file already exists/,
+        );
+        await expect(fs.readFile(path.join(dir, "source.txt"), "utf8")).resolves.toBe("foo\nbar\n");
+        await expect(fs.readFile(path.join(dir, "dest.txt"), "utf8")).resolves.toBe("keep me\n");
+      });
+    },
+  );
+
+  it("fails closed on sandbox adds when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox({}, { supportsExclusiveCreate: false });
+    const patch = `*** Begin Patch
+*** Add File: notes.txt
++new
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).rejects.toThrow(
+      /does not support atomic file creation/,
+    );
+    expect(memory.files.has("/sandbox/notes.txt")).toBe(false);
+  });
+
+  it("still permits sandbox updates when atomic create is unavailable", async () => {
+    const memory = createMemoryPatchSandbox(
+      { "source.txt": "before\n" },
+      { supportsExclusiveCreate: false },
+    );
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-before
++after
+*** End Patch`;
+
+    await expect(applyPatch(patch, memory.options)).resolves.toMatchObject({
+      summary: { modified: ["source.txt"] },
+    });
+    expect(memory.files.get("/sandbox/source.txt")).toBe("after\n");
+  });
+
+  it("updates and moves a file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: dest.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
+    expect(memory.files.has("/sandbox/source.txt")).toBe(false);
+    expect(result.summary.modified).toEqual(["dest.txt"]);
+  });
+
+  it("updates in place when move target resolves to the source file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: ./source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
+    expect(result.summary.modified).toEqual(["source.txt"]);
+  });
+
+  it("returns a terminal no-op without rewriting unchanged update hunks", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++bar
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.noOp).toBe(true);
+    expect(result.text).toBe("No changes made to source.txt.");
+    expect(result.summary).toEqual({ added: [], modified: [], deleted: [] });
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
+
+    const tool = createApplyPatchTool(memory.options);
+    const toolResult = await tool.execute("call-no-op", { input: patch }, undefined);
+    expect(toolResult.terminate).toBe(true);
+  });
+
+  it("normalizes supported punctuation while matching update hunks", async () => {
+    const cases = [
+      ["a\u2010\u2011\u2012\u2013\u2014\u2015\u2212b", "a-------b"],
+      ["a\u2018\u2019\u201A\u201Bb", "a''''b"],
+      ["a\u201C\u201D\u201E\u201Fb", 'a""""b'],
+      [
+        "a\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000b",
+        "a             b",
+      ],
+    ] as const;
+
+    for (const [sourceLine, patchLine] of cases) {
+      const memory = createMemoryPatchSandbox({
+        "source.txt": `${sourceLine}\n`,
+      });
+      const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-${patchLine}
++updated
+*** End Patch`;
+
+      await applyPatch(patch, memory.options);
+
+      expect(memory.files.get("/sandbox/source.txt")).toBe("updated\n");
+    }
   });
 
   it("rejects path traversal outside cwd by default", async () => {
@@ -137,32 +491,18 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows absolute paths within cwd by default", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "nested", "inside.txt");
-      const patch = `*** Begin Patch
-*** Add File: ${target}
-+inside
-*** End Patch`;
-
-      await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("inside\n");
-    });
-  });
-
   it("deletes the resolved target path", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "delete-me.txt");
-      await fs.writeFile(target, "x\n", "utf8");
-      const patch = `*** Begin Patch
+    const memory = createMemoryPatchSandbox({
+      "delete-me.txt": "x\n",
+    });
+    const patch = `*** Begin Patch
 *** Delete File: delete-me.txt
 *** End Patch`;
 
-      const result = await applyPatch(patch, { cwd: dir });
-      expect(result.summary.deleted).toEqual(["delete-me.txt"]);
-      await expect(fs.stat(target)).rejects.toBeDefined();
-    });
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.summary.deleted).toEqual(["delete-me.txt"]);
+    expect(memory.files.has("/sandbox/delete-me.txt")).toBe(false);
   });
 
   it("rejects symlink escape attempts by default", async () => {
@@ -210,7 +550,7 @@ describe("applyPatch", () => {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /Symlink escapes sandbox root/,
         );
-        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
+        await expectMissingPath(fs.readFile(outsideFile, "utf8"));
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -272,7 +612,9 @@ describe("applyPatch", () => {
 *** End Patch`;
 
       await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-        /path is not a regular file under root|symlink open blocked/i,
+        // fs-safe 0.5.2 reports the symlink rejection through the boundary-read
+        // validation path ("unsafe path") instead of a symlink-specific message.
+        /path is not a regular file under root|symlink open blocked|unsafe path/i,
       );
       const contents = await fs.readFile(target, "utf8");
       expect(contents).toBe("initial\n");
@@ -332,6 +674,20 @@ describe("applyPatch", () => {
     });
   });
 
+  it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: ..note.txt
++inside
+*** End Patch`;
+
+      const result = await applyPatch(patch, { cwd: dir });
+
+      expect(result.summary.added).toEqual(["..note.txt"]);
+      await expect(fs.readFile(path.join(dir, "..note.txt"), "utf8")).resolves.toBe("inside\n");
+    });
+  });
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
@@ -354,9 +710,41 @@ describe("applyPatch", () => {
 
         const result = await applyPatch(patch, { cwd: dir });
         expect(result.summary.deleted).toEqual(["link"]);
-        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
+        await expectMissingPath(fs.lstat(linkDir));
         const outsideContents = await fs.readFile(outsideTarget, "utf8");
         expect(outsideContents).toBe("keep\n");
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("rejects move targets whose parent path is a symlink outside cwd", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
+      try {
+        const sourcePath = path.join(dir, "source.txt");
+        const outsideTarget = path.join(outsideDir, "moved.txt");
+        const linkDir = path.join(dir, "link");
+        await fs.writeFile(sourcePath, "before\n", "utf8");
+        await fs.symlink(outsideDir, linkDir);
+
+        const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: link/moved.txt
+@@
+-before
++after
+*** End Patch`;
+
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /path alias under sandbox root|symlink escapes sandbox root/i,
+        );
+        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("before\n");
+        await expectMissingPath(fs.readFile(outsideTarget, "utf8"));
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -429,12 +817,12 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/under root/i);
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
+              );
             },
           });
-          await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectMissingPath(fs.stat(path.join(outside, "nested")));
         } finally {
           await fs.rm(outside, { recursive: true, force: true });
         }

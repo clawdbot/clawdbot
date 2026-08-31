@@ -1,8 +1,9 @@
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+// CLI-facing TCP port parser wrapper.
+import { parseTcpPort } from "../../infra/tcp-port.js";
 
+/** Re-export the canonical TCP port parser and limit for CLI callers. */
+
+/** Parse a TCP port from unknown CLI/config input, returning null for invalid values. */
 export function parsePort(raw: unknown): number | null {
-  if (raw === undefined || raw === null) {
-    return null;
-  }
-  return parseStrictPositiveInteger(raw) ?? null;
+  return parseTcpPort(raw);
 }

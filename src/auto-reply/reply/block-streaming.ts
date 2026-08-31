@@ -1,6 +1,8 @@
+// Owns block-streaming policy and buffered delivery state for reply runs.
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolveChannelStreamingBlockCoalesce } from "../../channels/streaming.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -10,23 +12,14 @@ const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 1000;
 
-function normalizeChunkProvider(provider?: string): TextChunkProvider | undefined {
-  if (!provider) {
-    return undefined;
-  }
-  const normalized = normalizeMessageChannel(provider);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized as TextChunkProvider;
-}
-
 function resolveProviderChunkContext(
   cfg: OpenClawConfig | undefined,
   provider?: string,
   accountId?: string | null,
 ) {
-  const providerKey = normalizeChunkProvider(provider);
+  const providerKey = provider
+    ? (normalizeMessageChannel(provider) as TextChunkProvider | undefined)
+    : undefined;
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelPlugin(providerId)?.outbound?.textChunkLimit
@@ -38,9 +31,15 @@ function resolveProviderChunkContext(
 }
 
 type ProviderBlockStreamingConfig = {
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  accounts?: Record<string, { blockStreamingCoalesce?: BlockStreamingCoalesceConfig }>;
+  streaming?: unknown;
+  accounts?: Record<string, { streaming?: unknown }>;
 };
+
+function resolveScopedBlockStreamingCoalesce(
+  config: ProviderBlockStreamingConfig | undefined,
+): BlockStreamingCoalesceConfig | undefined {
+  return config ? resolveChannelStreamingBlockCoalesce(config) : undefined;
+}
 
 function resolveProviderBlockStreamingCoalesce(params: {
   cfg: OpenClawConfig | undefined;
@@ -51,14 +50,20 @@ function resolveProviderBlockStreamingCoalesce(params: {
   if (!cfg || !providerKey) {
     return undefined;
   }
-  const providerCfg = (cfg as Record<string, unknown>)[providerKey];
+  const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
+  const providerCfg = channelsConfig?.[providerKey];
   if (!providerCfg || typeof providerCfg !== "object") {
     return undefined;
   }
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
   const accountCfg = resolveAccountEntry(typed.accounts, normalizedAccountId);
-  return accountCfg?.blockStreamingCoalesce ?? typed.blockStreamingCoalesce;
+  const channelCoalesce = resolveScopedBlockStreamingCoalesce(typed);
+  const accountCoalesce = resolveScopedBlockStreamingCoalesce(accountCfg);
+  if (channelCoalesce || accountCoalesce) {
+    return { ...channelCoalesce, ...accountCoalesce };
+  }
+  return undefined;
 }
 
 export type BlockStreamingCoalescing = {
@@ -70,14 +75,14 @@ export type BlockStreamingCoalescing = {
   flushOnEnqueue?: boolean;
 };
 
-export type BlockStreamingChunking = {
+type BlockStreamingChunking = {
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },
@@ -183,7 +188,7 @@ export function resolveBlockStreamingChunking(
   };
 }
 
-export function resolveBlockStreamingCoalescing(
+function resolveBlockStreamingCoalescing(
   cfg: OpenClawConfig | undefined,
   provider?: string,
   accountId?: string | null,

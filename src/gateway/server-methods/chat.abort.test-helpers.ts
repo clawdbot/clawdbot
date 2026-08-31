@@ -1,12 +1,19 @@
+/**
+ * Shared helpers for chat abort gateway method tests.
+ */
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 export function createActiveRun(
   sessionKey: string,
   params: {
     sessionId?: string;
+    agentId?: string;
+    controlUiVisible?: boolean;
     owner?: { connId?: string; deviceId?: string };
+    turnKind?: "main" | "btw";
   } = {},
 ) {
   const now = Date.now();
@@ -14,52 +21,66 @@ export function createActiveRun(
     controller: new AbortController(),
     sessionId: params.sessionId ?? `${sessionKey}-session`,
     sessionKey,
+    agentId: params.agentId,
     startedAtMs: now,
     expiresAtMs: now + 30_000,
+    controlUiVisible: params.controlUiVisible,
     ownerConnId: params.owner?.connId,
     ownerDeviceId: params.owner?.deviceId,
+    turnKind: params.turnKind,
   };
 }
 
-export type ChatAbortTestContext = Record<string, unknown> & {
+type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
-  chatRunBuffers: Map<string, string>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatAbortedRuns: Map<string, number>;
-  removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
+  chatRunState: ChatRunState;
+  dedupe: Map<string, unknown>;
+  removeChatRun: (
+    ...args: unknown[]
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
   logGateway: { warn: (...args: unknown[]) => void };
 };
 
-export type ChatAbortRespondMock = Mock<RespondFn>;
+type ChatAbortRespondMock = Mock<RespondFn>;
 
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
-  return {
+  const chatRunState =
+    overrides.chatRunState && typeof overrides.chatRunState === "object"
+      ? (overrides.chatRunState as ChatRunState)
+      : createChatRunState();
+  const context = {
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatAbortedRuns: new Map<string, number>(),
+    chatQueuedTurns: new Map(),
+    chatRunState,
+    dedupe: new Map(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),
     agentRunSeq: new Map<string, number>(),
+    getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
     logGateway: { warn: vi.fn() },
     ...overrides,
-  };
+  } as ChatAbortTestContext;
+  return context;
 }
 
 export async function invokeChatAbortHandler(params: {
   handler: GatewayRequestHandler;
   context: ChatAbortTestContext;
-  request: { sessionKey: string; runId?: string };
+  request: {
+    sessionKey: string;
+    agentId?: string;
+    runId?: string;
+    preserveSideRuns?: boolean;
+  };
   client?: {
     connId?: string;
     connect?: {

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Runtime config tests cover gateway bind/auth resolution, trusted proxy rules,
+// container defaults, and invalid config rejection before server startup.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -172,6 +175,12 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage: "gateway bind=loopback resolved to non-loopback host",
       },
       {
+        name: "tailnet binding that falls through to wildcard",
+        cfg: { gateway: { bind: "tailnet" as const, auth: TOKEN_AUTH } },
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=tailnet could not resolve a Tailscale or loopback address",
+      },
+      {
         name: "custom bind without customBindHost",
         cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
         expectedMessage: "gateway.bind=custom requires gateway.customBindHost",
@@ -251,6 +260,122 @@ describe("resolveGatewayRuntimeConfig", () => {
       }
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.bindHost).toBe(expectedBindHost);
+    });
+  });
+
+  describe("container-aware bind default", () => {
+    afterEach(() => {
+      resetContainerEnvironmentCacheForTest();
+      vi.restoreAllMocks();
+    });
+
+    it("defaults to auto (0.0.0.0) inside a container with auth configured", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            auth: TOKEN_AUTH,
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("0.0.0.0");
+    });
+
+    it("rejects container auto-bind with auth but without allowedOrigins (origin check preserved)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: { gateway: { auth: TOKEN_AUTH } },
+          port: 18789,
+        }),
+      ).rejects.toThrow(/non-loopback Control UI requires gateway\.controlUi\.allowedOrigins/);
+    });
+
+    it("rejects container auto-bind without auth (security invariant preserved)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: { gateway: { auth: { mode: "none" } } },
+          port: 18789,
+        }),
+      ).rejects.toThrow(/refusing to bind gateway/);
+    });
+
+    it("rejects tailscale serve with explicit no-auth", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              auth: { mode: "none" },
+              tailscale: { mode: "serve" },
+            },
+          },
+          port: 18789,
+        }),
+      ).rejects.toThrow("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve");
+    });
+
+    it("respects explicit loopback config even inside a container", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: { gateway: { bind: "loopback", auth: { mode: "none" } } },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("falls back to loopback inside a container when tailscale serve is enabled", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            auth: TOKEN_AUTH,
+            tailscale: { mode: "serve" },
+          },
+        },
+        port: 18789,
+      });
+      // Tailscale serve requires loopback — container auto-detection must not
+      // override this constraint when bind is unset.
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("falls back to loopback inside a container when tailscale funnel is enabled", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            auth: { mode: "password", password: "test-pw" },
+            tailscale: { mode: "funnel" },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+    });
+
+    it("respects explicit lan config inside a container (requires auth)", async () => {
+      const fs = require("node:fs");
+      vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: TOKEN_AUTH,
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("0.0.0.0");
     });
   });
 

@@ -1,59 +1,46 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+// Session chat type helpers classify chat surfaces from session metadata.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
+import {
+  deriveSessionChatTypeFromKey,
+  type SessionKeyChatType,
+} from "./session-chat-type-shared.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
-export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
-
-type LegacySessionChatTypeSurface = {
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
-};
-
-function listLegacySessionChatTypeSurfaces(): LegacySessionChatTypeSurface[] {
-  return getBundledChannelContractSurfaces() as LegacySessionChatTypeSurface[];
-}
-
-function deriveBuiltInLegacySessionChatType(
-  scopedSessionKey: string,
-): SessionKeyChatType | undefined {
-  if (/^group:[^:]+$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^whatsapp:(?!.*:group:).+@g\.us$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scopedSessionKey)) {
-    return "channel";
-  }
-  return undefined;
-}
-
-/**
- * Best-effort chat-type extraction from session keys across canonical and legacy formats.
- */
-export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+// Session chat-type derivation first uses generic key parsing, then falls back
+// to bootstrap channel plugins for legacy platform-specific session keys.
+function resolveScopedSessionKey(sessionKey: string | undefined | null): string {
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
-    return "unknown";
+    return "";
   }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const tokens = new Set(scoped.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
+  return parseAgentSessionKey(raw)?.rest ?? raw;
+}
+
+function collectLegacyChatTypeCandidatePluginIds(scopedSessionKey: string): string[] {
+  const ids = new Set<string>();
+  const firstToken = scopedSessionKey.split(":").find(Boolean);
+  if (firstToken) {
+    ids.add(firstToken);
   }
-  if (tokens.has("channel")) {
-    return "channel";
+  // Historical WhatsApp group keys can be bare JIDs without a channel prefix.
+  if (scopedSessionKey.includes("@g.us")) {
+    ids.add("whatsapp");
   }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
+  return Array.from(ids);
+}
+
+export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
+  const builtInType = deriveSessionChatTypeFromKey(sessionKey);
+  if (builtInType !== "unknown") {
+    return builtInType;
   }
-  const builtInLegacy = deriveBuiltInLegacySessionChatType(scoped);
-  if (builtInLegacy) {
-    return builtInLegacy;
-  }
-  for (const surface of listLegacySessionChatTypeSurfaces()) {
-    const derived = surface.deriveLegacySessionChatType?.(scoped);
+
+  const scopedSessionKey = resolveScopedSessionKey(sessionKey);
+  for (const pluginId of collectLegacyChatTypeCandidatePluginIds(scopedSessionKey)) {
+    const deriveLegacySessionChatType =
+      getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType;
+    const derived = deriveLegacySessionChatType?.(scopedSessionKey);
     if (derived) {
       return derived;
     }

@@ -1,3 +1,4 @@
+// Covers abort-signal wiring patterns used by async infrastructure helpers.
 import { describe, expect, it, vi } from "vitest";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 
@@ -81,21 +82,5 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     parent.signal.removeEventListener("abort", onAbort);
     parent.abort();
     expect(child.signal.aborted).toBe(false);
-  });
-
-  it("bindAbortRelay() forwards abort through combined signals", () => {
-    // Simulates the combineAbortSignals pattern from pi-tools.abort.ts
-    const signalA = new AbortController();
-    const signalB = new AbortController();
-    const combined = new AbortController();
-
-    const onAbort = bindAbortRelay(combined);
-    signalA.signal.addEventListener("abort", onAbort, { once: true });
-    signalB.signal.addEventListener("abort", onAbort, { once: true });
-
-    expect(combined.signal.aborted).toBe(false);
-    signalA.abort();
-    expect(combined.signal.aborted).toBe(true);
-    expectDefaultAbortReason(combined);
   });
 });

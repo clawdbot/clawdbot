@@ -1,3 +1,9 @@
+/**
+ * Encodes terminal key, hex, literal, and paste inputs into PTY byte
+ * sequences. The encoder handles xterm modifiers and DECCKM application
+ * cursor mode.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../utils.js";
 
 const ESC = "\x1b";
@@ -5,8 +11,10 @@ const CR = "\r";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
 
-export const BRACKETED_PASTE_START = `${ESC}[200~`;
-export const BRACKETED_PASTE_END = `${ESC}[201~`;
+/** Bracketed-paste prefix emitted before pasted text. */
+const BRACKETED_PASTE_START = `${ESC}[200~`;
+/** Bracketed-paste suffix emitted after pasted text. */
+const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
   ctrl: boolean;
@@ -101,17 +109,18 @@ const modifiableNamedKeys = new Set([
   "dc",
 ]);
 
-export type KeyEncodingRequest = {
+type KeyEncodingRequest = {
   keys?: string[];
   hex?: string[];
   literal?: string;
 };
 
-export type KeyEncodingResult = {
+type KeyEncodingResult = {
   data: string;
   warnings: string[];
 };
 
+/** True when request keys depend on normal vs application cursor-key mode. */
 export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
   return (
     request.keys?.some((raw) => {
@@ -123,11 +132,12 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
       if (hasAnyModifier(parsed.mods)) {
         return false;
       }
-      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
+      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
     }) ?? false
   );
 }
 
+/** Encodes literal, hex, and named key tokens into one PTY input string. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
@@ -159,6 +169,7 @@ export function encodeKeySequence(
   return { data, warnings };
 }
 
+/** Wraps pasted text in bracketed-paste markers when enabled. */
 export function encodePaste(text: string, bracketed = true): string {
   if (!bracketed) {
     return text;
@@ -177,7 +188,7 @@ function encodeKeyToken(
   }
 
   if (token.length === 2 && token.startsWith("^")) {
-    const ctrl = toCtrlChar(token[1]);
+    const ctrl = toCtrlChar(token.charAt(1));
     if (ctrl) {
       return ctrl;
     }
@@ -185,7 +196,7 @@ function encodeKeyToken(
 
   const parsed = parseModifiers(token);
   const base = parsed.base;
-  const baseLower = base.toLowerCase();
+  const baseLower = normalizeLowercaseStringOrEmpty(base);
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
@@ -239,7 +250,7 @@ function parseModifiers(token: string) {
   let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
-    const mod = rest[0].toLowerCase();
+    const mod = normalizeLowercaseStringOrEmpty(rest[0]);
     if (mod === "c") {
       mods.ctrl = true;
     } else if (mod === "m") {
@@ -324,8 +335,8 @@ function hasAnyModifier(mods: Modifiers): boolean {
 }
 
 function parseHexByte(raw: string): number | null {
-  const trimmed = raw.trim().toLowerCase();
-  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  const normalized = lower.startsWith("0x") ? lower.slice(2) : lower;
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }

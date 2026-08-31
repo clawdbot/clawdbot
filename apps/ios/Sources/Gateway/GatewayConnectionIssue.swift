@@ -1,8 +1,10 @@
 import Foundation
+import OpenClawKit
 
 enum GatewayConnectionIssue: Equatable {
     case none
     case tokenMissing
+    case passwordMissing
     case unauthorized
     case pairingRequired(requestId: String?)
     case network
@@ -15,18 +17,55 @@ enum GatewayConnectionIssue: Equatable {
         return nil
     }
 
-    var needsAuthToken: Bool {
+    var needsAuthCredentials: Bool {
         switch self {
-        case .tokenMissing, .unauthorized:
-            return true
+        case .tokenMissing, .passwordMissing, .unauthorized:
+            true
         default:
-            return false
+            false
         }
     }
 
     var needsPairing: Bool {
         if case .pairingRequired = self { return true }
         return false
+    }
+
+    static func detect(problem: GatewayConnectionProblem?) -> Self {
+        guard let problem else { return .none }
+        if problem.needsPairingApproval {
+            return .pairingRequired(requestId: problem.requestId)
+        }
+        if problem.kind == .gatewayAuthTokenMissing {
+            return .tokenMissing
+        }
+        if problem.kind == .gatewayAuthPasswordMissing {
+            return .passwordMissing
+        }
+        if problem.needsCredentialUpdate {
+            return .unauthorized
+        }
+        switch problem.kind {
+        case .deviceIdentityRequired,
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch,
+             .tailscaleIdentityMissing,
+             .tailscaleProxyMissing,
+             .tailscaleWhoisFailed,
+             .tailscaleIdentityMismatch,
+             .authRateLimited:
+            return .unauthorized
+        case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
+            return .network
+        case .unknown:
+            return .unknown(problem.message)
+        default:
+            return .none
+        }
     }
 
     static func detect(from statusText: String) -> Self {
@@ -39,6 +78,9 @@ enum GatewayConnectionIssue: Equatable {
         }
         if lower.contains("gateway token missing") {
             return .tokenMissing
+        }
+        if lower.contains("gateway password missing") {
+            return .passwordMissing
         }
         if lower.contains("unauthorized") {
             return .unauthorized

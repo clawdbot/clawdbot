@@ -1,0 +1,30 @@
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menampilkan acara dan konteks penjadwalan saat Anda mengaktifkan akses kalender.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menampilkan acara dan konteks penjadwalan saat Anda mengaktifkan akses kalender.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw menggunakan kalender Anda untuk menambahkan acara saat Anda mengaktifkan akses kalender.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw menggunakan kamera saat Anda memindai kode QR penyiapan Gateway atau meminta Gateway yang dipasangkan atau asisten Anda untuk mengambil foto atau video pendek dari iPhone ini, misalnya untuk terhubung ke Gateway Anda atau menunjukkan dokumen, layar perangkat, atau ruang kerja kepada asisten Anda.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "OpenClaw menggunakan kontak Anda agar Anda dapat mencari dan merujuk orang saat menggunakan asisten.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "OpenClaw menemukan dan terhubung ke gateway OpenClaw Anda di jaringan lokal.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw dapat membagikan lokasi Anda di latar belakang saat Anda mengaktifkan Selalu.";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "OpenClaw menggunakan lokasi Anda saat Anda mengizinkan berbagi lokasi.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "OpenClaw menggunakan mikrofon untuk obrolan realtime, voice wake, push-to-talk, dan pesan suara.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
+"NSMotionUsageDescription" = "OpenClaw dapat menggunakan data gerak untuk mendukung interaksi dan automasi yang sadar perangkat.";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw membaca data langkah, tidur, detak jantung saat istirahat, dan olahraga Anda dari aplikasi Apple Health untuk membuat ringkasan yang Anda minta dan mengirimkannya melalui Gateway Anda ke penyedia AI yang dikonfigurasi.";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw tidak menulis data ke aplikasi Apple Health. OpenClaw menggunakan data hanya-baca untuk membuat ringkasan yang Anda minta dan mengirimkannya melalui Gateway Anda ke penyedia AI yang dikonfigurasi.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "OpenClaw memungkinkan asisten Anda membaca foto yang Anda izinkan dan memungkinkan Anda memilih foto untuk dibagikan.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
+"NSRemindersFullAccessUsageDescription" = "OpenClaw menggunakan pengingat Anda untuk mencantumkan, menambahkan, dan menyelesaikan tugas saat Anda mengaktifkan akses pengingat.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "OpenClaw menggunakan pengenalan ucapan di perangkat untuk mode bicara dan bangun dengan suara.";

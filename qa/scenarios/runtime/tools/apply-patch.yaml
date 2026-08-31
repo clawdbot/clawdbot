@@ -1,0 +1,58 @@
+title: "Runtime tool fixture — apply-patch"
+
+scenario:
+  id: runtime-tool-apply-patch
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    secondary:
+      - agent-runtime.tool-apply-patch
+  objective: Verify OpenClaw and Codex execute valid workspace patches and reject workspace-escaping patches.
+  successCriteria:
+    - OpenClaw executes a valid workspace patch and rejects a matching-context workspace-escaping patch without modifying the outside sentinel.
+    - Private mock QA verifies linked apply_patch calls and results without treating provider plans as execution evidence.
+    - Live Codex verifies projected native file-change calls and results without requiring a duplicate dynamic apply_patch tool.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/apply-patch.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the apply_patch runtime tool family.
+    config:
+      toolName: apply_patch
+      toolCoverage:
+        family: apply-patch
+        actualTool: apply_patch
+        bucket: codex-native-workspace
+        expectedLayer: codex-native-workspace
+        required: true
+        codexDefaultImpact: P4
+        qaImpact: P2
+        action: require linked successful and workspace-denied patch execution
+        reason: Codex owns workspace patching natively while private QA may expose an OpenClaw dynamic apply_patch tool.
+      happyPrompt: >-
+        tool search qa check target=apply_patch. Call apply_patch exactly once
+        with a complete patch that adds runtime-tool-fixture-patch.txt containing
+        runtime patch, then summarize the actual tool result.
+      failurePrompt: >-
+        tool search qa failure target=apply_patch. Call apply_patch exactly once
+        with a complete patch that attempts to update
+        ../runtime-tool-fixture-denied.txt by replacing its existing
+        runtime-tool-fixture-denied-original line with
+        runtime patch outside the workspace, then summarize the actual
+        workspace-escape rejection.
+      promptSnippet: "target=apply_patch"
+      failurePromptSnippet: "failure target=apply_patch"
+
+flow:
+  steps:
+    - name: exercises apply_patch happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

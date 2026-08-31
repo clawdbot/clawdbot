@@ -2,12 +2,21 @@ import Foundation
 import OpenClawProtocol
 
 enum ConfigStore {
+    private struct ConfigWriteAck: Decodable {
+        let hash: String?
+    }
+
     struct Overrides {
         var isRemoteMode: (@Sendable () async -> Bool)?
         var loadLocal: (@MainActor @Sendable () -> [String: Any])?
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
         var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        var saveGateway: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        #if DEBUG
+        /// Isolates focused notification assertions without changing the production sender contract.
+        var notificationCenter: NotificationCenter?
+        #endif
     }
 
     private actor OverrideStore {
@@ -48,13 +57,23 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func save(_ root: sending [String: Any]) async throws {
+    static func save(
+        _ root: sending [String: Any],
+        allowGatewayAuthMutation: Bool = false) async throws
+    {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
-            if let override = overrides.saveRemote {
-                try await override(root)
-            } else {
-                try await self.saveToGateway(root)
+            do {
+                if let override = overrides.saveRemote {
+                    try await override(root)
+                } else {
+                    try await self.saveToGateway(root)
+                }
+            } catch {
+                if !self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) {
+                    self.lastHash = nil
+                }
+                throw error
             }
         } else {
             if let override = overrides.saveLocal {
@@ -63,10 +82,28 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    OpenClawConfigFile.saveDict(root)
+                    guard self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) else {
+                        self.lastHash = nil
+                        throw error
+                    }
+                    guard OpenClawConfigFile.saveDict(
+                        root,
+                        preserveExistingKeys: true,
+                        allowGatewayAuthMutation: allowGatewayAuthMutation)
+                    else {
+                        throw NSError(domain: "ConfigStore", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
+                        ])
+                    }
                 }
             }
         }
+        #if DEBUG
+        let notificationCenter = overrides.notificationCenter ?? .default
+        #else
+        let notificationCenter = NotificationCenter.default
+        #endif
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
     }
 
     @MainActor
@@ -83,8 +120,30 @@ enum ConfigStore {
         }
     }
 
+    private static func shouldFallbackToLocalWrite(afterGatewaySaveError error: Error) -> Bool {
+        let nsError = error as NSError
+        let message = "\(nsError.domain) \(nsError.localizedDescription)".lowercased()
+        let blockedFragments = [
+            "invalid_request",
+            "invalid request",
+            "invalid config",
+            "config changed since last load",
+            "base hash",
+            "basehash",
+            "unauthorized",
+            "token mismatch",
+            "auth",
+        ]
+        return !blockedFragments.contains { message.contains($0) }
+    }
+
     @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
+        let overrides = await self.overrideStore.overrides
+        if let saveGateway = overrides.saveGateway {
+            try await saveGateway(root)
+            return
+        }
         if self.lastHash == nil {
             _ = await self.loadFromGateway()
         }
@@ -98,10 +157,13 @@ enum ConfigStore {
         if let baseHash = self.lastHash {
             params["baseHash"] = AnyCodable(baseHash)
         }
-        _ = try await GatewayConnection.shared.requestRaw(
+        let ack: ConfigWriteAck = try await GatewayConnection.shared.requestDecoded(
             method: .configSet,
             params: params,
             timeoutMs: 10000)
+        if let hash = ack.hash, !hash.isEmpty {
+            self.lastHash = hash
+        }
         _ = await self.loadFromGateway()
     }
 
@@ -113,5 +175,19 @@ enum ConfigStore {
     static func _testClearOverrides() async {
         await self.overrideStore.setOverride(.init())
     }
+
+    @MainActor
+    static func _testSetLastHash(_ hash: String?) {
+        self.lastHash = hash
+    }
+
+    @MainActor
+    static func _testLastHash() -> String? {
+        self.lastHash
+    }
     #endif
+}
+
+extension Notification.Name {
+    static let openclawConfigDidChange = Notification.Name("openclaw.config.did-change")
 }

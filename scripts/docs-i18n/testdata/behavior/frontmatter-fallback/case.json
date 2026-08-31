@@ -1,0 +1,14 @@
+{
+  "name": "frontmatter scalar falls back instead of keeping tagged wrapper",
+  "mode": "frontmatter_scalar",
+  "rel_path": "install/fly.md",
+  "source_file": "source.txt",
+  "expected_file": "expected.txt",
+  "rules": [
+    {
+      "method": "masked",
+      "match_all": ["Deploying OpenClaw on Fly.io"],
+      "response_file": "masked-tagged-wrapper.txt"
+    }
+  ]
+}

@@ -1,0 +1,353 @@
+// Subagent announce dispatch tests lock down direct-vs-steer ordering for
+// progress updates and completion messages.
+import { describe, expect, it, vi } from "vitest";
+import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
+
+describe("runSubagentAnnounceDispatch", () => {
+  async function runNonCompletionDispatch(params: {
+    steerOutcome: "none" | "steered";
+    directDelivered?: boolean;
+  }) {
+    const steer = vi.fn(async () => ({ status: params.steerOutcome }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: params.directDelivered ?? true,
+      path: "direct" as const,
+    }));
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      steer,
+      direct,
+    });
+    return { steer, direct, result };
+  }
+
+  it("uses steer-first ordering for non-completion mode", async () => {
+    const { steer, direct, result } = await runNonCompletionDispatch({ steerOutcome: "none" });
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("direct");
+    expect(result.reason).toBeUndefined();
+    expect(result.phases).toEqual([
+      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+    ]);
+  });
+
+  it("short-circuits direct send when non-completion steering delivers", async () => {
+    const { steer, direct, result } = await runNonCompletionDispatch({ steerOutcome: "steered" });
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result.path).toBe("steered");
+    expect(result.phases).toEqual([
+      { phase: "steer-primary", delivered: true, path: "steered", error: undefined },
+    ]);
+  });
+
+  it("does not direct-fallback when steering loses source ownership", async () => {
+    const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      steer,
+      direct,
+    });
+
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
+  });
+
+  it.each([true, false])(
+    "never steers when direct delivery is required and direct delivery succeeds: %s",
+    async (delivered) => {
+      const steer = vi.fn(async () => ({ status: "steered" }) as const);
+      const direct = vi.fn(async () => ({
+        delivered,
+        path: "direct" as const,
+        ...(delivered ? {} : { error: "direct delivery failed" }),
+      }));
+
+      const result = await runSubagentAnnounceDispatch({
+        expectsCompletionMessage: false,
+        requireDirectDelivery: true,
+        steer,
+        direct,
+      });
+
+      expect(direct).toHaveBeenCalledOnce();
+      expect(steer).not.toHaveBeenCalled();
+      expect(result.delivered).toBe(delivered);
+      expect(result.path).toBe("direct");
+      expect(result.error).toBe(delivered ? undefined : "direct delivery failed");
+      expect(result.phases).toEqual([
+        {
+          phase: "direct-primary",
+          delivered,
+          path: "direct",
+          error: delivered ? undefined : "direct delivery failed",
+        },
+      ]);
+    },
+  );
+
+  it("uses direct-first ordering for completion mode", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.path).toBe("direct");
+    expect(result.phases).toEqual([
+      { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+    ]);
+  });
+
+  it("falls back to steering when completion direct send fails", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "network",
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(result.path).toBe("steered");
+    expect(result.phases).toEqual([
+      { phase: "direct-primary", delivered: false, path: "direct", error: "network" },
+      { phase: "steer-fallback", delivered: true, path: "steered", error: undefined },
+    ]);
+  });
+
+  it("does not fallback-steer after an ambiguous completion direct failure", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "media send may have partially succeeded",
+      disposition: "ambiguous" as const,
+    }));
+
+    // Ambiguous direct failures can represent partial media delivery; fallback
+    // steering would risk duplicate or contradictory completion messages.
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("media send may have partially succeeded");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "media send may have partially succeeded",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "cannot deliver",
+      steerStatus: "none" as const,
+      directReason: undefined,
+      expectedReason: undefined,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        error: undefined,
+      },
+    },
+    {
+      name: "drops the new item",
+      steerStatus: "dropped" as const,
+      directReason: undefined,
+      expectedReason: undefined,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        reason: "steer_dropped" as const,
+        error: undefined,
+      },
+    },
+    {
+      name: "drops the new item after a visible reply is missing",
+      steerStatus: "dropped" as const,
+      directReason: "visible_reply_missing" as const,
+      expectedReason: "visible_reply_missing" as const,
+      fallbackPhase: {
+        phase: "steer-fallback" as const,
+        delivered: false,
+        path: "none" as const,
+        reason: "steer_dropped" as const,
+        error: undefined,
+      },
+    },
+  ])(
+    "returns direct failure when completion fallback steering $name",
+    async ({ steerStatus, directReason, expectedReason, fallbackPhase }) => {
+      const steer = vi.fn(async () => ({ status: steerStatus }));
+      const direct = vi.fn(async () => ({
+        delivered: false,
+        path: "direct" as const,
+        error: "failed",
+        ...(directReason ? { reason: directReason } : {}),
+      }));
+
+      const result = await runSubagentAnnounceDispatch({
+        expectsCompletionMessage: true,
+        steer,
+        direct,
+      });
+
+      expect(result.delivered).toBe(false);
+      expect(result.path).toBe("direct");
+      expect(result.error).toBe("failed");
+      expect(result.reason).toBe(expectedReason);
+      expect(result.terminal).toBeUndefined();
+      expect(result.phases).toEqual([
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          error: "failed",
+          ...(directReason ? { reason: directReason } : {}),
+        },
+        fallbackPhase,
+      ]);
+    },
+  );
+
+  it("returns terminal source ownership loss from completion fallback steering", async () => {
+    const steer = vi.fn(async () => ({ status: "source_owner_changed" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "network",
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
+  });
+
+  it("does not fall through to direct delivery when non-completion steering drops the new item", async () => {
+    const steer = vi.fn(async () => ({ status: "dropped" }) as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: false,
+      steer,
+      direct,
+    });
+
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      path: "none",
+      reason: "steer_dropped",
+      phases: [
+        {
+          phase: "steer-primary",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+  });
+
+  it("preserves direct failure when completion dispatch aborts before fallback steering", async () => {
+    const controller = new AbortController();
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => {
+      controller.abort();
+      return {
+        delivered: false,
+        path: "direct" as const,
+        error: "direct failed before abort",
+      };
+    });
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      signal: controller.signal,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("direct failed before abort");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "direct failed before abort",
+      },
+    ]);
+  });
+
+  it("returns none immediately when signal is already aborted", async () => {
+    const steer = vi.fn(async () => ({ status: "none" }) as const);
+    const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      signal: controller.signal,
+      steer,
+      direct,
+    });
+
+    expect(steer).not.toHaveBeenCalled();
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      path: "none",
+      phases: [],
+    });
+  });
+});

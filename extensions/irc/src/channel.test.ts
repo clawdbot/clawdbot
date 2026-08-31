@@ -1,18 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Irc tests cover channel plugin behavior.
+import { describe, expect, it } from "vitest";
 import { ircPlugin } from "./channel.js";
-import { clearIrcRuntime } from "./runtime.js";
+import { ircOutboundBaseAdapter } from "./outbound-base.js";
 
 describe("irc outbound chunking", () => {
-  afterEach(() => {
-    clearIrcRuntime();
-  });
-
   it("chunks outbound text without requiring IRC runtime initialization", () => {
-    const chunker = ircPlugin.outbound?.chunker;
-    if (!chunker) {
-      throw new Error("irc outbound.chunker unavailable");
-    }
+    expect(ircOutboundBaseAdapter.chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+    expect(ircOutboundBaseAdapter.deliveryMode).toBe("direct");
+    expect(ircOutboundBaseAdapter.chunkerMode).toBe("markdown");
+    expect(ircOutboundBaseAdapter.textChunkLimit).toBe(350);
+    expect(ircPlugin.outbound?.sendFormattedText).toBeTypeOf("function");
+  });
+});
 
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+describe("irc target classification", () => {
+  it("distinguishes nicknames from channels", () => {
+    expect(ircPlugin.messaging?.inferTargetChatType?.({ to: "alice" })).toBe("direct");
+    expect(ircPlugin.messaging?.inferTargetChatType?.({ to: "#operators" })).toBe("group");
   });
 });

@@ -1,0 +1,4351 @@
+version: 1
+process_version: 3
+counts:
+  active_surfaces: 50
+  category_scores: 280
+rollups:
+  surface_average:
+    quality:
+      score: 64
+      label: Alpha
+    completeness:
+      score: 71
+      label: Beta
+  category_average:
+    quality:
+      score: 66
+      label: Alpha
+    completeness:
+      score: 72
+      label: Beta
+surfaces:
+  - id: gateway
+    name: Gateway runtime
+    family: core
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 81
+        label: Stable
+      completeness:
+        score: 89
+        label: Stable
+    lts:
+      status: partial
+      supported_categories: 12
+      total_categories: 13
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Approvals and Remote Execution
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: HTTP APIs
+        quality:
+          score: 90
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Hosted Web Surface
+        quality:
+          score: 89
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway RPC APIs and Events
+        quality:
+          score: 90
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Device Auth and Pairing
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Network Access and Discovery
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Nodes and Remote Capabilities
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Health, Diagnostics, and Repair
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Protocol Compatibility
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Roles and Permissions
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Lifecycle
+        quality:
+          score: 90
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Security Controls
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: WebSocket Connection
+        quality:
+          score: 90
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: cli
+    name: CLI
+    family: core
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 83
+        label: Stable
+      completeness:
+        score: 90
+        label: Stable
+    lts:
+      status: partial
+      supported_categories: 6
+      total_categories: 7
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: CLI Setup
+        quality:
+          score: 89
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Onboarding and Auth Setup
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Plugin and Channel Setup
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Service Management
+        quality:
+          score: 87
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: CLI Observability
+        quality:
+          score: 89
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Doctor
+        quality:
+          score: 89
+          label: Stable
+        completeness:
+          score: 90
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Updates and Upgrades
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: plugins
+    name: Plugins
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 72
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 7
+      total_categories: 9
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Authoring and Packaging plugins
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Bundled plugins
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Canvas plugin
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Installing and running plugins
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Channel plugins
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Provider and tool plugins
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Plugin approvals
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Publishing plugins
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Testing plugins
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: agent-runtime
+    name: Agent Runtime
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 78
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 6
+      total_categories: 9
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Agent Turn Execution
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: External Runtimes and Subagents
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Hosted Provider Execution
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Local and Self-hosted Providers
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Model and Runtime Selection
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Provider Auth
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Streaming and Progress
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Tool Calls and Response Handling
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Tool Execution Controls
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: session-memory
+    name: Session, memory, and context engine
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 77
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 6
+      total_categories: 9
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: CLI Session and Transcript Management
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Token Management
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Context Engine
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Cross-client History and Session Parity
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Diagnostics, Maintenance, and Recovery
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Core Prompts and Context
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Memory
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Session Routing
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Transcript Persistence
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: channels
+    name: Channel framework
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 76
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 5
+      total_categories: 8
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Actions Commands and Approvals
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Channel Setup
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Group Thread and Ambient Room Behavior
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Inbound Access and Identity Gates
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Media Attachments and Rich Channel Data
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Outbound Delivery and Reply Pipeline
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Status Health and Operator Controls
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: security
+    name: Security, auth, pairing, and secrets
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 72
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 5
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Approval Policy and Tool Safeguards
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Auth and Remote Access
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Channel Access Control
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Device and Node Pairing
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Plugin Trust
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Credential and Secret Hygiene
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: observability
+    name: Observability
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 75
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 3
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Health and Repair
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Logging
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Diagnostic Collection
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Telemetry Export
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Session Diagnostics
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: automation
+    name: "Automation: cron, hooks, tasks, polling"
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 72
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Cron Jobs
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Event Ingress
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Automation Hooks
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Background Tasks and Flows
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Heartbeat
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Polling Controls
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: media
+    name: Media understanding and media generation
+    family: core
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 64
+        label: Alpha
+      completeness:
+        score: 68
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Media Intake and Access
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Channel Media Handling
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media Configuration
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Text-to-Speech Delivery
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media Understanding
+        quality:
+          score: 69
+          label: Alpha
+        completeness:
+          score: 69
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media Generation
+        quality:
+          score: 69
+          label: Alpha
+        completeness:
+          score: 69
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: voice
+    name: Voice and realtime talk
+    family: core
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 61
+        label: Alpha
+      completeness:
+        score: 68
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Talk Providers
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Realtime Talk Sessions
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Speech and Transcription
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native App Talk
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Voice Wake and Routing
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Talk Observability
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: control-ui
+    name: Gateway Web App
+    family: core
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 74
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Browser Realtime Talk
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Browser Access and Trust
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Configuration
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Browser UI
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: WebChat Conversations
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Operator Console
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: tui
+    name: TUI
+    family: core
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 59
+        label: Alpha
+      completeness:
+        score: 66
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Runtime Modes
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Input and Commands
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Session Management
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Local Shell Execution
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Rendering and Output Safety
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: clawhub
+    name: ClawHub
+    family: core
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 58
+        label: Alpha
+      completeness:
+        score: 62
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Publishing
+        quality:
+          score: 54
+          label: Alpha
+        completeness:
+          score: 55
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Catalog Discovery
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Compatibility and Trust
+        quality:
+          score: 55
+          label: Alpha
+        completeness:
+          score: 56
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Plugin Lifecycle and Health
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: app-sdk
+    name: OpenClaw App SDK
+    family: core
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 54
+        label: Alpha
+      completeness:
+        score: 53
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Client API
+        quality:
+          score: 51
+          label: Alpha
+        completeness:
+          score: 50
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Access
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Agent Conversations
+        quality:
+          score: 52
+          label: Alpha
+        completeness:
+          score: 52
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Events and Approvals
+        quality:
+          score: 52
+          label: Alpha
+        completeness:
+          score: 52
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Resource Helpers
+        quality:
+          score: 62
+          label: Alpha
+        completeness:
+          score: 53
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Compatibility
+        quality:
+          score: 54
+          label: Alpha
+        completeness:
+          score: 55
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: macos-host
+    name: macOS Gateway host
+    family: platform-app
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 74
+        label: Beta
+      completeness:
+        score: 88
+        label: Stable
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 7
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: CLI Setup
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Local Gateway Integration
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Remote Gateway Mode
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Service Lifecycle
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Diagnostics and Observability
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Permissions and Native Capabilities
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Profiles and Isolation
+        quality:
+          score: 74
+          label: Beta
+        completeness:
+          score: 88
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: macos-app
+    name: macOS companion app
+    family: platform-app
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 8
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Canvas
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Local Setup
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Status and Settings
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Capabilities
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Remote Connections
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Voice and Talk
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: WebChat
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Remote WebChat
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: linux-host
+    name: Linux Gateway host
+    family: platform-app
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 75
+        label: Beta
+      completeness:
+        score: 89
+        label: Stable
+    lts:
+      status: partial
+      supported_categories: 4
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Host Setup and Updates
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Runtime and Service Control
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Remote Access and Security
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Diagnostics and Repair
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Deployment Targets
+        quality:
+          score: 75
+          label: Beta
+        completeness:
+          score: 89
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: linux-app
+    name: Linux companion app
+    family: platform-app
+    level:
+      id: planned
+      code: M0
+      label: Planned
+    scores:
+      quality:
+        score: 19
+        label: Experimental
+      completeness:
+        score: 21
+        label: Experimental
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: App Distribution
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Connectivity
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Chat and Sessions
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Desktop Capabilities
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Status and Diagnostics
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: wsl
+    name: Windows via WSL2
+    family: platform-app
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 69
+        label: Alpha
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 5
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: WSL Setup
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: CLI
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Service Lifecycle
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Access and Exposure
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Diagnostics and Repair
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Browser and Control UI
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: windows
+    name: Native Windows
+    family: platform-app
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 58
+        label: Alpha
+      completeness:
+        score: 66
+        label: Alpha
+    lts:
+      status: partial
+      supported_categories: 1
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: CLI
+        quality:
+          score: 54
+          label: Alpha
+        completeness:
+          score: 64
+          label: Alpha
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Gateway Management
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Networking
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Updates
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: windows-app
+    name: Native Windows companion app
+    family: platform-app
+    level:
+      id: planned
+      code: M0
+      label: Planned
+    scores:
+      quality:
+        score: 19
+        label: Experimental
+      completeness:
+        score: 21
+        label: Experimental
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Installation and Updates
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Connection
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Chat Sessions
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Status and Repair
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Desktop Tools and Permissions
+        quality:
+          score: 19
+          label: Experimental
+        completeness:
+          score: 21
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: android
+    name: Android app
+    family: platform-app
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 80
+        label: Stable
+      completeness:
+        score: 80
+        label: Stable
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 7
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Media Capture
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Mobile Chat
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Connection Setup
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Distribution
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Settings
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Voice
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Device Runtime
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: ios
+    name: iOS app
+    family: platform-app
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 80
+        label: Stable
+      completeness:
+        score: 80
+        label: Stable
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 7
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Media and Sharing
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Chat and Sessions
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Setup and Diagnostics
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Distribution
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Device Commands
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Notifications and Background
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Voice
+        quality:
+          score: 80
+          label: Stable
+        completeness:
+          score: 80
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: watchos
+    name: watchOS companion surfaces
+    family: platform-app
+    level:
+      id: experimental
+      code: M1
+      label: Experimental
+    scores:
+      quality:
+        score: 41
+        label: Experimental
+      completeness:
+        score: 44
+        label: Experimental
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Delivery and Recovery
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Exec Approvals
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Distribution and Support
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Notifications and Replies
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Watch App UI
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: small-linux
+    name: Raspberry Pi and small Linux devices
+    family: platform-app
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 67
+        label: Alpha
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Setup and Compatibility
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Remote Access and Auth
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Gateway Runtime
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Performance and Diagnostics
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: containers
+    name: Docker and Podman hosting
+    family: platform-app
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 71
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Container Setup
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Container Operations
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Image Release and Validation
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Agent Sandbox and Tooling
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: kubernetes
+    name: Kubernetes hosting
+    family: platform-app
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 55
+        label: Alpha
+      completeness:
+        score: 61
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Deployment Setup
+        quality:
+          score: 55
+          label: Alpha
+        completeness:
+          score: 61
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Configuration and Secrets
+        quality:
+          score: 55
+          label: Alpha
+        completeness:
+          score: 61
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Exposure
+        quality:
+          score: 55
+          label: Alpha
+        completeness:
+          score: 61
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Cluster Lifecycle
+        quality:
+          score: 55
+          label: Alpha
+        completeness:
+          score: 61
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: nix
+    name: Nix install path
+    family: platform-app
+    level:
+      id: experimental
+      code: M1
+      label: Experimental
+    scores:
+      quality:
+        score: 41
+        label: Experimental
+      completeness:
+        score: 44
+        label: Experimental
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Install Handoff
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Plugin Lifecycle
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Activation and App UX
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Config and State
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Service Runtime and Guards
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: discord
+    name: Discord
+    family: channel
+    level:
+      id: stable
+      code: M4
+      label: Stable
+    scores:
+      quality:
+        score: 73
+        label: Beta
+      completeness:
+        score: 87
+        label: Stable
+    lts:
+      status: partial
+      supported_categories: 4
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Access and Identity
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Media and Rich Content
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Native Controls and Approvals
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Realtime Voice and Calls
+        quality:
+          score: 73
+          label: Beta
+        completeness:
+          score: 87
+          label: Stable
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: telegram
+    name: Telegram
+    family: channel
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 68
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: full
+      supported_categories: 5
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Access and Identity
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Media and Rich Content
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Native Controls and Approvals
+        quality:
+          score: 77
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: whatsapp
+    name: WhatsApp
+    family: channel
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: slack
+    name: Slack
+    family: channel
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: full
+      supported_categories: 5
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Access and Identity
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Media and Rich Content
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Native Controls and Approvals
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: imessage-bluebubbles
+    name: iMessage and BlueBubbles
+    family: channel
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: signal
+    name: Signal
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 59
+        label: Alpha
+      completeness:
+        score: 66
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: google-chat
+    name: Google Chat
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 59
+        label: Alpha
+      completeness:
+        score: 66
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: matrix
+    name: Matrix
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 60
+        label: Alpha
+      completeness:
+        score: 67
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 6
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Encryption and Verification
+        quality:
+          score: 60
+          label: Alpha
+        completeness:
+          score: 67
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: microsoft-teams
+    name: Microsoft Teams
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 59
+        label: Alpha
+      completeness:
+        score: 66
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Controls and Approvals
+        quality:
+          score: 59
+          label: Alpha
+        completeness:
+          score: 66
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: community-channels
+    name: Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 53
+        label: Alpha
+      completeness:
+        score: 54
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: regional-channels
+    name: Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels
+    family: channel
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 55
+        label: Alpha
+      completeness:
+        score: 58
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 53
+          label: Alpha
+        completeness:
+          score: 54
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: voice-call
+    name: Voice Call channel
+    family: channel
+    level:
+      id: experimental
+      code: M1
+      label: Experimental
+    scores:
+      quality:
+        score: 41
+        label: Experimental
+      completeness:
+        score: 44
+        label: Experimental
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Channel Setup and Operations
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Access and Identity
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Conversation Routing and Delivery
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media and Rich Content
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Realtime Voice and Calls
+        quality:
+          score: 41
+          label: Experimental
+        completeness:
+          score: 44
+          label: Experimental
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: openai
+    name: OpenAI and Codex provider path
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 74
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 3
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Model and Auth
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Responses and Tool Compatibility
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Native Codex Harness
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Image and Multimodal Input
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Voice and Realtime Audio
+        quality:
+          score: 67
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: anthropic
+    name: Anthropic provider path
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 71
+        label: Beta
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Provider Auth and Recovery
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Model and Runtime Selection
+        quality:
+          score: 78
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Request Transport and Turn Semantics
+        quality:
+          score: 77
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Prompt Cache and Context
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media Inputs
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: google-ai
+    name: Google provider path
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Provider Setup and Credentials
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Model Routing and Endpoints
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Direct Gemini Runtime
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media, Search, and Realtime
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Prompt Caching
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: openrouter
+    name: OpenRouter provider path
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 66
+        label: Alpha
+      completeness:
+        score: 78
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Provider Setup and Auth
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Chat Runtime and Normalization
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Provider Recovery and Diagnostics
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Media Generation and Speech
+        quality:
+          score: 66
+          label: Alpha
+        completeness:
+          score: 78
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: local-models
+    name: "Local model providers: Ollama, vLLM, SGLang, LM Studio"
+    family: provider-tool
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 61
+        label: Alpha
+      completeness:
+        score: 68
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Provider Setup, Lifecycle, and Diagnostics
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Native Provider Plugins
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: OpenAI-Compatible Runtime Compatibility
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Local Memory and Embeddings
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Network Safety and Prompt Controls
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: hosted-providers
+    name: Long-tail hosted providers
+    family: provider-tool
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 61
+        label: Alpha
+      completeness:
+        score: 68
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 3
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Hosted LLM Providers
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Hosted Media Providers
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Provider Operations
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: web-search
+    name: Web search tools
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 74
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 4
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Search Providers
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Setup and Diagnostics
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Network Safety
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Tool Availability and Fetch
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+  - id: tools
+    name: Browser automation, exec, and sandbox tools
+    family: provider-tool
+    level:
+      id: beta
+      code: M3
+      label: Beta
+    scores:
+      quality:
+        score: 75
+        label: Beta
+      completeness:
+        score: 79
+        label: Beta
+    lts:
+      status: partial
+      supported_categories: 2
+      total_categories: 3
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Browser Automation
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Tool Invocation and Execution
+        quality:
+          score: 79
+          label: Beta
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+      - name: Sandbox and Tool Policy
+        quality:
+          score: 68
+          label: Alpha
+        completeness:
+          score: 79
+          label: Beta
+        lts:
+          supported: true
+          reason: human_override
+          human_override: true
+  - id: media-generation
+    name: Image, video, and music generation tools
+    family: provider-tool
+    level:
+      id: alpha
+      code: M2
+      label: Alpha
+    scores:
+      quality:
+        score: 61
+        label: Alpha
+      completeness:
+        score: 68
+        label: Alpha
+    lts:
+      status: none
+      supported_categories: 0
+      total_categories: 5
+    last_score_run:
+      status: complete
+      completed_at: 2026-08-02
+      by: codex
+      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      process_version: 3
+    categories:
+      - name: Media Routing and Discovery
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Task Lifecycle and Delivery
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Image Generation
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Video Generation
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false
+      - name: Music Generation
+        quality:
+          score: 61
+          label: Alpha
+        completeness:
+          score: 68
+          label: Alpha
+        lts:
+          supported: false
+          reason: none
+          human_override: false

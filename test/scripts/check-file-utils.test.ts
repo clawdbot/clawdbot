@@ -1,39 +1,28 @@
+// Check File Utils tests cover check file utils script behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectFilesSync,
   isCodeFile,
+  listRepoFilesSync,
   relativeToCwd,
   toPosixPath,
 } from "../../scripts/check-file-utils.js";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => ""));
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("node:child_process");
+  return { ...original, execFileSync: execFileSyncMock };
 });
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-check-file-utils-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-describe("scripts/check-file-utils isCodeFile", () => {
-  it("accepts source files and skips declarations", () => {
-    expect(isCodeFile("example.ts")).toBe(true);
-    expect(isCodeFile("example.mjs")).toBe(true);
-    expect(isCodeFile("example.d.ts")).toBe(false);
-  });
-});
+const { createTempDir } = createScriptTestHarness();
 
 describe("scripts/check-file-utils collectFilesSync", () => {
   it("collects matching files while skipping common generated dirs", () => {
-    const rootDir = makeTempDir();
+    const rootDir = createTempDir("openclaw-check-file-utils-");
     fs.mkdirSync(path.join(rootDir, "src", "nested"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "docs", ".generated"), { recursive: true });
@@ -53,7 +42,7 @@ describe("scripts/check-file-utils collectFilesSync", () => {
   });
 
   it("supports custom skipped directories", () => {
-    const rootDir = makeTempDir();
+    const rootDir = createTempDir("openclaw-check-file-utils-");
     fs.mkdirSync(path.join(rootDir, "fixtures"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(rootDir, "fixtures", "skip.ts"), "");
@@ -73,5 +62,48 @@ describe("scripts/check-file-utils relativeToCwd", () => {
     expect(relativeToCwd(path.join(process.cwd(), "scripts", "check-file-utils.ts"))).toBe(
       "scripts/check-file-utils.ts",
     );
+  });
+});
+
+describe("scripts/check-file-utils listRepoFilesSync", () => {
+  afterEach(() => {
+    execFileSyncMock.mockReset();
+  });
+
+  it("filters tracked source files and bounds the git lookup", () => {
+    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+
+    expect(
+      listRepoFilesSync("/fake/repo", {
+        includeFile: (filePath) => isCodeFile(filePath),
+      }),
+    ).toEqual(["src/keep.mjs", "src/keep.ts"]);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),
+      expect.objectContaining({
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+      }),
+    );
+  });
+
+  it("falls back to filesystem traversal when git ls-files times out", () => {
+    const error: NodeJS.ErrnoException & { signal?: string } = new Error("Command timed out");
+    error.code = "ETIMEDOUT";
+    error.signal = "SIGKILL";
+    execFileSyncMock.mockImplementation(() => {
+      throw error;
+    });
+    const rootDir = createTempDir("openclaw-check-file-utils-fallback-");
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
+
+    expect(
+      listRepoFilesSync(rootDir, {
+        includeFile: (filePath) => filePath.endsWith(".ts"),
+      }),
+    ).toEqual(["src/keep.ts"]);
   });
 });

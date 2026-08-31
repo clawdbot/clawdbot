@@ -1,50 +1,40 @@
+// Doctor config-flow safe-bin tests cover executable allowlist validation and repair behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { note } from "../terminal/note.js";
+import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
-
-vi.mock("../terminal/note.js", () => ({
-  note: vi.fn(),
-}));
-
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
+import {
+  collectExecSafeBinCoverageWarnings,
+  collectExecSafeBinTrustedDirHintWarnings,
+  maybeRepairExecSafeBinProfiles,
+  scanExecSafeBinCoverage,
+  scanExecSafeBinTrustedDirHints,
+} from "./doctor/shared/exec-safe-bins.js";
 
 describe("doctor config flow safe bins", () => {
-  const noteSpy = vi.mocked(note);
-
-  beforeEach(() => {
-    noteSpy.mockClear();
-  });
-
-  it("scaffolds missing custom safe-bin profiles on repair but skips interpreter bins", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        tools: {
-          exec: {
-            safeBins: ["myfilter", "python3"],
-          },
-        },
-        agents: {
-          list: [
-            {
-              id: "ops",
-              tools: {
-                exec: {
-                  safeBins: ["mytool", "node"],
-                },
-              },
-            },
-          ],
+  it("scaffolds missing custom safe-bin profiles on repair but skips interpreter bins", () => {
+    const result = maybeRepairExecSafeBinProfiles({
+      tools: {
+        exec: {
+          safeBins: ["myfilter", "python3"],
         },
       },
-      run: loadAndMaybeMigrateDoctorConfig,
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBins: ["mytool", "node"],
+              },
+            },
+          },
+        ],
+      },
     });
 
-    const cfg = result.cfg as {
+    const cfg = result.config as {
       tools?: {
         exec?: {
           safeBinProfiles?: Record<string, object>;
@@ -61,33 +51,29 @@ describe("doctor config flow safe bins", () => {
         }>;
       };
     };
-    expect(cfg.tools?.exec?.safeBinProfiles?.myfilter).toEqual({});
+    expect(cfg.tools?.exec?.safeBinProfiles?.myfilter).toStrictEqual({});
     expect(cfg.tools?.exec?.safeBinProfiles?.python3).toBeUndefined();
     const ops = cfg.agents?.list?.find((entry) => entry.id === "ops");
-    expect(ops?.tools?.exec?.safeBinProfiles?.mytool).toEqual({});
+    expect(ops?.tools?.exec?.safeBinProfiles?.mytool).toStrictEqual({});
     expect(ops?.tools?.exec?.safeBinProfiles?.node).toBeUndefined();
   });
 
-  it("warns when interpreter/custom safeBins entries are missing profiles in non-repair mode", async () => {
-    await runDoctorConfigWithInput({
-      config: {
+  it("warns when interpreter/custom safeBins entries are missing profiles in non-repair mode", () => {
+    const warnings = collectExecSafeBinCoverageWarnings({
+      hits: scanExecSafeBinCoverage({
         tools: {
           exec: {
             safeBins: ["python3", "myfilter"],
           },
         },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
+      }),
+      doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'python3'"),
-      "Doctor warnings",
+    expect(warnings.join("\n")).toContain(
+      "tools.exec.safeBins includes interpreter/runtime 'python3'",
     );
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw doctor --fix"),
-      "Doctor warnings",
-    );
+    expect(warnings.join("\n")).toContain("openclaw doctor --fix");
   });
 
   it("hints safeBinTrustedDirs when safeBins resolve outside default trusted dirs", async () => {
@@ -104,8 +90,8 @@ describe("doctor config flow safe bins", () => {
           PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         async () => {
-          await runDoctorConfigWithInput({
-            config: {
+          const warnings = collectExecSafeBinTrustedDirHintWarnings(
+            scanExecSafeBinTrustedDirHints({
               tools: {
                 exec: {
                   safeBins: ["mydoctorbin"],
@@ -114,18 +100,11 @@ describe("doctor config flow safe bins", () => {
                   },
                 },
               },
-            },
-            run: loadAndMaybeMigrateDoctorConfig,
-          });
+            }),
+          );
+          expect(warnings.join("\n")).toContain("outside trusted safe-bin dirs");
+          expect(warnings.join("\n")).toContain("tools.exec.safeBinTrustedDirs");
         },
-      );
-      expect(noteSpy).toHaveBeenCalledWith(
-        expect.stringContaining("outside trusted safe-bin dirs"),
-        "Doctor warnings",
-      );
-      expect(noteSpy).toHaveBeenCalledWith(
-        expect.stringContaining("tools.exec.safeBinTrustedDirs"),
-        "Doctor warnings",
       );
     } finally {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

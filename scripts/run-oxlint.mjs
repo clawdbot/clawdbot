@@ -1,31 +1,6 @@
-import { spawnSync } from "node:child_process";
-import path from "node:path";
-import {
-  acquireLocalHeavyCheckLockSync,
-  applyLocalOxlintPolicy,
-} from "./lib/local-heavy-check-runtime.mjs";
+import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
 
-const { args: finalArgs, env } = applyLocalOxlintPolicy(process.argv.slice(2), process.env);
-
-const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
-const releaseLock = acquireLocalHeavyCheckLockSync({
-  cwd: process.cwd(),
-  env,
-  toolName: "oxlint",
+await runTsxCliShim(import.meta.url, {
+  implementation: "./run-oxlint.mts",
+  failureTool: "oxlint",
 });
-
-try {
-  const result = spawnSync(oxlintPath, finalArgs, {
-    stdio: "inherit",
-    env,
-    shell: process.platform === "win32",
-  });
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  process.exit(result.status ?? 1);
-} finally {
-  releaseLock();
-}

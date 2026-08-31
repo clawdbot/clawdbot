@@ -1,0 +1,34 @@
+title: Agent-run decision receipt
+
+scenario:
+  id: agent-run-decision-receipt
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+      - gateway.exec-approvals
+  objective: Verify a denied operator approval is durably explained from its authoritative first-answer row through the audit CLI.
+  successCriteria:
+    - A real Gateway agent turn against the deterministic mock provider records one execution identity context.
+    - A real trusted agent exec request records an exact execution binding, is denied by an approval-capable Gateway client, and a conflicting later allow cannot replace the first answer.
+    - Text and JSON audit output report the denial reason, enforced state, authoritative durable owner, bounded policy references, and remediation.
+    - Receipt output omits raw command, tool-call, and reviewer-device details and creates no generic duplicate.
+    - A positive numeric compatibility cursor resumes the bounded decision receipt page and returns an opaque successor accepted by the same Gateway handler.
+    - A replacement Gateway process returns byte-equivalent decision inspection JSON.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/operator-approval-store.ts
+    - src/audit/execution-identity-context.ts
+    - src/gateway/server-methods/audit.ts
+    - src/commands/audit.ts
+    - test/e2e/qa-lab/runtime/agent-run-decision-receipt.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/agent-run-decision-receipt.ts
+    summary: Starts an ephemeral Gateway and mock provider, records a denied approval through real RPCs, inspects it through the CLI, replaces the Gateway, and verifies exact durable readback.
+    args:
+      - --artifact-base
+      - ${outputDir}

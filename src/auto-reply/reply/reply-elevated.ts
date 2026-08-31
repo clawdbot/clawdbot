@@ -1,7 +1,10 @@
+// Resolves whether a reply turn may use elevated command capabilities.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { MsgContext } from "../templating.js";
 import {
   type AllowFromFormatter,
@@ -15,6 +18,7 @@ import {
 } from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 
+/** Resolves provider-specific elevated allowlist entries with fallback defaults. */
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
@@ -27,6 +31,7 @@ function resolveElevatedAllowList(
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
 
+/** Resolves the channel formatter used before matching allowFrom entries. */
 function resolveAllowFromFormatter(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -45,10 +50,11 @@ function resolveAllowFromFormatter(params: {
       accountId: params.accountId,
       allowFrom: values,
     })
-      .map((entry) => String(entry).trim())
+      .map((entry) => normalizeOptionalString(entry) ?? "")
       .filter(Boolean);
 }
 
+/** Checks whether the inbound sender matches configured elevated allowFrom gates. */
 function isApprovedElevatedSender(params: {
   provider: string;
   ctx: MsgContext;
@@ -76,25 +82,35 @@ function isApprovedElevatedSender(params: {
   const senderIdTokens = new Set<string>();
   const senderFromTokens = new Set<string>();
   const senderE164Tokens = new Set<string>();
+  const senderId = normalizeOptionalString(params.ctx.SenderId);
+  const senderFrom = normalizeOptionalString(params.ctx.From);
+  const senderE164 = normalizeOptionalString(params.ctx.SenderE164);
 
-  if (params.ctx.SenderId?.trim()) {
+  if (senderId) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
-      values: [params.ctx.SenderId, stripSenderPrefix(params.ctx.SenderId)].filter(Boolean),
+      values: [senderId, stripSenderPrefix(senderId)].filter((value): value is string =>
+        Boolean(value),
+      ),
       tokens: senderIdTokens,
     });
   }
-  if (params.ctx.From?.trim()) {
+  if (
+    senderFrom &&
+    shouldUseFromAsSenderFallback({ from: senderFrom, chatType: params.ctx.ChatType })
+  ) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
-      values: [params.ctx.From, stripSenderPrefix(params.ctx.From)].filter(Boolean),
+      values: [senderFrom, stripSenderPrefix(senderFrom)].filter((value): value is string =>
+        Boolean(value),
+      ),
       tokens: senderFromTokens,
     });
   }
-  if (params.ctx.SenderE164?.trim()) {
+  if (senderE164) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
-      values: [params.ctx.SenderE164],
+      values: [senderE164],
       tokens: senderE164Tokens,
     });
   }
@@ -104,6 +120,7 @@ function isApprovedElevatedSender(params: {
     ...senderE164Tokens,
   ]);
 
+  // Identity fields use channel formatting; mutable labels use normalized text matching.
   const senderNameTokens = buildMutableTokens(params.ctx.SenderName);
   const senderUsernameTokens = buildMutableTokens(params.ctx.SenderUsername);
   const senderTagTokens = buildMutableTokens(params.ctx.SenderTag);
@@ -158,6 +175,7 @@ function isApprovedElevatedSender(params: {
   return false;
 }
 
+/** Resolves whether elevated tools are enabled and allowed for the inbound sender. */
 export function resolveElevatedPermissions(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -180,7 +198,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentEnabled) {
     failures.push({
       gate: "enabled",
-      key: "agents.list[].tools.elevated.enabled",
+      key: "agents.entries.*.tools.elevated.enabled",
     });
   }
   if (!enabled) {
@@ -230,7 +248,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentAllowed) {
     failures.push({
       gate: "allowFrom",
-      key: `agents.list[].tools.elevated.allowFrom.${params.provider}`,
+      key: `agents.entries.*.tools.elevated.allowFrom.${params.provider}`,
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };

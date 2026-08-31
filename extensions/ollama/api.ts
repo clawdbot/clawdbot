@@ -1,3 +1,4 @@
+// Ollama API module exposes the plugin public contract.
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -11,7 +12,9 @@ export {
   fetchOllamaModels,
   isReasoningModelHeuristic,
   queryOllamaContextWindow,
+  queryOllamaModelShowInfo,
   resolveOllamaApiBase,
+  type OllamaModelShowInfo,
   type OllamaModelWithContext,
   type OllamaTagModel,
   type OllamaTagsResponse,
@@ -21,6 +24,7 @@ export {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
+  resolveOllamaSetupDefaultBaseUrl,
 } from "./src/setup.js";
 export {
   buildOllamaChatRequest,
@@ -29,4 +33,4 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./src/stream.js";
+} from "./src/stream-api.js";

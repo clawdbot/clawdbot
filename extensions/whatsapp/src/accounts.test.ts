@@ -1,6 +1,12 @@
+// Whatsapp tests cover accounts plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+} from "./accounts.js";
 
 describe("resolveWhatsAppAuthDir", () => {
   const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
@@ -37,6 +43,23 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(authDir).toMatch(/whatsapp[/\\]default$/);
   });
 
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "~/.openclaw/whatsapp-default",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+
+    expect(listWhatsAppAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultWhatsAppAccountId(cfg)).toBe("default");
+    expect(resolveWhatsAppAccount({ cfg }).authDir).toMatch(/whatsapp-default$/);
+  });
+
   it("preserves valid accountId unchanged", () => {
     const { authDir } = resolveWhatsAppAuthDir({
       cfg: stubCfg,
@@ -48,18 +71,12 @@ describe("resolveWhatsAppAuthDir", () => {
   it("merges top-level and account-specific config through shared helpers", () => {
     const resolved = resolveWhatsAppAccount({
       cfg: {
-        messages: {
-          messagePrefix: "[global]",
-        },
         channels: {
           whatsapp: {
             sendReadReceipts: false,
-            messagePrefix: "[root]",
-            debounceMs: 100,
+            responsePrefix: "[root]",
             accounts: {
-              work: {
-                debounceMs: 250,
-              },
+              work: {},
             },
           },
         },
@@ -69,6 +86,113 @@ describe("resolveWhatsAppAuthDir", () => {
 
     expect(resolved.sendReadReceipts).toBe(false);
     expect(resolved.messagePrefix).toBe("[root]");
-    expect(resolved.debounceMs).toBe(250);
+  });
+
+  it("inherits shared defaults from accounts.default for named accounts", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                dmPolicy: "allowlist",
+                allowFrom: ["+15550001111"],
+                groupPolicy: "open",
+                groupAllowFrom: ["+15550002222"],
+                defaultTo: "+15550003333",
+                reactionLevel: "extensive",
+                historyLimit: 42,
+                mediaMaxMb: 12,
+              },
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.dmPolicy).toBe("allowlist");
+    expect(resolved.allowFrom).toEqual(["+15550001111"]);
+    expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.groupAllowFrom).toEqual(["+15550002222"]);
+    expect(resolved.defaultTo).toBe("+15550003333");
+    expect(resolved.reactionLevel).toBe("extensive");
+    expect(resolved.historyLimit).toBe(42);
+    expect(resolved.mediaMaxMb).toBe(12);
+  });
+
+  it("prefers account overrides and accounts.default over root defaults", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "disabled",
+            accounts: {
+              default: {
+                dmPolicy: "allowlist",
+                allowFrom: ["+15550001111"],
+                groupPolicy: "open",
+              },
+              work: {
+                authDir: "/tmp/work",
+                dmPolicy: "pairing",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.dmPolicy).toBe("pairing");
+    expect(resolved.allowFrom).toEqual(["+15550001111"]);
+    expect(resolved.groupPolicy).toBe("open");
+  });
+
+  it("does not inherit default-account authDir for named accounts", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                authDir: "/tmp/default-auth",
+                name: "Personal",
+              },
+              work: {},
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.authDir).toMatch(/whatsapp[/\\]work$/);
+    expect(resolved.name).toBeUndefined();
+  });
+
+  it("does not inherit default-account selfChatMode for named accounts", () => {
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                selfChatMode: true,
+              },
+              work: {},
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    expect(resolved.selfChatMode).toBeUndefined();
   });
 });

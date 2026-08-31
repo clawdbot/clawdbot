@@ -1,3 +1,4 @@
+// Matrix tests cover handler.body for agent plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
@@ -8,6 +9,80 @@ import {
 import type { MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler inbound body formatting", () => {
+  type MatrixHandlerHarness = ReturnType<typeof createMatrixHandlerTestHarness>;
+  type FinalizedReplyContext = {
+    MessageThreadId?: string;
+    RawBody?: string;
+    ReplyToId?: string;
+    ReplyToBody?: string;
+    ReplyToSender?: string;
+    ThreadStarterBody?: string;
+  };
+
+  function createQuotedReplyVisibilityHarness(contextVisibility: "allowlist" | "allowlist_quote") {
+    return createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$quoted",
+            sender: "@mallory:example.org",
+            body: "Quoted payload",
+          }),
+      },
+      isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility,
+            groupAllowFrom: ["@alice:example.org"],
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      replyToMode: "all",
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+  }
+
+  async function sendQuotedReply(handler: MatrixHandlerHarness["handler"]) {
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          "m.in_reply_to": { event_id: "$quoted" },
+        },
+        mentions: { room: true },
+      }),
+    );
+  }
+
+  function latestFinalizedReplyContext(
+    finalizeInboundContext: MatrixHandlerHarness["finalizeInboundContext"],
+  ) {
+    const calls = vi.mocked(finalizeInboundContext).mock.calls;
+    const call = calls[calls.length - 1];
+    if (!call) {
+      throw new Error("expected finalizeInboundContext call");
+    }
+    return call[0] as FinalizedReplyContext;
+  }
+
+  function latestSessionKey(recordInboundSession: MatrixHandlerHarness["recordInboundSession"]) {
+    const calls = vi.mocked(recordInboundSession).mock.calls;
+    const call = calls[calls.length - 1];
+    if (!call) {
+      throw new Error("expected recordInboundSession call");
+    }
+    const context = call[0] as { sessionKey?: string };
+    return context?.sessionKey;
+  }
+
   beforeEach(() => {
     installMatrixMonitorTestRuntime({
       matchesMentionPatterns: () => false,
@@ -45,18 +120,13 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        MessageThreadId: "$thread-root",
-        ThreadStarterBody: "Matrix thread root $thread-root from Alice:\nRoot topic",
-      }),
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.MessageThreadId).toBe("$thread-root");
+    expect(finalized.ThreadStarterBody).toBe(
+      "Matrix thread root $thread-root from Alice:\nRoot topic",
     );
     // Thread messages get thread-scoped session keys (thread isolation feature).
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:ops:main:thread:$thread-root",
-      }),
-    );
+    expect(latestSessionKey(recordInboundSession)).toBe("agent:ops:main:thread:$thread-root");
   });
 
   it("starts the thread-scoped session from the triggering message when threadReplies is always", async () => {
@@ -75,17 +145,10 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        MessageThreadId: "$thread-root",
-        ReplyToId: undefined,
-      }),
-    );
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:ops:main:thread:$thread-root",
-      }),
-    );
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.MessageThreadId).toBe("$thread-root");
+    expect(finalized.ReplyToId).toBeUndefined();
+    expect(latestSessionKey(recordInboundSession)).toBe("agent:ops:main:thread:$thread-root");
   });
 
   it("records formatted poll results for inbound poll response events", async () => {
@@ -142,15 +205,57 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       },
     } as MatrixRawEvent);
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        RawBody: expect.stringMatching(/1\. Pizza \(1 vote\)[\s\S]*Total voters: 1/),
-      }),
-    );
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:ops:main",
-      }),
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.RawBody).toContain("1. Pizza (1 vote)");
+    expect(finalized.RawBody).toContain("Total voters: 1");
+    expect(latestSessionKey(recordInboundSession)).toBe("agent:ops:main");
+  });
+
+  it("settles inbound poll events when relation pagination repeats a cursor", async () => {
+    let pollPageCalls = 0;
+    const getRelations = vi.fn(async () => {
+      pollPageCalls += 1;
+      if (pollPageCalls > 2) {
+        throw new Error("test stopped unbounded Matrix poll pagination");
+      }
+      return { events: [], nextBatch: "stuck", prevBatch: null };
+    });
+    const logVerboseMessage = vi.fn();
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () => ({
+          event_id: "$poll",
+          sender: "@bot:example.org",
+          type: "m.poll.start",
+          origin_server_ts: 1,
+          content: {
+            "m.poll.start": {
+              question: { "m.text": "Lunch?" },
+              answers: [{ id: "pizza", "m.text": "Pizza" }],
+            },
+          },
+        }),
+        getRelations,
+      } as unknown as Partial<MatrixClient>,
+      isDirectMessage: true,
+      logVerboseMessage,
+    });
+
+    await handler("!room:example.org", {
+      type: "m.poll.response",
+      sender: "@user:example.org",
+      event_id: "$vote",
+      origin_server_ts: 2,
+      content: {
+        "m.poll.response": { answers: ["pizza"] },
+        "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+      },
+    } as MatrixRawEvent);
+
+    expect(getRelations).toHaveBeenCalledTimes(2);
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Matrix poll pagination returned a repeated cursor"),
     );
   });
 
@@ -212,14 +317,13 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        MessageThreadId: "$thread-root",
-        ReplyToId: undefined,
-        ReplyToSender: "Alice",
-        ReplyToBody: "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
-        ThreadStarterBody: "Matrix thread root $thread-root from Bob:\nRoot topic",
-      }),
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.MessageThreadId).toBe("$thread-root");
+    expect(finalized.ReplyToId).toBeUndefined();
+    expect(finalized.ReplyToSender).toBe("Alice");
+    expect(finalized.ReplyToBody).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
+    expect(finalized.ThreadStarterBody).toBe(
+      "Matrix thread root $thread-root from Bob:\nRoot topic",
     );
   });
 
@@ -255,14 +359,13 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        MessageThreadId: "$thread-root",
-        ReplyToId: undefined,
-        ReplyToSender: "Alice",
-        ReplyToBody: "Root topic",
-        ThreadStarterBody: "Matrix thread root $thread-root from Alice:\nRoot topic",
-      }),
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.MessageThreadId).toBe("$thread-root");
+    expect(finalized.ReplyToId).toBeUndefined();
+    expect(finalized.ReplyToSender).toBe("Alice");
+    expect(finalized.ReplyToBody).toBe("Root topic");
+    expect(finalized.ThreadStarterBody).toBe(
+      "Matrix thread root $thread-root from Alice:\nRoot topic",
     );
     expect(getEvent).toHaveBeenCalledTimes(1);
     expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
@@ -283,6 +386,7 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
         channels: {
           matrix: {
             contextVisibility: "allowlist",
+            groupAllowFrom: ["@alice:example.org"],
           },
         },
       },
@@ -308,106 +412,29 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
-      ReplyToBody?: string;
-      ReplyToSender?: string;
-      ThreadStarterBody?: string;
-    };
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
     expect(finalized.ThreadStarterBody).toBeUndefined();
     expect(finalized.ReplyToBody).toBeUndefined();
     expect(finalized.ReplyToSender).toBeUndefined();
   });
 
   it("drops quoted reply context fetched from non-allowlisted room senders", async () => {
-    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$quoted",
-            sender: "@mallory:example.org",
-            body: "Quoted payload",
-          }),
-      },
-      isDirectMessage: false,
-      cfg: {
-        channels: {
-          matrix: {
-            contextVisibility: "allowlist",
-          },
-        },
-      },
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["@alice:example.org"],
-      roomsConfig: { "*": {} },
-      replyToMode: "all",
-      getMemberDisplayName: async (_roomId, userId) =>
-        userId === "@alice:example.org" ? "Alice" : "Mallory",
-    });
+    const { handler, finalizeInboundContext } = createQuotedReplyVisibilityHarness("allowlist");
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$reply1",
-        sender: "@alice:example.org",
-        body: "@room follow up",
-        relatesTo: {
-          "m.in_reply_to": { event_id: "$quoted" },
-        },
-        mentions: { room: true },
-      }),
-    );
+    await sendQuotedReply(handler);
 
-    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
-      ReplyToBody?: string;
-      ReplyToSender?: string;
-    };
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
     expect(finalized.ReplyToBody).toBeUndefined();
     expect(finalized.ReplyToSender).toBeUndefined();
   });
 
   it("keeps quoted reply context in allowlist_quote mode", async () => {
-    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
-      client: {
-        getEvent: async () =>
-          createMatrixTextMessageEvent({
-            eventId: "$quoted",
-            sender: "@mallory:example.org",
-            body: "Quoted payload",
-          }),
-      },
-      isDirectMessage: false,
-      cfg: {
-        channels: {
-          matrix: {
-            contextVisibility: "allowlist_quote",
-          },
-        },
-      },
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["@alice:example.org"],
-      roomsConfig: { "*": {} },
-      replyToMode: "all",
-      getMemberDisplayName: async (_roomId, userId) =>
-        userId === "@alice:example.org" ? "Alice" : "Mallory",
-    });
+    const { handler, finalizeInboundContext } =
+      createQuotedReplyVisibilityHarness("allowlist_quote");
 
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$reply1",
-        sender: "@alice:example.org",
-        body: "@room follow up",
-        relatesTo: {
-          "m.in_reply_to": { event_id: "$quoted" },
-        },
-        mentions: { room: true },
-      }),
-    );
+    await sendQuotedReply(handler);
 
-    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
-      ReplyToBody?: string;
-      ReplyToSender?: string;
-    };
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
     expect(finalized.ReplyToBody).toBe("Quoted payload");
     expect(finalized.ReplyToSender).toBe("Mallory");
   });

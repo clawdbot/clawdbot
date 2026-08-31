@@ -1,0 +1,23 @@
+title: Control UI assistant media ticket evidence
+
+scenario:
+  id: control-ui-assistant-media-tickets
+  surface: control-ui
+  category: control-ui.webchat-conversations
+  coverage:
+    primary:
+      - control-ui.assistant-media-tickets
+  objective: Link scoped assistant media ticket e2e coverage to Control UI maturity accounting.
+  successCriteria:
+    - Gateway metadata requests mint scoped assistant media tickets.
+    - Assistant media fetches without a ticket are rejected.
+    - Tickets cannot be replayed for a different source file.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/control-ui-assistant-media.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/gateway/control-ui-assistant-media.e2e.test.ts
+    summary: Vitest e2e coverage for scoped Control UI assistant media tickets.

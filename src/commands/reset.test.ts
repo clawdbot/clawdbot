@@ -1,28 +1,19 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
-const resolveCleanupPlanFromDisk = vi.fn();
-const removePath = vi.fn();
-const listAgentSessionDirs = vi.fn();
-const removeStateAndLinkedPaths = vi.fn();
-const removeWorkspaceDirs = vi.fn();
-
-vi.mock("../config/config.js", () => ({
-  isNixMode: false,
-}));
-
-vi.mock("./cleanup-plan.js", () => ({
-  resolveCleanupPlanFromDisk,
-}));
-
-vi.mock("./cleanup-utils.js", () => ({
-  removePath,
+// Reset command tests cover cleanup runtime behavior, workspace state, and reset prompts.
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  cleanupCommandLogMessages,
+  createCleanupCommandRuntime,
+  gatewayService,
   listAgentSessionDirs,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
-}));
+  resetCleanupCommandMocks,
+  resolveCleanupPlanForRemoval,
+  silenceCleanupCommandRuntime,
+} from "./cleanup-command.test-support.js";
 
 describe("resetCommand", () => {
-  const runtime = createNonExitingRuntime();
+  const runtime = createCleanupCommandRuntime();
   let resetCommand: typeof import("./reset.js").resetCommand;
 
   beforeAll(async () => {
@@ -30,21 +21,46 @@ describe("resetCommand", () => {
   });
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    resolveCleanupPlanFromDisk.mockReturnValue({
-      stateDir: "/tmp/.openclaw",
-      configPath: "/tmp/.openclaw/openclaw.json",
-      oauthDir: "/tmp/.openclaw/credentials",
-      configInsideState: true,
-      oauthInsideState: true,
-      workspaceDirs: ["/tmp/.openclaw/workspace"],
+    resetCleanupCommandMocks();
+    silenceCleanupCommandRuntime(runtime);
+  });
+
+  it.each([
+    {
+      failure: "inspection fails",
+      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+    },
+    {
+      failure: "stop fails",
+      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
+    },
+  ])("preserves user data when gateway $failure", async ({ arrange }) => {
+    arrange();
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "full",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+  });
+
+  it("stops the managed Gateway before loading the destructive cleanup plan", async () => {
+    gatewayService.stop.mockImplementation(async () => {
+      expect(resolveCleanupPlanForRemoval).not.toHaveBeenCalled();
     });
-    removePath.mockResolvedValue({ ok: true });
-    listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
-    removeStateAndLinkedPaths.mockResolvedValue(undefined);
-    removeWorkspaceDirs.mockResolvedValue(undefined);
-    vi.spyOn(runtime, "log").mockImplementation(() => {});
-    vi.spyOn(runtime, "error").mockImplementation(() => {});
+
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(resolveCleanupPlanForRemoval).toHaveBeenCalledOnce();
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {
@@ -55,7 +71,11 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(true);
   });
 
   it("does not recommend backup for config-only reset", async () => {
@@ -66,6 +86,55 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not reopen workspace state after full state removal", async () => {
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+      dryRun: true,
+    });
+
+    expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
+      dryRun: true,
+      removeStateRows: false,
+    });
+  });
+
+  it("removes workspace rows when full state removal fails", async () => {
+    removeStateAndLinkedPaths.mockResolvedValueOnce(false);
+
+    await resetCommand(runtime, {
+      scope: "full",
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
+      dryRun: false,
+      removeStateRows: true,
+    });
+  });
+
+  it("continues a scoped reset when session directory inspection fails", async () => {
+    listAgentSessionDirs.mockRejectedValueOnce(new Error("permission denied"));
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "config+creds+sessions",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Failed to inspect session directories: Error: permission denied",
+    );
   });
 });

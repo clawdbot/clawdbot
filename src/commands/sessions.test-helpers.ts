@@ -1,27 +1,49 @@
+// Session command test helpers create temporary homes, session stores, and runtime fixtures.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+
+const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknown> }>(() => ({
+  loadConfig: () => ({
+    agents: {
+      defaults: {
+        model: { primary: "test:opus" },
+        models: { "test:opus": {} },
+        contextTokens: 32000,
+      },
+    },
+  }),
+}));
+
+const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => sessionsConfigState.loadConfig(),
+  loadConfig: () => sessionsConfigState.loadConfig(),
+}));
 
 export function mockSessionsConfig() {
-  vi.mock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: () => ({
-        agents: {
-          defaults: {
-            model: { primary: "pi:opus" },
-            models: { "pi:opus": {} },
-            contextTokens: 32000,
-          },
-        },
-      }),
-    };
-  });
+  // The shared config mock is hoisted above so tests can keep their
+  // existing setup call without paying `importActual` cost or nested-mock
+  // warnings before importing `sessions.ts`.
+}
+
+export function setMockSessionsConfig(loader: () => Record<string, unknown>) {
+  sessionsConfigState.loadConfig = loader;
+}
+
+export function resetMockSessionsConfig() {
+  sessionsConfigState.loadConfig = defaultSessionsConfigLoader;
 }
 
 export function makeRuntime(params?: { throwOnError?: boolean }): {
@@ -50,21 +72,41 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
   };
 }
 
-export function writeStore(data: unknown, prefix = "sessions"): string {
-  const fileName = `${[prefix, Date.now(), randomUUID()].join("-")}.json`;
-  const file = path.join(os.tmpdir(), fileName);
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  return file;
+/** Seeds an isolated SQLite-backed session store and returns its legacy target path. */
+export async function writeStore(
+  data: Record<string, SessionEntry>,
+  prefix = "sessions",
+  options: { agentId?: string } = {},
+): Promise<string> {
+  const dirName = [prefix, Date.now(), randomUUID()].join("-");
+  const storeDir = path.join(os.tmpdir(), dirName);
+  fs.mkdirSync(storeDir, { recursive: true });
+  const storePath = path.join(storeDir, "sessions.json");
+  const agentId = options.agentId ?? "main";
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+  openOpenClawAgentDatabase({ agentId, path: databasePath });
+  for (const [sessionKey, entry] of Object.entries(data)) {
+    await replaceSessionEntry({ agentId, sessionKey, storePath }, entry);
+  }
+  closeOpenClawAgentDatabaseByPath(databasePath);
+  return databasePath;
 }
 
+/** Removes the temporary SQLite session store created by writeStore. */
+export function cleanupStore(store: string): void {
+  fs.rmSync(path.dirname(store), { recursive: true, force: true });
+}
+
+/** Runs sessionsCommand with JSON output and parses the emitted payload. */
 export async function runSessionsJson<T>(
   run: (
-    opts: { json?: boolean; store?: string; active?: string },
+    opts: { json?: boolean; store?: string; active?: string; limit?: string | number },
     runtime: RuntimeEnv,
   ) => Promise<void>,
   store: string,
   options?: {
     active?: string;
+    limit?: string | number;
   },
 ): Promise<T> {
   const { runtime, logs } = makeRuntime();
@@ -74,11 +116,12 @@ export async function runSessionsJson<T>(
         store,
         json: true,
         active: options?.active,
+        limit: options?.limit,
       },
       runtime,
     );
   } finally {
-    fs.rmSync(store, { force: true });
+    cleanupStore(store);
   }
   return JSON.parse(logs[0] ?? "{}") as T;
 }

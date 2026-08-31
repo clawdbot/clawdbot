@@ -1,0 +1,16 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 2
+max_line_length = off
+ktlint_standard_filename = disabled
+ktlint_standard_function-naming = disabled
+ktlint_standard_max-line-length = disabled
+ktlint_standard_property-naming = disabled

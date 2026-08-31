@@ -1,0 +1,18 @@
+{
+  "language": "fr",
+  "tabs": [
+    {
+      "tab": "Commencer",
+      "groups": [
+        {
+          "group": "Vue d'ensemble",
+          "pages": ["fr/index"]
+        },
+        {
+          "group": "Premiers pas",
+          "pages": ["fr/start/getting-started", "fr/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

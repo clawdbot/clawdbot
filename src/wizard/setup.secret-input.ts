@@ -1,9 +1,12 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Secret input helpers collect and validate credentials during setup.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+// Secret input resolver accepts literal setup values or SecretRef-shaped values
+// and reports path-specific errors for onboarding forms.
 function formatSecretResolutionError(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;

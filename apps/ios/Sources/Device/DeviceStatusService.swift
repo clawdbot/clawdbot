@@ -11,10 +11,10 @@ final class DeviceStatusService: DeviceStatusServicing {
     }
 
     func status() async throws -> OpenClawDeviceStatusPayload {
-        let battery = self.batteryStatus()
+        let battery = Self.batteryStatus(device: UIDevice.current)
         let thermal = self.thermalStatus()
         let storage = self.storageStatus()
-        let network = await self.networkStatus.currentStatus()
+        let network = try await self.networkStatus.currentStatus()
         let uptime = ProcessInfo.processInfo.systemUptime
 
         return OpenClawDeviceStatusPayload(
@@ -40,9 +40,10 @@ final class DeviceStatusService: DeviceStatusServicing {
             locale: locale)
     }
 
-    private func batteryStatus() -> OpenClawBatteryStatusPayload {
-        let device = UIDevice.current
+    static func batteryStatus(device: UIDevice) -> OpenClawBatteryStatusPayload {
+        let wasMonitoring = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
+        defer { device.isBatteryMonitoringEnabled = wasMonitoring }
         let level = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
         let state: OpenClawBatteryState = switch device.batteryState {
         case .charging: .charging

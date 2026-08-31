@@ -1,7 +1,8 @@
+// Msteams tests cover policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import {
-  isMSTeamsGroupAllowed,
+  resolveMSTeamsGroupToolPolicy,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
@@ -158,83 +159,143 @@ describe("msteams policy", () => {
     });
   });
 
-  describe("isMSTeamsGroupAllowed", () => {
-    it("allows when policy is open", () => {
+  describe("resolveMSTeamsGroupToolPolicy", () => {
+    it("uses stable projected keys and never raw mutable names", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            dangerouslyAllowNameMatching: true,
+            teams: {
+              "Mutable Team": {
+                channels: {
+                  "Mutable Channel": { tools: { allow: ["exec"] } },
+                },
+              },
+              "19:stable-team@thread.tacv2": {
+                channels: {
+                  "19:stable-channel@thread.tacv2": { tools: { allow: ["read"] } },
+                },
+              },
+            },
+          },
+        },
+      };
+
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "open",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:unknown@thread.tacv2",
+          groupChannel: "Mutable Channel",
+          groupSpace: "Mutable Team",
         }),
-      ).toBe(true);
+      ).toBeUndefined();
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:stable-channel@thread.tacv2",
+          groupSpace: "19:stable-team@thread.tacv2",
+        }),
+      ).toEqual({ allow: ["read"] });
     });
 
-    it("blocks when policy is disabled", () => {
+    it("finds a channel across teams when no team matches", () => {
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "disabled",
-          allowFrom: ["user-id"],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  first: { channels: { other: { tools: { deny: ["other"] } } } },
+                  second: { channels: { target: { tools: { allow: ["cross-team"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "missing-team",
+          groupId: "target",
         }),
-      ).toBe(false);
+      ).toEqual({ allow: ["cross-team"] });
     });
 
-    it("blocks allowlist when empty", () => {
+    it("falls through a policy-less matched team to the cross-team scan", () => {
+      // A matched team without any applicable policy must not swallow another
+      // team's channel deny rules (legacy resolver parity).
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  "*": {},
+                  actual: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "unknown-team",
+          groupId: "target",
         }),
-      ).toBe(false);
+      ).toEqual({ deny: ["shell"] });
     });
 
-    it("allows allowlist when sender matches", () => {
+    it("does not scan across teams once a channel matched inside the selected team", () => {
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["User-Id"],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  mine: { channels: { target: {} } },
+                  other: { channels: { target: { tools: { deny: ["shell"] } } } },
+                },
+              },
+            },
+          },
+          groupSpace: "mine",
+          groupId: "target",
         }),
-      ).toBe(true);
+      ).toBeUndefined();
     });
 
-    it("blocks sender-name allowlist matches by default", () => {
+    it("falls from a fieldless channel entry to its team policy", () => {
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg: {
+            channels: {
+              msteams: {
+                teams: {
+                  team: {
+                    tools: { deny: ["team"] },
+                    channels: { channel: {} },
+                  },
+                },
+              },
+            },
+          },
+          groupSpace: "team",
+          groupId: "channel",
         }),
-      ).toBe(false);
+      ).toEqual({ deny: ["team"] });
     });
 
-    it("allows sender-name allowlist matches when explicitly enabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-          allowNameMatching: true,
-        }),
-      ).toBe(true);
-    });
+    it("keeps slash-bearing flat scope keys collision-free", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            teams: {
+              "a/channel:b": { tools: { allow: ["slash-team"] } },
+              a: { channels: { b: { tools: { allow: ["nested-channel"] } } } },
+            },
+          },
+        },
+      };
 
-    it("allows allowlist wildcard", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["*"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(true);
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a/channel:b" })).toEqual({
+        allow: ["slash-team"],
+      });
+      expect(resolveMSTeamsGroupToolPolicy({ cfg, groupSpace: "a", groupId: "b" })).toEqual({
+        allow: ["nested-channel"],
+      });
     });
   });
 });

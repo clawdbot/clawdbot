@@ -1,0 +1,1055 @@
+name: QA Profile Evidence
+
+run-name: ${{ format('QA Profile Evidence {0} {1}', inputs.qa_profile, inputs.ref) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: OpenClaw branch, tag, or SHA to run
+        required: true
+        default: main
+        type: string
+      trusted_ref:
+        description: Optional trusted branch, tag, or SHA identity for an immutable ref
+        required: false
+        default: ""
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+      qa_profile:
+        description: Taxonomy QA profile id to run (for example release or all)
+        required: true
+        default: all
+        type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      ref:
+        description: OpenClaw branch, tag, or SHA to run
+        required: true
+        type: string
+      trusted_ref:
+        description: Optional trusted branch, tag, or SHA identity for an immutable ref
+        required: false
+        default: ""
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+      qa_profile:
+        description: Taxonomy QA profile id to run
+        required: true
+        type: string
+      allow_failures:
+        description: Continue after validated QA result failures
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
+    outputs:
+      artifact_name:
+        description: Uploaded QA profile evidence artifact name
+        value: ${{ jobs.aggregate_qa_profile.outputs.artifact_name }}
+      qa_profile:
+        description: Taxonomy QA profile id that produced the evidence
+        value: ${{ jobs.aggregate_qa_profile.outputs.qa_profile }}
+      qa_exit_code:
+        description: Exit code from the QA profile run; non-zero evidence is still uploaded
+        value: ${{ jobs.aggregate_qa_profile.outputs.qa_exit_code }}
+      qa_passed:
+        description: Whether the QA profile command exited successfully
+        value: ${{ jobs.aggregate_qa_profile.outputs.qa_passed }}
+      target_sha:
+        description: Resolved OpenClaw SHA that produced the evidence
+        value: ${{ jobs.aggregate_qa_profile.outputs.target_sha }}
+      trusted_reason:
+        description: Trust reason accepted before the secret-bearing QA job
+        value: ${{ jobs.aggregate_qa_profile.outputs.trusted_reason }}
+      qa_evidence_path:
+        description: Path to qa-evidence.json inside the uploaded artifact
+        value: ${{ jobs.aggregate_qa_profile.outputs.qa_evidence_path }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-profile-evidence-${{ inputs.qa_profile }}-${{ inputs.expected_sha || inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+  OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+  OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+
+jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
+    steps:
+      - name: Require maintainer-level repository access
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              core.setOutput("authorized", trustedMainCaller ? "true" : "false");
+              if (!trustedMainCaller) {
+                core.notice("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            core.setOutput("authorized", allowed.has(permission) ? "true" : "false");
+            if (!allowed.has(permission)) {
+              core.notice(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  validate_selected_ref:
+    name: Validate selected ref
+    needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      protocol_base_revision: ${{ steps.validate.outputs.protocol_base_revision }}
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
+    steps:
+      # github.workflow_sha identifies the caller during workflow_call. Resolve the called
+      # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
+      - name: Resolve job workflow identity
+        id: workflow
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          if (
+            typeof job.workflow_repository !== "string" ||
+            !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
+          ) {
+            throw new Error("job.workflow_repository must be an owner/repository slug");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          fs.appendFileSync(
+            outputPath,
+            `workflow_sha=${job.workflow_sha}\n`,
+          );
+          NODE
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          INPUT_REF: ${{ inputs.trusted_ref || inputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          selected_revision="$(git rev-parse HEAD)"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          branch_candidate="${INPUT_REF#refs/heads/}"
+          tag_candidate="${INPUT_REF#refs/tags/}"
+          trusted_reason=""
+
+          if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if [[ "$tag_candidate" =~ ^v ]]; then
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/tags/${tag_candidate}:refs/tags/${tag_candidate}"
+            release_tag_sha="$(git rev-parse "refs/tags/${tag_candidate}^{commit}")"
+            if [[ "$selected_revision" == "$release_tag_sha" ]]; then
+              trusted_reason="release-tag"
+            fi
+          elif [[ "$branch_candidate" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/heads/${branch_candidate}:refs/remotes/origin/${branch_candidate}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${branch_candidate}")"
+            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
+              trusted_reason="release-branch-head"
+            fi
+          elif git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing QA evidence run." >&2
+            echo "Allowed refs must be on main, point to a release tag, or match a release branch head." >&2
+            exit 1
+          fi
+
+          case "$trusted_reason" in
+            main-ancestor)
+              protocol_base_revision="$(git rev-parse "${selected_revision}^1")"
+              ;;
+            release-branch-head | release-tag)
+              protocol_base_revision="$(git merge-base "$selected_revision" refs/remotes/origin/main)"
+              ;;
+            *)
+              echo "Unsupported trusted ref classification: ${trusted_reason}" >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "$protocol_base_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Protocol comparison base must resolve to a full commit SHA." >&2
+            exit 1
+          fi
+          git cat-file -e "${protocol_base_revision}^{commit}"
+
+          echo "protocol_base_revision=$protocol_base_revision" >> "$GITHUB_OUTPUT"
+          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Target"
+            echo
+            echo "- Requested ref: \`${INPUT_REF}\`"
+            echo "- Resolved SHA: \`$selected_revision\`"
+            echo "- Trust reason: \`$trusted_reason\`"
+            echo "- Protocol base: \`$protocol_base_revision\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  plan_qa_profile:
+    name: Plan QA profile shards
+    needs: validate_selected_ref
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Selected-revision code requires the protected QA environment before runner allocation.
+    environment: qa-live-shared
+    outputs:
+      channel_driver: ${{ steps.plan.outputs.channel_driver }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      profile: ${{ steps.plan.outputs.profile }}
+      shard_count: ${{ steps.plan.outputs.shard_count }}
+    steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Checkout trusted QA harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Checkout selected ref
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          cd selected
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --config.ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+        working-directory: selected
+
+      - name: Resolve taxonomy profile shards
+        id: plan
+        env:
+          QA_PROFILE: ${{ inputs.qa_profile }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { createQaProfileEvidenceShardPlan } from "./extensions/qa-lab/src/profile-evidence-sharding.ts";
+
+          const requested = process.env.QA_PROFILE?.trim() ?? "";
+          if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(requested)) {
+            throw new Error(`qa_profile must use a taxonomy profile id, got ${JSON.stringify(process.env.QA_PROFILE)}`);
+          }
+          const plan = createQaProfileEvidenceShardPlan(requested);
+          fs.appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            [
+              `profile=${plan.profile}`,
+              `channel_driver=${plan.channelDriver}`,
+              `shard_count=${plan.shards.length}`,
+              `matrix=${JSON.stringify({ include: plan.shards })}`,
+              "",
+            ].join("\n"),
+          );
+          fs.appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `### QA profile plan\n\n- Profile: \`${plan.profile}\`\n- Shards: \`${plan.shards.length}\`\n- Scenarios: \`${plan.shards.flatMap((shard) => shard.scenarioIds).length}\`\n`,
+          );
+          NODE
+
+  run_qa_profile_shard:
+    name: Generate QA profile evidence (${{ matrix.id }})
+    needs: [validate_selected_ref, plan_qa_profile]
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    environment: qa-live-shared
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan_qa_profile.outputs.matrix) }}
+    steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Checkout trusted QA harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+
+      - name: Checkout selected ref
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          cd selected
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --config.ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
+
+      - name: Fetch protocol comparison base
+        env:
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          if [[ ! "$PROTOCOL_SINCE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Protocol comparison base must be a full commit SHA." >&2
+            exit 1
+          fi
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags --no-recurse-submodules --depth=1 origin \
+            "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"
+          test "$(git rev-parse refs/remotes/origin/qa-protocol-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"
+
+      - name: Require live profile credentials
+        if: needs.plan_qa_profile.outputs.channel_driver == 'live'
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        run: |
+          set -euo pipefail
+          [[ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]] || { echo "Missing required qa-live-shared secret: OPENCLAW_QA_CONVEX_SITE_URL" >&2; exit 1; }
+          [[ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ]] || { echo "Missing required qa-live-shared secret: OPENCLAW_QA_CONVEX_SECRET_CI" >&2; exit 1; }
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+        working-directory: selected
+
+      - name: Ensure Playwright Chromium
+        working-directory: selected
+        run: |
+          playwright_script="scripts/ensure-playwright-chromium.mts"
+          [[ -f "$playwright_script" ]] || playwright_script="scripts/ensure-playwright-chromium.mjs"
+          node --import tsx "$playwright_script"
+
+      - name: Run QA profile shard
+        id: run_profile
+        env:
+          CATEGORY_IDS_JSON: ${{ toJSON(matrix.categoryIds) }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+          QA_SHARD_ID: ${{ matrix.id }}
+          REQUESTED_REF: ${{ inputs.trusted_ref || inputs.ref }}
+          SCENARIO_IDS_JSON: ${{ toJSON(matrix.scenarioIds) }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
+          OPENCLAW_QA_CREDENTIAL_ROLE: ci
+          OPENCLAW_QA_CREDENTIAL_SOURCE: convex
+          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1"
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          qa_output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/${QA_SHARD_ID}"
+          published_output_dir="${GITHUB_WORKSPACE}/selected/${qa_output_dir}"
+          mkdir -p "$qa_output_dir"
+          echo "output_dir=${published_output_dir}" >> "$GITHUB_OUTPUT"
+          mapfile -t scenario_ids < <(jq -er '.[]' <<<"$SCENARIO_IDS_JSON")
+          scenario_args=()
+          for scenario_id in "${scenario_ids[@]}"; do
+            scenario_args+=(--scenario "$scenario_id")
+          done
+
+          timeout_supervisor_log="$(mktemp)"
+          timeout_supervisor_fifo="${timeout_supervisor_log}.fifo"
+          supervisor_tee_pid=""
+          cleanup_timeout_supervisor() {
+            if [[ -n "$supervisor_tee_pid" ]]; then
+              kill "$supervisor_tee_pid" 2>/dev/null || true
+              wait "$supervisor_tee_pid" 2>/dev/null || true
+            fi
+            rm -f "$timeout_supervisor_fifo" "$timeout_supervisor_log"
+          }
+          trap cleanup_timeout_supervisor EXIT
+
+          mkfifo "$timeout_supervisor_fifo"
+          tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &
+          supervisor_tee_pid=$!
+
+          timeout_child_env=(env)
+          if [[ -v LC_ALL ]]; then
+            timeout_child_env+=("LC_ALL=$LC_ALL")
+          else
+            timeout_child_env+=("-u" "LC_ALL")
+          fi
+
+          qa_exit_code=0
+          LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m \
+            "${timeout_child_env[@]}" bash -c 'exec "$@" 2>&3' bash \
+            pnpm openclaw qa run \
+              --repo-root . \
+              --qa-profile "$QA_PROFILE" \
+              --concurrency 3 \
+              --fast \
+              --output-dir "$qa_output_dir" \
+              "${scenario_args[@]}" \
+            3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?
+
+          wait "$supervisor_tee_pid"
+          supervisor_tee_pid=""
+
+          timeout_outcome="none"
+          if [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="kill"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
+          elif [[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
+            timeout_outcome="term"
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
+          fi
+
+          QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$published_output_dir" \
+            node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          fs.writeFileSync(
+            path.join(process.env.OUTPUT_DIR, "qa-profile-run-status.json"),
+            `${JSON.stringify({
+              target: {
+                ref: process.env.REQUESTED_REF,
+                sha: process.env.TARGET_SHA,
+                protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA,
+              },
+              profile: process.env.QA_PROFILE,
+              shard: {
+                id: process.env.QA_SHARD_ID,
+                categoryIds: JSON.parse(process.env.CATEGORY_IDS_JSON),
+                scenarioIds: JSON.parse(process.env.SCENARIO_IDS_JSON),
+              },
+              run: { id: process.env.GITHUB_RUN_ID, attempt: Number(process.env.GITHUB_RUN_ATTEMPT) },
+              exitCode: Number(process.env.QA_EXIT_CODE),
+              timedOut: process.env.TIMEOUT_OUTCOME !== "none",
+              timeoutOutcome: process.env.TIMEOUT_OUTCOME,
+              completedAt: new Date().toISOString(),
+            }, null, 2)}\n`,
+          );
+          NODE
+          echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate QA profile shard evidence
+        if: always()
+        env:
+          OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
+          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
+          if (!process.env.OUTPUT_DIR || !process.env.QA_EXIT_CODE) {
+            throw new Error("QA profile shard did not report its output directory and exit code.");
+          }
+          const payload = validateQaEvidenceSummaryJson(
+            JSON.parse(fs.readFileSync(path.join(process.env.OUTPUT_DIR, "qa-evidence.json"), "utf8")),
+          );
+          if (payload.profile !== process.env.QA_PROFILE || !payload.profilePlan) {
+            throw new Error(`QA shard evidence does not attest profile ${process.env.QA_PROFILE}.`);
+          }
+          qaProfileEvidencePlan.attest(payload.profilePlan, process.env.QA_EXIT_CODE === "0");
+          NODE
+
+      - name: Upload QA profile shard evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-profile-evidence-shard-${{ matrix.id }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          path: ${{ steps.run_profile.outputs.output_dir }}
+          retention-days: 3
+          if-no-files-found: error
+
+  aggregate_qa_profile:
+    name: Aggregate QA profile evidence
+    needs: [validate_selected_ref, plan_qa_profile, run_qa_profile_shard]
+    if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Selected-revision code requires the protected QA environment before runner allocation.
+    environment: qa-live-shared
+    timeout-minutes: 30
+    outputs:
+      artifact_name: ${{ steps.evidence.outputs.artifact_name }}
+      qa_profile: ${{ steps.evidence.outputs.qa_profile }}
+      qa_exit_code: ${{ steps.evidence.outputs.qa_exit_code }}
+      qa_passed: ${{ steps.evidence.outputs.qa_passed }}
+      target_sha: ${{ steps.evidence.outputs.target_sha }}
+      trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
+      qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
+    steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+      - name: Checkout trusted QA harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Restore trusted QA harness revision
+        env:
+          EXPECTED_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$EXPECTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected workflow SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_WORKFLOW_SHA"
+          git checkout --detach "$EXPECTED_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Checkout selected ref
+        env:
+          EXPECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ! -e selected ]] || { echo "Selected checkout path already exists." >&2; exit 1; }
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Expected selected SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          git init selected
+          git -C selected remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          cd selected
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install selected dependencies
+        shell: bash
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          selected_home="${RUNNER_TEMP}/openclaw-qa-selected-home"
+          mkdir -p "$selected_home"
+          env -i \
+            CI=true \
+            COREPACK_HOME="${selected_home}/.cache/corepack" \
+            HOME="$selected_home" \
+            LANG=C.UTF-8 \
+            NPM_CONFIG_USERCONFIG=/dev/null \
+            PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
+            RUNNER_TEMP="$RUNNER_TEMP" \
+            pnpm install \
+              --store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store" \
+              --prefer-offline \
+              --frozen-lockfile \
+              --config.ignore-scripts=false \
+              --config.engine-strict=false \
+              --config.enable-pre-post-scripts=true \
+              --config.package-import-method=copy \
+              --config.side-effects-cache=true
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+        working-directory: selected
+
+      - name: Download QA profile shard evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: qa-profile-evidence-shard-*-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          path: selected/.artifacts/qa-profile-shards
+          merge-multiple: false
+
+      - name: Aggregate validated shard evidence
+        id: aggregate
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}/selected/.artifacts/qa-e2e/profile-${{ needs.plan_qa_profile.outputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+          SHARD_COUNT: ${{ needs.plan_qa_profile.outputs.shard_count }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          mapfile -t status_paths < <(find .artifacts/qa-profile-shards -mindepth 2 -maxdepth 2 -type f -name qa-profile-run-status.json | sort)
+          mapfile -t evidence_paths < <(find .artifacts/qa-profile-shards -mindepth 2 -maxdepth 2 -type f -name qa-evidence.json | sort)
+          if [[ "${#status_paths[@]}" -ne "$SHARD_COUNT" || "${#evidence_paths[@]}" -ne "$SHARD_COUNT" ]]; then
+            echo "Expected ${SHARD_COUNT} completed status and evidence files; found ${#status_paths[@]} statuses and ${#evidence_paths[@]} evidence files." >&2
+            exit 1
+          fi
+          qa_exit_code=0
+          for status_path in "${status_paths[@]}"; do
+            if jq -e '.timedOut == true' "$status_path" >/dev/null; then
+              echo "Timed-out QA shard cannot contribute partial evidence: ${status_path}" >&2
+              exit 1
+            fi
+            shard_exit_code="$(jq -er '.exitCode' "$status_path")"
+            if [[ "$shard_exit_code" != "0" && "$qa_exit_code" == "0" ]]; then
+              qa_exit_code="$shard_exit_code"
+            fi
+          done
+          mkdir -p "$OUTPUT_DIR"
+          EVIDENCE_PATHS_JSON="$(printf '%s\n' "${evidence_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
+            GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+            OUTPUT_PATH="$OUTPUT_DIR/qa-evidence.json" \
+            node --import tsx --input-type=module <<'NODE'
+          import { aggregateQaProfileEvidenceShards } from "./extensions/qa-lab/src/profile-evidence-sharding.ts";
+          await aggregateQaProfileEvidenceShards({
+            evidencePaths: JSON.parse(process.env.EVIDENCE_PATHS_JSON),
+            generatedAt: process.env.GENERATED_AT,
+            outputPath: process.env.OUTPUT_PATH,
+            profile: process.env.QA_PROFILE,
+            shardCount: Number(process.env.SHARD_COUNT),
+          });
+          NODE
+          jq -s \
+            --arg profile "$QA_PROFILE" \
+            --argjson exitCode "$qa_exit_code" \
+            '{
+              target: .[0].target,
+              profile: $profile,
+              run: .[0].run,
+              shards: map(.shard + {exitCode, timedOut, timeoutOutcome, completedAt}),
+              exitCode: $exitCode,
+              timedOut: false,
+              timeoutOutcome: "none",
+              completedAt: (map(.completedAt) | max)
+            }' "${status_paths[@]}" > "$OUTPUT_DIR/qa-profile-run-status.json"
+          echo "output_dir=${OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
+          echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize QA profile evidence
+        id: evidence
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+          ARTIFACT_NAME: qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          OUTPUT_DIR: ${{ steps.aggregate.outputs.output_dir }}
+          QA_EXIT_CODE: ${{ steps.aggregate.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+          PROTOCOL_BASE_SHA: ${{ needs.validate_selected_ref.outputs.protocol_base_revision }}
+          REQUESTED_REF: ${{ inputs.trusted_ref || inputs.ref }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          TRUSTED_REASON: ${{ needs.validate_selected_ref.outputs.trusted_reason }}
+        working-directory: selected
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
+          const evidencePath = path.join(process.env.OUTPUT_DIR, "qa-evidence.json");
+          const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+          if (payload.profile !== process.env.QA_PROFILE || !payload.profilePlan || !payload.scorecard) {
+            throw new Error(`Aggregated QA evidence does not attest profile ${process.env.QA_PROFILE}.`);
+          }
+          const { sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            payload.profilePlan,
+            process.env.QA_EXIT_CODE === "0",
+          );
+          const manifest = {
+            artifactName: process.env.ARTIFACT_NAME,
+            generatedAt: new Date().toISOString(),
+            qaProfile: process.env.QA_PROFILE,
+            qaExitCode: Number(process.env.QA_EXIT_CODE),
+            qaPassed: process.env.QA_EXIT_CODE === "0",
+            allowFailures: process.env.ALLOW_FAILURES === "true",
+            requestedRef: process.env.REQUESTED_REF,
+            targetSha: process.env.TARGET_SHA,
+            protocolBaseSha: process.env.PROTOCOL_BASE_SHA,
+            trustedReason: process.env.TRUSTED_REASON,
+            evidenceMode: payload.evidenceMode,
+            profilePlanSha256,
+            qaEvidencePath: "qa-evidence.json",
+            scorecard: {
+              categories: payload.scorecard.categories,
+              features: payload.scorecard.features,
+              categoryReports: payload.scorecard.categoryReports.length,
+            },
+          };
+          fs.writeFileSync(
+            path.join(process.env.OUTPUT_DIR, "qa-profile-evidence-manifest.json"),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          );
+          NODE
+          echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "qa_profile=${QA_PROFILE}" >> "$GITHUB_OUTPUT"
+          echo "qa_exit_code=${QA_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          if [[ "$QA_EXIT_CODE" == "0" ]]; then
+            echo "qa_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "qa_passed=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
+          echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
+
+      - name: Upload QA profile evidence
+        if: always() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-profile-evidence-${{ needs.plan_qa_profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          path: ${{ steps.aggregate.outputs.output_dir }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Fail if QA profile failed
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
+          QA_EXIT_CODE: ${{ steps.aggregate.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ needs.plan_qa_profile.outputs.profile }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${QA_EXIT_CODE:-}" ]]; then
+            echo "QA profile aggregate did not report an exit code." >&2
+            exit 1
+          fi
+          if [[ "$QA_EXIT_CODE" != "0" && "$ALLOW_FAILURES" != "true" ]]; then
+            echo "QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}." >&2
+            exit "$QA_EXIT_CODE"
+          fi
+          if [[ "$QA_EXIT_CODE" != "0" ]]; then
+            echo "::warning::QA profile '${QA_PROFILE}' completed with validated shard failures; allow_failures accepted the aggregate evidence."
+          fi

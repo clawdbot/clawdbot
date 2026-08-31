@@ -1,4 +1,6 @@
+// Verifies sessions_history visibility defaults and sandbox clamps.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -12,47 +14,23 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
     resolveGatewayPort: () => 18789,
   };
 });
-
-import "./test-helpers/fast-core-tools.js";
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-
-async function loadFreshOpenClawToolsModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
-  vi.doMock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: () => mockConfig,
-      resolveGatewayPort: () => 18789,
-    };
-  });
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-}
-
 function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
-  const tool = createOpenClawTools({
+  return createSessionsHistoryTool({
     agentSessionKey: "main",
     sandboxed: options?.sandboxed,
-  }).find((candidate) => candidate.name === "sessions_history");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing sessions_history tool");
-  }
-  return tool;
+    config: mockConfig as never,
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  });
 }
 
 function mockGatewayWithHistory(
   extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
 ) {
+  // Most visibility tests need chat.history plus optional session resolution/listing.
   callGatewayMock.mockClear();
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const req = opts as { method?: string; params?: Record<string, unknown> };
@@ -68,21 +46,21 @@ function mockGatewayWithHistory(
 }
 
 describe("sessions tools visibility", () => {
-  beforeEach(async () => {
-    await loadFreshOpenClawToolsModuleForTest();
+  beforeEach(() => {
+    callGatewayMock.mockClear();
   });
 
-  it("defaults to tree visibility (self + spawned) for sessions_history", async () => {
+  it("defaults to same-agent visibility for sessions_history", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { agentToAgent: { enabled: false } },
     };
     mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
-        return { sessions: [{ key: "subagent:child-1" }] };
-      }
       if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        const key = typeof req.params?.key === "string" ? req.params.key : "";
+        if (req.params?.spawnedBy === "main" && key !== "subagent:child-1") {
+          return {};
+        }
         return { key };
       }
       return undefined;
@@ -90,15 +68,15 @@ describe("sessions tools visibility", () => {
 
     const tool = getSessionsHistoryTool();
 
-    const denied = await tool.execute("call1", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+    const sibling = await tool.execute("call1", {
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((sibling.details as { sessionKey?: string }).sessionKey).toBe(
+      "agent:main:quietchat:direct:someone-else",
+    );
 
     const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
-    expect(allowed.details).toMatchObject({
-      sessionKey: "subagent:child-1",
-    });
+    expect((allowed.details as { sessionKey?: string }).sessionKey).toBe("subagent:child-1");
   });
 
   it("allows broader access when tools.sessions.visibility=all", async () => {
@@ -110,11 +88,11 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const result = await tool.execute("call3", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(result.details).toMatchObject({
-      sessionKey: "agent:main:discord:direct:someone-else",
-    });
+    expect((result.details as { sessionKey?: string }).sessionKey).toBe(
+      "agent:main:quietchat:direct:someone-else",
+    );
   });
 
   it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
@@ -124,8 +102,8 @@ describe("sessions tools visibility", () => {
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
     };
     mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
-        return { sessions: [] };
+      if (req.method === "sessions.resolve" && req.params?.spawnedBy === "main") {
+        return {};
       }
       return undefined;
     });
@@ -135,6 +113,6 @@ describe("sessions tools visibility", () => {
     const denied = await tool.execute("call4", {
       sessionKey: "agent:other:main",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { status?: string }).status).toBe("forbidden");
   });
 });

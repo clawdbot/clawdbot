@@ -1,202 +1,33 @@
-import type {
-  ChannelDoctorAdapter,
-  ChannelDoctorConfigMutation,
-  ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+// Zalouser plugin module implements doctor behavior.
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { isZalouserMutableGroupEntry } from "./security-audit.js";
 
-type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-}
-
-function hasLegacyZalouserGroupAllowAlias(value: unknown): boolean {
-  const group = asObjectRecord(value);
-  return Boolean(group && typeof group.allow === "boolean");
-}
-
-function hasLegacyZalouserGroupAllowAliases(value: unknown): boolean {
-  const groups = asObjectRecord(value);
-  return Boolean(
-    groups && Object.values(groups).some((group) => hasLegacyZalouserGroupAllowAlias(group)),
-  );
-}
-
-function hasLegacyZalouserAccountGroupAllowAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => {
-    const accountRecord = asObjectRecord(account);
-    return Boolean(accountRecord && hasLegacyZalouserGroupAllowAliases(accountRecord.groups));
-  });
-}
-
-function normalizeZalouserGroupAllowAliases(params: {
-  groups: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { groups: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextGroups: Record<string, unknown> = { ...params.groups };
-  for (const [groupId, groupValue] of Object.entries(params.groups)) {
-    const group = asObjectRecord(groupValue);
-    if (!group || typeof group.allow !== "boolean") {
-      continue;
-    }
-    const nextGroup = { ...group };
-    if (typeof nextGroup.enabled !== "boolean") {
-      nextGroup.enabled = group.allow;
-    }
-    delete nextGroup.allow;
-    nextGroups[groupId] = nextGroup;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.${groupId}.allow → ${params.pathPrefix}.${groupId}.enabled (${String(nextGroup.enabled)}).`,
-    );
-  }
-  return { groups: nextGroups, changed };
-}
-
-function normalizeZalouserCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
-  const channels = asObjectRecord(cfg.channels);
-  const zalouser = asObjectRecord(channels?.zalouser);
-  if (!zalouser) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  let updatedZalouser: Record<string, unknown> = zalouser;
-  let changed = false;
-
-  const groups = asObjectRecord(updatedZalouser.groups);
-  if (groups) {
-    const normalized = normalizeZalouserGroupAllowAliases({
-      groups,
-      pathPrefix: "channels.zalouser.groups",
-      changes,
-    });
-    if (normalized.changed) {
-      updatedZalouser = { ...updatedZalouser, groups: normalized.groups };
-      changed = true;
-    }
-  }
-
-  const accounts = asObjectRecord(updatedZalouser.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      if (!account) {
-        continue;
-      }
-      const accountGroups = asObjectRecord(account.groups);
-      if (!accountGroups) {
-        continue;
-      }
-      const normalized = normalizeZalouserGroupAllowAliases({
-        groups: accountGroups,
-        pathPrefix: `channels.zalouser.accounts.${accountId}.groups`,
-        changes,
-      });
-      if (!normalized.changed) {
-        continue;
-      }
-      nextAccounts[accountId] = {
-        ...account,
-        groups: normalized.groups,
-      };
-      accountsChanged = true;
-    }
-    if (accountsChanged) {
-      updatedZalouser = { ...updatedZalouser, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-
-  return {
-    config: {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: updatedZalouser as ZalouserChannelsConfig["zalouser"],
-      },
+const collectZalouserMutableAllowlistWarnings =
+  createDangerousNameMatchingMutableAllowlistWarningCollector({
+    channel: "zalouser",
+    detector: isZalouserMutableGroupEntry,
+    collectLists: (scope) => {
+      const groups = asObjectRecord(scope.account.groups);
+      return groups
+        ? [
+            {
+              pathLabel: `${scope.prefix}.groups`,
+              list: Object.keys(groups),
+            },
+          ]
+        : [];
     },
-    changes,
-  };
-}
-
-const ZALOUSER_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "zalouser", "groups"],
-    message:
-      "channels.zalouser.groups.<id>.allow is legacy; use channels.zalouser.groups.<id>.enabled instead (auto-migrated on load).",
-    match: hasLegacyZalouserGroupAllowAliases,
-  },
-  {
-    path: ["channels", "zalouser", "accounts"],
-    message:
-      "channels.zalouser.accounts.<id>.groups.<id>.allow is legacy; use channels.zalouser.accounts.<id>.groups.<id>.enabled instead (auto-migrated on load).",
-    match: hasLegacyZalouserAccountGroupAllowAliases,
-  },
-];
-
-export function collectZalouserMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
-  const hits: Array<{ path: string; entry: string }> = [];
-
-  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "zalouser")) {
-    if (scope.dangerousNameMatchingEnabled) {
-      continue;
-    }
-    const groups = asObjectRecord(scope.account.groups);
-    if (!groups) {
-      continue;
-    }
-    for (const entry of Object.keys(groups)) {
-      if (isZalouserMutableGroupEntry(entry)) {
-        hits.push({ path: `${scope.prefix}.groups`, entry });
-      }
-    }
-  }
-
-  if (hits.length === 0) {
-    return [];
-  }
-  const exampleLines = hits
-    .slice(0, 8)
-    .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
-  const remaining =
-    hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
-  return [
-    `- Found ${hits.length} mutable allowlist ${hits.length === 1 ? "entry" : "entries"} across zalouser while name matching is disabled by default.`,
-    ...exampleLines,
-    ...(remaining ? [remaining] : []),
-    "- Option A (break-glass): enable channels.zalouser.dangerousNameMatching=true for the affected scope.",
-    "- Option B (recommended): resolve mutable group names to stable IDs and rewrite the allowlist entries.",
-  ];
-}
+  });
 
 export const zalouserDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOnly",
   groupModel: "hybrid",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
-  legacyConfigRules: ZALOUSER_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeZalouserCompatibilityConfig(cfg),
-  collectMutableAllowlistWarnings: ({ cfg }) => collectZalouserMutableAllowlistWarnings(cfg),
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  collectMutableAllowlistWarnings: collectZalouserMutableAllowlistWarnings,
 };

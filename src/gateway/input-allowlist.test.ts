@@ -1,3 +1,6 @@
+/**
+ * Gateway input allowlist tests.
+ */
 import { describe, expect, it } from "vitest";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 

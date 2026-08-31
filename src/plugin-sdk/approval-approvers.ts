@@ -1,16 +1,15 @@
+/**
+ * Public SDK helper for deriving normalized approval approver ids.
+ */
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
+
 type ApproverInput = string | number;
 
 function dedupeDefined(values: Array<string | undefined>): string[] {
-  const resolved = new Set<string>();
-  for (const value of values) {
-    if (!value) {
-      continue;
-    }
-    resolved.add(value);
-  }
-  return [...resolved];
+  return uniqueStrings(values.filter((value): value is string => Boolean(value)));
 }
 
+/** Resolves explicit approvers first, then allow-from/default fallbacks with dedupe. */
 export function resolveApprovalApprovers(params: {
   explicit?: readonly ApproverInput[] | null;
   allowFrom?: readonly ApproverInput[] | null;

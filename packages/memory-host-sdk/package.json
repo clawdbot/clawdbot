@@ -3,16 +3,21 @@
   "version": "0.0.0-private",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*",
+    "p-map": "7.0.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "exports": {
-    "./runtime": "./src/runtime.ts",
     "./runtime-core": "./src/runtime-core.ts",
-    "./runtime-cli": "./src/runtime-cli.ts",
     "./runtime-files": "./src/runtime-files.ts",
-    "./engine": "./src/engine.ts",
     "./engine-foundation": "./src/engine-foundation.ts",
     "./engine-storage": "./src/engine-storage.ts",
     "./engine-embeddings": "./src/engine-embeddings.ts",
-    "./engine-qmd": "./src/engine-qmd.ts",
+    "./engine-sessions": "./src/engine-sessions.ts",
     "./multimodal": "./src/multimodal.ts",
     "./query": "./src/query.ts",
     "./secret": "./src/secret.ts",

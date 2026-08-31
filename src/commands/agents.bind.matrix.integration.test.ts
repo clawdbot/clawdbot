@@ -1,17 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Agent bind Matrix integration tests cover account binding resolution through plugin registry surfaces.
+import { afterEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   createBindingResolverTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import {
-  loadFreshAgentsCommandModuleForTest,
-  readConfigFileSnapshotMock,
-  resetAgentsBindTestHarness,
-  runtime,
-  writeConfigFileMock,
-} from "./agents.bind.test-support.js";
-import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
+import { parseBindingSpecs } from "./agents.bindings.js";
 
 const matrixBindingPlugin = createBindingResolverTestPlugin({
   id: "matrix",
@@ -25,37 +19,47 @@ const matrixBindingPlugin = createBindingResolverTestPlugin({
   },
 });
 
-let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
-
 describe("agents bind matrix integration", () => {
-  beforeEach(async () => {
-    ({ agentsBindCommand } = await loadFreshAgentsCommandModuleForTest());
-    resetAgentsBindTestHarness();
-
+  it("uses matrix plugin binding resolver when accountId is omitted", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
     );
+
+    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix"], config: {} });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      { type: "route", agentId: "main", match: { channel: "matrix", accountId: "main" } },
+    ]);
+  });
+
+  it("rejects a binding spec with extra colon segments instead of silently truncating", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix:work:extra"], config: {} });
+
+    expect(parsed.bindings).toEqual([]);
+    expect(parsed.errors).toEqual([
+      'Invalid binding "matrix:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+    ]);
+  });
+
+  it("still accepts a single channel:account binding", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix:work"], config: {} });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      { type: "route", agentId: "main", match: { channel: "matrix", accountId: "work" } },
+    ]);
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
-  });
-
-  it("uses matrix plugin binding resolver when accountId is omitted", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-
-    await agentsBindCommand({ agent: "main", bind: ["matrix"] }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [
-          { type: "route", agentId: "main", match: { channel: "matrix", accountId: "main" } },
-        ],
-      }),
-    );
-    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

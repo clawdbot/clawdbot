@@ -1,5 +1,7 @@
+// Android node policy-source tests document when clients fetch remote capability
+// policy versus trusting local loopback gateway configuration.
 import { describe, expect, it } from "vitest";
-import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
+import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
 import type { GatewayConnectionDetails } from "./call.js";
 
 function details(overrides: Partial<GatewayConnectionDetails>): GatewayConnectionDetails {

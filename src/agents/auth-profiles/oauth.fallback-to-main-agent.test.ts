@@ -1,25 +1,33 @@
+/**
+ * Tests OAuth fallback to main-agent credentials.
+ * Ensures agent-local auth can recover from refresh failure by adopting a fresh
+ * main-store credential when identity checks allow it.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
-const { getOAuthApiKeyMock } = vi.hoisted(() => ({
-  getOAuthApiKeyMock: vi.fn(async () => {
-    throw new Error("invalid_grant");
-  }),
-}));
-
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
-  );
+const { getOAuthApiKeyMock } = vi.hoisted(() => {
+  vi.resetModules();
   return {
-    ...actual,
-    getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthApiKeyMock: vi.fn(async () => {
+      throw new Error("invalid_grant");
+    }),
   };
 });
+
+vi.mock("../../llm/oauth.js", () => ({
+  getOAuthApiKey: getOAuthApiKeyMock,
+  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai" }],
+}));
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
@@ -31,25 +39,27 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: async () => null,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("./store.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureAuthProfileStore: typeof import("./store.js").ensureAuthProfileStore;
-let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+vi.mock("../../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
 
-async function loadFreshOAuthModuleForTest() {
+afterAll(() => {
+  vi.doUnmock("../../llm/oauth.js");
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../../plugins/provider-external-auth.js");
   vi.resetModules();
-  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } = await import("./store.js"));
-  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+});
+
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
 }
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
   let tmpDir: string;
   let mainAgentDir: string;
   let secondaryAgentDir: string;
@@ -66,11 +76,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.mkdir(mainAgentDir, { recursive: true });
     await fs.mkdir(secondaryAgentDir, { recursive: true });
 
-    // Set environment variables so resolveOpenClawAgentDir() returns mainAgentDir
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
-    await loadFreshOAuthModuleForTest();
+    // Set environment variables so the default agent dir resolves under tmpDir.
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+    setTestEnvValue("OPENCLAW_AGENT_DIR", mainAgentDir);
     clearRuntimeAuthProfileStoreSnapshots();
   });
 
@@ -95,8 +103,29 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     };
   }
 
+  function expectOauthCredentialFields(
+    store: AuthProfileStore,
+    profileId: string,
+    params: { access: string; expires: number },
+  ) {
+    const credential = store.profiles[profileId];
+    expect(credential?.type).toBe("oauth");
+    if (credential?.type !== "oauth") {
+      throw new Error(`Expected OAuth credential for ${profileId}`);
+    }
+    expect(credential.access).toBe(params.access);
+    expect(credential.expires).toBe(params.expires);
+  }
+
   async function writeAuthProfilesStore(agentDir: string, store: AuthProfileStore) {
-    await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store));
+    saveAuthProfileStore(store, agentDir, {
+      filterExternalAuthProfiles: false,
+      syncExternalCli: false,
+    });
+  }
+
+  function readAuthProfilesStore(agentDir: string): AuthProfileStore {
+    return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
   }
 
   async function resolveFromSecondaryAgent(profileId: string) {
@@ -111,6 +140,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   afterEach(async () => {
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    closeOpenClawAgentDatabasesForTest();
     vi.unstubAllGlobals();
 
     envSnapshot.restore();
@@ -128,7 +158,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           provider: "anthropic",
           access: "oauth-token",
           refresh: "refresh-token",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         },
       },
     };
@@ -152,7 +182,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   it("falls back to main agent credentials when secondary agent token is expired and refresh fails", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
     const freshTime = now + 60 * 60 * 1000; // 1 hour from now
@@ -181,25 +211,25 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     // Load the secondary agent's store (will merge with main agent's store)
     // Call resolveApiKeyForProfile with the secondary agent's expired credentials:
-    // refresh fails, then fallback copies main credentials to secondary.
+    // fresh main credentials are used read-through without copying the refresh token.
     const result = await resolveFromSecondaryAgent(profileId);
 
-    expect(result).not.toBeNull();
-    expect(result?.apiKey).toBe("fresh-access-token");
-    expect(result?.provider).toBe("anthropic");
+    if (!result) {
+      throw new Error("Expected fallback OAuth result from main agent");
+    }
+    expect(result.apiKey).toBe("fresh-access-token");
+    expect(result.provider).toBe("anthropic");
 
-    // Verify the credentials were copied to the secondary agent
-    const updatedSecondaryStore = JSON.parse(
-      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
-      access: "fresh-access-token",
-      expires: freshTime,
+    // The secondary store keeps its local credential; inherited OAuth is read-through.
+    const secondaryStore = readAuthProfilesStore(secondaryAgentDir);
+    expectOauthCredentialFields(secondaryStore, profileId, {
+      access: "expired-access-token",
+      expires: expiredTime,
     });
   });
 
   it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const secondaryExpiry = now + 30 * 60 * 1000;
     const mainExpiry = now + 2 * 60 * 60 * 1000;
@@ -228,17 +258,15 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     expect(result?.apiKey).toBe("main-newer-access-token");
 
-    const updatedSecondaryStore = JSON.parse(
-      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
-      access: "main-newer-access-token",
-      expires: mainExpiry,
+    const secondaryStore = readAuthProfilesStore(secondaryAgentDir);
+    expectOauthCredentialFields(secondaryStore, profileId, {
+      access: "secondary-access-token",
+      expires: secondaryExpiry,
     });
   });
 
   it("adopts main token when secondary expires is NaN/malformed", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const mainExpiry = now + 2 * 60 * 60 * 1000;
 
@@ -248,7 +276,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         profileId,
         access: "secondary-stale",
         refresh: "secondary-refresh",
-        expires: NaN,
+        expires: Number.NaN,
       }),
     );
 
@@ -312,7 +340,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("throws error when both secondary and main agent credentials are expired", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
 
@@ -330,5 +358,45 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(
       /OAuth token refresh failed/,
     );
+  });
+
+  it("still falls back to main agent credentials when the refresh-token-reused retry throws", async () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "expired-access-token",
+        refresh: "expired-refresh-token",
+        expires: expiredTime,
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: freshTime,
+      }),
+    );
+
+    getOAuthApiKeyMock
+      .mockImplementationOnce(async () => {
+        throw new Error("refresh_token_reused");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("retry also failed");
+      });
+
+    const result = await resolveFromSecondaryAgent(profileId);
+
+    expect(result?.apiKey).toBe("fresh-access-token");
+    expect(result?.provider).toBe("anthropic");
   });
 });

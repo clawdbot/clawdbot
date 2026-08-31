@@ -1,17 +1,148 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+// Matrix tests cover draft stream plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 
-const loadConfigMock = vi.fn(() => ({}));
-const resolveTextChunkLimitMock = vi.fn<
-  (cfg: unknown, channel: unknown, accountId?: unknown) => number
->(() => 4000);
-const resolveChunkModeMock = vi.fn<(cfg: unknown, channel: unknown, accountId?: unknown) => string>(
-  () => "length",
-);
-const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
-const convertMarkdownTablesMock = vi.fn((text: string) => text);
+const sendModuleMocks = vi.hoisted(() => {
+  const loadConfigMock = vi.fn(() => ({}));
+  const resolveTextChunkLimitMock = vi.fn<
+    (cfg: unknown, channel: unknown, accountId?: unknown) => number
+  >(() => 4000);
+  const resolveChunkModeMock = vi.fn<
+    (cfg: unknown, channel: unknown, accountId?: unknown) => string
+  >(() => "length");
+  const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
+  const convertMarkdownTablesMock = vi.fn((text: string) => text);
+  const prepareMatrixSingleText = vi.fn(
+    (
+      text: string,
+      opts: { cfg?: unknown; accountId?: string; preserveWhitespace?: boolean } = {},
+    ) => {
+      const trimmedText = opts.preserveWhitespace ? text : text.trim();
+      const convertedText = convertMarkdownTablesMock(trimmedText);
+      const singleEventLimit = Math.min(
+        resolveTextChunkLimitMock(opts.cfg ?? {}, "matrix", opts.accountId),
+        4000,
+      );
+      return {
+        trimmedText,
+        convertedText,
+        singleEventLimit,
+        fitsInSingleEvent: convertedText.length <= singleEventLimit,
+      };
+    },
+  );
+  const sendSingleTextMessageMatrix = vi.fn(
+    async (
+      roomId: string,
+      text: string,
+      opts: {
+        client?: {
+          sendMessage: (roomId: string, content: Record<string, unknown>) => Promise<string>;
+        };
+        cfg?: unknown;
+        accountId?: string;
+        msgtype?: string;
+        includeMentions?: boolean;
+        live?: boolean;
+      } = {},
+    ) => {
+      const prepared = prepareMatrixSingleText(text, {
+        cfg: opts.cfg,
+        accountId: opts.accountId,
+        preserveWhitespace: true,
+      });
+      if (!prepared.trimmedText) {
+        throw new Error("Matrix single-message send requires text");
+      }
+      if (!prepared.fitsInSingleEvent) {
+        throw new Error("Matrix single-message text exceeds limit");
+      }
+      const content: Record<string, unknown> = {
+        msgtype: opts.msgtype ?? "m.text",
+        body: prepared.convertedText,
+      };
+      if (opts.live) {
+        content["org.matrix.msc4357.live"] = {};
+      }
+      const eventId = await opts.client?.sendMessage(roomId, content);
+      return {
+        messageId: eventId ?? "unknown",
+        roomId,
+        primaryMessageId: eventId ?? "unknown",
+        receipt: {
+          ...(eventId ? { primaryPlatformMessageId: eventId } : {}),
+          platformMessageIds: eventId ? [eventId] : [],
+          parts: eventId ? [{ platformMessageId: eventId, kind: "text" as const, index: 0 }] : [],
+          sentAt: 123,
+        },
+      };
+    },
+  );
+  const editMessageMatrix = vi.fn(
+    async (
+      roomId: string,
+      originalEventId: string,
+      newText: string,
+      opts: {
+        client?: {
+          sendMessage: (roomId: string, content: Record<string, unknown>) => Promise<string>;
+        };
+        msgtype?: string;
+        live?: boolean;
+      } = {},
+    ) => {
+      const convertedText = convertMarkdownTablesMock(newText);
+      const newContent: Record<string, unknown> = {
+        msgtype: opts.msgtype ?? "m.text",
+        body: convertedText,
+      };
+      if (opts.live) {
+        newContent["org.matrix.msc4357.live"] = {};
+      }
+      const content: Record<string, unknown> = {
+        ...newContent,
+        body: `* ${convertedText}`,
+        "m.new_content": newContent,
+        "m.relates_to": {
+          rel_type: "m.replace",
+          event_id: originalEventId,
+        },
+      };
+      if (opts.live) {
+        content["org.matrix.msc4357.live"] = {};
+      }
+      return (await opts.client?.sendMessage(roomId, content)) ?? "";
+    },
+  );
+  return {
+    chunkMarkdownTextWithModeMock,
+    convertMarkdownTablesMock,
+    editMessageMatrix,
+    loadConfigMock,
+    prepareMatrixSingleText,
+    resolveChunkModeMock,
+    resolveTextChunkLimitMock,
+    sendSingleTextMessageMatrix,
+  };
+});
+
+const {
+  chunkMarkdownTextWithModeMock,
+  convertMarkdownTablesMock,
+  loadConfigMock,
+  resolveChunkModeMock,
+  resolveTextChunkLimitMock,
+} = sendModuleMocks;
+
+vi.mock("./send.js", () => ({
+  editMessageMatrix: sendModuleMocks.editMessageMatrix,
+  prepareMatrixSingleText: sendModuleMocks.prepareMatrixSingleText,
+  sendSingleTextMessageMatrix: sendModuleMocks.sendSingleTextMessageMatrix,
+}));
 const runtimeStub = {
-  config: { loadConfig: () => loadConfigMock() },
+  config: {
+    current: () => loadConfigMock(),
+  },
   channel: {
     text: {
       resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
@@ -45,6 +176,18 @@ function createMockClient() {
   } as unknown as import("./sdk.js").MatrixClient;
 }
 
+function sentContentAt(callIndex: number): Record<string, unknown> {
+  const content = sendMessageMock.mock.calls[callIndex]?.[1];
+  if (!content || typeof content !== "object") {
+    throw new Error(`Expected sent content at call ${callIndex}`);
+  }
+  return content as Record<string, unknown>;
+}
+
+function expectLogContaining(log: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
+}
+
 beforeAll(async () => {
   const runtimeModule = await import("../runtime.js");
   runtimeModule.setMatrixRuntime(runtimeStub);
@@ -63,13 +206,15 @@ describe("createMatrixDraftStream", () => {
       .mockReset()
       .mockImplementation((text: string) => (text ? [text] : []));
     convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
+    sendModuleMocks.editMessageMatrix.mockClear();
+    sendModuleMocks.sendSingleTextMessageMatrix.mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("sends a new message on first update", async () => {
+  it("sends a normal text preview on first partial update", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
@@ -80,14 +225,76 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sentContentAt(0).msgtype).toBe("m.text");
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
+      includeMentions: false,
+      live: true,
+      msgtype: "m.text",
+    });
     expect(stream.eventId()).toBe("$evt1");
   });
 
-  it("edits the message on subsequent updates", async () => {
+  it("tracks the provider-visible prepared draft content", async () => {
+    convertMarkdownTablesMock.mockImplementation((text: string) => `prepared:${text}`);
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+    });
+
+    stream.update("raw table");
+    await stream.flush();
+
+    expect(stream.content()).toBe("prepared:raw table");
+  });
+
+  it("preserves indented code through draft sends, edits, and final comparisons", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+    const firstMarkdown = "    @room";
+
+    stream.update(`${firstMarkdown}  `);
+    await stream.flush();
+
+    expect(sentContentAt(0).body).toBe(firstMarkdown);
+    expect(stream.content()).toBe(firstMarkdown);
+    expect(stream.matchesPreparedText(`${firstMarkdown}  `)).toBe(true);
+    expect(stream.matchesPreparedText("@room")).toBe(false);
+
+    vi.advanceTimersByTime(1000);
+    const editedMarkdown = "    @alice:example.org";
+    stream.update(editedMarkdown);
+    await stream.flush();
+
+    expect(sendModuleMocks.editMessageMatrix.mock.lastCall?.[2]).toBe(editedMarkdown);
+    expect(stream.content()).toBe(editedMarkdown);
+  });
+
+  it("sends quiet preview notices when quiet mode is enabled", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sentContentAt(0).msgtype).toBe("m.notice");
+    expect(sentContentAt(0)).not.toHaveProperty("m.mentions");
+  });
+
+  it("edits the message on subsequent quiet updates", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Hello");
@@ -102,13 +309,19 @@ describe("createMatrixDraftStream", () => {
 
     // First call = initial send, second call = edit (both go through sendMessage)
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sentContentAt(1).msgtype).toBe("m.notice");
+    expect(sentContentAt(1)["m.new_content"]).toEqual({
+      msgtype: "m.notice",
+      body: "Hello world",
+    });
   });
 
-  it("coalesces rapid updates within throttle window", async () => {
+  it("coalesces rapid quiet updates within throttle window", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("A");
@@ -119,9 +332,12 @@ describe("createMatrixDraftStream", () => {
     // First update fires immediately (fresh throttle window), then AB/ABC
     // coalesce into a single edit with the latest text.
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ body: "A" });
+    expect(sentContentAt(0).body).toBe("A");
     // Edit uses "* <text>" prefix per Matrix m.replace spec.
-    expect(sendMessageMock.mock.calls[1][1]).toMatchObject({ body: "* ABC" });
+    expect(sentContentAt(1).body).toBe("* ABC");
+    expect(sentContentAt(0).msgtype).toBe("m.notice");
+    expect(sentContentAt(1).msgtype).toBe("m.notice");
+    expect(sentContentAt(1)["m.new_content"]).toEqual({ msgtype: "m.notice", body: "ABC" });
   });
 
   it("skips no-op updates", async () => {
@@ -171,6 +387,56 @@ describe("createMatrixDraftStream", () => {
     expect(eventId).toBe("$evt1");
   });
 
+  it("stop does not finalize live drafts on its own", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls.at(0)?.[1]).toHaveProperty("org.matrix.msc4357.live");
+  });
+
+  it("finalizeLive clears the live marker at most once", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    await stream.finalizeLive();
+    await stream.finalizeLive();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageMock.mock.calls.at(1)?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
+  });
+
+  it("marks live finalize failures for normal final delivery fallback", async () => {
+    sendMessageMock.mockResolvedValueOnce("$evt1").mockRejectedValueOnce(new Error("rate limited"));
+
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "partial",
+    });
+
+    stream.update("Hello");
+    await stream.stop();
+
+    await expect(stream.finalizeLive()).resolves.toBe(false);
+    expect(stream.mustDeliverFinalNormally()).toBe(true);
+  });
+
   it("reset allows reuse for next block", async () => {
     sendMessageMock.mockResolvedValueOnce("$first").mockResolvedValueOnce("$second");
 
@@ -178,6 +444,7 @@ describe("createMatrixDraftStream", () => {
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Block 1");
@@ -207,7 +474,7 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     // Should have logged the failure
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("send/edit failed"));
+    expectLogContaining(log, "send/edit failed");
 
     vi.advanceTimersByTime(1000);
 
@@ -254,7 +521,7 @@ describe("createMatrixDraftStream", () => {
 
     stream.update("Hello world");
     await stream.flush();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("send/edit failed"));
+    expectLogContaining(log, "send/edit failed");
 
     vi.advanceTimersByTime(1000);
 
@@ -278,7 +545,7 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({ body: "line 1\nline 2" });
+    expect(sentContentAt(0).body).toBe("line 1\nline 2");
   });
 
   it("falls back to normal delivery when preview text exceeds one Matrix event", async () => {
@@ -296,10 +563,25 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.eventId()).toBeUndefined();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("preview exceeded single-event limit"),
-    );
+    expectLogContaining(log, "preview exceeded single-event limit");
+  });
+
+  it("discardPending cancels pending updates without creating another preview event", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+
+    stream.update("First draft");
+    await stream.flush();
+    stream.update("Pending draft");
+    await stream.discardPending();
+    await stream.flush();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendModuleMocks.editMessageMatrix).not.toHaveBeenCalled();
+    expect(stream.eventId()).toBe("$evt1");
   });
 
   it("uses converted Matrix text when checking the single-event preview limit", async () => {
@@ -317,9 +599,6 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("preview exceeded single-event limit"),
-    );
+    expectLogContaining(log, "preview exceeded single-event limit");
   });
 });

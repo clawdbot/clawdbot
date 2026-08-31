@@ -1,7 +1,10 @@
+// Matrix tests cover inbound dedupe plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LogService } from "../sdk/logger.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
 describe("Matrix inbound event dedupe", () => {
@@ -9,138 +12,82 @@ describe("Matrix inbound event dedupe", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
+    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  function createStoragePath(): string {
+  function createStateEnv(): NodeJS.ProcessEnv {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-inbound-dedupe-"));
     tempDirs.push(dir);
-    return path.join(dir, "inbound-dedupe.json");
+    return { ...process.env, OPENCLAW_STATE_DIR: dir };
   }
 
-  const auth = {
-    accountId: "ops",
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    accessToken: "token",
-    deviceId: "DEVICE",
-  } as const;
+  const auth = { accountId: "ops" } as const;
+  const event = { roomId: "!room:example.org", eventId: "$event-1" } as const;
 
   it("persists committed events across restarts", async () => {
-    const storagePath = createStoragePath();
-    const first = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-    });
+    const env = createStateEnv();
+    const first = createMatrixInboundEventDeduper({ auth, env });
+    const firstClaim = await first.claim(event);
+    expect(firstClaim.kind).toBe("claimed");
+    if (firstClaim.kind === "claimed") {
+      await firstClaim.handle.commit();
+    }
 
-    expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(true);
-    await first.commitEvent({
-      roomId: "!room:example.org",
-      eventId: "$event-1",
-    });
-    await first.stop();
-
-    const second = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-    });
-    expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(false);
+    // A fresh instance has an empty memory layer, so the duplicate verdict
+    // must come from the persisted plugin-state SQLite rows.
+    const second = createMatrixInboundEventDeduper({ auth, env });
+    await expect(second.claim(event)).resolves.toEqual({ kind: "duplicate" });
   });
 
-  it("does not persist released pending claims", async () => {
-    const storagePath = createStoragePath();
-    const first = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-    });
+  it("scopes dedupe state per account", async () => {
+    const env = createStateEnv();
+    const ops = createMatrixInboundEventDeduper({ auth: { accountId: "ops" }, env });
+    const opsClaim = await ops.claim(event);
+    expect(opsClaim.kind).toBe("claimed");
+    if (opsClaim.kind === "claimed") {
+      await opsClaim.handle.commit();
+    }
 
-    expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
-    first.releaseEvent({ roomId: "!room:example.org", eventId: "$event-2" });
-    await first.stop();
-
-    const second = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-    });
-    expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
+    const home = createMatrixInboundEventDeduper({ auth: { accountId: "home" }, env });
+    await expect(home.claim(event)).resolves.toMatchObject({ kind: "claimed" });
   });
 
-  it("prunes expired and overflowed entries on load", async () => {
-    const storagePath = createStoragePath();
-    fs.writeFileSync(
-      storagePath,
-      JSON.stringify({
-        version: 1,
-        entries: [
-          { key: "!room:example.org|$old", ts: 10 },
-          { key: "!room:example.org|$keep-1", ts: 90 },
-          { key: "!room:example.org|$keep-2", ts: 95 },
-          { key: "!room:example.org|$keep-3", ts: 100 },
-        ],
-      }),
-      "utf8",
+  it("fails open for events without usable identifiers", async () => {
+    const deduper = createMatrixInboundEventDeduper({ auth, env: createStateEnv() });
+
+    await expect(deduper.claim({ roomId: " ", eventId: "$x" })).resolves.toEqual({
+      kind: "invalid",
+    });
+    await expect(deduper.claim({ roomId: " ", eventId: "$x" })).resolves.toEqual({
+      kind: "invalid",
+    });
+  });
+
+  it("keeps committed events in memory when plugin-state persistence fails", async () => {
+    const warnSpy = vi.spyOn(LogService, "warn").mockImplementation(() => {});
+    const blockedDir = createStateEnv().OPENCLAW_STATE_DIR as string;
+    // A regular file where the state dir should be makes every SQLite open fail.
+    const filePath = path.join(blockedDir, "not-a-dir");
+    fs.writeFileSync(filePath, "x", "utf8");
+    const deduper = createMatrixInboundEventDeduper({
+      auth,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(filePath, "nested") },
+    });
+
+    const claim = await deduper.claim(event);
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error(`expected claimed result, received ${claim.kind}`);
+    }
+    await expect(claim.handle.commit()).resolves.toBe(true);
+    await expect(deduper.claim(event)).resolves.toEqual({ kind: "duplicate" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "MatrixInboundDedupe",
+      "Matrix inbound dedupe persistence failed:",
+      expect.anything(),
     );
-
-    const deduper = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-      ttlMs: 20,
-      maxEntries: 2,
-      nowMs: () => 100,
-    });
-
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$old" })).toBe(true);
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$keep-1" })).toBe(true);
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$keep-2" })).toBe(false);
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$keep-3" })).toBe(false);
-  });
-
-  it("retains replayed backlog events based on processing time", async () => {
-    const storagePath = createStoragePath();
-    let now = 100;
-    const first = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-      ttlMs: 20,
-      nowMs: () => now,
-    });
-
-    expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(true);
-    await first.commitEvent({
-      roomId: "!room:example.org",
-      eventId: "$backlog",
-    });
-    await first.stop();
-
-    now = 110;
-    const second = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath,
-      ttlMs: 20,
-      nowMs: () => now,
-    });
-    expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
-  });
-
-  it("treats stop persistence failures as best-effort cleanup", async () => {
-    const blockingPath = createStoragePath();
-    fs.writeFileSync(blockingPath, "blocking file", "utf8");
-    const deduper = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      storagePath: path.join(blockingPath, "nested", "inbound-dedupe.json"),
-    });
-
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$persist-fail" })).toBe(
-      true,
-    );
-    await deduper.commitEvent({
-      roomId: "!room:example.org",
-      eventId: "$persist-fail",
-    });
-
-    await expect(deduper.stop()).resolves.toBeUndefined();
   });
 });

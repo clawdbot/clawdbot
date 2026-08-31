@@ -1,3 +1,4 @@
+// Context script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import ts from "typescript";
@@ -9,7 +10,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function normalizePath(filePath: string): string {
+function normalizePath(filePath: string): string {
   return filePath.split(path.sep).join(path.posix.sep);
 }
 
@@ -41,7 +42,7 @@ export function createProgramContext(
   };
 }
 
-export function comparableSymbol(
+function comparableSymbol(
   checker: ts.TypeChecker,
   symbol: ts.Symbol | undefined,
 ): ts.Symbol | undefined {

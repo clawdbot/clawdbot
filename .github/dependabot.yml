@@ -17,7 +17,10 @@ updates:
     schedule:
       interval: daily
     cooldown:
-      default-days: 2
+      default-days: 7
+      exclude:
+        - "@openai/codex"
+        - "@openai/codex-*"
     groups:
       production:
         dependency-type: production
@@ -29,7 +32,7 @@ updates:
         update-types:
           - minor
           - patch
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 20
     registries:
       - npm-npmjs
 
@@ -65,9 +68,25 @@ updates:
           - patch
     open-pull-requests-limit: 5
 
-  # Swift Package Manager - shared MoltbotKit
+  # Swift Package Manager - shared OpenClawKit
   - package-ecosystem: swift
-    directory: /apps/shared/MoltbotKit
+    directory: /apps/shared/OpenClawKit
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 2
+    groups:
+      swift-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  # Swift Package Manager - isolated MLX TTS helper
+  - package-ecosystem: swift
+    directory: /apps/macos-mlx-tts
     schedule:
       interval: daily
     cooldown:
@@ -83,7 +102,7 @@ updates:
 
   # Swift Package Manager - Swabble
   - package-ecosystem: swift
-    directory: /Swabble
+    directory: /apps/swabble
     schedule:
       interval: daily
     cooldown:

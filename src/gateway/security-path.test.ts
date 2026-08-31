@@ -1,11 +1,15 @@
+// Covers gateway protected-path canonicalization for repeated encoding,
+// malformed encodings, dot segments, and plugin route prefixes.
 import { describe, expect, it } from "vitest";
+import { canonicalizePathForSecurity } from "./security-path.js";
 import {
-  PROTECTED_PLUGIN_ROUTE_PREFIXES,
-  buildCanonicalPathCandidates,
-  canonicalizePathForSecurity,
-  isPathProtectedByPrefixes,
-  isProtectedPluginRoutePath,
-} from "./security-path.js";
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+} from "./server/plugins-http/path-context.js";
+
+function isProtectedPluginRoutePath(pathname: string): boolean {
+  return isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname));
+}
 
 function buildRepeatedEncodedSlashPath(depth: number): string {
   let encodedSlash = "%2f";
@@ -17,16 +21,14 @@ function buildRepeatedEncodedSlashPath(depth: number): string {
 
 describe("security-path canonicalization", () => {
   it("canonicalizes decoded case/slash variants", () => {
-    expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual(
-      expect.objectContaining({
-        canonicalPath: "/api/channels/nostr/default/profile",
-        candidates: ["/api/channels/nostr/default/profile"],
-        malformedEncoding: false,
-        decodePasses: 0,
-        decodePassLimitReached: false,
-        rawNormalizedPath: "/api/channels/nostr/default/profile",
-      }),
-    );
+    expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual({
+      canonicalPath: "/api/channels/nostr/default/profile",
+      candidates: ["/api/channels/nostr/default/profile"],
+      malformedEncoding: false,
+      decodePasses: 0,
+      decodePassLimitReached: false,
+      rawNormalizedPath: "/api/channels/nostr/default/profile",
+    });
     const encoded = canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile");
     expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
     expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");
@@ -50,19 +52,19 @@ describe("security-path canonicalization", () => {
     expect(canonicalizePathForSecurity("/api/channels%zz").malformedEncoding).toBe(true);
   });
 
-  it("resolves 4x encoded slash path variants to protected channel routes", () => {
+  it("resolves deeply encoded path separators and protects the route", () => {
     const deeplyEncoded = "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
-    const canonical = canonicalizePathForSecurity(deeplyEncoded);
-    expect(canonical.canonicalPath).toBe("/api/channels/nostr/default/profile");
-    expect(canonical.decodePasses).toBeGreaterThanOrEqual(4);
+    const result = canonicalizePathForSecurity(deeplyEncoded);
+    expect(result.canonicalPath).toBe("/api/channels/nostr/default/profile");
+    expect(result.decodePasses).toBeGreaterThanOrEqual(4);
     expect(isProtectedPluginRoutePath(deeplyEncoded)).toBe(true);
   });
 
-  it("flags decode depth overflow and fails closed for protected prefix checks", () => {
+  it("reports decode depth overflow and fails closed", () => {
     const excessiveDepthPath = buildRepeatedEncodedSlashPath(40);
-    const candidates = buildCanonicalPathCandidates(excessiveDepthPath, 32);
-    expect(candidates.decodePassLimitReached).toBe(true);
-    expect(candidates.malformedEncoding).toBe(false);
+    const result = canonicalizePathForSecurity(excessiveDepthPath);
+    expect(result.decodePassLimitReached).toBe(true);
+    expect(result.malformedEncoding).toBe(false);
     expect(isProtectedPluginRoutePath(excessiveDepthPath)).toBe(true);
   });
 });
@@ -83,7 +85,6 @@ describe("security-path protected-prefix matching", () => {
   for (const path of channelVariants) {
     it(`protects plugin channel path variant: ${path}`, () => {
       expect(isProtectedPluginRoutePath(path)).toBe(true);
-      expect(isPathProtectedByPrefixes(path, PROTECTED_PLUGIN_ROUTE_PREFIXES)).toBe(true);
     });
   }
 

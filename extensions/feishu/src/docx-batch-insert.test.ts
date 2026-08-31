@@ -1,3 +1,4 @@
+// Feishu tests cover docx batch insert plugin behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { describe, expect, it, vi } from "vitest";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
@@ -7,6 +8,9 @@ type InsertBlocksClient = Parameters<typeof insertBlocksInBatches>[0];
 type DocxDescendantCreate = Lark.Client["docx"]["documentBlockDescendant"]["create"];
 type DocxDescendantCreateParams = Parameters<DocxDescendantCreate>[0];
 type DocxDescendantCreateResponse = Awaited<ReturnType<DocxDescendantCreate>>;
+type RequiredDocxDescendantCreateParams = NonNullable<DocxDescendantCreateParams> & {
+  data: NonNullable<NonNullable<DocxDescendantCreateParams>["data"]>;
+};
 
 function createDocxDescendantClient(create: DocxDescendantCreate): InsertBlocksClient {
   return {
@@ -22,13 +26,45 @@ function createCountingIterable<T>(values: T[]) {
   let iterations = 0;
   return {
     values: {
-      [Symbol.iterator]: function* () {
+      *[Symbol.iterator]() {
         iterations += 1;
         yield* values;
       },
     },
     getIterations: () => iterations,
   };
+}
+
+function createSuccessfulDocxDescendantCreateMock() {
+  return vi.fn(
+    async (params?: DocxDescendantCreateParams): Promise<DocxDescendantCreateResponse> => ({
+      code: 0,
+      data: {
+        children: (params?.data?.children_id ?? []).map((id) => ({
+          block_id: id,
+          block_type: 2,
+        })),
+      },
+    }),
+  );
+}
+
+function createCallParams(
+  createMock: ReturnType<typeof createSuccessfulDocxDescendantCreateMock>,
+  index = 0,
+): RequiredDocxDescendantCreateParams {
+  const call = createMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected DOCX descendant create call ${index}`);
+  }
+  const params = call.at(0);
+  if (!params) {
+    throw new Error(`Expected DOCX descendant create params ${index}`);
+  }
+  if (!params.data) {
+    throw new Error(`Expected DOCX descendant create data ${index}`);
+  }
+  return params as RequiredDocxDescendantCreateParams;
 }
 
 describe("insertBlocksInBatches", () => {
@@ -39,17 +75,7 @@ describe("insertBlocksInBatches", () => {
       block_type: 2,
     }));
     const counting = createCountingIterable(blocks);
-    const createMock = vi.fn(
-      async (params?: DocxDescendantCreateParams): Promise<DocxDescendantCreateResponse> => ({
-        code: 0,
-        data: {
-          children: (params?.data?.children_id ?? []).map((id) => ({
-            block_id: id,
-            block_type: 2,
-          })),
-        },
-      }),
-    );
+    const createMock = createSuccessfulDocxDescendantCreateMock();
     const client = createDocxDescendantClient((params) => createMock(params));
 
     const result = await insertBlocksInBatches(
@@ -61,23 +87,13 @@ describe("insertBlocksInBatches", () => {
 
     expect(counting.getIterations()).toBe(1);
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(createMock.mock.calls[0]?.[0]?.data.children_id).toHaveLength(BATCH_SIZE);
-    expect(createMock.mock.calls[1]?.[0]?.data.children_id).toHaveLength(200);
+    expect(createCallParams(createMock).data.children_id).toHaveLength(BATCH_SIZE);
+    expect(createCallParams(createMock, 1).data.children_id).toHaveLength(200);
     expect(result.children).toHaveLength(blockCount);
   });
 
   it("keeps nested descendants grouped with their root blocks", async () => {
-    const createMock = vi.fn(
-      async (params?: DocxDescendantCreateParams): Promise<DocxDescendantCreateResponse> => ({
-        code: 0,
-        data: {
-          children: (params?.data?.children_id ?? []).map((id) => ({
-            block_id: id,
-            block_type: 2,
-          })),
-        },
-      }),
-    );
+    const createMock = createSuccessfulDocxDescendantCreateMock();
     const client = createDocxDescendantClient((params) => createMock(params));
     const blocks: FeishuDocxBlock[] = [
       { block_id: "root_a", block_type: 1, children: ["child_a"] },
@@ -89,9 +105,13 @@ describe("insertBlocksInBatches", () => {
     await insertBlocksInBatches(client, "doc_1", blocks, ["root_a", "root_b"]);
 
     expect(createMock).toHaveBeenCalledTimes(1);
-    expect(createMock.mock.calls[0]?.[0]?.data.children_id).toEqual(["root_a", "root_b"]);
-    expect(
-      createMock.mock.calls[0]?.[0]?.data.descendants.map((block) => block.block_id ?? ""),
-    ).toEqual(["root_a", "child_a", "root_b", "child_b"]);
+    const createParams = createCallParams(createMock);
+    expect(createParams.data.children_id).toEqual(["root_a", "root_b"]);
+    expect(createParams.data.descendants.map((block) => block.block_id ?? "")).toEqual([
+      "root_a",
+      "child_a",
+      "root_b",
+      "child_b",
+    ]);
   });
 });

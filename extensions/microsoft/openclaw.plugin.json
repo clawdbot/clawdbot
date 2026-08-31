@@ -1,7 +1,11 @@
 {
   "id": "microsoft",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "contracts": {
-    "speechProviders": ["microsoft"]
+    "speechProviders": ["microsoft", "edge"]
   },
   "configSchema": {
     "type": "object",

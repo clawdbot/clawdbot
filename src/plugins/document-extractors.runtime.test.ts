@@ -1,0 +1,110 @@
+// Covers document extractor runtime hooks supplied by plugins.
+import { describe, expect, it, vi } from "vitest";
+import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+
+const mocks = vi.hoisted(() => ({
+  loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
+    plugins: [
+      {
+        id: "document-extract",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: [],
+        legacyPluginIds: [],
+        contracts: { documentExtractors: ["pdf"] },
+      },
+      {
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: ["openai", "openai"],
+        legacyPluginIds: [],
+        contracts: {},
+      },
+    ],
+  })),
+}));
+
+vi.mock("./document-extractor-public-artifacts.js", () => ({
+  loadBundledDocumentExtractorEntriesFromDir: vi.fn(
+    ({ dirName }: { dirName: string; pluginId: string }) =>
+      dirName === "document-extract"
+        ? [
+            {
+              id: "pdf",
+              label: "PDF",
+              mimeTypes: ["application/pdf"],
+              pluginId: "document-extract",
+              extract: vi.fn(),
+            },
+          ]
+        : null,
+  ),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: vi.fn(
+    (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+  ),
+}));
+
+vi.mock("./manifest-registry.js", () => ({
+  resolveManifestContractOwnerPluginId: vi.fn(() => undefined),
+}));
+
+describe("resolvePluginDocumentExtractors", () => {
+  it("reuses one manifest registry pass for compat and enabled bundled extractors", () => {
+    vi.mocked(loadPluginMetadataSnapshot).mockClear();
+
+    expect(resolvePluginDocumentExtractors().map((extractor) => extractor.id)).toEqual(["pdf"]);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("respects global plugin disablement", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            enabled: false,
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not expand an operator plugin allowlist", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            allow: ["openai"],
+          },
+        },
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope with an operator plugin allowlist", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            allow: ["document-extract"],
+          },
+        },
+        onlyPluginIds: [],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope without an operator plugin allowlist", () => {
+    expect(resolvePluginDocumentExtractors({ onlyPluginIds: [] })).toStrictEqual([]);
+  });
+});

@@ -7,26 +7,28 @@ export {
   danger,
   info,
   isVerbose,
-  isYes,
   logVerbose,
-  logVerboseConsole,
-  setVerbose,
-  setYes,
   shouldLogVerbose,
   success,
   warn,
 } from "../globals.js";
-export { sleep } from "../utils.js";
-export { withTimeout } from "../utils/with-timeout.js";
+export { sleep } from "../utils/sleep.js";
+
 export { isTruthyEnvValue } from "../infra/env.js";
-export * from "../logging.js";
+export { getChildLogger, resetLogger, setLoggerOverride, toPinoLikeLogger } from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
-export { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+export { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+export type { BackoffPolicy } from "../infra/backoff.js";
 export {
   formatDurationPrecise,
   formatDurationSeconds,
 } from "../infra/format-time/format-duration.ts";
 export { retryAsync } from "../infra/retry.js";
 export { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
-export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+export {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+} from "../infra/unhandled-rejections.js";
 export { isWSL2Sync } from "../infra/wsl.js";
+
+export { createSubsystemLogger } from "../logging/subsystem.js";

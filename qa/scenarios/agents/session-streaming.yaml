@@ -1,0 +1,27 @@
+title: Agent session streaming
+
+scenario:
+  id: session-streaming
+  surface: agent-runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    primary:
+      - agent-runtime.session-streaming
+  objective: Verify a generic agent RPC streams ordered Gateway events and persists one final assistant transcript message without channel delivery.
+  successCriteria:
+    - One real child Gateway runs an embedded agent turn against a deterministic paced streaming provider.
+    - Every assistant delta carries the accepted run and session identity with strictly increasing sequence numbers.
+    - Exactly one terminal lifecycle event follows streamed assistant content.
+    - Reassembled deltas equal the single persisted assistant transcript entry.
+    - No channel transport message is emitted.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/infra/agent-events.ts
+    - src/gateway/server-chat.ts
+    - test/e2e/qa-lab/runtime/agent-session-streaming.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/agent-session-streaming.e2e.test.ts
+    summary: Run one real child Gateway and paced loopback provider while an authenticated operator captures ordered agent stream events and the canonical transcript.

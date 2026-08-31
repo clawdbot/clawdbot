@@ -6,20 +6,35 @@
  */
 
 import fs from "node:fs";
-import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openRootFile } from "../infra/boundary-file-read.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { shouldIncludeHook } from "./config.js";
+import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
+import { resolveHookKey } from "./frontmatter.js";
 import { buildImportUrl } from "./import-url.js";
+import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
-import { registerInternalHook } from "./internal-hooks.js";
-import { getLegacyInternalHookHandlers } from "./legacy-config.js";
+import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
+const LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY = Symbol.for(
+  "openclaw.loadedInternalHookRegistrations",
+);
+const loadedHookRegistrations = resolveGlobalSingleton<
+  Array<{ event: string; handler: InternalHookHandler }>
+>(
+  LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY,
+  () => [],
+  () => resetLoadedInternalHooks(),
+  "plugin-registry",
+);
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);
@@ -39,12 +54,20 @@ function maybeWarnTrustedHookSource(source: string): void {
   }
 }
 
+function resetLoadedInternalHooks(): void {
+  while (loadedHookRegistrations.length > 0) {
+    const registration = loadedHookRegistrations.pop();
+    if (!registration) {
+      continue;
+    }
+    unregisterInternalHook(registration.event, registration.handler);
+  }
+}
+
 /**
  * Load and register all hook handlers
  *
- * Loads hooks from both:
- * 1. Directory-based discovery (bundled, managed, workspace)
- * 2. Legacy config handlers (backwards compatibility)
+ * Loads hooks from directory-based discovery (bundled, managed, workspace).
  *
  * @param cfg - OpenClaw configuration
  * @param workspaceDir - Workspace directory for hook discovery
@@ -52,7 +75,7 @@ function maybeWarnTrustedHookSource(source: string): void {
  *
  * @example
  * ```ts
- * const config = await loadConfig();
+ * const config = await getRuntimeConfig();
  * const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
  * const count = await loadInternalHooks(config, workspaceDir);
  * console.log(`Loaded ${count} hook handlers`);
@@ -66,14 +89,15 @@ export async function loadInternalHooks(
     bundledHooksDir?: string;
   },
 ): Promise<number> {
-  // Hooks are on by default; only skip when explicitly disabled.
-  if (cfg.hooks?.internal?.enabled === false) {
+  resetLoadedInternalHooks();
+
+  if (!hasConfiguredInternalHooks(cfg)) {
     return 0;
   }
 
   let loadedCount = 0;
+  const configuredNames = resolveConfiguredInternalHookNames(cfg);
 
-  // 1. Load hooks from directories (new system)
   try {
     const hookEntries = loadWorkspaceHookEntries(workspaceDir, {
       config: cfg,
@@ -82,18 +106,26 @@ export async function loadInternalHooks(
     });
 
     // Filter by eligibility
-    const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
+    const eligible = hookEntries.filter((entry) => {
+      if (configuredNames) {
+        const hookKey = resolveHookKey(entry.hook.name, entry);
+        if (!configuredNames.has(entry.hook.name) && !configuredNames.has(hookKey)) {
+          return false;
+        }
+      }
+      return shouldIncludeHook({ entry, config: cfg });
+    });
 
     for (const entry of eligible) {
       try {
-        const hookBaseDir = resolveExistingRealpath(entry.hook.baseDir);
+        const hookBaseDir = safeRealpathSync(entry.hook.baseDir);
         if (!hookBaseDir) {
           log.error(
             `Hook '${safeLogValue(entry.hook.name)}' base directory is no longer readable: ${safeLogValue(entry.hook.baseDir)}`,
           );
           continue;
         }
-        const opened = await openBoundaryFile({
+        const opened = await openRootFile({
           absolutePath: entry.hook.handlerPath,
           rootPath: hookBaseDir,
           boundaryLabel: "hook directory",
@@ -133,8 +165,23 @@ export async function loadInternalHooks(
           continue;
         }
 
+        // Core never emits keys outside the known set, so these are almost
+        // always typos that leave the hook silently dead (a plugin could emit
+        // custom keys via plugin-sdk/hook-runtime, hence advisory: warn but
+        // still register).
+        const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
+        if (unknownEvents.length > 0) {
+          log.warn(
+            `Hook '${safeLogValue(entry.hook.name)}' subscribes to event${unknownEvents.length === 1 ? "" : "s"} ` +
+              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} not emitted by OpenClaw core — ` +
+              `likely a typo; unless a plugin emits it, the hook never fires. ` +
+              `Known events: https://docs.openclaw.ai/automation/hooks`,
+          );
+        }
+
         for (const event of events) {
           registerInternalHook(event, handler);
+          loadedHookRegistrations.push({ event, handler });
         }
 
         log.debug(
@@ -143,107 +190,13 @@ export async function loadInternalHooks(
         loadedCount++;
       } catch (err) {
         log.error(
-          `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
+          `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(err))}`,
         );
       }
     }
   } catch (err) {
-    log.error(
-      `Failed to load directory-based hooks: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
-    );
-  }
-
-  // 2. Load legacy config handlers (backwards compatibility)
-  const handlers = getLegacyInternalHookHandlers(cfg);
-  for (const handlerConfig of handlers) {
-    try {
-      // Legacy handler paths: keep them workspace-relative.
-      const rawModule = handlerConfig.module.trim();
-      if (!rawModule) {
-        log.error("Handler module path is empty");
-        continue;
-      }
-      if (path.isAbsolute(rawModule)) {
-        log.error(
-          `Handler module path must be workspace-relative (got absolute path): ${safeLogValue(rawModule)}`,
-        );
-        continue;
-      }
-      const baseDir = path.resolve(workspaceDir);
-      const modulePath = path.resolve(baseDir, rawModule);
-      const baseDirReal = resolveExistingRealpath(baseDir);
-      if (!baseDirReal) {
-        log.error(
-          `Workspace directory is no longer readable while loading hooks: ${safeLogValue(baseDir)}`,
-        );
-        continue;
-      }
-      const modulePathSafe = resolveExistingRealpath(modulePath);
-      if (!modulePathSafe) {
-        log.error(
-          `Handler module path could not be resolved with realpath: ${safeLogValue(rawModule)}`,
-        );
-        continue;
-      }
-      const rel = path.relative(baseDirReal, modulePathSafe);
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-        log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
-        continue;
-      }
-      const opened = await openBoundaryFile({
-        absolutePath: modulePathSafe,
-        rootPath: baseDirReal,
-        boundaryLabel: "workspace directory",
-      });
-      if (!opened.ok) {
-        log.error(
-          `Handler module path fails boundary checks under workspaceDir: ${safeLogValue(rawModule)}`,
-        );
-        continue;
-      }
-      const safeModulePath = opened.path;
-      fs.closeSync(opened.fd);
-      log.warn(
-        `Loading legacy internal hook module from workspace path ${safeLogValue(rawModule)}. Legacy hook modules are trusted local code.`,
-      );
-
-      // Legacy handlers are always workspace-relative, so use mtime-based cache busting
-      const importUrl = buildImportUrl(safeModulePath, "openclaw-workspace");
-      const mod = (await import(importUrl)) as Record<string, unknown>;
-
-      // Get the handler function
-      const exportName = handlerConfig.export ?? "default";
-      const handler = resolveFunctionModuleExport<InternalHookHandler>({
-        mod,
-        exportName,
-      });
-
-      if (!handler) {
-        log.error(
-          `Handler '${safeLogValue(exportName)}' from ${safeLogValue(modulePath)} is not a function`,
-        );
-        continue;
-      }
-
-      registerInternalHook(handlerConfig.event, handler);
-      log.debug(
-        `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
-      );
-      loadedCount++;
-    } catch (err) {
-      log.error(
-        `Failed to load hook handler from ${safeLogValue(handlerConfig.module)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
-      );
-    }
+    log.error(`Failed to load directory-based hooks: ${safeLogValue(formatErrorMessage(err))}`);
   }
 
   return loadedCount;
-}
-
-function resolveExistingRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
 }

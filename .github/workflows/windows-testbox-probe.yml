@@ -1,0 +1,472 @@
+name: Windows Testbox Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Git ref or SHA to check out"
+        required: false
+        default: "main"
+        type: string
+      runner_label:
+        description: "Windows runner label"
+        required: false
+        default: "blacksmith-16vcpu-windows-2025"
+        type: choice
+        options:
+          - blacksmith-16vcpu-windows-2025
+          - blacksmith-32vcpu-windows-2025
+          - windows-2025
+      keepalive_minutes:
+        description: "Minutes to keep the Windows runner alive for SSH inspection"
+        required: false
+        default: "20"
+        type: string
+      require_wsl2:
+        description: "Fail the run when WSL2 is unavailable"
+        required: false
+        default: false
+        type: boolean
+      import_ubuntu_wsl2:
+        description: "Import a throwaway Ubuntu WSL2 distro when none is installed"
+        required: false
+        default: false
+        type: boolean
+      enable_wsl2_features:
+        description: "Try enabling Windows WSL2/VM optional features before probing"
+        required: false
+        default: false
+        type: boolean
+      run_windows_ci:
+        description: "Run the focused Windows CI shard and native Scheduled Task proof"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  probe:
+    name: Windows probe
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Probe native Windows
+        env:
+          TARGET_REF: ${{ inputs.target_ref || github.ref }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "runner=$env:RUNNER_NAME"
+          Write-Host "machine=$env:COMPUTERNAME"
+          Write-Host "workspace=$env:GITHUB_WORKSPACE"
+          Write-Host "target_ref=$env:TARGET_REF"
+          Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          Write-Host ("arch=" + [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
+          Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
+          cmd.exe /c ver
+          git --version
+
+      - name: Probe WSL2
+        id: wsl2
+        env:
+          ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
+          IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $ok = $false
+          $restartRequired = $false
+
+          function Resolve-UbuntuWslRootfsUrl {
+            $osArch = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant()
+            switch ($osArch) {
+              "x64" { $wslArch = "amd64" }
+              "arm64" { $wslArch = "arm64" }
+              default { throw "Unsupported Windows architecture for Ubuntu WSL rootfs: $osArch" }
+            }
+            Write-Host "ubuntu_wsl_rootfs_arch=$wslArch"
+            "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz"
+          }
+
+          function Invoke-WslText {
+            param([string[]] $Arguments)
+            $output = & wsl.exe @Arguments 2>&1
+            $code = $LASTEXITCODE
+            $text = (($output | ForEach-Object { "$_" }) -join "`n") -replace "`0", ""
+            [pscustomobject]@{ Code = $code; Text = $text }
+          }
+
+          function Get-WslDistros {
+            $result = Invoke-WslText -Arguments @("--list", "--quiet")
+            $result.Text -split "\r?\n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object {
+                $_ -and
+                $_ -notmatch "Windows Subsystem for Linux has no installed distributions" -and
+                $_ -notmatch "^Use 'wsl\.exe" -and
+                $_ -notmatch "^and 'wsl\.exe"
+              }
+          }
+
+          $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+          if (-not $wsl) {
+            Write-Warning "wsl.exe is not available on this runner."
+          } else {
+            Write-Host "wsl.exe=$($wsl.Source)"
+            if ($env:ENABLE_WSL2_FEATURES -eq "true") {
+              Write-Host "enable_wsl2_features=true"
+              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform")) {
+                dism.exe /online /enable-feature /featurename:$feature /all /norestart
+                Write-Host "enable_feature_${feature}_exit=$LASTEXITCODE"
+                if ($LASTEXITCODE -eq 3010) {
+                  $restartRequired = $true
+                }
+              }
+              if ($restartRequired) {
+                Write-Warning "wsl2_restart_required=true; Windows optional feature changes require a runner reboot before WSL2 can be imported."
+              }
+            }
+
+            $status = Invoke-WslText -Arguments @("--status")
+            Write-Host $status.Text
+            Write-Host "wsl_status_exit=$($status.Code)"
+
+            $list = Invoke-WslText -Arguments @("--list", "--verbose")
+            Write-Host $list.Text
+            Write-Host "wsl_list_exit=$($list.Code)"
+
+            $distros = @(Get-WslDistros)
+            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and -not $restartRequired) {
+              Write-Host "import_ubuntu_wsl2=true"
+              $wslRoot = "C:\wsl\UbuntuProbe"
+              $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              $rootfsUrl = Resolve-UbuntuWslRootfsUrl
+              New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
+              Invoke-WebRequest `
+                -Uri $rootfsUrl `
+                -OutFile $rootfs `
+                -UseBasicParsing `
+                -ConnectionTimeoutSeconds 15 `
+                -OperationTimeoutSeconds 120
+              $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
+              Write-Host $import.Text
+              Write-Host "wsl_import_exit=$($import.Code)"
+              $list = Invoke-WslText -Arguments @("--list", "--verbose")
+              Write-Host $list.Text
+              Write-Host "wsl_list_after_import_exit=$($list.Code)"
+              $distros = @(Get-WslDistros)
+            } elseif ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true" -and $restartRequired) {
+              Write-Warning "import_ubuntu_wsl2=skipped_restart_required"
+            }
+
+            if ($distros.Count -gt 0) {
+              $distro = $distros[0]
+              Write-Host "wsl_probe_distro=$distro"
+              $exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
+            } elseif ($restartRequired) {
+              $exec = [pscustomobject]@{ Code = 1; Text = "wsl_exec_skipped=restart_required" }
+            } else {
+              $exec = Invoke-WslText -Arguments @("--exec", "bash", "-lc", 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi')
+            }
+            Write-Host $exec.Text
+            if ($exec.Code -eq 0) {
+              $ok = $true
+            }
+            Write-Host "wsl_exec_exit=$($exec.Code)"
+          }
+
+          if ($ok) {
+            "wsl2_ok=true" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=false" >> $env:GITHUB_OUTPUT
+            "OPENCLAW_WSL2_PROBE_OK=true" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=false" >> $env:GITHUB_ENV
+            Write-Host "wsl2_ok=true"
+          } else {
+            "wsl2_ok=false" >> $env:GITHUB_OUTPUT
+            "wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+            "OPENCLAW_WSL2_PROBE_OK=false" >> $env:GITHUB_ENV
+            "OPENCLAW_WSL2_RESTART_REQUIRED=$($restartRequired.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
+            Write-Warning "wsl2_ok=false"
+          }
+
+          exit 0
+
+      - name: Try to exclude workspace from Windows Defender (best-effort)
+        if: ${{ inputs.run_windows_ci }}
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
+
+      - name: Setup Node.js
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          REQUESTED_NODE_VERSION: "22.x"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+      - name: Setup pnpm
+        if: ${{ inputs.run_windows_ci }}
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: restore
+          node-version: 22.x
+
+      - name: Runtime versions
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node -v
+          npm -v
+          pnpm -v
+
+      - name: Capture node path
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        run: |
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          if command -v cygpath >/dev/null 2>&1; then
+            node_bin="$(cygpath -u "$node_bin")"
+          fi
+          echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Run Windows CI tests
+        if: ${{ inputs.run_windows_ci }}
+        shell: bash
+        env:
+          CI: true
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
+          OPENCLAW_VITEST_MAX_WORKERS: 1
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          pnpm test:windows:ci
+
+      - name: Preflight native Scheduled Task session
+        if: ${{ inputs.run_windows_ci }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          $sessionId = (Get-Process -Id $PID).SessionId
+          Write-Host "identity=$($identity.Name)"
+          Write-Host "session_id=$sessionId"
+          Write-Host "user_interactive=$([Environment]::UserInteractive)"
+          Write-Host "administrator=$isAdmin"
+          query user 2>&1 | Write-Host
+          if (-not [Environment]::UserInteractive) {
+            throw "Native Scheduled Task proof requires an interactive Windows runner session."
+          }
+          exit 0
+
+      - name: Run native Scheduled Task lifecycle proof
+        id: native_schtasks
+        if: ${{ inputs.run_windows_ci }}
+        timeout-minutes: 5
+        shell: bash
+        env:
+          CI_WINDOWS_SCHTASKS_PROOF_PATH: ${{ github.workspace }}\.artifacts\windows-schtasks\proof.json
+          CI_WINDOWS_SCHTASKS_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+          CI_WINDOWS_SCHTASKS_TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          if [[ ! "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Native Scheduled Task proof requires target_ref to be an exact 40-character commit SHA." >&2
+            exit 1
+          fi
+          CI_WINDOWS_SCHTASKS_HEAD="$(git rev-parse HEAD)"
+          if [[ "$CI_WINDOWS_SCHTASKS_HEAD" != "$EXPECTED_HEAD" ]]; then
+            echo "Checked out $CI_WINDOWS_SCHTASKS_HEAD, expected frozen target $EXPECTED_HEAD." >&2
+            exit 1
+          fi
+          export CI_WINDOWS_SCHTASKS_HEAD
+          mkdir -p .artifacts/windows-schtasks
+          pnpm test:windows:schtasks:integration
+
+      - name: Clean native Scheduled Task residue
+        id: native_cleanup
+        if: ${{ always() && inputs.run_windows_ci }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $cleanupErrors = @()
+          $profile = "schtasks-int-$env:TEST_ID"
+          $taskName = "OpenClaw Gateway ($profile)"
+          $stateDir = Join-Path $env:USERPROFILE ".openclaw-$profile"
+          New-Item -ItemType Directory -Force -Path $env:TEST_ROOT | Out-Null
+          schtasks.exe /End /TN $taskName 2>$null
+          Start-Sleep -Milliseconds 200
+          $activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"
+          if (Test-Path -LiteralPath $activePidPath) {
+            try {
+              $probePid = 0
+              $activePid = (Get-Content -LiteralPath $activePidPath -Raw).Trim()
+              if (-not [int]::TryParse($activePid, [ref]$probePid) -or $probePid -le 1) {
+                throw "Invalid Scheduled Task active process id: $activePid"
+              }
+              $processQueryError = @()
+              $process = Get-CimInstance Win32_Process -Filter "ProcessId = $probePid" -ErrorAction SilentlyContinue -ErrorVariable processQueryError
+              if ($processQueryError.Count -gt 0) {
+                throw "Could not inspect Scheduled Task probe process $probePid."
+              }
+              if ($process) {
+                $probePath = Join-Path $env:TEST_ROOT "probe.cjs"
+                $eventsPath = Join-Path $env:TEST_ROOT "runs.txt"
+                if (
+                  $process.CommandLine -like "*$probePath*" -and
+                  $process.CommandLine -like "*$eventsPath*"
+                ) {
+                  taskkill.exe /F /T /PID $probePid 2>$null
+                  $deadline = [DateTime]::UtcNow.AddSeconds(30)
+                  do {
+                    Start-Sleep -Milliseconds 200
+                    $processQueryError = @()
+                    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $probePid" -ErrorAction SilentlyContinue -ErrorVariable processQueryError
+                    if ($processQueryError.Count -gt 0) {
+                      throw "Could not verify Scheduled Task probe process $probePid exited."
+                    }
+                  } while ($process -and [DateTime]::UtcNow -lt $deadline)
+                  if ($process) {
+                    throw "Scheduled Task probe process $probePid survived cleanup."
+                  }
+                } else {
+                  throw "Refusing to kill reused or unverifiable process id $probePid."
+                }
+              }
+            } catch {
+              $cleanupErrors += $_.Exception.Message
+            }
+          }
+          schtasks.exe /Delete /F /TN $taskName 2>$null
+          $deleteExit = $LASTEXITCODE
+          try {
+            $service = New-Object -ComObject "Schedule.Service"
+            $service.Connect()
+            $null = $service.GetFolder("\").GetTask($taskName)
+            $taskExists = $true
+          } catch {
+            $exception = $_.Exception
+            while ($null -ne $exception.InnerException) {
+              $exception = $exception.InnerException
+            }
+            if ($exception.HResult -eq -2147024894 -or $exception.HResult -eq -2147024893) {
+              $taskExists = $false
+            } else {
+              $cleanupErrors += "Could not verify Scheduled Task cleanup for $taskName (HRESULT $($exception.HResult))."
+              $taskExists = $null
+            }
+          }
+          if ($taskExists -eq $true) {
+            $cleanupErrors += "Scheduled Task cleanup left $taskName registered (delete exit $deleteExit)."
+          }
+          @(
+            "task_name=$taskName"
+            "delete_exit=$deleteExit"
+            "task_exists=$taskExists"
+            "proof_outcome=${{ steps.native_schtasks.outcome }}"
+            "cleanup_errors=$($cleanupErrors -join ' ')"
+          ) | Set-Content -LiteralPath (Join-Path $env:TEST_ROOT "cleanup-summary.txt")
+          if ($cleanupErrors.Count -gt 0) {
+            throw ($cleanupErrors -join " ")
+          }
+          exit 0
+
+      - name: Upload native Scheduled Task proof
+        id: native_proof_upload
+        if: ${{ always() && inputs.run_windows_ci }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-schtasks/proof.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\failure-diagnostics.json
+            ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}\cleanup-summary.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove retained native Scheduled Task evidence
+        if: ${{ always() && inputs.run_windows_ci && steps.native_cleanup.outcome == 'success' && steps.native_proof_upload.outcome == 'success' }}
+        shell: pwsh
+        env:
+          TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          TEST_ROOT: ${{ runner.temp }}\openclaw-schtasks-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $profile = "schtasks-int-$env:TEST_ID"
+          Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Keep runner alive for SSH inspection
+        if: ${{ always() && !cancelled() }}
+        env:
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $minutes = 20
+          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
+            $minutes = [int]$env:KEEPALIVE_MINUTES
+          }
+          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
+          Write-Host "keepalive_minutes=$minutes"
+          for ($i = 1; $i -le $minutes; $i++) {
+            Write-Host "keepalive minute $i/$minutes"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: Enforce WSL2 requirement
+        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
+        run: |
+          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
+              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
+              exit 1
+            }
+            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
+            exit 1
+          }

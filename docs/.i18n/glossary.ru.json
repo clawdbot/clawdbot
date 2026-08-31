@@ -1,0 +1,86 @@
+[
+  {
+    "source": "ACP",
+    "target": "ACP"
+  },
+  {
+    "source": "Active Memory",
+    "target": "Active Memory"
+  },
+  {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "Compaction",
+    "target": "Compaction"
+  },
+  {
+    "source": "Cron",
+    "target": "Cron"
+  },
+  {
+    "source": "Dreaming",
+    "target": "Dreaming"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Mintlify",
+    "target": "Mintlify"
+  },
+  {
+    "source": "Node",
+    "target": "Node"
+  },
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "TaskFlow",
+    "target": "TaskFlow"
+  },
+  {
+    "source": "TUI",
+    "target": "TUI"
+  },
+  {
+    "source": "Webhook",
+    "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "Процесс ревью pull request"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI-пайплайн"
+  }
+]

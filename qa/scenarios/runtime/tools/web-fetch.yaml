@@ -1,0 +1,50 @@
+title: "Runtime tool fixture — web_fetch"
+
+scenario:
+  id: runtime-tool-web-fetch
+  surface: runtime-tools
+  runtimePairLane: core
+  coverage:
+    primary:
+      - web-search.web-fetch-exposure
+  objective: Verify web_fetch preserves arguments and result shape across OpenClaw and Codex.
+  successCriteria:
+    - Effective tools expose web_fetch.
+    - The mock provider plans exactly one happy-path web_fetch call.
+    - The mock provider plans one denied-input failure-path web_fetch call.
+    - Runtime parity coverage hard-fails call/result drift in the core runtime-pair lane.
+  docsRefs:
+    - qa/scenarios/index.yaml
+  codeRefs:
+    - src/agents/tools/web-fetch.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the web_fetch runtime tool family.
+    config:
+      toolName: web_fetch
+      happyPrompt: "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch."
+      toolCoverage:
+        family: web_fetch
+        actualTool: web_fetch
+        bucket: openclaw-dynamic-integration
+        expectedLayer: openclaw-dynamic
+        capabilityLayer: openclaw-dynamic-direct
+        required: true
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: hard gate in the core runtime-pair lane
+        reason: web_fetch is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
+      promptSnippet: "target=web_fetch"
+      failurePromptSnippet: "failure target=web_fetch"
+
+flow:
+  steps:
+    - name: exercises web_fetch happy and failure paths
+      actions:
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

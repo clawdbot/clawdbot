@@ -1,9 +1,11 @@
+// Commander registration for sandbox container list, recreate, and explain commands.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatHelpExamples } from "./help-format.js";
 
 // --- Types ---
@@ -45,12 +47,9 @@ function createRunner(
   commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
 ) {
   return async (opts: CommandOptions) => {
-    try {
+    await runCommandWithRuntime(defaultRuntime, async () => {
       await commandFn(opts, defaultRuntime);
-    } catch (err) {
-      defaultRuntime.error(String(err));
-      defaultRuntime.exit(1);
-    }
+    });
   };
 }
 

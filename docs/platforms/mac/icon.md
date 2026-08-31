@@ -2,30 +2,46 @@
 summary: "Menu bar icon states and animations for OpenClaw on macOS"
 read_when:
   - Changing menu bar icon behavior
-title: "Menu Bar Icon"
+title: "Menu bar icon"
 ---
 
 # Menu Bar Icon States
 
-Author: steipete · Updated: 2025-12-06 · Scope: macOS app (`apps/macos`)
+Scope: macOS app (`apps/macos`). Rendering: `CritterIconRenderer.makeIcon(...)`. Animation/state wiring: `CritterStatusLabel` + `CritterStatusLabel+Behavior.swift`.
 
-- **Idle:** Normal icon animation (blink, occasional wiggle).
-- **Paused:** Status item uses `appearsDisabled`; no motion.
-- **Voice trigger (big ears):** Voice wake detector calls `AppState.triggerVoiceEars(ttl: nil)` when the wake word is heard, keeping `earBoostActive=true` while the utterance is captured. Ears scale up (1.9x), get circular ear holes for readability, then drop via `stopVoiceEars()` after 1s of silence. Only fired from the in-app voice pipeline.
-- **Working (agent running):** `AppState.isWorking=true` drives a “tail/leg scurry” micro-motion: faster leg wiggle and slight offset while work is in-flight. Currently toggled around WebChat agent runs; add the same toggle around other long tasks when you wire them.
+## States
 
-Wiring points
+| State                 | Trigger                                   | Visual                                                                                              |
+| --------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Idle                  | Default                                   | Normal blink/wiggle animation; open eyes keep a glossy glint                                        |
+| Paused                | `isPaused=true`                           | Antennae droop ("off duty") with open eyes; no motion                                               |
+| Sleeping              | Gateway disconnected/unconfigured         | Antennae droop and eyes close into `⌣ ⌣` lids; no motion                                            |
+| Celebrate             | Message sent (`sendCelebrationTick`)      | Eyes flash happy `∩ ∩` arcs for ~0.9s plus a leg kick                                               |
+| Voice wake (big ears) | Wake word heard                           | Antennae perk up straight and taller (`earScale=1.9`); drops after silence                          |
+| Working               | `isWorking=true` or an active `IconState` | Faster leg wiggle (`legWiggle` up to `1.0`) plus a small horizontal offset; additive to idle wiggle |
 
-- Voice wake: runtime/tester call `AppState.triggerVoiceEars(ttl: nil)` on trigger and `stopVoiceEars()` after 1s of silence to match the capture window.
-- Agent activity: set `AppStateStore.shared.setWorking(true/false)` around work spans (already done in WebChat agent call). Keep spans short and reset in `defer` blocks to avoid stuck animations.
+A tool-activity badge (SF Symbol puck, e.g. `chevron.left.slash.chevron.right` for exec) can render on top of the same critter icon when a session has an active job or tool. That badge comes from `IconState`/`ActivityKind`; see [Menu bar](/platforms/mac/menu-bar) for the full state model.
 
-Shapes & sizes
+## Voice wake ears
 
-- Base icon drawn in `CritterIconRenderer.makeIcon(blink:legWiggle:earWiggle:earScale:earHoles:)`.
-- Ear scale defaults to `1.0`; voice boost sets `earScale=1.9` and toggles `earHoles=true` without changing overall frame (18×18 pt template image rendered into a 36×36 px Retina backing store).
-- Scurry uses leg wiggle up to ~1.0 with a small horizontal jiggle; it’s additive to any existing idle wiggle.
+- Trigger: `AppStateStore.shared.triggerVoiceEars(ttl: nil)`, called from the voice-wake capture pipeline (`VoiceWakeRuntime`) and from voice-wake debug/test tooling (`VoiceWakeTester`, `VoiceWakeOverlayController`).
+- Stop: `stopVoiceEars()`, called when capture finalizes.
+- Silence window before finalizing: `2.0s` normally, `5.0s` if only the trigger word was heard and no further speech followed (`VoiceWakeRuntime.silenceWindow` / `triggerOnlySilenceWindow`).
+- While boosted, idle blink/wiggle/leg/ear timers are suspended (`earBoostActive` gates the animation task in `CritterStatusLabel+Behavior`).
 
-Behavioral notes
+## Shapes and sizes
 
-- No external CLI/broker toggle for ears/working; keep it internal to the app’s own signals to avoid accidental flapping.
-- Keep TTLs short (&lt;10s) so the icon returns to baseline quickly if a job hangs.
+- Canvas: 18x18pt template image, rendered into a 36x36px bitmap backing store (2x) so the icon stays crisp on Retina.
+- Ear scale defaults to `1.0`; voice boost sets `earScale=1.9` without changing the overall frame.
+- `antennaDroop` (0-1) folds the antennae down for the paused and sleeping poses.
+- Leg scurry uses `legWiggle` up to `1.0` with a small horizontal jiggle.
+
+## Behavioral notes
+
+- No external CLI/broker toggle for ears or working state; both are driven internally by app signals (`AppState.setWorking`, `AppState.triggerVoiceEars`) to avoid accidental flapping.
+- Keep any new TTL short (well under 10s) so the icon returns to baseline quickly if a job hangs.
+
+## Related
+
+- [Menu bar](/platforms/mac/menu-bar)
+- [macOS app](/platforms/macos)

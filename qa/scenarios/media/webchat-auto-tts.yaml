@@ -1,0 +1,36 @@
+title: WebChat auto TTS delivery
+
+scenario:
+  id: webchat-auto-tts
+  surface: media
+  category: media.text-to-speech-delivery
+  coverage:
+    primary:
+      - media.tts
+      - media.outbound-voice-audio-delivery
+  objective: Verify WebChat auto-TTS synthesizes only the final reply tail and serves trusted local audio through scoped browser media tickets.
+  successCriteria:
+    - WebChat block delivery does not synthesize intermediate TTS audio.
+    - WebChat final delivery synthesizes one local TTS audio file with spoken text metadata.
+    - Trusted local TTS media becomes a WebChat audio attachment while untrusted local paths are rejected.
+    - The real Gateway HTTP route mints a scoped ticket and serves the synthesized audio only with that ticket.
+  docsRefs:
+    - docs/tools/tts.md
+    - docs/tools/media-overview.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/tts/runtime-api.ts
+    - src/gateway/server-methods/chat-webchat-media.ts
+    - src/gateway/managed-image-attachments.ts
+    - src/gateway/server-methods/artifacts.ts
+    - test/e2e/qa-lab/runtime/media-talk-gateway.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
+    summary: Starts a real Gateway and mock model/TTS providers, sends a WebChat turn, and verifies the history attachment plus scoped media-ticket route.
+    args:
+      - --scenario
+      - webchat-auto-tts
+      - --artifact-base
+      - ${outputDir}

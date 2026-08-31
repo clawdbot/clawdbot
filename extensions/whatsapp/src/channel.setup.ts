@@ -1,12 +1,12 @@
+// Whatsapp plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { ResolvedWhatsAppAccount } from "./accounts.js";
+import { readWhatsAppAccountLinkState } from "./channel-runtime-loader.js";
 import {
-  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../api.js";
-import { type ResolvedWhatsAppAccount } from "./accounts.js";
-import { webAuthExists } from "./auth-store.js";
-import { whatsappSetupAdapter } from "./setup-core.js";
+} from "./group-policy.js";
+import { whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 
 export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
@@ -14,10 +14,10 @@ export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
       resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
     setupWizard: whatsappSetupWizardProxy,
-    setup: whatsappSetupAdapter,
-    isConfigured: async (account) => await webAuthExists(account.authDir),
+    setupContract: whatsappSetupContract,
+    isConfigured: (account) => Boolean(account.authDir),
+    isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
   }),
 };

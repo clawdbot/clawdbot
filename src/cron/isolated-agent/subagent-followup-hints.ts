@@ -1,3 +1,6 @@
+/** Detects interim cron replies that should wait for or retry subagent work. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 const SUBAGENT_FOLLOWUP_HINTS = [
   "subagent spawned",
   "spawned a subagent",
@@ -25,9 +28,10 @@ const INTERIM_CRON_HINTS = [
 ] as const;
 
 function normalizeHintText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(value).replace(/\s+/g, " ");
 }
 
+/** Detects short cron replies that probably announce work continuing elsewhere. */
 export function isLikelyInterimCronMessage(value: string): boolean {
   const normalized = normalizeHintText(value);
   if (!normalized) {
@@ -40,6 +44,7 @@ export function isLikelyInterimCronMessage(value: string): boolean {
   return words <= 45 && INTERIM_CRON_HINTS.some((hint) => normalized.includes(hint));
 }
 
+/** Detects cron replies that explicitly promise a subagent follow-up message. */
 export function expectsSubagentFollowup(value: string): boolean {
   const normalized = normalizeHintText(value);
   return Boolean(normalized && SUBAGENT_FOLLOWUP_HINTS.some((hint) => normalized.includes(hint)));

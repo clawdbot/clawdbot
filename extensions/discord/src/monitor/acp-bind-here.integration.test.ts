@@ -1,26 +1,27 @@
-import { ChannelType } from "@buape/carbon";
+// Discord tests cover acp bind here.integration plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    getRuntimeConfig: () => loadConfigMock(),
   };
 });
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
   registerSessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
+  testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
@@ -34,6 +35,9 @@ const baseCfg = {
   session: {
     mainKey: "main",
     scope: "per-sender",
+    threadBindings: {
+      enabled: true,
+    },
   },
   acp: {
     enabled: true,
@@ -41,13 +45,6 @@ const baseCfg = {
       enabled: true,
     },
     backend: "acpx",
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-      },
-    },
   },
 } satisfies OpenClawConfig;
 
@@ -156,13 +153,22 @@ describe("Discord ACP bind here end-to-end flow", () => {
     });
 
     expect(adapter.bindings).toHaveLength(1);
-    expect(binding).toMatchObject({
+    expect(binding).toEqual({
+      bindingId: "discord:default:user:user-1",
       targetSessionKey: "agent:codex:acp:test-session",
+      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "user:user-1",
         parentConversationId: "user:user-1",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: {
+        boundBy: "user-1",
+        agentId: "codex",
+        label: "codex",
       },
     });
     expect(
@@ -171,9 +177,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         accountId: "default",
         conversationId: "user:user-1",
       }),
-    )?.toMatchObject({
-      targetSessionKey: binding.targetSessionKey,
-    });
+    ).toEqual(binding);
 
     const message = createDiscordMessage({
       id: "m-followup-1",
@@ -200,11 +204,13 @@ describe("Discord ACP bind here end-to-end flow", () => {
         client: createDmClient("dm-1"),
         botUserId: "bot-1",
       }),
+      allowFrom: ["*"],
     });
 
-    expect(preflight).not.toBeNull();
     expect(preflight?.boundSessionKey).toBe(binding.targetSessionKey);
+    expect(preflight?.boundAgentId).toBe("codex");
     expect(preflight?.route.sessionKey).toBe(binding.targetSessionKey);
     expect(preflight?.route.agentId).toBe("codex");
+    expect(preflight?.threadBinding).toEqual(binding);
   });
 });

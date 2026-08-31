@@ -1,0 +1,17 @@
+name: openclaw-codeql-macos-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+paths:
+  - apps/macos/Sources
+
+paths-ignore:
+  - "**/.build"
+  - "**/.build/**"
+  - "**/DerivedData"
+  - "**/DerivedData/**"
+  - "**/*.generated.swift"
+  - "**/*Tests.swift"

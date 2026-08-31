@@ -1,19 +1,12 @@
 import AppKit
 import Observation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct DebugSettings: View {
     @Bindable var state: AppState
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let labelColumnWidth: CGFloat = 140
-    @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
-    @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
-    @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
-    @State private var modelsCount: Int?
-    @State private var modelsLoading = false
-    @State private var modelsError: String?
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
@@ -24,6 +17,7 @@ struct DebugSettings: View {
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
+    @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
@@ -31,14 +25,11 @@ struct DebugSettings: View {
     @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
     @State private var canvasError: String?
-    @State private var canvasEvalJS: String = "document.title"
-    @State private var canvasEvalResult: String?
-    @State private var canvasSnapshotPath: String?
 
     init(state: AppState = AppStateStore.shared) {
         self.state = state
@@ -49,6 +40,7 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 14) {
                 self.header
 
+                self.overviewSection
                 self.launchdSection
                 self.appInfoSection
                 self.gatewaySection
@@ -61,14 +53,11 @@ struct DebugSettings: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .settingsDetailContent()
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
         .task {
             guard !self.isPreview else { return }
-            await self.reloadModels()
             self.loadSessionStorePath()
         }
         .alert(item: self.$pendingKill) { listener in
@@ -91,14 +80,6 @@ struct DebugSettings: View {
                         if self.launchAgentWriteError != nil {
                             self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
                             return
-                        }
-                        if newValue {
-                            Task {
-                                _ = await GatewayLaunchAgentManager.set(
-                                    enabled: false,
-                                    bundlePath: Bundle.main.bundlePath,
-                                    port: GatewayEnvironment.gatewayPort())
-                            }
                         }
                     }
 
@@ -124,6 +105,31 @@ struct DebugSettings: View {
             Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var overviewSection: some View {
+        HStack(spacing: 12) {
+            DebugMetricCard(
+                title: "App Health",
+                value: self.healthStore.state.debugTitle,
+                icon: "heart.text.square",
+                tint: self.healthStore.state.tint,
+                subtitle: self.healthStore.summaryLine)
+
+            DebugMetricCard(
+                title: "Gateway",
+                value: self.gatewayManager.status.label,
+                icon: "antenna.radiowaves.left.and.right",
+                tint: self.gatewayManager.status.debugTint,
+                subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+
+            DebugMetricCard(
+                title: "App PID",
+                value: "\(ProcessInfo.processInfo.processIdentifier)",
+                icon: "number.square",
+                tint: .blue,
+                subtitle: Bundle.main.bundleURL.lastPathComponent)
         }
     }
 
@@ -157,6 +163,15 @@ struct DebugSettings: View {
                 GridRow {
                     self.gridLabel("PID")
                     Text("\(ProcessInfo.processInfo.processIdentifier)")
+                }
+                GridRow {
+                    self.gridLabel("Settings")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show native settings panes", isOn: self.$state.nativeSettingsPanesEnabled)
+                        Text("These panes are being retired in favor of the Dashboard.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 GridRow {
                     self.gridLabel("Binary path")
@@ -224,8 +239,12 @@ struct DebugSettings: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                    .frame(height: 180)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                    .frame(height: 130)
+                    .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(.white.opacity(0.06))
+                    }
 
                     HStack(spacing: 8) {
                         if self.canRestartGateway {
@@ -263,7 +282,7 @@ struct DebugSettings: View {
                     self.gridLabel("App logging")
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Verbosity", selection: self.$appLogLevelRaw) {
-                            ForEach(AppLogLevel.allCases) { level in
+                            ForEach(Logger.Level.allCases, id: \.rawValue) { level in
                                 Text(level.title).tag(level.rawValue)
                             }
                         }
@@ -429,45 +448,6 @@ struct DebugSettings: View {
                             }
                         }
                     }
-                    GridRow {
-                        self.gridLabel("Model catalog")
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(self.modelCatalogPath)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                            HStack(spacing: 8) {
-                                Button {
-                                    self.chooseCatalogFile()
-                                } label: {
-                                    Label("Choose models.generated.ts…", systemImage: "folder")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    Task { await self.reloadModels() }
-                                } label: {
-                                    Label(
-                                        self.modelsLoading ? "Reloading…" : "Reload models",
-                                        systemImage: "arrow.clockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(self.modelsLoading)
-                            }
-                            if let modelsError {
-                                Text(modelsError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else if let modelsCount {
-                                Text("Loaded \(modelsCount) models")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text("Local fallback for model picker when gateway models.list is unavailable.")
-                                .font(.footnote)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
                 }
             }
         }
@@ -478,9 +458,26 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
-                        Task { await DebugActions.sendTestNotification() }
+                        Task { await self.sendTestNotification() }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(self.testNotificationOutcome == .pending)
+
+                    if let testNotificationOutcome {
+                        switch testNotificationOutcome {
+                        case .pending:
+                            ProgressView("Sending test notification…")
+                                .controlSize(.small)
+                        case .sent:
+                            Text("Test notification queued.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case let .error(message):
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
 
                     Button("Open Agent Events") {
                         DebugActions.openAgentEventsWindow()
@@ -529,13 +526,19 @@ struct DebugSettings: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        LaunchdManager.startOpenClaw()
-                    } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                    if AppProfile.current.isActive {
+                        Text("Login-agent restart is unavailable under a profile.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button {
+                            LaunchdManager.startOpenClaw()
+                        } label: {
+                            Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
 
                 HStack(spacing: 8) {
@@ -578,51 +581,11 @@ struct DebugSettings: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 8) {
-                    TextField("Eval JS", text: self.$canvasEvalJS)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: 520)
-                    Button("Eval") {
-                        Task { await self.canvasEval() }
-                    }
-                    .buttonStyle(.bordered)
-                    Button("Snapshot") {
-                        Task { await self.canvasSnapshot() }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer(minLength: 0)
-                }
-
                 if let canvasStatus {
                     Text(canvasStatus)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                }
-                if let canvasEvalResult {
-                    Text("eval → \(canvasEvalResult)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                if let canvasSnapshotPath {
-                    HStack(spacing: 8) {
-                        Text("snapshot → \(canvasSnapshotPath)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Button("Reveal") {
-                            NSWorkspace.shared
-                                .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
                 }
                 if let canvasError {
                     Text(canvasError)
@@ -705,37 +668,6 @@ struct DebugSettings: View {
         }
     }
 
-    private func chooseCatalogFile() {
-        let panel = NSOpenPanel()
-        panel.title = "Select models.generated.ts"
-        let tsType = UTType(filenameExtension: "ts")
-            ?? UTType(tag: "ts", tagClass: .filenameExtension, conformingTo: .sourceCode)
-            ?? .item
-        panel.allowedContentTypes = [tsType]
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = URL(fileURLWithPath: self.modelCatalogPath).deletingLastPathComponent()
-        if panel.runModal() == .OK, let url = panel.url {
-            self.modelCatalogPath = url.path
-            self.modelCatalogReloadBump += 1
-            Task { await self.reloadModels() }
-        }
-    }
-
-    private func reloadModels() async {
-        guard !self.modelsLoading else { return }
-        self.modelsLoading = true
-        self.modelsError = nil
-        self.modelCatalogReloadBump += 1
-        defer { self.modelsLoading = false }
-        do {
-            let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
-            self.modelsCount = loaded.count
-        } catch {
-            self.modelsCount = nil
-            self.modelsError = error.localizedDescription
-        }
-    }
-
     private func sendVoiceDebug() async {
         await MainActor.run {
             self.debugSendInFlight = true
@@ -756,6 +688,13 @@ struct DebugSettings: View {
                 self.debugSendError = error.localizedDescription
             }
         }
+    }
+
+    @MainActor
+    private func sendTestNotification() async {
+        guard self.testNotificationOutcome != .pending else { return }
+        self.testNotificationOutcome = .pending
+        self.testNotificationOutcome = await DebugActions.sendTestNotification()
     }
 
     private func revealApp() {
@@ -787,7 +726,10 @@ struct DebugSettings: View {
         session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
         root["session"] = session
 
-        OpenClawConfigFile.saveDict(root)
+        guard OpenClawConfigFile.saveDict(root) else {
+            self.sessionStoreSaveError = "Config write rejected to protect gateway auth/mode."
+            return
+        }
         self.sessionStoreSaveError = nil
     }
 
@@ -900,47 +842,85 @@ extension DebugSettings {
             self.canvasError = error.localizedDescription
         }
     }
-
-    @MainActor
-    private func canvasEval() async {
-        self.canvasError = nil
-        self.canvasEvalResult = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await CanvasManager.shared.eval(
-                sessionKey: session.isEmpty ? "main" : session,
-                javaScript: self.canvasEvalJS)
-            self.canvasEvalResult = result
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasSnapshot() async {
-        self.canvasError = nil
-        self.canvasSnapshotPath = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let path = try await CanvasManager.shared.snapshot(
-                sessionKey: session.isEmpty ? "main" : session,
-                outPath: nil)
-            self.canvasSnapshotPath = path
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
 }
 
 struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             configuration.label
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             configuration.content
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+private struct DebugMetricCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let tint: Color
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: self.icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(self.tint)
+                .frame(width: 34, height: 34)
+                .background(self.tint.opacity(0.18), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(self.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(self.value)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(self.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+extension HealthState {
+    fileprivate var debugTitle: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .ok: "Healthy"
+        case .linkingNeeded: "Needs Link"
+        case .degraded: "Degraded"
+        }
+    }
+}
+
+extension GatewayProcessManager.Status {
+    fileprivate var debugTint: Color {
+        switch self {
+        case .running, .attachedExisting: .green
+        case .starting: .orange
+        case .failed: .red
+        case .stopped: .secondary
+        }
     }
 }
 
@@ -949,58 +929,6 @@ struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension DebugSettings {
-    static func exerciseForTesting() async {
-        let view = DebugSettings(state: .preview)
-        view.modelsCount = 3
-        view.modelsLoading = false
-        view.modelsError = "Failed to load models"
-        view.gatewayRootInput = "/tmp/openclaw"
-        view.sessionStorePath = "/tmp/sessions.json"
-        view.sessionStoreSaveError = "Save failed"
-        view.debugSendInFlight = true
-        view.debugSendStatus = "Sent"
-        view.debugSendError = "Failed"
-        view.portCheckInFlight = true
-        view.portReports = [
-            DebugActions.PortReport(
-                port: GatewayEnvironment.gatewayPort(),
-                expected: "Gateway websocket (node/tsx)",
-                status: .missing("Missing"),
-                listeners: []),
-        ]
-        view.portKillStatus = "Killed"
-        view.pendingKill = DebugActions.PortListener(
-            pid: 1,
-            command: "node",
-            fullCommand: "node",
-            user: nil,
-            expected: true)
-        view.canvasSessionKey = "main"
-        view.canvasStatus = "Canvas ok"
-        view.canvasError = "Canvas error"
-        view.canvasEvalJS = "document.title"
-        view.canvasEvalResult = "Canvas"
-        view.canvasSnapshotPath = "/tmp/snapshot.png"
-
-        _ = view.body
-        _ = view.header
-        _ = view.appInfoSection
-        _ = view.gatewaySection
-        _ = view.logsSection
-        _ = view.portsSection
-        _ = view.pathsSection
-        _ = view.quickActionsSection
-        _ = view.canvasSection
-        _ = view.experimentsSection
-        _ = view.gridLabel("Test")
-
-        view.loadSessionStorePath()
-        await view.reloadModels()
     }
 }
 #endif

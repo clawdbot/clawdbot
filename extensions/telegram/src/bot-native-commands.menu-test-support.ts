@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot native commands.menu test support behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -20,6 +21,9 @@ type CreateCommandBotResult = {
   sendMessage: ReturnType<typeof vi.fn>;
   deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
+};
+type CreateCommandBotParams = {
+  api?: Record<string, unknown>;
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
@@ -54,7 +58,7 @@ export async function waitForRegisteredCommands(
   await vi.waitFor(() => {
     expect(setMyCommands).toHaveBeenCalled();
   });
-  return setMyCommands.mock.calls[0]?.[0] as RegisteredCommand[];
+  return setMyCommands.mock.calls.at(0)?.[0] as RegisteredCommand[];
 }
 
 export function resetNativeCommandMenuMocks() {
@@ -67,7 +71,7 @@ export function resetNativeCommandMenuMocks() {
   emitTelegramMessageSentHooks.mockClear();
 }
 
-export function createCommandBot(): CreateCommandBotResult {
+export function createCommandBot(params: CreateCommandBotParams = {}): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
   const deleteMessage = vi.fn().mockResolvedValue(true);
@@ -77,6 +81,7 @@ export function createCommandBot(): CreateCommandBotResult {
       setMyCommands,
       sendMessage,
       deleteMessage,
+      ...params.api,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);
@@ -89,20 +94,21 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
-  const dispatchResult: Awaited<
-    ReturnType<TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"]>
-  > = {
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  };
   const telegramDeps: TelegramNativeCommandDeps = {
-    loadConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["loadConfig"],
+    getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-      async () => dispatchResult,
-    ) as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    dispatchChannelInboundTurn: vi.fn(async (plan) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: plan.ctxPayload,
+      routeSessionKey: plan.route.sessionKey,
+      dispatchResult: {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      },
+    })) as TelegramNativeCommandDeps["dispatchChannelInboundTurn"],
     listSkillCommandsForAgents,
     syncTelegramMenuCommands: vi.fn(({ bot, commandsToRegister }) => {
       if (commandsToRegister.length === 0) {
@@ -111,6 +117,7 @@ export function createNativeCommandTestParams(
       return bot.api.setMyCommands(commandsToRegister);
     }) as TelegramNativeCommandDeps["syncTelegramMenuCommands"],
     editMessageTelegram,
+    sendMessageTelegram: vi.fn(async () => ({ messageId: "999", chatId: "100" })),
   };
   return createBaseNativeCommandTestParams({
     cfg,

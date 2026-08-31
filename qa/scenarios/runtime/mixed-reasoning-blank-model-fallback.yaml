@@ -1,0 +1,115 @@
+title: Mixed reasoning-plus-blank model fallback
+
+scenario:
+  id: mixed-reasoning-blank-model-fallback
+  surface: runtime
+  coverage:
+    primary:
+      - agent-runtime.failure-recovery-empty-response-recovery
+      - channels.qa-channel-final-reply
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+  objective: Verify a mixed reasoning-plus-whitespace completion advances non-GPT model fallback to one visible answer.
+  successCriteria:
+    - The scenario runs through qa-channel, the scenario-aware mock provider, and an ephemeral Gateway child.
+    - The primary non-GPT model returns one reasoning item plus one whitespace-only final-answer item.
+    - The fallback runner rejects that invisible completion and attempts the configured alternate model.
+    - The alternate model's exact marker reaches the channel exactly once.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/result-fallback-classifier.ts
+    - src/agents/model-fallback-runner.ts
+  execution:
+    kind: flow
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Exercise mixed invisible output through mock provider, model fallback, ephemeral Gateway, and qa-channel delivery.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Mixed reasoning blank fallback QA check
+      prompt: "Mixed reasoning blank fallback QA check: recover through the alternate model."
+      expectedReply: MODEL-FALLBACK-VISIBLE-OK
+
+flow:
+  steps:
+    - name: advances the invisible primary candidate and delivers the fallback
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:mixed-reasoning-blank:${randomUUID().slice(0, 8)}`"
+        - call: startAgentRun
+          saveAs: started
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 45000)
+        - set: waited
+          value:
+            expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
+        - assert:
+            expr: "['ok', 'completed', 'succeeded'].includes(String(waited?.status)) || (waited?.status === 'error' && String(waited?.error ?? '').trim().toLowerCase() === 'completed')"
+            message:
+              expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).find((message) => message.conversation.id === 'qa-operator')"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - call: sleep
+          args:
+            - 300
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === 'qa-operator')"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: expectedModels
+          value:
+            expr: "[splitModelRef(env.primaryModel)?.model, splitModelRef(env.alternateModel)?.model]"
+        - set: primaryRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.model === expectedModels[0])"
+        - set: fallbackRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.model === expectedModels[1])"
+        - assert:
+            expr: "expectedModels.every((model) => typeof model === 'string' && model.length > 0) && primaryRequests.length > 0 && fallbackRequests.length === 1 && scenarioRequests.at(-1) === fallbackRequests[0] && scenarioRequests.every((request) => !request.plannedToolName)"
+            message:
+              expr: "`expected ordered mixed-output primary retries then one visible fallback ${JSON.stringify(expectedModels)}, saw ${JSON.stringify(scenarioRequests.map((request) => ({ model: request.model, tool: request.plannedToolName ?? null })))}`"
+        - assert:
+            expr: "scenarioOutbound.length === 1 && String(outbound.text ?? '') === config.expectedReply"
+            message:
+              expr: "`expected one visible fallback reply, saw ${JSON.stringify(scenarioOutbound.map((message) => String(message.text ?? '')))}`"
+        - set: verdict
+          value:
+            expr: "({ verdict: 'PASS', harness: 'qa-channel + qa-lab bus + ephemeral Gateway child + mock-openai', primaryOutput: 'reasoning item plus whitespace-only final answer', primaryModel: expectedModels[0], fallbackModel: expectedModels[1], primaryRequestCount: primaryRequests.length, fallbackRequestCount: fallbackRequests.length, attemptedModels: scenarioRequests.map((request) => request.model), visibleTerminalPayloads: scenarioOutbound.map((message) => String(message.text ?? '')), outboundCount: scenarioOutbound.length, silentDropPrevented: scenarioOutbound.length === 1, pass: primaryRequests.length > 0 && fallbackRequests.length === 1 && scenarioOutbound.length === 1 && String(outbound.text ?? '') === config.expectedReply })"
+        - assert:
+            expr: verdict.pass === true
+            message:
+              expr: "`mixed reasoning fallback verdict failed: ${JSON.stringify(verdict)}`"
+      detailsExpr: "JSON.stringify(verdict, null, 2)"

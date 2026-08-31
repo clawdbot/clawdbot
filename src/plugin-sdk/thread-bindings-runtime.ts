@@ -15,6 +15,12 @@ export type {
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 export {
+  createAccountScopedConversationBindingManager,
+  resetAccountScopedConversationBindingsForTests,
+  type AccountScopedConversationBindingManager,
+  type AccountScopedConversationBindingRecord,
+} from "../infra/outbound/account-scoped-conversation-bindings.js";
+export {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";

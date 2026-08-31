@@ -1,78 +1,44 @@
+// Google plugin entrypoint registers its OpenClaw integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
+import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-  type ProviderAuthContext,
-  type ProviderFetchUsageSnapshotContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
-import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import {
-  GOOGLE_GEMINI_DEFAULT_MODEL,
-  applyGoogleGeminiModelDefault,
-  normalizeGoogleProviderConfig,
-  resolveGoogleGenerativeAiTransport,
-  normalizeGoogleModelId,
-} from "./api.js";
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
-import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
-import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import {
+  createGoogleMusicGenerationProviderMetadata,
+  createGoogleVideoGenerationProviderMetadata,
+} from "./generation-provider-metadata.js";
+import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import { registerGoogleProvider } from "./provider-registration.js";
+import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
-const GOOGLE_GEMINI_CLI_PROVIDER_LABEL = "Gemini CLI OAuth";
-const GOOGLE_GEMINI_CLI_DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
-const GOOGLE_GEMINI_CLI_ENV_VARS = [
-  "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
-  "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
-  "GEMINI_CLI_OAUTH_CLIENT_ID",
-  "GEMINI_CLI_OAUTH_CLIENT_SECRET",
-] as const;
-
-let googleGeminiCliProviderPromise: Promise<ProviderPlugin> | null = null;
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
+let googleMusicGenerationProviderPromise: Promise<MusicGenerationProvider> | null = null;
+let googleRealtimeVoiceProviderPromise: Promise<RealtimeVoiceProviderPlugin> | null = null;
+let googleVideoGenerationProviderPromise: Promise<VideoGenerationProvider> | null = null;
 
-type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
-  describeImage: NonNullable<MediaUnderstandingProvider["describeImage"]>;
-  describeImages: NonNullable<MediaUnderstandingProvider["describeImages"]>;
-  transcribeAudio: NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
-  describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
-};
-
-const GOOGLE_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "google-gemini",
-});
-const GOOGLE_GEMINI_PROVIDER_HOOKS = {
-  ...GOOGLE_GEMINI_REPLAY_HOOKS,
-  ...buildProviderStreamFamilyHooks("google-thinking"),
-};
-const GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT = {
-  ...GOOGLE_GEMINI_PROVIDER_HOOKS,
-  ...buildProviderToolCompatFamilyHooks("gemini"),
-};
-
-async function loadGoogleGeminiCliProvider(): Promise<ProviderPlugin> {
-  if (!googleGeminiCliProviderPromise) {
-    googleGeminiCliProviderPromise = import("./gemini-cli-provider.js").then((mod) => {
-      let provider: ProviderPlugin | undefined;
-      mod.registerGoogleGeminiCliProvider({
-        registerProvider(entry) {
-          provider = entry;
-        },
-      } as Pick<OpenClawPluginApi, "registerProvider"> as OpenClawPluginApi);
-      if (!provider) {
-        throw new Error("google gemini cli provider missing provider registration");
-      }
-      return provider;
-    });
-  }
-  return await googleGeminiCliProviderPromise;
-}
+type GoogleMediaUnderstandingProvider = Required<
+  Pick<
+    MediaUnderstandingProvider,
+    "describeImage" | "describeImages" | "transcribeAudio" | "describeVideo"
+  >
+>;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
   if (!googleImageGenerationProviderPromise) {
@@ -92,6 +58,33 @@ async function loadGoogleMediaUnderstandingProvider(): Promise<MediaUnderstandin
   return await googleMediaUnderstandingProviderPromise;
 }
 
+async function loadGoogleMusicGenerationProvider(): Promise<MusicGenerationProvider> {
+  if (!googleMusicGenerationProviderPromise) {
+    googleMusicGenerationProviderPromise = import("./music-generation-provider.js").then((mod) =>
+      mod.buildGoogleMusicGenerationProvider(),
+    );
+  }
+  return await googleMusicGenerationProviderPromise;
+}
+
+async function loadGoogleRealtimeVoiceProvider(): Promise<RealtimeVoiceProviderPlugin> {
+  if (!googleRealtimeVoiceProviderPromise) {
+    googleRealtimeVoiceProviderPromise = import("./realtime-voice-provider.js").then((mod) =>
+      mod.buildGoogleRealtimeVoiceProvider(),
+    );
+  }
+  return await googleRealtimeVoiceProviderPromise;
+}
+
+async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvider> {
+  if (!googleVideoGenerationProviderPromise) {
+    googleVideoGenerationProviderPromise = import("./video-generation-provider.js").then((mod) =>
+      mod.buildGoogleVideoGenerationProvider(),
+    );
+  }
+  return await googleVideoGenerationProviderPromise;
+}
+
 async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMediaUnderstandingProvider> {
   const provider = await loadGoogleMediaUnderstandingProvider();
   if (
@@ -105,63 +98,12 @@ async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMed
   return provider as GoogleMediaUnderstandingProvider;
 }
 
-function createLazyGoogleGeminiCliProvider(): ProviderPlugin {
-  return {
-    id: GOOGLE_GEMINI_CLI_PROVIDER_ID,
-    label: GOOGLE_GEMINI_CLI_PROVIDER_LABEL,
-    docsPath: "/providers/models",
-    aliases: ["gemini-cli"],
-    envVars: [...GOOGLE_GEMINI_CLI_ENV_VARS],
-    auth: [
-      {
-        id: "oauth",
-        label: "Google OAuth",
-        hint: "PKCE + localhost callback",
-        kind: "oauth",
-        run: async (ctx: ProviderAuthContext) => {
-          const provider = await loadGoogleGeminiCliProvider();
-          const authMethod = provider.auth?.[0];
-          if (!authMethod || authMethod.kind !== "oauth") {
-            return { profiles: [] };
-          }
-          return await authMethod.run(ctx);
-        },
-      },
-    ],
-    wizard: {
-      setup: {
-        choiceId: "google-gemini-cli",
-        choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Google OAuth with project-aware token payload",
-        methodId: "oauth",
-      },
-    },
-    normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-    resolveDynamicModel: (ctx) =>
-      resolveGoogle31ForwardCompatModel({ providerId: GOOGLE_GEMINI_CLI_PROVIDER_ID, ctx }),
-    ...GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT,
-    isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
-    formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
-    resolveUsageAuth: async (ctx) => {
-      const provider = await loadGoogleGeminiCliProvider();
-      return await provider.resolveUsageAuth?.(ctx);
-    },
-    fetchUsageSnapshot: async (ctx: ProviderFetchUsageSnapshotContext) => {
-      const provider = await loadGoogleGeminiCliProvider();
-      if (!provider.fetchUsageSnapshot) {
-        throw new Error("google gemini cli provider missing usage snapshot handler");
-      }
-      return await provider.fetchUsageSnapshot(ctx);
-    },
-  };
-}
-
 function createLazyGoogleImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "google",
     label: "Google",
-    defaultModel: "gemini-3.1-flash-image-preview",
-    models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+    defaultModel: "gemini-3.1-flash-image",
+    models: ["gemini-3.1-flash-image", "gemini-3-pro-image"],
     capabilities: {
       generate: {
         maxCount: 4,
@@ -209,57 +151,329 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
   };
 }
 
+function createLazyGoogleMusicGenerationProvider(): MusicGenerationProvider {
+  return {
+    ...createGoogleMusicGenerationProviderMetadata(),
+    generateMusic: async (...args) =>
+      await (await loadGoogleMusicGenerationProvider()).generateMusic(...args),
+  };
+}
+
+function resolveGoogleRealtimeProviderConfig(
+  rawConfig: RealtimeVoiceProviderConfig,
+  cfg?: { models?: { providers?: { google?: { apiKey?: unknown } } } },
+): RealtimeVoiceProviderConfig {
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw =
+    asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google) ?? rawConfig;
+  return {
+    ...raw,
+    ...(raw.apiKey === undefined
+      ? cfg?.models?.providers?.google?.apiKey === undefined
+        ? {}
+        : {
+            apiKey: normalizeResolvedSecretInputString({
+              value: cfg.models.providers.google.apiKey,
+              path: "models.providers.google.apiKey",
+            }),
+          }
+      : {
+          apiKey: normalizeResolvedSecretInputString({
+            value: raw.apiKey,
+            path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
+          }),
+        }),
+  };
+}
+
+function resolveGoogleRealtimeEnvApiKey(): string | undefined {
+  return (
+    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
+    normalizeOptionalString(process.env.GOOGLE_API_KEY)
+  );
+}
+
+const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES = 128;
+const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES = 256 * 1024;
+
+function createLazyGoogleRealtimeVoiceBridge(
+  req: RealtimeVoiceBridgeCreateRequest,
+): RealtimeVoiceBridge {
+  let bridge: RealtimeVoiceBridge | undefined;
+  let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
+  let bridgePromiseGeneration = 0;
+  let bridgeReady = false;
+  // Provider close is terminal for input admission. Only an explicit connect()
+  // call may reopen it; late callbacks and microphone frames stay ignored.
+  let terminated = false;
+  let generation = 0;
+  let latestMediaTimestamp: number | undefined;
+  let pendingGreeting: string | undefined;
+  // Lazy startup keeps the newest microphone tail when loading stalls.
+  const pendingAudio = createRealtimeVoiceAudioQueue("drop-oldest");
+  const pendingUserMessages: string[] = [];
+  let pendingUserMessageBytes = 0;
+  const closedBridges = new WeakSet<RealtimeVoiceBridge>();
+  const clearPendingInput = () => {
+    pendingAudio.clear();
+    pendingUserMessages.length = 0;
+    pendingUserMessageBytes = 0;
+    pendingGreeting = undefined;
+    latestMediaTimestamp = undefined;
+  };
+  const isCurrentNonterminalGeneration = (candidate: number) =>
+    candidate === generation && !terminated;
+  // Loading and connecting finish on separate async boundaries. Keep close ownership
+  // here so either late completion closes the provider bridge exactly once.
+  const closeBridge = (loadedBridge = bridge) => {
+    if (!loadedBridge || closedBridges.has(loadedBridge)) {
+      return;
+    }
+    closedBridges.add(loadedBridge);
+    loadedBridge.close();
+  };
+  const emitTerminal = (terminalGeneration: number, reason: "completed" | "error") => {
+    if (!isCurrentNonterminalGeneration(terminalGeneration)) {
+      return;
+    }
+    bridgeReady = false;
+    terminated = true;
+    clearPendingInput();
+    req.onClose?.(reason);
+  };
+  const throwTerminalBridgeError = (
+    terminalGeneration: number,
+    loadedBridge: RealtimeVoiceBridge,
+    primaryError: unknown,
+  ): never => {
+    if (isCurrentNonterminalGeneration(terminalGeneration)) {
+      try {
+        req.onError?.(
+          primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
+        );
+      } catch {
+        // Consumer callback failures cannot prevent terminal cleanup or replace the provider failure.
+      }
+      try {
+        emitTerminal(terminalGeneration, "error");
+      } catch {
+        // Consumer callback failures cannot prevent cleanup or replace the provider failure.
+      }
+    }
+    try {
+      closeBridge(loadedBridge);
+    } catch {
+      // Cleanup failures cannot replace the provider failure.
+    }
+    throw primaryError;
+  };
+  const loadBridge = async () => {
+    if (!bridgePromise) {
+      const loadGeneration = generation;
+      bridgePromiseGeneration = loadGeneration;
+      bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
+        provider.createBridge({
+          ...req,
+          onReady: () => {
+            if (loadGeneration !== generation || terminated) {
+              return;
+            }
+            req.onReady?.();
+            if (loadGeneration !== generation || terminated || !bridge) {
+              return;
+            }
+            bridgeReady = true;
+            // `connect()` and provider readiness are separate lifecycle facts.
+            // Release prompts only after the provider can accept user content.
+            flushPending(bridge);
+          },
+          onClose: (reason) => {
+            emitTerminal(loadGeneration, reason);
+          },
+        }),
+      );
+    }
+    const loading = bridgePromise;
+    const loadGeneration = bridgePromiseGeneration;
+    const loadedBridge = await loading;
+    // Explicit reconnect can replace the lazy load before it settles. Only the
+    // matching generation may publish a bridge; stale instances must close.
+    if (loading !== bridgePromise || loadGeneration !== generation || terminated) {
+      closeBridge(loadedBridge);
+      return loadedBridge;
+    }
+    bridge = loadedBridge;
+    return loadedBridge;
+  };
+  const requireBridge = () => {
+    if (!bridge) {
+      throw new Error("Google realtime voice bridge is not connected");
+    }
+    return bridge;
+  };
+  const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
+    if (terminated) {
+      return;
+    }
+    if (typeof latestMediaTimestamp === "number") {
+      loadedBridge.setMediaTimestamp(latestMediaTimestamp);
+    }
+    for (const audio of pendingAudio.drain()) {
+      loadedBridge.sendAudio(audio);
+    }
+    const userMessages = pendingUserMessages.splice(0);
+    pendingUserMessageBytes = 0;
+    for (const text of userMessages) {
+      loadedBridge.sendUserMessage?.(text);
+    }
+    if (pendingGreeting !== undefined) {
+      const greeting = pendingGreeting;
+      pendingGreeting = undefined;
+      loadedBridge.triggerGreeting?.(greeting);
+    }
+  };
+  return {
+    get supportsToolResultContinuation() {
+      return bridge?.supportsToolResultContinuation ?? false;
+    },
+    supportsToolResultSuppression: false,
+    connect: async () => {
+      if (terminated) {
+        generation += 1;
+        bridge = undefined;
+        bridgePromise = undefined;
+        bridgeReady = false;
+        terminated = false;
+      }
+      const connectGeneration = generation;
+      const loadedBridge = await loadBridge();
+      if (connectGeneration !== generation || terminated) {
+        closeBridge(loadedBridge);
+        return;
+      }
+      try {
+        await loadedBridge.connect();
+      } catch (error) {
+        throwTerminalBridgeError(connectGeneration, loadedBridge, error);
+      }
+      if (connectGeneration !== generation || terminated) {
+        closeBridge(loadedBridge);
+      }
+    },
+    sendAudio: (audio) => {
+      if (terminated) {
+        return;
+      }
+      if (bridgeReady && bridge) {
+        bridge.sendAudio(audio);
+        return;
+      }
+      pendingAudio.enqueue(audio);
+    },
+    setMediaTimestamp: (ts) => {
+      if (terminated) {
+        return;
+      }
+      latestMediaTimestamp = ts;
+      bridge?.setMediaTimestamp(ts);
+    },
+    sendUserMessage: (text) => {
+      if (terminated) {
+        return;
+      }
+      if (bridgeReady && bridge) {
+        bridge.sendUserMessage?.(text);
+        return;
+      }
+      const messageBytes = Buffer.byteLength(text, "utf8");
+      if (
+        pendingUserMessages.length >= GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES ||
+        pendingUserMessageBytes + messageBytes > GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES
+      ) {
+        req.onError?.(
+          new Error("Google realtime voice pending user message queue overflow during startup"),
+        );
+        return;
+      }
+      pendingUserMessages.push(text);
+      pendingUserMessageBytes += messageBytes;
+    },
+    triggerGreeting: (instructions) => {
+      if (terminated) {
+        return;
+      }
+      if (bridgeReady && bridge) {
+        bridge.triggerGreeting?.(instructions);
+        return;
+      }
+      pendingGreeting = instructions;
+    },
+    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
+    submitToolResult: (callId, result, options) =>
+      requireBridge().submitToolResult(callId, result, options),
+    acknowledgeMark: () => requireBridge().acknowledgeMark(),
+    close: () => {
+      if (terminated) {
+        return;
+      }
+      terminated = true;
+      bridgeReady = false;
+      clearPendingInput();
+      closeBridge();
+      // A bridge closed before its first connect has no provider-owned
+      // connection to report the terminal outcome.
+      req.onClose?.("completed");
+    },
+    isConnected: () => !terminated && (bridge?.isConnected() ?? false),
+  };
+}
+
+function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
+  return {
+    id: "google",
+    label: "Google Live Voice",
+    autoSelectOrder: 20,
+    resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
+    isConfigured: ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeOptionalString(providerConfig.apiKey) ??
+        normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
+        resolveGoogleRealtimeEnvApiKey(),
+      ),
+    createBridge: createLazyGoogleRealtimeVoiceBridge,
+    createBrowserSession: async (req) => {
+      const provider = await loadGoogleRealtimeVoiceProvider();
+      if (!provider.createBrowserSession) {
+        throw new Error("Google realtime voice browser sessions are unavailable");
+      }
+      return await provider.createBrowserSession(req);
+    },
+  };
+}
+
+function createLazyGoogleVideoGenerationProvider(): VideoGenerationProvider {
+  return {
+    ...createGoogleVideoGenerationProviderMetadata(),
+    generateVideo: async (...args) =>
+      await (await loadGoogleVideoGenerationProvider()).generateVideo(...args),
+  };
+}
+
 export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
   register(api) {
-    api.registerProvider({
-      id: "google",
-      label: "Google AI Studio",
-      docsPath: "/providers/models",
-      hookAliases: ["google-antigravity", "google-vertex"],
-      envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: "google",
-          methodId: "api-key",
-          label: "Google Gemini API key",
-          hint: "AI Studio / Gemini API key",
-          optionKey: "geminiApiKey",
-          flagName: "--gemini-api-key",
-          envVar: "GEMINI_API_KEY",
-          promptMessage: "Enter Gemini API key",
-          defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
-          expectedProviders: ["google"],
-          applyConfig: (cfg) => applyGoogleGeminiModelDefault(cfg).next,
-          wizard: {
-            choiceId: "gemini-api-key",
-            choiceLabel: "Google Gemini API key",
-            groupId: "google",
-            groupLabel: "Google",
-            groupHint: "Gemini API key + OAuth",
-          },
-        }),
-      ],
-      normalizeTransport: ({ api, baseUrl }) =>
-        resolveGoogleGenerativeAiTransport({ api, baseUrl }),
-      normalizeConfig: ({ provider, providerConfig }) =>
-        normalizeGoogleProviderConfig(provider, providerConfig),
-      normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-      resolveDynamicModel: (ctx) =>
-        resolveGoogle31ForwardCompatModel({
-          providerId: ctx.provider,
-          templateProviderId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
-          ctx,
-        }),
-      ...GOOGLE_GEMINI_PROVIDER_HOOKS,
-      isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
-    });
     api.registerCliBackend(buildGoogleGeminiCliBackend());
-    api.registerProvider(createLazyGoogleGeminiCliProvider());
+    registerGoogleGeminiCliProvider(api);
+    registerGoogleProvider(api);
+    api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
+    api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());
+    api.registerRealtimeVoiceProvider(createLazyGoogleRealtimeVoiceProvider());
+    api.registerSpeechProvider(buildGoogleSpeechProvider());
+    api.registerVideoGenerationProvider(createLazyGoogleVideoGenerationProvider());
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
 });

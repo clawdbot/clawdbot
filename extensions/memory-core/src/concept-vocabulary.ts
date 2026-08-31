@@ -1,8 +1,11 @@
+// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MAX_CONCEPT_TAGS = 8;
 
-export type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
+type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
 export type ConceptTagScriptCoverage = {
   latinEntryCount: number;
@@ -18,6 +21,7 @@ const LANGUAGE_STOP_WORDS = {
     "agent",
     "again",
     "also",
+    "assistant",
     "because",
     "before",
     "being",
@@ -63,6 +67,8 @@ const LANGUAGE_STOP_WORDS = {
     "should",
     "since",
     "some",
+    "subagent",
+    "system",
     "than",
     "that",
     "their",
@@ -72,13 +78,14 @@ const LANGUAGE_STOP_WORDS = {
     "this",
     "through",
     "today",
+    "user",
     "using",
     "with",
     "work",
     "workspace",
     "year",
   ],
-  english: ["and", "are", "for", "into", "its", "our", "then", "were"],
+  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
   spanish: [
     "al",
     "con",
@@ -203,7 +210,6 @@ const LANGUAGE_STOP_WORDS = {
     "할",
     "해",
     "했다",
-    "했다",
   ],
   pathNoise: [
     "cjs",
@@ -226,8 +232,8 @@ const LANGUAGE_STOP_WORDS = {
 
 const CONCEPT_STOP_WORDS = new Set(
   Object.values(LANGUAGE_STOP_WORDS)
-    .flatMap((words) => words)
-    .map((word) => word.toLowerCase()),
+    .flat()
+    .map((word) => normalizeLowercaseStringOrEmpty(word)),
 );
 
 const PROTECTED_GLOSSARY = [
@@ -242,7 +248,6 @@ const PROTECTED_GLOSSARY = [
   "kv",
   "network",
   "openai",
-  "qmd",
   "router",
   "s3",
   "vlan",
@@ -273,7 +278,7 @@ const PROTECTED_GLOSSARY = [
   "네트워크",
   "게이트웨이",
   "장애대응",
-].map((word) => word.normalize("NFKC").toLowerCase());
+].map((word) => normalizeLowercaseStringOrEmpty(word.normalize("NFKC")));
 
 const COMPOUND_TOKEN_RE = /[\p{L}\p{N}]+(?:[._/-][\p{L}\p{N}]+)+/gu;
 const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
@@ -286,11 +291,7 @@ const HANGUL_RE = /\p{Script=Hangul}/u;
 const DEFAULT_WORD_SEGMENTER =
   typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
 
-function containsLetterOrNumber(value: string): boolean {
-  return LETTER_OR_NUMBER_RE.test(value);
-}
-
-export function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
+function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
   const hasLatin = LATIN_RE.test(normalized);
   const hasCjk =
@@ -325,24 +326,28 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
-function normalizeConceptToken(rawToken: string): string | null {
-  const normalized = rawToken
-    .normalize("NFKC")
-    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
-    .replaceAll("_", "-")
-    .toLowerCase();
-  if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
+export function normalizeConceptToken(rawToken: string): string | null {
+  const normalized = normalizeLowercaseStringOrEmpty(
+    rawToken
+      .normalize("NFKC")
+      .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+      .replaceAll("_", "-"),
+  );
+  if (!normalized || !LETTER_OR_NUMBER_RE.test(normalized) || normalized.length > 32) {
     return null;
   }
   if (
-    /^\d+$/.test(normalized) ||
-    /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
+    /^\p{N}+(?:[./-]\p{N}+)*$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
     return null;
   }
   const script = classifyConceptTagScript(normalized);
-  if (normalized.length < minimumTokenLengthForScript(script)) {
+  // Recognize the glossary here so extraction and stored REM tags share the same short-token policy.
+  if (
+    normalized.length < minimumTokenLengthForScript(script) &&
+    !PROTECTED_GLOSSARY.includes(normalized)
+  ) {
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -354,14 +359,27 @@ function normalizeConceptToken(rawToken: string): string | null {
   return normalized;
 }
 
+// Only entries shorter than their script's minimum token length rely on the glossary bypass, and
+// only those need whole-word matching so they don't fire inside longer words ("kv" in "mkv"). Longer
+// entries keep substring containment (the shipped behavior, e.g. "backup" tagging inside "backups").
+// Precomputed so derive() does not reclassify on every call.
+const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
+  entry,
+  // Unicode boundaries must inspect code points, not half of an astral letter or number.
+  wholeWord:
+    entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry))
+      ? new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(entry)}(?![\\p{L}\\p{N}])`, "u")
+      : undefined,
+}));
+
 function collectGlossaryMatches(source: string): string[] {
-  const normalizedSource = source.normalize("NFKC").toLowerCase();
+  const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
   const matches: string[] = [];
-  for (const entry of PROTECTED_GLOSSARY) {
-    if (!normalizedSource.includes(entry)) {
-      continue;
+  for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
+    const present = wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry);
+    if (present) {
+      matches.push(entry);
     }
-    matches.push(entry);
   }
   return matches;
 }
@@ -379,23 +397,15 @@ function collectSegmentTokens(source: string): string[] {
   return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
-function pushNormalizedTag(tags: string[], rawToken: string, limit: number): void {
-  const normalized = normalizeConceptToken(rawToken);
-  if (!normalized || tags.includes(normalized)) {
-    return;
-  }
-  tags.push(normalized);
-  if (tags.length > limit) {
-    tags.splice(limit);
-  }
-}
-
 export function deriveConceptTags(params: {
   path: string;
   snippet: string;
   limit?: number;
 }): string[] {
-  const source = `${path.basename(params.path)} ${params.snippet}`;
+  // Recall annotations are control metadata; deriving tags from them can turn
+  // project identities into promoted triggers instead of user-visible concepts.
+  const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
+  const source = `${path.basename(params.path)} ${visibleSnippet}`;
   const limit = Number.isFinite(params.limit)
     ? Math.max(0, Math.floor(params.limit as number))
     : MAX_CONCEPT_TAGS;
@@ -404,14 +414,21 @@ export function deriveConceptTags(params: {
   }
 
   const tags: string[] = [];
-  for (const rawToken of [
-    ...collectGlossaryMatches(source),
-    ...collectCompoundTokens(source),
-    ...collectSegmentTokens(source),
-  ]) {
-    pushNormalizedTag(tags, rawToken, limit);
-    if (tags.length >= limit) {
-      break;
+  const tokenSources = [
+    collectGlossaryMatches(source),
+    collectCompoundTokens(source),
+    collectSegmentTokens(source),
+  ];
+  for (const tokens of tokenSources) {
+    for (const rawToken of tokens) {
+      const normalized = normalizeConceptToken(rawToken);
+      if (!normalized || tags.includes(normalized)) {
+        continue;
+      }
+      tags.push(normalized);
+      if (tags.length >= limit) {
+        return tags;
+      }
     }
   }
   return tags;
@@ -462,10 +479,3 @@ export function summarizeConceptTagScriptCoverage(
 
   return coverage;
 }
-
-export const __testing = {
-  normalizeConceptToken,
-  collectGlossaryMatches,
-  collectCompoundTokens,
-  collectSegmentTokens,
-};

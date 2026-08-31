@@ -1,19 +1,24 @@
-import fs from "node:fs";
+// Memory Lancedb helper module supports config behavior.
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: string;
     model: string;
-    apiKey: string;
+    apiKey?: string;
     baseUrl?: string;
     dimensions?: number;
   };
+  dreaming?: Record<string, unknown>;
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
-  captureMaxChars?: number;
+  captureMaxChars: number;
+  customTriggers?: string[];
+  recallMaxChars: number;
+  storageOptions?: Record<string, string>;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -21,39 +26,14 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
-const LEGACY_STATE_DIRS: string[] = [];
-
-function resolveDefaultDbPath(): string {
-  const home = homedir();
-  const preferred = join(home, ".openclaw", "memory", "lancedb");
-  try {
-    if (fs.existsSync(preferred)) {
-      return preferred;
-    }
-  } catch {
-    // best-effort
-  }
-
-  for (const legacy of LEGACY_STATE_DIRS) {
-    const candidate = join(home, legacy, "memory", "lancedb");
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // best-effort
-    }
-  }
-
-  return preferred;
-}
-
-const DEFAULT_DB_PATH = resolveDefaultDbPath();
+export const DEFAULT_RECALL_MAX_CHARS = 1000;
+const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
 };
+const EMBEDDING_CONFIG_KEYS = ["provider", "apiKey", "model", "baseUrl", "dimensions"] as const;
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -81,12 +61,49 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
+function resolveEmbeddingModel(
+  embedding: Record<string, unknown>,
+  dimensions: number | undefined,
+): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  if (typeof embedding.dimensions !== "number") {
+  if (dimensions === undefined) {
     vectorDimsForModel(model);
   }
   return model;
+}
+
+function resolveFiniteIntegerConfig(value: unknown): number | undefined {
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  const parsed = parseFiniteNumber(value);
+  return parsed === undefined ? undefined : Math.floor(parsed);
+}
+
+function resolveBoundedIntegerConfig(params: {
+  value: unknown;
+  fallback: number;
+  min: number;
+  max: number;
+  label: string;
+}): number {
+  const resolved = resolveFiniteIntegerConfig(params.value) ?? params.fallback;
+  if (resolved < params.min || resolved > params.max) {
+    throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
+  }
+  return resolved;
+}
+
+function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number | undefined {
+  if (embedding.dimensions === undefined) {
+    return undefined;
+  }
+  const dimensions =
+    typeof embedding.dimensions === "number" ? parseFiniteNumber(embedding.dimensions) : undefined;
+  if (dimensions === undefined || !Number.isInteger(dimensions) || dimensions < 1) {
+    throw new Error("embedding.dimensions must be a positive integer");
+  }
+  return dimensions;
 }
 
 export const memoryConfigSchema = {
@@ -97,84 +114,116 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "customTriggers",
+        "recallMaxChars",
+        "storageOptions",
+      ],
       "memory config",
     );
 
     const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
+    if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
+      throw new Error("embedding config required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
+    assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
+    if (Object.keys(embedding).length === 0) {
+      throw new Error("embedding config must include at least one setting");
+    }
 
-    const model = resolveEmbeddingModel(embedding);
+    const dimensions = resolveEmbeddingDimensions(embedding);
+    const model = resolveEmbeddingModel(embedding, dimensions);
+    const provider = typeof embedding.provider === "string" ? embedding.provider.trim() : "openai";
+    if (!provider) {
+      throw new Error("embedding.provider must not be empty");
+    }
 
-    const captureMaxChars =
-      typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
-    if (
-      typeof captureMaxChars === "number" &&
-      (captureMaxChars < 100 || captureMaxChars > 10_000)
-    ) {
-      throw new Error("captureMaxChars must be between 100 and 10000");
+    const captureMaxChars = resolveBoundedIntegerConfig({
+      value: cfg.captureMaxChars,
+      fallback: DEFAULT_CAPTURE_MAX_CHARS,
+      min: 100,
+      max: 10_000,
+      label: "captureMaxChars",
+    });
+    const recallMaxChars = resolveBoundedIntegerConfig({
+      value: cfg.recallMaxChars,
+      fallback: DEFAULT_RECALL_MAX_CHARS,
+      min: 100,
+      max: 10_000,
+      label: "recallMaxChars",
+    });
+    let customTriggers: string[] | undefined;
+    if (cfg.customTriggers !== undefined) {
+      if (!Array.isArray(cfg.customTriggers)) {
+        throw new Error("customTriggers must be an array of strings");
+      }
+      customTriggers = cfg.customTriggers.map((trigger, index) => {
+        if (typeof trigger !== "string") {
+          throw new Error(`customTriggers.${index} must be a string`);
+        }
+        const normalized = trigger.trim();
+        if (!normalized) {
+          throw new Error(`customTriggers.${index} must not be empty`);
+        }
+        if (normalized.length > 100) {
+          throw new Error(`customTriggers.${index} must be at most 100 characters`);
+        }
+        return normalized;
+      });
+      if (customTriggers.length > 50) {
+        throw new Error("customTriggers must include at most 50 entries");
+      }
+    }
+
+    const dreaming =
+      cfg.dreaming === undefined
+        ? undefined
+        : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
+          ? (cfg.dreaming as Record<string, unknown>)
+          : (() => {
+              throw new Error("dreaming config must be an object");
+            })();
+
+    // Parse storageOptions (object with string values)
+    let storageOptions: Record<string, string> | undefined;
+    const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
+    if (storageOpts !== undefined && storageOpts !== null) {
+      if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
+        throw new Error("storageOptions must be an object");
+      }
+      storageOptions = {};
+      // Validate all values are strings
+      for (const [key, valueLocal] of Object.entries(storageOpts)) {
+        if (typeof valueLocal !== "string") {
+          throw new Error(`storageOptions.${key} must be a string`);
+        }
+        storageOptions[key] = resolveEnvVars(valueLocal);
+      }
     }
 
     return {
       embedding: {
-        provider: "openai",
+        provider,
         model,
-        apiKey: resolveEnvVars(embedding.apiKey),
+        apiKey: typeof embedding.apiKey === "string" ? resolveEnvVars(embedding.apiKey) : undefined,
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
-        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+        dimensions,
       },
+      dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
-      captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      captureMaxChars,
+      ...(customTriggers ? { customTriggers } : {}),
+      recallMaxChars,
+      ...(storageOptions ? { storageOptions } : {}),
     };
-  },
-  uiHints: {
-    "embedding.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
-    },
-    "embedding.baseUrl": {
-      label: "Base URL",
-      placeholder: "https://api.openai.com/v1",
-      help: "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
-      advanced: true,
-    },
-    "embedding.dimensions": {
-      label: "Dimensions",
-      placeholder: "1536",
-      help: "Vector dimensions for custom models (required for non-standard models)",
-      advanced: true,
-    },
-    "embedding.model": {
-      label: "Embedding Model",
-      placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
-    },
-    dbPath: {
-      label: "Database Path",
-      placeholder: "~/.openclaw/memory/lancedb",
-      advanced: true,
-    },
-    autoCapture: {
-      label: "Auto-Capture",
-      help: "Automatically capture important information from conversations",
-    },
-    autoRecall: {
-      label: "Auto-Recall",
-      help: "Automatically inject relevant memories into context",
-    },
-    captureMaxChars: {
-      label: "Capture Max Chars",
-      help: "Maximum message length eligible for auto-capture",
-      advanced: true,
-      placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
-    },
   },
 };

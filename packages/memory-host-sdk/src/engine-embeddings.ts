@@ -3,52 +3,77 @@
 export {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
-} from "../../../src/plugins/memory-embedding-providers.js";
+  listRegisteredMemoryEmbeddingProviderAdapters,
+} from "./host/openclaw-runtime-memory.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,
-} from "../../../src/plugins/memory-embedding-providers.js";
-export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
+} from "./host/openclaw-runtime-memory.js";
 export {
-  createGeminiEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  buildGeminiEmbeddingRequest,
-} from "./host/embeddings-gemini.js";
+  EmbeddingBatchUnavailableError,
+  extractBatchErrorMessage,
+  formatBatchErrorDetail,
+  formatUnavailableBatchError,
+  isEmbeddingBatchUnavailableError,
+} from "./host/batch-error-utils.js";
+export { postJsonWithRetry } from "./host/batch-http.js";
+export { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./host/batch-output.js";
 export {
-  createMistralEmbeddingProvider,
-  DEFAULT_MISTRAL_EMBEDDING_MODEL,
-} from "./host/embeddings-mistral.js";
+  EMBEDDING_BATCH_ENDPOINT,
+  type EmbeddingBatchStatus,
+  type ProviderBatchOutputLine,
+} from "./host/batch-provider-common.js";
 export {
-  createOllamaEmbeddingProvider,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
-} from "./host/embeddings-ollama.js";
-export type { OllamaEmbeddingClient } from "./host/embeddings-ollama.js";
+  buildEmbeddingBatchGroupOptions,
+  runEmbeddingBatchGroups,
+  type EmbeddingBatchExecutionParams,
+} from "./host/batch-runner.js";
 export {
-  createOpenAiEmbeddingProvider,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-} from "./host/embeddings-openai.js";
+  resolveBatchCompletionFromStatus,
+  resolveCompletedBatchResult,
+  throwIfBatchCompletionError,
+  throwIfBatchTerminalFailure,
+  type BatchCompletionResult,
+} from "./host/batch-status.js";
+export { uploadBatchJsonlFile } from "./host/batch-upload.js";
 export {
-  createVoyageEmbeddingProvider,
-  DEFAULT_VOYAGE_EMBEDDING_MODEL,
-} from "./host/embeddings-voyage.js";
-export { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./host/batch-gemini.js";
-export {
-  OPENAI_BATCH_ENDPOINT,
-  runOpenAiEmbeddingBatches,
-  type OpenAiBatchRequest,
-} from "./host/batch-openai.js";
-export { runVoyageEmbeddingBatches, type VoyageBatchRequest } from "./host/batch-voyage.js";
+  buildBatchHeaders,
+  normalizeBatchBaseUrl,
+  type BatchHttpClientConfig,
+} from "./host/batch-utils.js";
 export { enforceEmbeddingMaxInputTokens } from "./host/embedding-chunk-limits.js";
+export {
+  isMissingEmbeddingApiKeyError,
+  mapBatchEmbeddingsByIndex,
+  sanitizeEmbeddingCacheHeaders,
+} from "./host/embedding-provider-adapter-utils.js";
+export { sanitizeAndNormalizeEmbedding } from "./host/embedding-vectors.js";
+export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
+export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
+export {
+  embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
+  resolveRemoteEmbeddingBearerClient,
+  type RemoteEmbeddingProviderId,
+} from "./host/embeddings-remote-client.js";
+export {
+  createRemoteEmbeddingProvider,
+  resolveRemoteEmbeddingClient,
+  type RemoteEmbeddingClient,
+} from "./host/embeddings-remote-provider.js";
+export { fetchRemoteEmbeddingVectors } from "./host/embeddings-remote-fetch.js";
 export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
 export { hasNonTextEmbeddingParts, type EmbeddingInput } from "./host/embedding-inputs.js";
+export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
 export {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,

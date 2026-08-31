@@ -1,45 +1,96 @@
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+} from "@openclaw/normalization-core/agent-id";
+// Routing session key helpers build stable session keys from route targets.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
+import {
+  isCronRunSessionKey,
+  normalizeSessionPeerId,
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
+} from "../sessions/session-key-utils.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { normalizeAccountId } from "./account-id.js";
 
 export {
-  getSubagentDepth,
   isCronSessionKey,
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
+  parseSessionDeliveryRoute,
+  parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
+export { isIncognitoSessionKey };
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
+export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 
-export const DEFAULT_AGENT_ID = "main";
+/** Legacy on-disk identity used only by doctor/migration and their fixtures. */
+export const LEGACY_IMPLICIT_AGENT_ID = "main";
+/** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
+export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export const DEFAULT_MAIN_KEY = "main";
-export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
-
-// Pre-compiled regex
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
+type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {
-  return (value ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
   wakeOptions: T,
-): T | (T & { sessionKey: string }) {
-  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+  mainKey?: string,
+  scope?: "per-sender" | "global",
+): T | (T & { sessionKey: string }) | (T & { agentId: string }) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return wakeOptions;
+  }
+  if (isCronRunSessionKey(sessionKey)) {
+    // Global-scope agents drain the literal "global" queue, not agent-main;
+    // a targeted wake on agent:<id>:main would be unresolvable. Drop the
+    // sessionKey but carry the agent target so multi-agent global-scope
+    // setups still wake the originating agent's heartbeat.
+    if (scope === "global") {
+      return { ...wakeOptions, agentId: parsed.agentId };
+    }
+    return {
+      ...wakeOptions,
+      sessionKey: buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey }),
+    };
+  }
+  return { ...wakeOptions, sessionKey };
+}
+
+export function resolveEventSessionKey(
+  sessionKey: string,
+  mainKey?: string,
+  scope?: "per-sender" | "global",
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed || !isCronRunSessionKey(sessionKey)) {
+    return sessionKey;
+  }
+  // Global-scope agents enqueue/drain via the literal "global" queue; agent-main
+  // would strand the event in a queue the heartbeat never peeks.
+  if (scope === "global") {
+    return "global";
+  }
+  return buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey });
 }
 
 export function normalizeMainKey(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  return trimmed ? trimmed.toLowerCase() : DEFAULT_MAIN_KEY;
+  return normalizeLowercaseStringOrEmpty(value) || DEFAULT_MAIN_KEY;
 }
 
 export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
@@ -50,29 +101,59 @@ export function toAgentRequestSessionKey(storeKey: string | undefined | null): s
   return parseAgentSessionKey(raw)?.rest ?? raw;
 }
 
+export function agentSessionKeysMatchByRequestKey(
+  left: string | undefined | null,
+  right: string | undefined | null,
+): boolean {
+  const leftRaw = (left ?? "").trim();
+  const rightRaw = (right ?? "").trim();
+  if (!leftRaw || !rightRaw) {
+    return false;
+  }
+  return (
+    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+  );
+}
+
 export function toAgentStoreSessionKey(params: {
   agentId: string;
   requestKey: string | undefined | null;
   mainKey?: string | undefined;
 }): string {
   const raw = (params.requestKey ?? "").trim();
-  if (!raw || raw.toLowerCase() === DEFAULT_MAIN_KEY) {
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (!raw || lowered === DEFAULT_MAIN_KEY) {
     return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
   }
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
     return `agent:${parsed.agentId}:${parsed.rest}`;
   }
-  const lowered = raw.toLowerCase();
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
   if (lowered.startsWith("agent:")) {
-    return lowered;
+    return normalized;
   }
-  return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
-export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
+export function resolveAgentIdFromSessionKey(
+  sessionKey: string | undefined | null,
+  configuredDefaultAgentId?: string,
+): string {
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  const configuredDefault = configuredDefaultAgentId?.trim();
+  if (configuredDefault) {
+    return normalizeAgentId(configuredDefault);
+  }
+  throw new Error(
+    "Session key does not contain an agent id; resolve it with the configured default agent.",
+  );
 }
 
 export function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape {
@@ -83,32 +164,39 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
   if (parseAgentSessionKey(raw)) {
     return "agent";
   }
-  return raw.toLowerCase().startsWith("agent:") ? "malformed_agent" : "legacy_or_alias";
+  return normalizeLowercaseStringOrEmpty(raw).startsWith("agent:")
+    ? "malformed_agent"
+    : "legacy_or_alias";
 }
 
-export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  // Keep it path-safe + shell-friendly.
-  if (VALID_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
-  }
-  // Best-effort fallback: collapse invalid characters to "-"
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
+export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean {
+  const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  return lowered === "global" || lowered === "unknown";
 }
 
-export function isValidAgentId(value: string | undefined | null): boolean {
-  const trimmed = (value ?? "").trim();
-  return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
+export function scopeLegacySessionKeyToAgent(params: {
+  agentId?: string | undefined;
+  sessionKey?: string | undefined;
+  mainKey?: string | undefined;
+}): string | undefined {
+  const raw = (params.sessionKey ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  const agentId = params.agentId?.trim();
+  if (!agentId || classifySessionKeyShape(raw) !== "legacy_or_alias") {
+    return raw;
+  }
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey: raw,
+    mainKey: params.mainKey,
+  });
+}
+
+export function normalizeOptionalAgentId(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed ? normalizeAgentId(trimmed) : undefined;
 }
 
 export function sanitizeAgentId(value: string | undefined | null): string {
@@ -134,6 +222,7 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  groupScope?: "main" | "per-group";
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -142,7 +231,7 @@ export function buildAgentPeerSessionKey(params: {
     const linkedPeerId =
       dmScope === "main"
         ? null
-        : resolveLinkedPeerId({
+        : resolveLinkedDirectPeerId({
             identityLinks: params.identityLinks,
             channel: params.channel,
             peerId,
@@ -150,14 +239,14 @@ export function buildAgentPeerSessionKey(params: {
     if (linkedPeerId) {
       peerId = linkedPeerId;
     }
-    peerId = peerId.toLowerCase();
+    peerId = normalizeLowercaseStringOrEmpty(peerId);
     if (dmScope === "per-account-channel-peer" && peerId) {
-      const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
+      const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
       const accountId = normalizeAccountId(params.accountId);
       return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:direct:${peerId}`;
     }
     if (dmScope === "per-channel-peer" && peerId) {
-      const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
+      const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
       return `agent:${normalizeAgentId(params.agentId)}:${channel}:direct:${peerId}`;
     }
     if (dmScope === "per-peer" && peerId) {
@@ -168,12 +257,21 @@ export function buildAgentPeerSessionKey(params: {
       mainKey: params.mainKey,
     });
   }
-  const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-  const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
+  if (params.groupScope === "main") {
+    return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
+  const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel: params.channel,
+      peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
-function resolveLinkedPeerId(params: {
+/** @internal Resolves a declared cross-channel identity for one direct peer. */
+export function resolveLinkedDirectPeerId(params: {
   identityLinks?: Record<string, string[]>;
   channel: string;
   peerId: string;
@@ -227,7 +325,12 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = params.peerId.trim().toLowerCase() || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel,
+      peerKind: params.peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 
@@ -242,12 +345,11 @@ export function resolveThreadSessionKeys(params: {
   if (!threadId) {
     return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
   }
-  const normalizedThreadId = (params.normalizeThreadId ?? ((value: string) => value.toLowerCase()))(
-    threadId,
-  );
+  const normalizedThread =
+    params.normalizeThreadId?.(threadId) ?? normalizeLowercaseStringOrEmpty(threadId);
   const useSuffix = params.useSuffix ?? true;
   const sessionKey = useSuffix
-    ? `${params.baseSessionKey}:thread:${normalizedThreadId}`
+    ? `${params.baseSessionKey}:thread:${normalizedThread}`
     : params.baseSessionKey;
   return { sessionKey, parentSessionKey: params.parentSessionKey };
 }

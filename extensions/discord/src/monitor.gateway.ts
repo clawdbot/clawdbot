@@ -1,21 +1,21 @@
-import type { EventEmitter } from "node:events";
+// Discord plugin module implements monitor.gateway behavior.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
+import { DiscordGatewayLifecycleError } from "./monitor/gateway-supervisor.js";
 import type {
   DiscordGatewayEvent,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
 
-export type WaitForDiscordGatewayStopParams = {
+export { getDiscordGatewayEmitter } from "./monitor/gateway-supervisor.js";
+
+type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
   abortSignal?: AbortSignal;
   gatewaySupervisor?: Pick<DiscordGatewaySupervisor, "attachLifecycle" | "detachLifecycle">;
   onGatewayEvent?: (event: DiscordGatewayEvent) => "continue" | "stop";
   registerForceStop?: (forceStop: (err: unknown) => void) => void;
 };
-
-export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
-  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
-}
 
 export async function waitForDiscordGatewayStop(
   params: WaitForDiscordGatewayStopParams,
@@ -50,7 +50,7 @@ export async function waitForDiscordGatewayStop(
         gateway?.disconnect?.();
       } finally {
         cleanup();
-        reject(err);
+        reject(toErrorObject(err, "Non-Error rejection"));
       }
     };
     const onAbort = () => {
@@ -59,7 +59,7 @@ export async function waitForDiscordGatewayStop(
     const onGatewayEvent = (event: DiscordGatewayEvent) => {
       const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
       if (shouldStop) {
-        finishReject(event.err);
+        finishReject(new DiscordGatewayLifecycleError(event));
       }
     };
     const onForceStop = (err: unknown) => {

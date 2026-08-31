@@ -1,0 +1,7 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"in","kind":"partial","data":{"text":"Working on the fix"}}
+{"seq":3,"at":0,"dir":"out","kind":"POST /posts","data":{"payload":{"channel_id":"channel-trace","message":"Working on the fix","root_id":"root-trace"},"result":{"id":"post-1"},"target":"channel-trace"}}
+{"seq":4,"at":300,"dir":"in","kind":"partial","data":{"text":"Working on the fix: patching now."}}
+{"seq":5,"at":600,"dir":"in","kind":"cancel"}
+{"seq":6,"at":600,"dir":"in","kind":"idle"}
+{"seq":7,"at":600,"dir":"out","kind":"PUT /posts/post-1","data":{"payload":{"id":"post-1","message":"Working on the fix: patching now."},"result":{"id":"post-1"},"target":"post-1"}}

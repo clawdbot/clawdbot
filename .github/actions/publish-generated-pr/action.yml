@@ -1,0 +1,209 @@
+name: Publish generated pull request
+description: Commit generated files to an automation branch and open or update its pull request.
+
+inputs:
+  contents-client-id:
+    description: GitHub App client id with contents write access.
+    required: true
+  contents-private-key:
+    description: GitHub App private key with contents write access.
+    required: true
+  pull-request-client-id:
+    description: GitHub App client id with pull-request write access.
+    required: true
+  pull-request-private-key:
+    description: GitHub App private key with pull-request write access.
+    required: true
+  base-branch:
+    description: Target branch for the generated pull request.
+    required: true
+  head-branch:
+    description: Automation-owned branch for the generated commit.
+    required: true
+  commit-message:
+    description: Generated commit message.
+    required: true
+  pr-title:
+    description: Generated pull request title.
+    required: true
+  pr-body:
+    description: Generated pull request body.
+    required: true
+  generated-paths:
+    description: Newline-delimited generated paths to commit.
+    required: true
+  invalidation-paths:
+    description: Newline-delimited generator input paths that make an older run stale.
+    required: false
+    default: ""
+  working-directory:
+    description: Repository root containing the generated files.
+    required: false
+    default: .
+  overlap-policy:
+    description: Whether stale inputs or owned-path overlap defer to a successor run or fail.
+    required: false
+    default: defer
+  auto-merge:
+    description: Enable squash auto-merge; false rejects an inherited auto-merge request.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare Git owner
+      uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
+    - name: Create generated PR tokens
+      id: tokens
+      uses: ./.github/actions/create-generated-pr-tokens
+      with:
+        contents-client-id: ${{ inputs.contents-client-id }}
+        contents-private-key: ${{ inputs.contents-private-key }}
+        pull-request-client-id: ${{ inputs.pull-request-client-id }}
+        pull-request-private-key: ${{ inputs.pull-request-private-key }}
+        pull-request-contents-permission: ${{ inputs.auto-merge == 'true' && 'write' || '' }}
+
+    - name: Publish generated pull request
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PUBLISH_ACTION_PATH: ${{ github.action_path }}
+        CONTENTS_TOKEN: ${{ steps.tokens.outputs.contents-token }}
+        GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        HEAD_BRANCH: ${{ inputs.head-branch }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY: ${{ inputs.pr-body }}
+        GENERATED_PATHS: ${{ inputs.generated-paths }}
+        INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
+        OVERLAP_POLICY: ${{ inputs.overlap-policy }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
+      run: |
+        set -euo pipefail
+        export GH_PROMPT_DISABLED=1
+        export GIT_ASKPASS=/bin/false
+        export GIT_EDITOR=true
+        export GIT_SEQUENCE_EDITOR=true
+        export GIT_TERMINAL_PROMPT=0
+
+        if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
+          echo "Generated branch publication requires a contents-write App token." >&2
+          exit 1
+        fi
+        if [[ -z "${GH_TOKEN:-}" ]]; then
+          echo "Generated PR publication requires a pull-request-write App token." >&2
+          exit 1
+        fi
+        case "${OVERLAP_POLICY}" in
+          defer | fail) ;;
+          *)
+            echo "Generated PR publication overlap policy must be 'defer' or 'fail'." >&2
+            exit 1
+            ;;
+        esac
+        case "${AUTO_MERGE}" in
+          true | false) ;;
+          *)
+            echo "Generated PR publication auto-merge must be 'true' or 'false'." >&2
+            exit 1
+            ;;
+        esac
+
+        find_open_pr() {
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f state=open -f base="${BASE_BRANCH}" \
+            -f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}" \
+            --jq '[.[] | select(.base.repo.full_name == env.GITHUB_REPOSITORY and .head.repo.full_name == env.GITHUB_REPOSITORY and .base.ref == env.BASE_BRANCH and .head.ref == env.HEAD_BRANCH)][0] | if . == null then "" else [.html_url, .head.sha] | @tsv end'
+        }
+
+        read_auto_merge_record_for_head() {
+          local attempt auto_merge_record observed_head
+          local expected_head="$1"
+          local pr_url="$2"
+          for attempt in 1 2 3; do
+            auto_merge_record="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh pr view "${pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                  --json autoMergeRequest,headRefOid \
+                  --jq '[.headRefOid, (.autoMergeRequest.mergeMethod // "")] | @tsv'
+            )"
+            observed_head="${auto_merge_record%%$'\t'*}"
+            if [[ "${observed_head}" = "${expected_head}" ]]; then
+              printf '%s\n' "${auto_merge_record}"
+              return 0
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking." >&2
+            sleep "${attempt}"
+          done
+        }
+
+        ensure_auto_merge_compatible() {
+          local attempt auto_merge_method auto_merge_record existing_pr_head existing_pr_record
+          local existing_pr_url
+          local expected_head="$1"
+          for attempt in 1 2 3; do
+            existing_pr_record="$(find_open_pr)"
+            existing_pr_url="${existing_pr_record%%$'\t'*}"
+            if [[ -z "${existing_pr_url}" ]]; then
+              return 0
+            fi
+            existing_pr_head="${existing_pr_record#*$'\t'}"
+            if [[ "${existing_pr_head}" = "${expected_head}" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::Generated pull request head does not match the observed automation branch."
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking."
+            sleep "${attempt}"
+          done
+          if ! auto_merge_record="$(
+            read_auto_merge_record_for_head "${expected_head}" "${existing_pr_url}"
+          )"; then
+            echo "::error::Generated pull request moved during auto-merge compatibility validation."
+            return 1
+          fi
+          auto_merge_method="${auto_merge_record#*$'\t'}"
+          if [[ "${AUTO_MERGE}" != "true" && -n "${auto_merge_method}" ]]; then
+            echo "::error::Generated pull request still has auto-merge enabled while publication opted out."
+            return 1
+          fi
+          if [[ -n "${auto_merge_method}" && "${auto_merge_method}" != "SQUASH" ]]; then
+            echo "::error::Generated pull request already uses incompatible ${auto_merge_method} auto-merge."
+            return 1
+          fi
+        }
+
+        mutate_pr() {
+          local pr_url="$1" body_file="$2" pr_mutation_status
+          set +e
+          if [[ -n "${pr_url}" ]]; then
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr edit "${pr_url}" --title "${PR_TITLE}" --body-file "${body_file}"
+            pr_mutation_status="$?"
+          else
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh pr create --repo "${GITHUB_REPOSITORY}" \
+              --base "${BASE_BRANCH}" --head "${HEAD_BRANCH}" \
+              --title "${PR_TITLE}" --body-file "${body_file}"
+            pr_mutation_status="$?"
+          fi
+          set -e
+          return "${pr_mutation_status}"
+        }
+        merge_pr() {
+          local published_pr_url="$1" published_commit="$2"
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+              --auto --squash --match-head-commit "${published_commit}"
+        }
+        export -f find_open_pr read_auto_merge_record_for_head ensure_auto_merge_compatible mutate_pr merge_pr
+        exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"

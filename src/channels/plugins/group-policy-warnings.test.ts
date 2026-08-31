@@ -1,3 +1,4 @@
+// Group policy warning tests cover user-facing warnings for channel group access policy.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -23,7 +24,6 @@ import {
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
-  buildOpenGroupPolicyNoRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
 } from "./group-policy-warnings.js";
@@ -93,7 +93,7 @@ describe("group policy warning builders", () => {
       { account: { accountId: string }; cfg: OpenClawConfig }
     >(
       (cfg: OpenClawConfig) => cfg.channels ?? {},
-      ({ account, cfg }) => [String(account.accountId), Object.keys(cfg).join(",") || "none"],
+      ({ account, cfg }) => [account.accountId, Object.keys(cfg).join(",") || "none"],
     );
 
     expect(
@@ -111,7 +111,7 @@ describe("group policy warning builders", () => {
     );
 
     expect(collect({ open: true })).toEqual(["open", "missing token", "cannot send replies"]);
-    expect(collect({ open: false, token: "x" })).toEqual([]);
+    expect(collect({ open: false, token: "x" })).toStrictEqual([]);
   });
 
   it("composes account-scoped warning collectors", () => {
@@ -158,20 +158,6 @@ describe("group policy warning builders", () => {
     );
   });
 
-  it("builds no-route-allowlist warning", () => {
-    expect(
-      buildOpenGroupPolicyNoRouteAllowlistWarning({
-        surface: "Example groups",
-        routeAllowlistPath: "channels.example.groups",
-        routeScope: "group",
-        groupPolicyPath: "channels.example.groupPolicy",
-        groupAllowFromPath: "channels.example.groupAllowFrom",
-      }),
-    ).toBe(
-      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
-    );
-  });
-
   it("builds configure-route-allowlist warning", () => {
     expect(
       buildOpenGroupPolicyConfigureRouteAllowlistWarning({
@@ -194,7 +180,7 @@ describe("group policy warning builders", () => {
         groupPolicyPath: "channels.example.groupPolicy",
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       collectOpenGroupPolicyRestrictSendersWarnings({
@@ -222,7 +208,7 @@ describe("group policy warning builders", () => {
         groupPolicyPath: "channels.example.groupPolicy",
         groupAllowFromPath: "channels.example.groupAllowFrom",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       collectAllowlistProviderRestrictSendersWarnings({
@@ -339,7 +325,9 @@ describe("group policy warning builders", () => {
         ...params,
         routeAllowlistConfigured: false,
       }),
-    ).toEqual([buildOpenGroupPolicyNoRouteAllowlistWarning(params.noRouteAllowlist)]);
+    ).toEqual([
+      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
+    ]);
   });
 
   it("collects configured-route warning variants", () => {
@@ -406,7 +394,7 @@ describe("group policy warning builders", () => {
       cfg: {
         channels?: {
           defaults?: { groupPolicy?: "open" | "allowlist" | "disabled" };
-          example?: unknown;
+          example?: Record<string, unknown>;
         };
       };
       channelLabel: string;
@@ -456,13 +444,7 @@ describe("group policy warning builders", () => {
         cfg: { channels: { example: {} } },
       }),
     ).toEqual([
-      buildOpenGroupPolicyNoRouteAllowlistWarning({
-        surface: "Example groups",
-        routeAllowlistPath: "channels.example.groups",
-        routeScope: "group",
-        groupPolicyPath: "channels.example.groupPolicy",
-        groupAllowFromPath: "channels.example.groupAllowFrom",
-      }),
+      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
     ]);
   });
 
@@ -505,7 +487,7 @@ describe("group policy warning builders", () => {
 
   it("builds config-aware open-provider collectors", () => {
     const collectWarnings = createOpenProviderGroupPolicyWarningCollector<{
-      cfg: { channels?: { example?: unknown } };
+      cfg: { channels?: { example?: Record<string, unknown> } };
       configuredGroupPolicy?: "open" | "allowlist" | "disabled";
     }>({
       providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
@@ -563,7 +545,7 @@ describe("group policy warning builders", () => {
       mentionGated: false,
     });
 
-    expect(collectWarnings({ groupPolicy: "allowlist" })).toEqual([]);
+    expect(collectWarnings({ groupPolicy: "allowlist" })).toStrictEqual([]);
     expect(collectWarnings({ groupPolicy: "open" })).toEqual([
       buildOpenGroupPolicyRestrictSendersWarning({
         surface: "Example groups",

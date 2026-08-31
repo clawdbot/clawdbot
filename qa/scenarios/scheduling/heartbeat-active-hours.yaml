@@ -1,0 +1,25 @@
+title: Heartbeat active-hours automation evidence
+
+scenario:
+  id: heartbeat-active-hours
+  surface: automation
+  category: automation.heartbeat
+  coverage:
+    secondary:
+      - automation.active-hours
+      - automation.heartbeat-scheduling
+  objective: Prove cron-owned heartbeat wakes honor active hours and configuration reloads.
+  successCriteria:
+    - An active-hours heartbeat wake runs while its configured window is open.
+    - A heartbeat wake skips execution during quiet hours.
+    - Updating the active-hours configuration allows the next eligible wake.
+  docsRefs:
+    - docs/gateway/heartbeat.md
+  codeRefs:
+    - src/infra/heartbeat-active-hours.ts
+    - test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts
+    - test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts
+    summary: Prove active execution, quiet-hours suppression, and reloaded automation behavior.

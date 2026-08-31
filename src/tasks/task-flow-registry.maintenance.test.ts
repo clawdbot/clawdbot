@@ -1,52 +1,90 @@
+// Covers maintenance reconciliation for managed task-flow records.
 import { afterEach, describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { captureEnv } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
+  setFlowWaiting,
 } from "./task-flow-registry.js";
 import {
+  getInspectableTaskFlowAuditSummary,
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { finalizeTaskRecordByRunId } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  createFlowRecord as createFlowRecordOrNull,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
+  const flow = createFlowRecordOrNull(params);
+  if (!flow) {
+    throw new Error("expected TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
 
 async function withTaskFlowMaintenanceStateDir(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-task-flow-maintenance-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
-    try {
-      await run(root);
-    } finally {
+  await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-task-flow-maintenance-",
+    },
+    async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
-    }
-  });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await run(state.stateDir);
+      } finally {
+        resetTaskRegistryDeliveryRuntimeForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+    },
+  );
 }
 
 describe("task-flow-registry maintenance", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("finalizes cancel-requested managed flows once no child tasks remain active", async () => {
@@ -70,11 +108,13 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 1,
         pruned: 0,
       });
-      expect(getTaskFlowById(flow.flowId)).toMatchObject({
-        flowId: flow.flowId,
-        status: "cancelled",
-        cancelRequestedAt: 100,
-      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected cancel-requested flow to remain registered");
+      }
+      expect(storedFlow.flowId).toBe(flow.flowId);
+      expect(storedFlow.status).toBe("cancelled");
+      expect(storedFlow.cancelRequestedAt).toBe(100);
     });
   });
 
@@ -104,6 +144,147 @@ describe("task-flow-registry maintenance", () => {
     });
   });
 
+  it.each(["preview", "apply"] as const)(
+    "preserves old blocked managed flows without an end timestamp during %s maintenance",
+    async (mode) => {
+      await withTaskFlowMaintenanceStateDir(async () => {
+        const blockedAt = Date.now() - 8 * 24 * 60 * 60_000;
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/task-flow-maintenance",
+          goal: "Wait for an external approval",
+          status: "running",
+          createdAt: blockedAt,
+          updatedAt: blockedAt,
+        });
+        const blocked = setFlowWaiting({
+          flowId: flow.flowId,
+          expectedRevision: flow.revision,
+          blockedSummary: "Waiting for an external approval",
+          updatedAt: blockedAt,
+        });
+        expect(blocked.applied).toBe(true);
+        expect(getInspectableTaskFlowAuditSummary().byCode.stale_blocked).toBe(1);
+
+        const maintenance =
+          mode === "preview"
+            ? previewTaskFlowRegistryMaintenance()
+            : await runTaskFlowRegistryMaintenance();
+
+        expect(getTaskFlowById(flow.flowId)).toMatchObject({
+          status: "blocked",
+          blockedSummary: "Waiting for an external approval",
+          updatedAt: blockedAt,
+        });
+        expect(getTaskFlowById(flow.flowId)?.endedAt).toBeUndefined();
+        expect(maintenance).toEqual({ reconciled: 0, pruned: 0 });
+        expect(getInspectableTaskFlowAuditSummary().byCode.stale_blocked).toBe(1);
+      });
+    },
+  );
+
+  it("prunes ended blocked flows without removing resumable managed flows", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const endedAt = Date.now() - 8 * 24 * 60 * 60_000;
+      const endedManaged = createManagedTaskFlow({
+        ownerKey: "agent:main:ended-managed",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Completed managed flow",
+        status: "blocked",
+        blockedSummary: "Completed with a blocked result",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+      const endedMirrored = createFlowRecord({
+        syncMode: "task_mirrored",
+        ownerKey: "agent:main:ended-mirrored",
+        goal: "Completed mirrored flow",
+        status: "blocked",
+        blockedSummary: "Completed with a blocked result",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+        endedAt,
+      });
+      const activeManaged = createManagedTaskFlow({
+        ownerKey: "agent:main:active-managed",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Resume after approval",
+        status: "blocked",
+        blockedSummary: "Waiting for an external approval",
+        createdAt: endedAt,
+        updatedAt: endedAt,
+      });
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 2 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 2 });
+      expect(getTaskFlowById(endedManaged.flowId)).toBeUndefined();
+      expect(getTaskFlowById(endedMirrored.flowId)).toBeUndefined();
+      expect(getTaskFlowById(activeManaged.flowId)).toMatchObject({ status: "blocked" });
+    });
+  });
+
+  it("finalizes cancel-requested blocked managed flows without active child tasks", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Cancel blocked work",
+        status: "running",
+      });
+      const blocked = setFlowWaiting({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        blockedSummary: "Waiting for an external approval",
+      });
+      if (!blocked.applied) {
+        throw new Error("Expected managed flow to enter its resumable blocked state");
+      }
+      const cancelled = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: blocked.flow.revision,
+      });
+      expect(cancelled.applied).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ status: "cancelled" });
+      expect(getTaskFlowById(flow.flowId)?.endedAt).toBeTypeOf("number");
+    });
+  });
+
+  it("repairs terminal mirrored flows whose delivery updates outlived endedAt", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createFlowRecord({
+        syncMode: "task_mirrored",
+        ownerKey: "agent:main:main",
+        goal: "Failed ACP task",
+        status: "failed",
+        createdAt: 100,
+        updatedAt: 250,
+        endedAt: 200,
+      });
+
+      expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(1);
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        pruned: 0,
+      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected repaired mirrored flow to remain registered");
+      }
+      expect(storedFlow.endedAt).toBe(200);
+      expect(storedFlow.updatedAt).toBe(200);
+      expect(getInspectableTaskFlowAuditSummary().byCode.inconsistent_timestamps).toBe(0);
+    });
+  });
+
   it("does not finalize cancel-requested flows while a child task is still active", async () => {
     await withTaskFlowMaintenanceStateDir(async () => {
       const flow = createManagedTaskFlow({
@@ -127,20 +308,18 @@ describe("task-flow-registry maintenance", () => {
         lastEventAt: 100,
       });
 
-      expect(
-        requestFlowCancel({
-          flowId: flow.flowId,
-          expectedRevision: flow.revision,
-          cancelRequestedAt: 100,
-          updatedAt: 100,
-        }),
-      ).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: flow.flowId,
-          cancelRequestedAt: 100,
-        }),
+      const cancelResult = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        cancelRequestedAt: 100,
+        updatedAt: 100,
       });
+      expect(cancelResult.applied).toBe(true);
+      if (!cancelResult.applied) {
+        throw new Error("Expected flow cancel request to apply");
+      }
+      expect(cancelResult.flow.flowId).toBe(flow.flowId);
+      expect(cancelResult.flow.cancelRequestedAt).toBe(100);
 
       expect(previewTaskFlowRegistryMaintenance()).toEqual({
         reconciled: 0,
@@ -151,12 +330,64 @@ describe("task-flow-registry maintenance", () => {
         reconciled: 0,
         pruned: 0,
       });
-      expect(getTaskFlowById(flow.flowId)).toMatchObject({
-        flowId: flow.flowId,
-        status: "running",
-        cancelRequestedAt: 100,
-      });
+      const storedFlow = getTaskFlowById(flow.flowId);
+      if (!storedFlow) {
+        throw new Error("Expected active child flow to remain registered");
+      }
+      expect(storedFlow.flowId).toBe(flow.flowId);
+      expect(storedFlow.status).toBe("running");
+      expect(storedFlow.cancelRequestedAt).toBe(100);
       expect(child.parentFlowId).toBe(flow.flowId);
+    });
+  });
+
+  it("does not finalize cancel-requested flows while a child kill is provisional", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait for child kill reconciliation",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:provisional-kill",
+        runId: "run-provisional-kill",
+        task: "Finish while cancellation races",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+      finalizeTaskRecordByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 110,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const currentFlow = getTaskFlowById(flow.flowId);
+      if (!currentFlow) {
+        throw new Error("Expected provisional child flow to remain registered");
+      }
+      const cancelResult = requestFlowCancel({
+        flowId: currentFlow.flowId,
+        expectedRevision: currentFlow.revision,
+        cancelRequestedAt: 120,
+        updatedAt: 120,
+      });
+      expect(cancelResult.applied).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "running",
+        cancelRequestedAt: 120,
+      });
     });
   });
 

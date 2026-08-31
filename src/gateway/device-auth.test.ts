@@ -1,3 +1,6 @@
+/**
+ * Gateway device-auth regression tests.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildDeviceAuthPayload,

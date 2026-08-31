@@ -1,0 +1,20 @@
+OpenClaw är en personlig AI-assistent som du kör på dina egna enheter.
+
+Parkoppla iOS-appen med din OpenClaw Gateway och använd din iPhone som en säker nod för chatt, röst, godkännanden, delning och enhetsmedveten automatisering.
+
+Det här kan du göra:
+- Parkoppla med din privata OpenClaw Gateway via QR-kod eller installationskod
+- Chatta med din assistent från iPhone
+- Använd Talk-läge i realtid och tryck-och-prata
+- Granska åtgärder som väntar på godkännande från gatewayen
+- Dela text, länkar och media direkt från iOS till OpenClaw
+- Aktivera enhetsfunktioner som kamera, skärm, plats, bilder, kontakter, kalender och påminnelser när du vill
+- Skapa skrivskyddade sammanfattningar från Apple Hälsa för steg, sömn, vilopuls och träningspass
+- Ta emot pushväckningar och nodstatus för anslutna arbetsflöden
+
+OpenClaw är byggt för lokal kontroll: du styr din gateway, dina nycklar, din konfiguration och dina behörigheter. Åtkomst till enheten hanteras av iOS-behörigheter och aktiveras bara för de funktioner du vill använda.
+
+Kom igång:
+1. Konfigurera din OpenClaw Gateway
+2. Öppna iOS-appen och parkoppla den med gatewayen
+3. Börja använda chatt, Talk-läge, godkännanden och automatiseringar från din iPhone

@@ -31,9 +31,15 @@ public enum ShareToAgentDeepLink {
         let title = self.clean(payload.title)
         let text = self.clean(payload.text)
         let urlText = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedInstruction = self.clean(instruction) ?? ShareToAgentSettings.loadDefaultInstruction()
+        let resolvedInstruction = self.clean(instruction) ?? self.clean(ShareToAgentSettings.loadDefaultInstruction())
+        let hasSharedContent = title != nil || text != nil || self.clean(urlText) != nil
 
-        var lines: [String] = ["Shared from iOS."]
+        guard hasSharedContent || resolvedInstruction != nil else { return "" }
+
+        var lines: [String] = []
+        if hasSharedContent {
+            lines.append("Shared from iOS.")
+        }
         if let title, !title.isEmpty {
             lines.append("Title: \(title)")
         }
@@ -43,7 +49,9 @@ public enum ShareToAgentDeepLink {
         if let text, !text.isEmpty {
             lines.append("Text:\n\(text)")
         }
-        lines.append(resolvedInstruction)
+        if let resolvedInstruction {
+            lines.append(resolvedInstruction)
+        }
 
         let message = lines.joined(separator: "\n\n")
         return self.limit(message, maxCharacters: 2400)

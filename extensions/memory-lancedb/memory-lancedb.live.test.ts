@@ -1,33 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+// Memory Lancedb tests cover memory lancedb plugin behavior.
+import { describe, expect, test } from "vitest";
+import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
-
-function installTmpDirHarness(params: { prefix: string }) {
-  let tmpDir = "";
-  let dbPath = "";
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
-    dbPath = path.join(tmpDir, "lancedb");
-  });
-
-  afterEach(async () => {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  return {
-    getTmpDir: () => tmpDir,
-    getDbPath: () => dbPath,
-  };
-}
 
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
@@ -38,13 +16,9 @@ describeLive("memory plugin live tests", () => {
     const liveApiKey = OPENAI_API_KEY;
 
     // Mock plugin API
-    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredTools: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredClis: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredServices: any[] = [];
-    // oxlint-disable-next-line typescript/no-explicit-any
     const registeredHooks: Record<string, any[]> = {};
     const logs: string[] = [];
 
@@ -69,19 +43,15 @@ describeLive("memory plugin live tests", () => {
         error: (msg: string) => logs.push(`[error] ${msg}`),
         debug: (msg: string) => logs.push(`[debug] ${msg}`),
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       registerTool: (tool: any, opts: any) => {
         registeredTools.push({ tool, opts });
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       registerCli: (registrar: any, opts: any) => {
         registeredClis.push({ registrar, opts });
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       registerService: (service: any) => {
         registeredServices.push(service);
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       on: (hookName: string, handler: any) => {
         if (!registeredHooks[hookName]) {
           registeredHooks[hookName] = [];
@@ -92,8 +62,7 @@ describeLive("memory plugin live tests", () => {
     };
 
     // Register plugin
-    // oxlint-disable-next-line typescript/no-explicit-any
-    memoryPlugin.register(mockApi as any);
+    memoryPlugin.register(mockApi as unknown as Parameters<typeof memoryPlugin.register>[0]);
 
     // Check registration
     expect(registeredTools.length).toBe(3);
@@ -104,13 +73,20 @@ describeLive("memory plugin live tests", () => {
     expect(registeredServices.length).toBe(1);
 
     // Get tool functions
-    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
-    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-    const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+    const materialize = (name: string) => {
+      const toolOrFactory = registeredTools.find((entry) => entry.opts?.name === name)?.tool;
+      return typeof toolOrFactory === "function"
+        ? toolOrFactory({ agentId: "main", config: {} })
+        : toolOrFactory;
+    };
+    const storeTool = materialize("memory_store");
+    const recallTool = materialize("memory_recall");
+    const forgetTool = materialize("memory_forget");
+    const storedText = "The user prefers dark mode for all applications";
 
     // Test store
     const storeResult = await storeTool.execute("test-call-1", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
       importance: 0.8,
       category: "preference",
     });
@@ -130,10 +106,14 @@ describeLive("memory plugin live tests", () => {
 
     // Test duplicate detection
     const duplicateResult = await storeTool.execute("test-call-3", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
     });
 
-    expect(duplicateResult.details?.action).toBe("duplicate");
+    expect(duplicateResult.details).toEqual({
+      action: "already_present",
+      existingId: storedId,
+      existingText: storedText,
+    });
 
     // Test forget
     const forgetResult = await forgetTool.execute("test-call-4", {

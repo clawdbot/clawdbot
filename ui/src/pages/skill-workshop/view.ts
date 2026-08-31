@@ -1,0 +1,1137 @@
+// Control UI view renders skill workshop screen content.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
+import { styleMap } from "lit/directives/style-map.js";
+import "../../components/file-preview-modal-registration.ts";
+import "../../components/modal-dialog.ts";
+import "../../components/resizable-divider.ts";
+import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
+import "../../styles/plugins.css";
+import "../../styles/skill-workshop.css";
+import {
+  filterSkillWorkshopProposals,
+  type SkillWorkshopActionNotice,
+  type SkillWorkshopAppliedDiffMode,
+  type SkillWorkshopAppliedSkill,
+  type SkillWorkshopEvaluation,
+  type SkillWorkshopEvaluationFinding,
+  type SkillWorkshopEvaluationOutcome,
+  type SkillWorkshopProposal,
+  type SkillWorkshopProposalDecision,
+  type SkillWorkshopStatusFilter,
+} from "../../lib/skill-workshop/index.ts";
+import {
+  renderLazyAppliedHistory,
+  renderLazyAppliedRevisionDiff,
+  resolveAppliedBodyView,
+  resolveAppliedHistory,
+  type SkillWorkshopBodyView,
+} from "./applied-history.ts";
+import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
+import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
+import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
+import { renderSelfLearningError } from "./self-learning.ts";
+import type { SkillWorkshopProps } from "./view-types.ts";
+
+const STATUS_TABS: SkillWorkshopStatusFilter[] = [
+  "all",
+  "pending",
+  "applied",
+  "rejected",
+  "quarantined",
+  "stale",
+];
+
+const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
+  all: "skillWorkshop.status.all",
+  pending: "skillWorkshop.status.pending",
+  applied: "skillWorkshop.status.applied",
+  rejected: "skillWorkshop.status.rejected",
+  quarantined: "skillWorkshop.status.quarantined",
+  stale: "skillWorkshop.status.stale",
+};
+
+const TODAY_PREVIEW_MAX_ITEMS = 3;
+const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
+
+const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
+  today: "skillWorkshop.recency.today",
+  yesterday: "skillWorkshop.recency.yesterday",
+  earlier: "skillWorkshop.recency.earlier",
+};
+
+export function renderSkillWorkshop(props: SkillWorkshopProps) {
+  const appliedHistory =
+    props.statusFilter === "applied"
+      ? resolveAppliedHistory(props.proposals, props.query, props.selectedKey)
+      : undefined;
+  const filtered = appliedHistory
+    ? appliedHistory.skills.map((skill) => skill.latest)
+    : filterSkillWorkshopProposals(props.proposals, props.statusFilter, props.query);
+  const selected =
+    appliedHistory?.selectedProposal ??
+    filtered.find((proposal) => proposal.key === props.selectedKey) ??
+    filtered[0];
+  const groups = groupByRecency(filtered);
+  const preview =
+    selected && props.filePreviewKey
+      ? selected.supportFiles.find((f) => f.path === props.filePreviewKey)
+      : null;
+  const revisionProposal = props.revisionKey
+    ? props.proposals.find((p) => p.key === props.revisionKey)
+    : null;
+  const allPending = props.proposals.filter((p) => p.status === "pending");
+  const todayHero = selected ?? allPending[0] ?? props.proposals[0];
+  const hasNoProposals = props.proposals.length === 0 && !props.loading && !props.error;
+
+  const body = hasNoProposals
+    ? renderWorkshopEmptyState({
+        agentName: resolveSkillWorkshopAgentName(props, t("skillWorkshop.empty.defaultAgent")),
+        selfLearning: props.selfLearning,
+        onSelfLearningToggle: props.onSelfLearningToggle,
+      })
+    : props.mode === "today"
+      ? renderToday(props, todayHero, allPending)
+      : renderBoard(
+          props,
+          groups,
+          selected,
+          appliedHistory?.skills ?? [],
+          appliedHistory?.selectedSkill,
+        );
+
+  return html`
+    <section class="skill-workshop sw-mode-${props.mode}">
+      ${props.error
+        ? html`<div class="sw-error" role="status">
+            <span>${props.error}</span>
+            <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+              ${t("pluginsPage.tryAgain")}
+            </button>
+          </div>`
+        : nothing}
+      ${renderSelfLearningError(props.selfLearning)}
+      ${renderSkillWorkshopHistoryScan({
+        state: props.historyScan,
+        canScan: props.access.canScanHistory,
+        onScan: props.onHistoryScan,
+      })}
+      <div class="sw-view" data-mode=${props.mode}>
+        ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
+      </div>
+    </section>
+    ${preview && selected
+      ? html`
+          <openclaw-file-preview-modal
+            .files=${selected.supportFiles}
+            .activePath=${preview.path}
+            .query=${props.filePreviewQuery}
+            .contextLabel=${t("skillWorkshop.previewContext", { slug: selected.slug })}
+            @file-preview-query-change=${(event: CustomEvent<string>) =>
+              props.onFilePreviewQueryChange(event.detail)}
+            @file-preview-select=${(event: CustomEvent<string>) =>
+              props.onPreviewFile(selected.key, event.detail)}
+            @file-preview-close=${props.onClosePreview}
+          ></openclaw-file-preview-modal>
+        `
+      : nothing}
+    ${revisionProposal ? renderRevisionDialog(props, revisionProposal) : nothing}
+  `;
+}
+
+function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
+  const cancelDisabled = Boolean(props.actionBusy) || props.revisionRecoveryActive;
+  const canSubmit =
+    props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
+  const verb =
+    props.mode === "board" ? t("skillWorkshop.actions.revise") : t("skillWorkshop.actions.tweak");
+
+  return html`
+    <openclaw-modal-dialog
+      .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
+      .description=${t("skillWorkshop.revision.description")}
+      style="--openclaw-modal-width: 560px"
+      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
+    >
+      <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
+        <div class="sw-revision-dialog__head">
+          <div>
+            <div class="sw-revision-dialog__eyebrow">
+              ${t("skillWorkshop.revision.title", { verb })}
+            </div>
+            <h2 id="sw-revision-title">${proposal.slug}</h2>
+          </div>
+          <openclaw-tooltip content=${t("skillWorkshop.actions.close")}>
+            <button
+              type="button"
+              class="sw-revision-dialog__close"
+              aria-label=${t("skillWorkshop.actions.close")}
+              ?disabled=${cancelDisabled}
+              @click=${props.onRevisionCancel}
+            >
+              ×
+            </button>
+          </openclaw-tooltip>
+        </div>
+        <p class="sw-revision-dialog__copy">${t("skillWorkshop.revision.description")}</p>
+        <textarea
+          class="sw-revision-dialog__input"
+          autofocus
+          placeholder=${t("skillWorkshop.revision.placeholder")}
+          .value=${props.revisionDraft}
+          ?disabled=${!props.access.canRevise ||
+          Boolean(props.actionBusy) ||
+          props.revisionRecoveryActive}
+          @input=${(event: Event) =>
+            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
+        ></textarea>
+        ${busy
+          ? html`
+              <div class="sw-revision-dialog__status" role="status">
+                <span class="sw-revision-dialog__status-dot" aria-hidden="true"></span>
+                <span>${t("skillWorkshop.revision.preparing")}</span>
+              </div>
+            `
+          : nothing}
+        <div class="sw-revision-dialog__actions">
+          <button
+            type="button"
+            class="sw-btn sw-btn--ghost"
+            ?disabled=${cancelDisabled}
+            @click=${props.onRevisionCancel}
+          >
+            ${t("skillWorkshop.actions.cancel")}
+          </button>
+          <button
+            type="button"
+            class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
+            ?disabled=${!canSubmit}
+            @click=${() => props.onRevisionSubmit(proposal.key)}
+          >
+            ${busy ? t("skillWorkshop.actions.sending") : t("skillWorkshop.revision.send")}
+          </button>
+        </div>
+      </section>
+    </openclaw-modal-dialog>
+  `;
+}
+
+function renderBoard(
+  props: SkillWorkshopProps,
+  groups: Array<{ label: string; items: SkillWorkshopProposal[] }>,
+  selected: SkillWorkshopProposal | undefined,
+  appliedSkills: SkillWorkshopAppliedSkill[],
+  selectedAppliedSkill: SkillWorkshopAppliedSkill | undefined,
+) {
+  return html`
+    ${renderLifecycleTabs(props)}
+    <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
+      ${renderSkillWorkshopProposalList(
+        props,
+        groups,
+        selected,
+        appliedSkills,
+        queueEmptyText(props),
+      )}
+      ${renderQueueResizer(props)}
+      ${selected
+        ? renderDetail(props, selected, selectedAppliedSkill)
+        : renderBoardEmptyDetail(props.query, props.statusFilter)}
+    </div>
+  `;
+}
+
+function renderQueueResizer(props: SkillWorkshopProps) {
+  let divider: HTMLElement | undefined;
+  const measureSize = () => {
+    const queue = divider?.previousElementSibling?.getBoundingClientRect().width ?? 0;
+    const detail = divider?.nextElementSibling?.getBoundingClientRect().width ?? 0;
+    return queue + detail;
+  };
+  return html`<resizable-divider
+    ${ref((element) => (divider = element instanceof HTMLElement ? element : undefined))}
+    class="sw-queue-resizer"
+    .label=${t("skillWorkshop.queue.resize")}
+    .splitRatio=${0.5}
+    .minRatio=${0.2}
+    .maxRatio=${0.8}
+    .measureRatio=${() => props.queueWidth / measureSize()}
+    .measureSize=${measureSize}
+    @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+      props.onQueueWidthChange(event.detail.splitRatio * measureSize())}
+  ></resizable-divider>`;
+}
+
+function renderLifecycleTabs(props: SkillWorkshopProps) {
+  return html`
+    <div class="sw-lifecycle-tabs">
+      ${STATUS_TABS.map((status) => {
+        const isActive = props.statusFilter === status;
+        const count = props.counts[status] ?? 0;
+        return html`
+          <button
+            class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
+            @click=${() => props.onStatusFilterChange(status)}
+          >
+            ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
+          </button>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderBodyModeButton(
+  props: SkillWorkshopProps,
+  mode: SkillWorkshopAppliedDiffMode,
+  label: string,
+) {
+  const active = props.appliedDiffMode === mode;
+  return html`
+    <button
+      class="sw-body-mode__button ${active ? "is-active" : ""}"
+      aria-pressed=${active ? "true" : "false"}
+      @click=${() => props.onAppliedDiffModeChange(mode)}
+    >
+      ${label}
+    </button>
+  `;
+}
+
+function renderBodyModeToggle(props: SkillWorkshopProps) {
+  return html`
+    <div class="sw-body-mode" role="group" aria-label=${t("skillWorkshop.diff.viewLabel")}>
+      ${renderBodyModeButton(props, "changes", t("skillWorkshop.diff.changes"))}
+      ${renderBodyModeButton(props, "full", t("skillWorkshop.diff.fullBody"))}
+    </div>
+  `;
+}
+
+function renderRevisionBody(view: SkillWorkshopBodyView, proposal: SkillWorkshopProposal) {
+  if (view.kind === "diff") {
+    return renderLazyAppliedRevisionDiff(view.previous.body, proposal.body);
+  }
+  if (view.kind === "loadingPrevious") {
+    return html`<p class="sw-muted" aria-busy="true">
+      ${t("skillWorkshop.diff.loadingPrevious")}
+    </p>`;
+  }
+  if (view.kind === "previousUnavailable") {
+    return html`
+      <p class="sw-muted">${t("skillWorkshop.diff.previousUnavailable")}</p>
+      ${renderProposalBody(proposal.body)}
+    `;
+  }
+  if (view.kind === "tooLarge") {
+    return html`<p class="sw-muted">${t("skillWorkshop.diff.tooLarge")}</p>`;
+  }
+  return renderProposalBody(proposal.body);
+}
+
+function renderDetail(
+  props: SkillWorkshopProps,
+  proposal: SkillWorkshopProposal,
+  appliedSkill: SkillWorkshopAppliedSkill | undefined,
+) {
+  const editedAt =
+    proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
+  const createdLabel = editedAt
+    ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
+    : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
+  const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
+  const firstSupportFile = proposal.supportFiles[0];
+  const previousRevision =
+    appliedSkill?.revisions.find(({ proposal: revision }) => revision.key === proposal.key)
+      ?.previous ?? null;
+  const bodyView = resolveAppliedBodyView(props, proposal, previousRevision);
+
+  return html`
+    <div class="sw-detail">
+      <div class="sw-detail__head">
+        <div class="sw-detail__head-left">
+          <h1 class="sw-detail__title">${proposal.name}</h1>
+          <div class="sw-detail__one-line">${proposal.oneLine}</div>
+          <div class="sw-detail__meta">
+            <span>${createdLabel}</span>
+            <span>·</span>
+            <span>v${proposal.version}</span>
+            <span>·</span>
+            ${firstSupportFile
+              ? html`<button
+                  class="sw-detail__meta-link"
+                  @click=${() => props.onPreviewFile(proposal.key, firstSupportFile.path)}
+                >
+                  ${t("skillWorkshop.detail.supportFiles", {
+                    count: String(proposal.supportFiles.length),
+                  })}
+                </button>`
+              : html`<span>${t("skillWorkshop.detail.noSupportFiles")}</span>`}
+          </div>
+        </div>
+        <div class="sw-detail__nav">
+          <openclaw-tooltip content=${t("skillWorkshop.actions.previous")}>
+            <button aria-label=${t("skillWorkshop.actions.previous")} @click=${props.onPrev}>
+              ↑
+            </button>
+          </openclaw-tooltip>
+          <openclaw-tooltip content=${t("skillWorkshop.actions.next")}>
+            <button aria-label=${t("skillWorkshop.actions.next")} @click=${props.onNext}>↓</button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+
+      <div class="sw-detail__body">
+        <div class="sw-body-card">
+          <div class="sw-body-card__head">
+            <h1>${proposal.slug}</h1>
+            ${previousRevision ? renderBodyModeToggle(props) : nothing}
+          </div>
+          ${detailLoading
+            ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+            : renderRevisionBody(bodyView, proposal)}
+        </div>
+
+        ${appliedSkill ? renderLazyAppliedHistory(props, appliedSkill) : nothing}
+        ${proposal.supportFiles.length > 0
+          ? html`
+              <div class="sw-section" style="margin-top: 18px;">
+                <h3 class="sw-section__label">${t("skillWorkshop.detail.supportFilesTitle")}</h3>
+                <div class="sw-files">
+                  ${proposal.supportFiles.map(
+                    (file) => html`
+                      <button
+                        class="sw-file"
+                        @click=${() => props.onPreviewFile(proposal.key, file.path)}
+                      >
+                        <span>📄</span>
+                        <span class="sw-file__name">${file.path}</span>
+                        <span class="sw-file__size"
+                          >${file.size}
+                          <span class="sw-file__hint"
+                            >${t("skillWorkshop.detail.clickToPreview")}</span
+                          ></span
+                        >
+                      </button>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : nothing}
+        ${proposal.evaluation ? renderEvaluation(proposal.evaluation) : nothing}
+      </div>
+
+      ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
+      ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
+    </div>
+  `;
+}
+
+function renderActionNotice(notice: SkillWorkshopActionNotice) {
+  return html`
+    <div class="sw-action-toast" role="status" aria-live="polite">
+      <span>${notice.label}</span>
+      <strong>${notice.slug}</strong>
+      <span>·</span>
+    </div>
+  `;
+}
+
+function proposalDecision(proposal: SkillWorkshopProposal): SkillWorkshopProposalDecision {
+  return {
+    proposalId: proposal.key,
+    expectedRevisionHash: proposal.revisionHash,
+  };
+}
+
+function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+  return html`
+    <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
+      <button
+        class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
+        ?disabled=${disabled || !props.access.canEvaluate}
+        @click=${() => props.onEvaluate(proposal.key)}
+      >
+        ${busy === "evaluate"
+          ? t("skillWorkshop.actions.evaluating")
+          : t("skillWorkshop.actions.evaluate")}
+      </button>
+      <button
+        class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
+        ?disabled=${disabled || !props.access.canApply}
+        @click=${() => props.onApply(proposalDecision(proposal))}
+      >
+        ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
+      </button>
+      <button
+        class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
+        ?disabled=${disabled || !props.access.canRevise}
+        @click=${() => props.onRevise(proposal.key)}
+      >
+        ${busy === "revise"
+          ? t("skillWorkshop.actions.opening")
+          : t("skillWorkshop.actions.revise")}
+      </button>
+      <button
+        class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
+        ?disabled=${disabled || !props.access.canReject}
+        @click=${() => props.onReject(proposalDecision(proposal))}
+      >
+        ${busy === "reject"
+          ? t("skillWorkshop.actions.rejecting")
+          : t("skillWorkshop.actions.reject")}
+      </button>
+    </div>
+  `;
+}
+
+function resolveSkillWorkshopAgentName(props: SkillWorkshopProps, fallback: string): string {
+  return props.workshopAgentName.trim() || props.assistantName.trim() || fallback;
+}
+
+function renderToday(
+  props: SkillWorkshopProps,
+  hero: SkillWorkshopProposal | undefined,
+  pending: SkillWorkshopProposal[],
+) {
+  if (!hero) {
+    return html`
+      <div class="sw-today sw-today--empty">
+        <p class="sw-empty__title">${t("skillWorkshop.today.emptyTitle")}</p>
+        <p class="sw-empty__sub">${t("skillWorkshop.today.emptyBody")}</p>
+      </div>
+    `;
+  }
+
+  const heroIndex = Math.max(
+    0,
+    pending.findIndex((p) => p.key === hero.key),
+  );
+  const total = Math.max(pending.length, 1);
+  const upNext = pending.filter((p) => p.key !== hero.key).slice(0, 3);
+  const applied = props.proposals.filter((p) => p.status === "applied").slice(0, 3);
+  const heroLabel = hero.isNew
+    ? t("skillWorkshop.today.new")
+    : hero.status === "pending"
+      ? t("skillWorkshop.today.waiting")
+      : t("skillWorkshop.today.reviewed");
+  const ageLabel = hero.ageLabel;
+  const dateLine = formatTodayDate(Date.now());
+  const isPending = hero.status === "pending";
+  const busy = props.actionBusy?.key === hero.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+  const assistantName = resolveSkillWorkshopAgentName(props, t("skillWorkshop.today.agent"));
+  const firstSupportFile = hero.supportFiles[0];
+
+  return html`
+    <div class="sw-today">
+      <div class="sw-today__head">
+        <div class="sw-today__date">${dateLine}</div>
+        <h1 class="sw-today__h1">
+          ${t("skillWorkshop.today.proposalsWaiting", { count: String(pending.length) })}
+        </h1>
+        ${pending.length === 0
+          ? html`<div class="sw-today__sub">${t("skillWorkshop.today.browseApplied")}</div>`
+          : nothing}
+        ${pending.length > 0
+          ? html`
+              <div class="sw-today__progress">
+                <span
+                  >${t("skillWorkshop.today.progress", {
+                    current: String(heroIndex + 1),
+                    total: String(total),
+                  })}</span
+                >
+                <div class="sw-today__dots">
+                  ${pending.map(
+                    (_, i) => html`
+                      <span
+                        class="sw-today__dot ${i < heroIndex
+                          ? "is-done"
+                          : i === heroIndex
+                            ? "is-now"
+                            : ""}"
+                      ></span>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+
+      <article class="sw-today__hero">
+        <div class="sw-today__label">
+          <span class="sw-today__ping"></span>
+          ${heroLabel} · ${ageLabel}
+        </div>
+        <h2 class="sw-today__name">${hero.slug}</h2>
+        <p class="sw-today__one-liner">${hero.oneLine}</p>
+
+        ${renderTodayDoesBlock(hero)}
+
+        <div class="sw-today__author">
+          <span class="sw-today__avatar">v${hero.version}</span>
+          <span>
+            ${t("skillWorkshop.today.draftedBy")}
+            <strong>${assistantName}</strong> · ${ageLabel}.
+            ${firstSupportFile
+              ? html`
+                  <button
+                    class="sw-today__files-link"
+                    @click=${() => props.onPreviewFile(hero.key, firstSupportFile.path)}
+                  >
+                    ${t(
+                      hero.supportFiles.length === 1
+                        ? "skillWorkshop.today.supportFile"
+                        : "skillWorkshop.today.supportFiles",
+                      { count: String(hero.supportFiles.length) },
+                    )}
+                  </button>
+                  ${t("skillWorkshop.today.comeWithIt")}
+                `
+              : nothing}
+          </span>
+        </div>
+
+        ${hero.evaluation ? renderEvaluation(hero.evaluation, true) : nothing}
+        ${isPending
+          ? html`
+              <div class="sw-today__actions" aria-busy=${busy ? "true" : "false"}>
+                <button
+                  class="sw-today__big sw-today__big--evaluate ${busy === "evaluate"
+                    ? "is-busy"
+                    : ""}"
+                  ?disabled=${disabled || !props.access.canEvaluate}
+                  @click=${() => props.onEvaluate(hero.key)}
+                >
+                  ${busy === "evaluate"
+                    ? t("skillWorkshop.actions.evaluating")
+                    : t("skillWorkshop.today.evaluate")}
+                  <span class="sw-today__big-sub">${t("skillWorkshop.today.runChecks")}</span>
+                </button>
+                <button
+                  class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
+                  ?disabled=${disabled || !props.access.canApply}
+                  @click=${() => props.onApply(proposalDecision(hero))}
+                >
+                  ${busy === "apply"
+                    ? t("skillWorkshop.actions.applying")
+                    : t("skillWorkshop.today.useIt")}
+                  <span class="sw-today__big-sub">${t("skillWorkshop.today.addToSkills")}</span>
+                </button>
+                <button
+                  class="sw-today__big sw-today__big--tweak ${busy === "revise" ? "is-busy" : ""}"
+                  ?disabled=${disabled || !props.access.canRevise}
+                  @click=${() => props.onRevise(hero.key)}
+                >
+                  ${busy === "revise"
+                    ? t("skillWorkshop.actions.opening")
+                    : t("skillWorkshop.today.tweakIt")}
+                  <span class="sw-today__big-sub">${t("skillWorkshop.today.askAgent")}</span>
+                </button>
+                <button
+                  class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
+                  ?disabled=${disabled || !props.access.canReject}
+                  @click=${() => props.onReject(proposalDecision(hero))}
+                >
+                  ${busy === "reject"
+                    ? t("skillWorkshop.today.skipping")
+                    : t("skillWorkshop.today.skip")}
+                  <span class="sw-today__big-sub">${t("skillWorkshop.today.notForMe")}</span>
+                </button>
+              </div>
+            `
+          : nothing}
+        ${props.actionNotice?.key === hero.key ? renderActionNotice(props.actionNotice) : nothing}
+      </article>
+
+      ${upNext.length > 0
+        ? html`
+            <section class="sw-today__section">
+              <header class="sw-today__section-head">
+                <h3>
+                  ${t("skillWorkshop.today.upNext", {
+                    count: String(pending.length - 1),
+                  })}
+                </h3>
+                <button class="sw-today__link" @click=${() => props.onModeChange("board")}>
+                  ${t("skillWorkshop.today.seeAll")}
+                </button>
+              </header>
+              <div class="sw-today__upnext">
+                ${upNext.map(
+                  (p) => html`
+                    <button class="sw-today__mini" @click=${() => props.onSelect(p.key)}>
+                      <div class="sw-today__mini-name">${p.slug}</div>
+                      <div class="sw-today__mini-desc">${p.oneLine}</div>
+                      <div class="sw-today__mini-meta">${p.ageLabel}</div>
+                    </button>
+                  `,
+                )}
+              </div>
+            </section>
+          `
+        : nothing}
+      ${applied.length > 0
+        ? html`
+            <section class="sw-today__section">
+              <header class="sw-today__section-head">
+                <h3>
+                  ${t("skillWorkshop.today.collection", {
+                    count: String(props.counts.applied),
+                  })}
+                </h3>
+                <button
+                  class="sw-today__link sw-today__link--muted"
+                  @click=${() => props.onModeChange("board")}
+                >
+                  ${t("skillWorkshop.today.manage")}
+                </button>
+              </header>
+              <div class="sw-today__applied">
+                ${applied.map(
+                  (p) => html`
+                    <button
+                      class="sw-today__applied-row"
+                      @click=${() => {
+                        props.onSelect(p.key);
+                        props.onModeChange("board");
+                      }}
+                    >
+                      <span class="sw-today__check">✓</span>
+                      <span class="sw-today__applied-name">
+                        <strong>${p.slug}</strong> — ${p.oneLine}
+                      </span>
+                      <span class="sw-today__applied-when">${p.ageLabel}</span>
+                    </button>
+                  `,
+                )}
+              </div>
+            </section>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+function renderEvaluation(evaluation: SkillWorkshopEvaluation, today = false) {
+  const completedAt = Date.parse(evaluation.completedAt);
+  return html`
+    <section class="sw-evaluation ${today ? "sw-evaluation--today" : ""}">
+      <header class="sw-evaluation__head">
+        <h3>${t("skillWorkshop.evaluation.title")}</h3>
+        <div class="sw-evaluation__meta">
+          <span>
+            ${t("skillWorkshop.evaluation.version", {
+              version: evaluation.proposedVersion,
+            })}
+          </span>
+          ${Number.isFinite(completedAt)
+            ? html`<span>
+                ${t("skillWorkshop.evaluation.completedAt", {
+                  time: formatRelative(completedAt),
+                })}
+              </span>`
+            : nothing}
+        </div>
+      </header>
+      <div class="sw-evaluation__outcomes">
+        ${evaluation.outcomes.map((outcome) => renderEvaluationOutcome(outcome))}
+      </div>
+    </section>
+  `;
+}
+
+function renderEvaluationOutcome(outcome: SkillWorkshopEvaluationOutcome) {
+  const result = outcome.result;
+  const pluginLabel = outcome.pluginVersion
+    ? `${outcome.pluginId} ${outcome.pluginVersion}`
+    : outcome.pluginId;
+  return html`
+    <section class="sw-evaluation__outcome">
+      <div class="sw-evaluation__outcome-head">
+        <div class="sw-evaluation__identity">
+          <strong>${outcome.evaluatorId}</strong>
+          <span>${pluginLabel}</span>
+        </div>
+        <div class="sw-evaluation__badges">
+          <span class="sw-evaluation__badge is-${outcome.status}">
+            ${t(`skillWorkshop.evaluation.status.${outcome.status}`)}
+          </span>
+          ${result?.decision
+            ? html`<span class="sw-evaluation__badge is-${result.decision}">
+                ${t(`skillWorkshop.evaluation.decision.${result.decision}`)}
+              </span>`
+            : nothing}
+        </div>
+      </div>
+      ${result?.summary ? html`<p class="sw-evaluation__summary">${result.summary}</p>` : nothing}
+      ${result?.decisionReason
+        ? html`<p class="sw-evaluation__reason">${formatUiExternalText(result.decisionReason)}</p>`
+        : nothing}
+      ${outcome.error
+        ? html`<p class="sw-evaluation__error">${formatUiExternalText(outcome.error)}</p>`
+        : nothing}
+      ${result?.findings?.length ? renderEvaluationFindings(result.findings) : nothing}
+      ${result?.metrics && Object.keys(result.metrics).length > 0
+        ? renderEvaluationMetrics(result.metrics)
+        : nothing}
+      ${result?.evaluatorVersion || result?.mode
+        ? html`
+            <div class="sw-evaluation__runtime">
+              ${result.evaluatorVersion
+                ? html`<span>
+                    ${t("skillWorkshop.evaluation.evaluatorVersion", {
+                      version: result.evaluatorVersion,
+                    })}
+                  </span>`
+                : nothing}
+              ${result.mode
+                ? html`<span> ${t("skillWorkshop.evaluation.mode", { mode: result.mode })} </span>`
+                : nothing}
+            </div>
+          `
+        : nothing}
+    </section>
+  `;
+}
+
+function renderEvaluationFindings(findings: SkillWorkshopEvaluationFinding[]) {
+  return html`
+    <div class="sw-evaluation__findings">
+      <h4>${t("skillWorkshop.evaluation.findings")}</h4>
+      <ul>
+        ${findings.map((finding) => {
+          const location = finding.file
+            ? finding.line
+              ? t("skillWorkshop.evaluation.fileLine", {
+                  file: finding.file,
+                  line: String(finding.line),
+                })
+              : finding.file
+            : null;
+          return html`
+            <li>
+              <span class="sw-evaluation__severity is-${finding.severity}">
+                ${t(`skillWorkshop.evaluation.severity.${finding.severity}`)}
+              </span>
+              <span>
+                <code class="sw-evaluation__rule">${finding.ruleId}</code>
+                ${formatUiExternalText(finding.message)}
+                ${location ? html`<small>${location}</small>` : nothing}
+              </span>
+            </li>
+          `;
+        })}
+      </ul>
+    </div>
+  `;
+}
+
+function renderEvaluationMetrics(metrics: Record<string, string | number | boolean>) {
+  return html`
+    <div class="sw-evaluation__metrics">
+      <h4>${t("skillWorkshop.evaluation.metrics")}</h4>
+      <dl>
+        ${Object.entries(metrics)
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(
+            ([name, value]) => html`
+              <div>
+                <dt>${name}</dt>
+                <dd>${String(value)}</dd>
+              </div>
+            `,
+          )}
+      </dl>
+    </div>
+  `;
+}
+
+function renderTodayDoesBlock(hero: SkillWorkshopProposal) {
+  const preview = extractTodayProposalPreview(hero.body);
+  if (!preview) {
+    return nothing;
+  }
+  return html`
+    <div class="sw-today__does">
+      <div class="sw-today__does-h">${preview.heading}</div>
+      <ul>
+        ${preview.items.map((item) => html`<li>${item}</li>`)}
+      </ul>
+    </div>
+  `;
+}
+
+type TodayProposalPreview = {
+  heading: string;
+  items: string[];
+};
+
+type ProposalBodySection = {
+  title: string;
+  lines: string[];
+};
+
+function extractTodayProposalPreview(body: string): TodayProposalPreview | null {
+  const sections = splitProposalBodySections(body);
+  const workflow = findProposalSection(sections, [
+    "workflow",
+    "procedure",
+    "steps",
+    "agent workflow",
+    "process",
+  ]);
+  const workflowItems = workflow ? extractTopLevelListItems(workflow.lines) : [];
+  if (workflowItems.length > 0) {
+    return {
+      heading: t("skillWorkshop.today.workflowHeading"),
+      items: workflowItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
+    };
+  }
+
+  const applicability = findProposalSection(sections, [
+    "when to use",
+    "use when",
+    "applies when",
+    "trigger",
+    "triggers",
+  ]);
+  const applicabilityItems = applicability ? extractTopLevelListItems(applicability.lines) : [];
+  if (applicabilityItems.length > 0) {
+    return {
+      heading: t("skillWorkshop.today.applicabilityHeading"),
+      items: applicabilityItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
+    };
+  }
+
+  return null;
+}
+
+function splitProposalBodySections(body: string): ProposalBodySection[] {
+  const sections: ProposalBodySection[] = [];
+  let current: ProposalBodySection | null = null;
+  let inCode = false;
+
+  for (const raw of body.split("\n")) {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("```")) {
+      inCode = !inCode;
+    }
+    const heading = !inCode ? /^(#{2,4})\s+(.+?)\s*$/.exec(trimmed) : null;
+    const headingText = heading?.[2];
+    if (headingText) {
+      current = { title: normalizeSectionTitle(headingText), lines: [] };
+      sections.push(current);
+      continue;
+    }
+    current?.lines.push(raw);
+  }
+
+  return sections;
+}
+
+function findProposalSection(
+  sections: readonly ProposalBodySection[],
+  names: readonly string[],
+): ProposalBodySection | undefined {
+  const wanted = new Set(names.map(normalizeSectionTitle));
+  return sections.find((section) => wanted.has(section.title));
+}
+
+function normalizeSectionTitle(title: string): string {
+  return title
+    .replace(/[#*_`[\]().:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function extractTopLevelListItems(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of lines) {
+    if (/^\s{2,}/.test(raw)) {
+      continue;
+    }
+    const line = raw.trim();
+    const m = /^(?:[-*]|\d+\.)\s+(.+)/.exec(line);
+    const item = m?.[1];
+    if (item) {
+      out.push(cleanTodayPreviewItem(item));
+    }
+  }
+  return out.filter(Boolean);
+}
+
+function cleanTodayPreviewItem(item: string): string {
+  const cleaned = item
+    .replace(/^\*\*[^*]+\*\*\s*/, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncateAtWord(cleaned, TODAY_PREVIEW_MAX_ITEM_CHARS);
+}
+
+function truncateAtWord(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  const clipped = truncateUtf16Safe(value, maxChars - 1);
+  const boundary = clipped.lastIndexOf(" ");
+  const base = boundary > 48 ? clipped.slice(0, boundary) : clipped;
+  return `${base.trimEnd()}…`;
+}
+
+function formatTodayDate(ms: number): string {
+  const d = new Date(ms);
+  const day = d.toLocaleDateString(undefined, { weekday: "long" });
+  const month = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${day} · ${month}`;
+}
+
+function renderProposalBody(body: string) {
+  const lines = body.split("\n");
+  const out: unknown[] = [];
+  let para: string[] = [];
+  let list: string[] = [];
+  let inCode = false;
+  let codeBuf: string[] = [];
+
+  const flushPara = () => {
+    if (para.length) {
+      out.push(html`<p>${renderInline(para.join(" "))}</p>`);
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list.length) {
+      const items = list;
+      out.push(html`
+        <ol>
+          ${items.map((line) => html`<li>${renderInline(line)}</li>`)}
+        </ol>
+      `);
+      list = [];
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (line.startsWith("```")) {
+      flushPara();
+      flushList();
+      if (inCode) {
+        out.push(html`<pre>${codeBuf.join("\n")}</pre>`);
+        codeBuf = [];
+        inCode = false;
+      } else {
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuf.push(raw);
+      continue;
+    }
+    if (line === "") {
+      flushPara();
+      flushList();
+      continue;
+    }
+    if (line.startsWith("## ")) {
+      flushPara();
+      flushList();
+      out.push(html`<h3>${line.slice(3)}</h3>`);
+      continue;
+    }
+    if (line.startsWith("# ")) {
+      flushPara();
+      flushList();
+      out.push(html`<h3>${line.slice(2)}</h3>`);
+      continue;
+    }
+    const olMatch = /^\d+\.\s+(.+)/.exec(line);
+    const listItem = olMatch?.[1];
+    if (listItem) {
+      flushPara();
+      list.push(listItem);
+      continue;
+    }
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+  if (inCode && codeBuf.length) {
+    out.push(html`<pre>${codeBuf.join("\n")}</pre>`);
+  }
+  return out;
+}
+
+// Inline render: handles `code` and **bold** in text segments.
+function renderInline(text: string): unknown {
+  const parts: unknown[] = [];
+  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    if (match.index > last) {
+      parts.push(text.slice(last, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("`")) {
+      parts.push(html`<code>${token.slice(1, -1)}</code>`);
+    } else {
+      parts.push(html`<strong>${token.slice(2, -2)}</strong>`);
+    }
+    last = match.index + token.length;
+  }
+  if (last < text.length) {
+    parts.push(text.slice(last));
+  }
+  return parts;
+}
+
+function groupByRecency(
+  proposals: SkillWorkshopProposal[],
+): Array<{ label: string; items: SkillWorkshopProposal[] }> {
+  const buckets = new Map<SkillWorkshopProposal["recencyGroup"], SkillWorkshopProposal[]>();
+  for (const proposal of proposals) {
+    const list = buckets.get(proposal.recencyGroup) ?? [];
+    list.push(proposal);
+    buckets.set(proposal.recencyGroup, list);
+  }
+  const order: Array<SkillWorkshopProposal["recencyGroup"]> = ["today", "yesterday", "earlier"];
+  return order
+    .filter((key) => buckets.has(key))
+    .map((key) => ({ label: GROUP_LABEL[key], items: buckets.get(key) ?? [] }));
+}
+
+function queueEmptyText(props: SkillWorkshopProps): string {
+  if (props.error) {
+    return t("skillWorkshop.queue.loadError");
+  }
+  if (props.loading) {
+    return t("skillWorkshop.queue.loading");
+  }
+  if (props.statusFilter !== "all") {
+    return t("skillWorkshop.queue.noStatus", {
+      status: t(STATUS_LABEL[props.statusFilter]).toLocaleLowerCase(),
+    });
+  }
+  return t("skillWorkshop.queue.noMatch");
+}
+
+function formatRelative(ms: number): string {
+  return formatRelativeTimestamp(ms, { dateFallback: true });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,36 +1,34 @@
+// Checks whether a requester can read or mutate task-flow records.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   findLatestTaskFlowForOwnerKey,
+  findTaskFlowForOwnerLookup,
   getTaskFlowById,
   listTaskFlowsForOwnerKey,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function canOwnerAccessFlow(flow: TaskFlowRecord, callerOwnerKey: string): boolean {
-  return normalizeOwnerKey(flow.ownerKey) === normalizeOwnerKey(callerOwnerKey);
-}
-
+/** Reads a flow only when it belongs to the caller owner key. */
 export function getTaskFlowByIdForOwner(params: {
   flowId: string;
   callerOwnerKey: string;
 }): TaskFlowRecord | undefined {
   const flow = getTaskFlowById(params.flowId);
-  return flow && canOwnerAccessFlow(flow, params.callerOwnerKey) ? flow : undefined;
+  return flow &&
+    normalizeOptionalString(flow.ownerKey) === normalizeOptionalString(params.callerOwnerKey)
+    ? flow
+    : undefined;
 }
 
 export function listTaskFlowsForOwner(params: { callerOwnerKey: string }): TaskFlowRecord[] {
-  const ownerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const ownerKey = normalizeOptionalString(params.callerOwnerKey);
   return ownerKey ? listTaskFlowsForOwnerKey(ownerKey) : [];
 }
 
 export function findLatestTaskFlowForOwner(params: {
   callerOwnerKey: string;
 }): TaskFlowRecord | undefined {
-  const ownerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const ownerKey = normalizeOptionalString(params.callerOwnerKey);
   return ownerKey ? findLatestTaskFlowForOwnerKey(ownerKey) : undefined;
 }
 
@@ -45,10 +43,10 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (direct) {
     return direct;
   }
-  const normalizedToken = normalizeOwnerKey(params.token);
-  const normalizedCallerOwnerKey = normalizeOwnerKey(params.callerOwnerKey);
+  const normalizedToken = normalizeOptionalString(params.token);
+  const normalizedCallerOwnerKey = normalizeOptionalString(params.callerOwnerKey);
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }
-  return findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
+  return findTaskFlowForOwnerLookup(normalizedCallerOwnerKey);
 }

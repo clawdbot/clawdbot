@@ -1,5 +1,6 @@
+// Tests normalized session queue cleanup through the canonical lane resolver.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, clearSessionQueues } from "./cleanup.js";
+import { clearSessionQueues } from "./cleanup.js";
 
 const followupQueueMocks = vi.hoisted(() => ({
   clearFollowupDrainCallback: vi.fn(),
@@ -22,57 +23,37 @@ vi.mock("../../../process/command-queue.js", () => ({
   clearCommandLane: commandQueueMocks.clearCommandLane,
 }));
 
-vi.mock("../../../agents/pi-embedded-runner/lanes.js", () => ({
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-
 describe("clearSessionQueues", () => {
   afterEach(() => {
-    __testing.resetDepsForTests();
     followupQueueMocks.clearFollowupDrainCallback.mockReset();
     followupQueueMocks.clearFollowupQueue.mockReset().mockReturnValue(2);
     commandQueueMocks.clearCommandLane.mockReset().mockReturnValue(3);
   });
 
-  it("falls back to default runtime deps when injected deps are invalid", () => {
-    __testing.setDepsForTests({
-      resolveEmbeddedSessionLane: undefined,
-      clearCommandLane: undefined,
-    });
-
-    const result = clearSessionQueues(["alpha"]);
-
-    expect(result).toEqual({
-      followupCleared: 2,
-      laneCleared: 3,
-      keys: ["alpha"],
-    });
-    expect(followupQueueMocks.clearFollowupQueue).toHaveBeenCalledWith("alpha");
-    expect(followupQueueMocks.clearFollowupDrainCallback).toHaveBeenCalledWith("alpha");
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith("session:alpha");
-  });
-
-  it("falls back at call time when a test mutates deps to non-functions", () => {
-    __testing.setDepsForTests({
-      resolveEmbeddedSessionLane: ((key: string) => `custom:${key}`) as never,
-      clearCommandLane: ((lane: string) => (lane === "custom:alpha" ? 7 : 0)) as never,
-    });
-    (
-      __testing as {
-        setDepsForTests: (deps: Partial<Record<string, unknown>> | undefined) => void;
-      }
-    ).setDepsForTests({
-      resolveEmbeddedSessionLane: "broken",
-      clearCommandLane: "broken",
-    });
-
-    const result = clearSessionQueues(["alpha"]);
+  it("clears each normalized key once using canonical session lanes", () => {
+    const result = clearSessionQueues([
+      " alpha ",
+      undefined,
+      "",
+      " \t ",
+      "alpha",
+      " session:beta ",
+      "session:beta",
+    ]);
 
     expect(result).toEqual({
-      followupCleared: 2,
-      laneCleared: 3,
-      keys: ["alpha"],
+      followupCleared: 4,
+      laneCleared: 6,
+      keys: ["alpha", "session:beta"],
     });
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith("session:alpha");
+    expect(followupQueueMocks.clearFollowupQueue.mock.calls).toEqual([["alpha"], ["session:beta"]]);
+    expect(followupQueueMocks.clearFollowupDrainCallback.mock.calls).toEqual([
+      ["alpha"],
+      ["session:beta"],
+    ]);
+    expect(commandQueueMocks.clearCommandLane.mock.calls).toEqual([
+      ["session:alpha"],
+      ["session:beta"],
+    ]);
   });
 });

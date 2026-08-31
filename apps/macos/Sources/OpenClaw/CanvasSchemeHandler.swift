@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawKit
 import OSLog
 import WebKit
 
@@ -64,17 +63,6 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         if let qIdx = path.firstIndex(of: "?") { path = String(path[..<qIdx]) }
         if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path
-
-        // Special-case: welcome page when root index is missing.
-        if path.isEmpty {
-            let indexA = sessionRoot.appendingPathComponent("index.html", isDirectory: false)
-            let indexB = sessionRoot.appendingPathComponent("index.htm", isDirectory: false)
-            if !FileManager().fileExists(atPath: indexA.path),
-               !FileManager().fileExists(atPath: indexB.path)
-            {
-                return self.scaffoldPage(sessionRoot: sessionRoot)
-            }
-        }
 
         let resolved = self.resolveFileURL(sessionRoot: sessionRoot, requestPath: path)
         guard let fileURL = resolved else {
@@ -191,51 +179,6 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         return CanvasResponse(mime: "text/html", data: Data(html.utf8))
     }
 
-    private func welcomePage(sessionRoot: URL) -> CanvasResponse {
-        let escaped = sessionRoot.path
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-        let body = """
-        <div style="font-weight:600; font-size:14px;">Canvas is ready.</div>
-        <div class="muted">Create <code>index.html</code> in:</div>
-        <div style="margin-top:10px;"><code>\(escaped)</code></div>
-        """
-        return self.html(body, title: "Canvas")
-    }
-
-    private func scaffoldPage(sessionRoot: URL) -> CanvasResponse {
-        // Default Canvas UX: when no index exists, show the built-in scaffold page.
-        if let data = self.loadBundledResourceData(relativePath: "CanvasScaffold/scaffold.html") {
-            return CanvasResponse(mime: "text/html", data: data)
-        }
-
-        // Fallback for dev misconfiguration: show the classic welcome page.
-        return self.welcomePage(sessionRoot: sessionRoot)
-    }
-
-    private func loadBundledResourceData(relativePath: String) -> Data? {
-        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains("..") || trimmed.contains("\\") { return nil }
-
-        let parts = trimmed.split(separator: "/")
-        guard let filename = parts.last else { return nil }
-        let subdirectory =
-            parts.count > 1 ? parts.dropLast().joined(separator: "/") : nil
-        let fileURL = URL(fileURLWithPath: String(filename))
-        let ext = fileURL.pathExtension
-        let name = fileURL.deletingPathExtension().lastPathComponent
-        guard !name.isEmpty, !ext.isEmpty else { return nil }
-
-        let bundle = OpenClawKitResources.bundle
-        let resourceURL =
-            bundle.url(forResource: name, withExtension: ext, subdirectory: subdirectory)
-            ?? bundle.url(forResource: name, withExtension: ext)
-        guard let resourceURL else { return nil }
-        return try? Data(contentsOf: resourceURL)
-    }
-
     private func textEncodingName(forMimeType mimeType: String) -> String? {
         if mimeType.hasPrefix("text/") { return "utf-8" }
         switch mimeType {
@@ -252,10 +195,6 @@ extension CanvasSchemeHandler {
     func _testResponse(for url: URL) -> (mime: String, data: Data) {
         let response = self.response(for: url)
         return (response.mime, response.data)
-    }
-
-    func _testResolveFileURL(sessionRoot: URL, requestPath: String) -> URL? {
-        self.resolveFileURL(sessionRoot: sessionRoot, requestPath: requestPath)
     }
 
     func _testTextEncodingName(for mimeType: String) -> String? {

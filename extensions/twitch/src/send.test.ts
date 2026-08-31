@@ -104,10 +104,35 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("twitch-msg-123");
+      expect(typeof result.receipt.sentAt).toBe("number");
+      expect({ ...result.receipt, sentAt: 0 }).toEqual({
+        primaryPlatformMessageId: "twitch-msg-123",
+        platformMessageIds: ["twitch-msg-123"],
+        parts: [
+          {
+            platformMessageId: "twitch-msg-123",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "twitch",
+              conversationId: "testchannel",
+              messageId: "twitch-msg-123",
+            },
+          },
+        ],
+        raw: [
+          {
+            channel: "twitch",
+            conversationId: "testchannel",
+            messageId: "twitch-msg-123",
+          },
+        ],
+        sentAt: 0,
+      });
     });
 
     it("should strip markdown when enabled", async () => {
-      const { stripMarkdownForTwitch } = await mockSuccessfulSend({
+      const { stripMarkdownForTwitch: stripMarkdownForTwitchLocal } = await mockSuccessfulSend({
         messageId: "twitch-msg-456",
         stripMarkdown: (text) => text.replace(/\*\*/g, ""),
       });
@@ -121,7 +146,7 @@ describe("send", () => {
         mockLogger as unknown as Console,
       );
 
-      expect(stripMarkdownForTwitch).toHaveBeenCalledWith("**Bold** text");
+      expect(stripMarkdownForTwitchLocal).toHaveBeenCalledWith("**Bold** text");
     });
 
     it("should return error when account not found", async () => {
@@ -179,6 +204,10 @@ describe("send", () => {
 
     it("should skip sending empty message after markdown stripping", async () => {
       setupAccountContext();
+      const sendMessage = vi.fn();
+      vi.mocked(getClientManager).mockReturnValue({
+        sendMessage,
+      } as unknown as ReturnType<typeof getClientManager>);
       vi.mocked(stripMarkdownForTwitch).mockReturnValue("");
 
       const result = await sendMessageTwitchInternal(
@@ -191,7 +220,14 @@ describe("send", () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(result.messageId).toBe("skipped");
+      expect(result.outcome).toBe("not_sent");
+      expect(result.messageId).toBe("");
+      expect(result.receipt.platformMessageIds).toStrictEqual([]);
+      expect(result.receipt.parts).toStrictEqual([]);
+      // A no-send disposition must stay upstream of the platform client: reporting
+      // "not_sent" while still hitting sendMessage would emit an untracked Twitch
+      // message that the delivery receipt claims never happened.
+      expect(sendMessage).not.toHaveBeenCalled();
     });
 
     it("should return error when client manager not found", async () => {
@@ -301,7 +337,13 @@ describe("send", () => {
         secondaryAccount,
         "secondary-channel",
         "Hello!",
-        expect.any(Object),
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        },
         "secondary",
       );
     });

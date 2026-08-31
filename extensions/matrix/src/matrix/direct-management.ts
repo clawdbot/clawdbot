@@ -1,4 +1,6 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
+// Matrix plugin module implements direct management behavior.
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMatrixDirectRoomEvidence } from "./direct-room.js";
 import type { MatrixClient } from "./sdk.js";
 import { EventType, type MatrixDirectAccountData } from "./send/types.js";
@@ -12,7 +14,7 @@ export type MatrixDirectRoomCandidate = {
   source: "account-data" | "joined";
 };
 
-export type MatrixDirectRoomInspection = {
+type MatrixDirectRoomInspection = {
   selfUserId: string | null;
   remoteUserId: string;
   mappedRoomIds: string[];
@@ -21,14 +23,14 @@ export type MatrixDirectRoomInspection = {
   activeRoomId: string | null;
 };
 
-export type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
+type MatrixDirectRoomRepairResult = MatrixDirectRoomInspection & {
   createdRoomId: string | null;
   changed: boolean;
   directContentBefore: MatrixDirectAccountData;
   directContentAfter: MatrixDirectAccountData;
 };
 
-export type MatrixDirectRoomPromotionResult =
+type MatrixDirectRoomPromotionResult =
   | {
       classifyAsDirect: true;
       repaired: boolean;
@@ -60,7 +62,7 @@ async function readMatrixDirectAccountData(client: MatrixClient): Promise<Matrix
 }
 
 function normalizeRemoteUserId(remoteUserId: string): string {
-  const normalized = remoteUserId.trim();
+  const normalized = normalizeOptionalString(remoteUserId) ?? "";
   if (!isMatrixQualifiedUserId(normalized)) {
     throw new Error(`Matrix user IDs must be fully qualified (got "${remoteUserId}")`);
   }
@@ -75,7 +77,7 @@ function normalizeMappedRoomIds(direct: MatrixDirectAccountData, remoteUserId: s
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const value of current) {
-    const roomId = typeof value === "string" ? value.trim() : "";
+    const roomId = normalizeOptionalString(value) ?? "";
     if (!roomId || seen.has(roomId)) {
       continue;
     }
@@ -99,12 +101,14 @@ function normalizeRoomIdList(values: readonly string[]): string[] {
   return normalized;
 }
 
-function hasPrimaryMatrixDirectRoomMapping(params: {
+function hasMatrixDirectRoomMappings(params: {
   directContent: MatrixDirectAccountData;
   remoteUserId: string;
-  roomId: string;
+  roomIds: readonly string[];
 }): boolean {
-  return normalizeMappedRoomIds(params.directContent, params.remoteUserId)[0] === params.roomId;
+  const current = normalizeMappedRoomIds(params.directContent, params.remoteUserId);
+  const next = normalizeRoomIdList([...params.roomIds, ...current]);
+  return current.length === next.length && current.every((roomId, index) => roomId === next[index]);
 }
 
 function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
@@ -117,10 +121,10 @@ function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQue
   return created;
 }
 
-async function writeMatrixDirectRoomMapping(params: {
+async function writeMatrixDirectRoomMappings(params: {
   client: MatrixClient;
   remoteUserId: string;
-  roomId: string;
+  roomIds: readonly string[];
 }): Promise<MatrixDirectRoomMappingWriteResult> {
   return await resolveDirectAccountDataWriteQueue(params.client).enqueue(
     DIRECT_ACCOUNT_DATA_QUEUE_KEY,
@@ -129,12 +133,12 @@ async function writeMatrixDirectRoomMapping(params: {
       const directContentAfter = buildNextDirectContent({
         directContent: directContentBefore,
         remoteUserId: params.remoteUserId,
-        roomId: params.roomId,
+        roomIds: params.roomIds,
       });
-      const changed = !hasPrimaryMatrixDirectRoomMapping({
+      const changed = !hasMatrixDirectRoomMappings({
         directContent: directContentBefore,
         remoteUserId: params.remoteUserId,
-        roomId: params.roomId,
+        roomIds: params.roomIds,
       });
       if (changed) {
         await params.client.setAccountData(EventType.Direct, directContentAfter);
@@ -177,10 +181,10 @@ async function classifyDirectRoomCandidate(params: {
 function buildNextDirectContent(params: {
   directContent: MatrixDirectAccountData;
   remoteUserId: string;
-  roomId: string;
+  roomIds: readonly string[];
 }): MatrixDirectAccountData {
   const current = normalizeMappedRoomIds(params.directContent, params.remoteUserId);
-  const nextRooms = normalizeRoomIdList([params.roomId, ...current]);
+  const nextRooms = normalizeRoomIdList([...params.roomIds, ...current]);
   return {
     ...params.directContent,
     [params.remoteUserId]: nextRooms,
@@ -194,10 +198,10 @@ export async function persistMatrixDirectRoomMapping(params: {
 }): Promise<boolean> {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
   return (
-    await writeMatrixDirectRoomMapping({
+    await writeMatrixDirectRoomMappings({
       client: params.client,
       remoteUserId,
-      roomId: params.roomId,
+      roomIds: [params.roomId],
     })
   ).changed;
 }
@@ -257,7 +261,8 @@ export async function inspectMatrixDirectRooms(params: {
   remoteUserId: string;
 }): Promise<MatrixDirectRoomInspection> {
   const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
-  const selfUserId = (await params.client.getUserId().catch(() => null))?.trim() || null;
+  const selfUserId =
+    normalizeOptionalString(await params.client.getUserId().catch(() => null)) ?? null;
   const directContent = await readMatrixDirectAccountData(params.client);
   const mappedRoomIds = normalizeMappedRoomIds(directContent, remoteUserId);
   const mappedRooms = await Promise.all(
@@ -275,7 +280,7 @@ export async function inspectMatrixDirectRooms(params: {
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
   let joinedRooms: string[] = [];
-  if (!mappedStrict && typeof params.client.getJoinedRooms === "function") {
+  if (typeof params.client.getJoinedRooms === "function") {
     try {
       const resolved = await params.client.getJoinedRooms();
       joinedRooms = Array.isArray(resolved) ? resolved : [];
@@ -329,10 +334,10 @@ export async function repairMatrixDirectRooms(params: {
       encrypted: params.encrypted === true,
     }));
   const createdRoomId = inspected.activeRoomId ? null : activeRoomId;
-  const mappingWrite = await writeMatrixDirectRoomMapping({
+  const mappingWrite = await writeMatrixDirectRoomMappings({
     client: params.client,
     remoteUserId,
-    roomId: activeRoomId,
+    roomIds: [activeRoomId, ...inspected.discoveredStrictRoomIds],
   });
   return {
     ...inspected,

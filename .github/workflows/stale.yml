@@ -4,6 +4,32 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      backfill_stale_closures:
+        description: "Close currently stale-eligible issues and PRs with the Barnacle app"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "List matching stale-eligible items without closing them"
+        required: false
+        type: boolean
+        default: true
+      include_issues:
+        description: "Include stale-eligible issues in the backfill"
+        required: false
+        type: boolean
+        default: true
+      include_prs:
+        description: "Include stale-eligible pull requests in the backfill"
+        required: false
+        type: boolean
+        default: true
+      max_closures:
+        description: "Maximum items to close when dry_run is false"
+        required: false
+        type: number
+        default: 50
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -12,36 +38,43 @@ permissions: {}
 
 jobs:
   stale:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         continue-on-error: true
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
-      - name: Mark stale issues and pull requests (primary)
+          permission-actions: read
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Mark stale unassigned issues and pull requests (primary)
         id: stale-primary
         continue-on-error: true
-        uses: actions/stale@v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -56,16 +89,64 @@ jobs:
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
-            If you are absolutely sure it still happens on the latest release, open a new issue with fresh repro steps.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
+            That channel is the escape hatch for high-quality PRs that get auto-closed.
+      - name: Mark stale assigned issues (primary)
+        id: assigned-issue-stale-primary
+        continue-on-error: true
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: 30
+          days-before-issue-close: 10
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          remove-stale-when-updated: true
+          stale-issue-message: |
+            This assigned issue has been automatically marked as stale after 30 days of inactivity.
+            Please add updates or it will be closed.
+          close-issue-message: |
+            Closing due to inactivity.
+            If this is still an issue, please retry on the latest OpenClaw release and share updated details.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
+          close-issue-reason: not_planned
+      - name: Mark stale assigned pull requests (primary)
+        id: assigned-stale-primary
+        continue-on-error: true
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 27
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          ignore-pr-updates: true
+          remove-stale-when-updated: true
+          stale-pr-message: |
+            This assigned pull request has been automatically marked as stale after being open for 27 days.
+            Please add updates or it will be closed.
+          close-pr-message: |
+            Closing due to inactivity.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Check stale state cache
         id: stale-state
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ steps.app-token-fallback.outputs.token || steps.app-token.outputs.token }}
           script: |
@@ -86,18 +167,18 @@ jobs:
               core.warning(`Failed to check stale state cache: ${message}`);
               core.setOutput("has_state", "false");
             }
-      - name: Mark stale issues and pull requests (fallback)
+      - name: Mark stale unassigned issues and pull requests (fallback)
         if: (steps.stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
-        uses: actions/stale@v10
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -112,106 +193,652 @@ jobs:
           close-issue-message: |
             Closing due to inactivity.
             If this is still an issue, please retry on the latest OpenClaw release and share updated details.
-            If you are absolutely sure it still happens on the latest release, open a new issue with fresh repro steps.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
+            That channel is the escape hatch for high-quality PRs that get auto-closed.
+      - name: Mark stale assigned issues (fallback)
+        if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          repo-token: ${{ steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: 30
+          days-before-issue-close: 10
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,bug,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          remove-stale-when-updated: true
+          stale-issue-message: |
+            This assigned issue has been automatically marked as stale after 30 days of inactivity.
+            Please add updates or it will be closed.
+          close-issue-message: |
+            Closing due to inactivity.
+            If this is still an issue, please retry on the latest OpenClaw release and share updated details.
+            If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.
+          close-issue-reason: not_planned
+      - name: Mark stale assigned pull requests (fallback)
+        if: (steps.assigned-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          repo-token: ${{ steps.app-token-fallback.outputs.token }}
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 27
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          exempt-pr-labels: maintainer,no-stale,bad-barnacle
+          operations-per-run: 2000
+          ascending: true
+          include-only-assigned: true
+          ignore-pr-updates: true
+          remove-stale-when-updated: true
+          stale-pr-message: |
+            This assigned pull request has been automatically marked as stale after being open for 27 days.
+            Please add updates or it will be closed.
+          close-pr-message: |
+            Closing due to inactivity.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
-  lock-closed-issues:
+  stale-bug-verification:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
+        continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - name: Lock closed issues after 48h of no comments
-        uses: actions/github-script@v8
+          permission-issues: write
+          permission-metadata: read
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+      - name: Mark inactive bugs for ClawSweeper verification
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          retries: 3
+          script: |
+            const dayMs = 24 * 60 * 60 * 1000;
+            const nowMs = Date.now();
+            const maxMarks = 25;
+            const barnacleActorIds = new Set([257215752, 264559031]);
+            const exemptLabels = new Set([
+              "enhancement",
+              "maintainer",
+              "pinned",
+              "security",
+              "no-stale",
+              "bad-barnacle",
+              "clawsweeper:queueable-fix",
+              "clawsweeper:source-repro",
+              "clawsweeper:fix-shape-clear",
+            ]);
+            const { owner, repo } = context.repo;
+            const marked = [];
+            const unmarked = [];
+
+            const labelNames = item =>
+              new Set(
+                (item.labels || []).map(label =>
+                  (typeof label === "string" ? label : label.name).toLowerCase(),
+                ),
+              );
+            const eventTimestamp = event =>
+              Date.parse(event.created_at || event.submitted_at || "");
+            const isBarnacleStaleComment = event =>
+              event.event === "commented" &&
+              barnacleActorIds.has(event.actor?.id || event.user?.id || 0) &&
+              String(event.body || "").includes("marked as stale");
+            const hasSubstantiveUpdateSinceStale = (item, timeline) => {
+              const orderedTimeline = timeline
+                .map((event, index) => ({ event, index, timestamp: eventTimestamp(event) }))
+                .filter(entry => Number.isFinite(entry.timestamp))
+                .toSorted(
+                  (left, right) => left.timestamp - right.timestamp || left.index - right.index,
+                );
+              const staleEventIndex = orderedTimeline.findLastIndex(
+                entry =>
+                  entry.event.event === "labeled" &&
+                  String(entry.event.label?.name || "").toLowerCase() === "stale",
+              );
+              if (staleEventIndex < 0) return false;
+              const staleAtMs = orderedTimeline[staleEventIndex].timestamp;
+              const updatedAtMs = Date.parse(item.updated_at);
+              if (!Number.isFinite(updatedAtMs)) return false;
+              const laterEvents = orderedTimeline
+                .slice(staleEventIndex + 1)
+                .map(entry => entry.event);
+              if (laterEvents.some(event => !isBarnacleStaleComment(event))) return true;
+              const lastAutomationAtMs = Math.max(staleAtMs, ...laterEvents.map(eventTimestamp));
+              return updatedAtMs > lastAutomationAtMs;
+            };
+            const removeStale = async item => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  name: "stale",
+                });
+                unmarked.push(item);
+              } catch (error) {
+                if (error.status !== 404) throw error;
+              }
+            };
+
+            for await (const response of github.paginate.iterator(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              labels: "bug",
+              sort: "updated",
+              direction: "asc",
+              per_page: 100,
+            })) {
+              for (const listedItem of response.data) {
+                if (listedItem.pull_request) continue;
+                const listedLabels = labelNames(listedItem);
+                const isExempt = [...listedLabels].some(label => exemptLabels.has(label));
+
+                if (listedLabels.has("stale")) {
+                  if (isExempt) {
+                    await removeStale(listedItem);
+                    continue;
+                  }
+                  const timeline = await github.paginate(
+                    github.rest.issues.listEventsForTimeline,
+                    { owner, repo, issue_number: listedItem.number, per_page: 100 },
+                  );
+                  if (hasSubstantiveUpdateSinceStale(listedItem, timeline)) {
+                    await removeStale(listedItem);
+                  }
+                  // Existing stale bugs are intentionally not re-labeled or
+                  // dispatched; #114238 requires separate backfill approval.
+                  continue;
+                }
+
+                if (isExempt || marked.length >= maxMarks) continue;
+                const assigned = (listedItem.assignees || []).length > 0;
+                const staleAfterDays = assigned ? 30 : 14;
+                if (Date.parse(listedItem.updated_at) >= nowMs - staleAfterDays * dayMs) continue;
+
+                // Re-read immediately before mutation so a recent comment,
+                // assignment, or exemption cannot be raced by the scan.
+                const { data: item } = await github.rest.issues.get({
+                  owner,
+                  repo,
+                  issue_number: listedItem.number,
+                });
+                const currentLabels = labelNames(item);
+                const currentlyExempt = [...currentLabels].some(label => exemptLabels.has(label));
+                const currentlyAssigned = (item.assignees || []).length > 0;
+                const currentStaleAfterDays = currentlyAssigned ? 30 : 14;
+                if (
+                  item.state !== "open" ||
+                  currentLabels.has("stale") ||
+                  !currentLabels.has("bug") ||
+                  currentlyExempt ||
+                  Date.parse(item.updated_at) >= nowMs - currentStaleAfterDays * dayMs
+                ) {
+                  continue;
+                }
+
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  labels: ["stale"],
+                });
+                const body = [
+                  currentlyAssigned
+                    ? "This assigned bug report has been automatically marked as stale after 30 days of inactivity."
+                    : "This bug report has been automatically marked as stale due to inactivity.",
+                  "ClawSweeper is checking whether current `main` already fixes the reported behavior.",
+                  "Inactivity alone will not close a bug report.",
+                ].join("\n");
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: item.number,
+                  body,
+                });
+                marked.push(item);
+              }
+            }
+
+            core.info(`Marked ${marked.length} bug issue(s) for ClawSweeper verification.`);
+            core.info(`Removed stale from ${unmarked.length} updated or exempt bug issue(s).`);
+            await core.summary
+              .addHeading("Bug stale verification")
+              .addRaw(`Marked for ClawSweeper review: ${marked.length}\n\n`)
+              .addRaw(`Returned to active/exempt state: ${unmarked.length}\n\n`)
+              .write();
+
+  backfill-stale-closures:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
+    permissions:
+      issues: write
+      pull-requests: write
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-metadata: read
+          permission-pull-requests: write
+      - name: Backfill stale closures
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          INCLUDE_ISSUES: ${{ inputs.include_issues }}
+          INCLUDE_PRS: ${{ inputs.include_prs }}
+          MAX_CLOSURES: ${{ inputs.max_closures }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const lockAfterHours = 48;
-            const lockAfterMs = lockAfterHours * 60 * 60 * 1000;
-            const perPage = 100;
-            const cutoffMs = Date.now() - lockAfterMs;
+            const dayMs = 24 * 60 * 60 * 1000;
+            const dryRun = process.env.DRY_RUN !== "false";
+            const includeIssues = process.env.INCLUDE_ISSUES !== "false";
+            const includePrs = process.env.INCLUDE_PRS !== "false";
+            const maxClosures = Math.max(0, Number(process.env.MAX_CLOSURES || "50"));
+            const nowMs = Date.now();
             const { owner, repo } = context.repo;
 
-            let locked = 0;
-            let inspected = 0;
+            const issueExemptLabels = new Set([
+              "enhancement",
+              "maintainer",
+              "pinned",
+              "security",
+              "no-stale",
+              "bad-barnacle",
+              "bug",
+              "clawsweeper:queueable-fix",
+              "clawsweeper:source-repro",
+              "clawsweeper:fix-shape-clear",
+            ]);
+            const prExemptLabels = new Set(["maintainer", "no-stale", "bad-barnacle"]);
+            const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const maintainerLogins = new Set([
+              "altaywtf",
+              "BunsDev",
+              "cpojer",
+              "gumadeiras",
+              "hydro13",
+              "hxy91819",
+              "jalehman",
+              "joshavant",
+              "joshp123",
+              "mbelinky",
+              "mukhtharcm",
+              "ngutman",
+              "obviyus",
+              "odysseus0",
+              "onutc",
+              "osolmaz",
+              "sebslight",
+              "sliverp",
+              "steipete",
+              "thewilloftheshadow",
+              "tyler6204",
+              "velvet-shark",
+              "vignesh07",
+              "vincentkoc",
+              "visionik",
+            ].map(login => login.toLowerCase()));
 
-            let page = 1;
-            while (true) {
-              const { data: issues } = await github.rest.issues.listForRepo({
+            const issueCloseMessage = [
+              "Closing due to inactivity.",
+              "If this is still an issue, please retry on the latest OpenClaw release and share updated details.",
+              "If you are absolutely sure it still happens on the latest release, open a new issue with fresh steps to reproduce.",
+            ].join("\n");
+            const prCloseMessage = [
+              "Closing due to inactivity.",
+              "If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.",
+              "That channel is the escape hatch for high-quality PRs that get auto-closed.",
+            ].join("\n");
+
+            const hasAny = (labels, exemptLabels) => {
+              for (const label of labels) {
+                if (exemptLabels.has(label)) {
+                  return true;
+                }
+              }
+              return false;
+            };
+            const isOlderThan = (dateString, days) => {
+              const timestamp = Date.parse(dateString);
+              return Number.isFinite(timestamp) && timestamp < nowMs - days * dayMs;
+            };
+
+            const candidates = [];
+            const skipped = {
+              missingStale: 0,
+              exemptLabel: 0,
+              maintainerAuthor: 0,
+              maintainerAssignee: 0,
+              notOldEnough: 0,
+              disabledType: 0,
+            };
+
+            for await (const response of github.paginate.iterator(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              sort: "updated",
+              direction: "asc",
+              per_page: 100,
+            })) {
+              for (const item of response.data) {
+                const isPr = Boolean(item.pull_request);
+                if ((isPr && !includePrs) || (!isPr && !includeIssues)) {
+                  skipped.disabledType += 1;
+                  continue;
+                }
+
+                const labels = new Set((item.labels || []).map(label => label.name));
+                if (!labels.has("stale")) {
+                  skipped.missingStale += 1;
+                  continue;
+                }
+
+                const exemptLabels = isPr ? prExemptLabels : issueExemptLabels;
+                if (hasAny(labels, exemptLabels)) {
+                  skipped.exemptLabel += 1;
+                  continue;
+                }
+
+                if (maintainerAssociations.has(item.author_association)) {
+                  skipped.maintainerAuthor += 1;
+                  continue;
+                }
+
+                const assigned = (item.assignees || []).length > 0;
+                const assignedToMaintainer = (item.assignees || []).some(assignee =>
+                  maintainerLogins.has(assignee.login.toLowerCase()),
+                );
+                if (assignedToMaintainer) {
+                  skipped.maintainerAssignee += 1;
+                  continue;
+                }
+
+                let eligible = false;
+                let lane = "";
+                if (isPr && assigned) {
+                  lane = "assigned-pr";
+                  eligible = isOlderThan(item.created_at, 34) && isOlderThan(item.updated_at, 7);
+                } else if (isPr) {
+                  lane = "unassigned-pr";
+                  eligible = isOlderThan(item.updated_at, 7);
+                } else if (assigned) {
+                  lane = "assigned-issue";
+                  eligible = isOlderThan(item.updated_at, 10);
+                } else {
+                  lane = "unassigned-issue";
+                  eligible = isOlderThan(item.updated_at, 7);
+                }
+
+                if (!eligible) {
+                  skipped.notOldEnough += 1;
+                  continue;
+                }
+
+                candidates.push({
+                  number: item.number,
+                  title: item.title,
+                  lane,
+                  isPr,
+                  assigned,
+                  createdAt: item.created_at,
+                  updatedAt: item.updated_at,
+                  authorAssociation: item.author_association,
+                  url: item.html_url,
+                });
+              }
+            }
+
+            const countsByLane = candidates.reduce((counts, candidate) => {
+              counts[candidate.lane] = (counts[candidate.lane] || 0) + 1;
+              return counts;
+            }, {});
+            const selected = candidates.slice(0, maxClosures);
+
+            core.info(`Dry run: ${dryRun}`);
+            core.info(`Candidates: ${candidates.length}`);
+            core.info(`Selected: ${selected.length}`);
+            core.info(`Counts by lane: ${JSON.stringify(countsByLane)}`);
+            core.info(`Skipped: ${JSON.stringify(skipped)}`);
+            for (const candidate of selected) {
+              core.info(`${dryRun ? "Would close" : "Closing"} ${candidate.lane} #${candidate.number}: ${candidate.title} (${candidate.url})`);
+            }
+
+            await core.summary
+              .addHeading("Stale Closure Backfill")
+              .addRaw(`Dry run: ${dryRun}\n\n`)
+              .addRaw(`Candidates: ${candidates.length}\n\n`)
+              .addRaw(`Selected: ${selected.length}\n\n`)
+              .addCodeBlock(JSON.stringify({ countsByLane, skipped }, null, 2), "json")
+              .addTable([
+                [
+                  { data: "Lane", header: true },
+                  { data: "Number", header: true },
+                  { data: "Title", header: true },
+                  { data: "URL", header: true },
+                ],
+                ...selected.map(candidate => [
+                  candidate.lane,
+                  String(candidate.number),
+                  candidate.title,
+                  candidate.url,
+                ]),
+              ])
+              .write();
+
+            if (dryRun) {
+              return;
+            }
+
+            for (const candidate of selected) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: candidate.number,
+                body: candidate.isPr ? prCloseMessage : issueCloseMessage,
+              });
+
+              if (candidate.isPr) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number: candidate.number,
+                  state: "closed",
+                });
+              } else {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: candidate.number,
+                  state: "closed",
+                  state_reason: "not_planned",
+                });
+              }
+            }
+
+  audit-bug-closure-reasons:
+    needs: stale
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    permissions:
+      issues: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject Barnacle NOT_PLANNED bug closures
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const auditWindowMs = 48 * 60 * 60 * 1000;
+            const cutoffMs = Date.now() - auditWindowMs;
+            // Immutable GitHub bot account ids for openclaw-barnacle[bot] and
+            // barnacle-openclaw[bot]. Logins are display-only and spoofable.
+            const barnacleActorIds = new Set([257215752, 264559031]);
+            const { owner, repo } = context.repo;
+            const violations = [];
+            const escapeSummaryCell = value =>
+              String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+
+            pages: for await (const response of github.paginate.iterator(
+              github.rest.issues.listForRepo,
+              {
                 owner,
                 repo,
                 state: "closed",
                 sort: "updated",
                 direction: "desc",
-                per_page: perPage,
-                page,
-              });
+                per_page: 100,
+              },
+            )) {
+              const items = response.data;
 
-              if (issues.length === 0) {
-                break;
-              }
+              for (const item of items) {
+                const updatedAtMs = Date.parse(item.updated_at);
+                if (Number.isFinite(updatedAtMs) && updatedAtMs < cutoffMs) break pages;
+                if (item.pull_request || item.state_reason !== "not_planned") continue;
+                const closedAtMs = Date.parse(item.closed_at || "");
+                if (!Number.isFinite(closedAtMs) || closedAtMs < cutoffMs) continue;
+                const labels = (item.labels || []).map(label =>
+                  typeof label === "string" ? label : label.name,
+                );
+                if (!labels.includes("bug")) continue;
 
-              for (const issue of issues) {
-                if (issue.pull_request) {
-                  continue;
-                }
-                if (issue.locked) {
-                  continue;
-                }
-                if (!issue.closed_at) {
-                  continue;
-                }
-
-                inspected += 1;
-                const closedAtMs = Date.parse(issue.closed_at);
-                if (!Number.isFinite(closedAtMs)) {
-                  continue;
-                }
-                if (closedAtMs > cutoffMs) {
-                  continue;
-                }
-
-                let lastCommentMs = 0;
-                if (issue.comments > 0) {
-                  const { data: comments } = await github.rest.issues.listComments({
-                    owner,
-                    repo,
-                    issue_number: issue.number,
-                    per_page: 1,
-                    page: 1,
-                    sort: "created",
-                    direction: "desc",
-                  });
-
-                  if (comments.length > 0) {
-                    lastCommentMs = Date.parse(comments[0].created_at);
-                  }
-                }
-
-                const lastActivityMs = Math.max(closedAtMs, lastCommentMs || 0);
-                if (lastActivityMs > cutoffMs) {
-                  continue;
-                }
-
-                await github.rest.issues.lock({
+                const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
                   owner,
                   repo,
-                  issue_number: issue.number,
-                  lock_reason: "resolved",
+                  issue_number: item.number,
+                  per_page: 100,
                 });
-
-                locked += 1;
+                const closeEvent = timeline
+                  .filter(event => event.event === "closed")
+                  .toSorted((left, right) =>
+                    Date.parse(left.created_at || "") - Date.parse(right.created_at || ""),
+                  )
+                  .at(-1);
+                if (!closeEvent || !barnacleActorIds.has(closeEvent.actor?.id || 0)) continue;
+                violations.push({
+                  number: item.number,
+                  title: item.title,
+                  actor: closeEvent.actor.login,
+                  url: item.html_url,
+                });
               }
-
-              page += 1;
             }
 
-            core.info(`Inspected ${inspected} closed issues; locked ${locked}.`);
+            if (violations.length === 0) {
+              core.info("No Barnacle NOT_PLANNED bug closures found in the last 48 hours.");
+              return;
+            }
+
+            await core.summary
+              .addHeading("Barnacle bug closure invariant failed")
+              .addRaw(
+                "Bug-labeled issues must be verified by ClawSweeper instead of closed by Barnacle as not planned.\n\n",
+              )
+              .addTable([
+                [
+                  { data: "Issue", header: true },
+                  { data: "Title", header: true },
+                  { data: "Actor", header: true },
+                ],
+                ...violations.map(violation => [
+                  `[#${violation.number}](${violation.url})`,
+                  escapeSummaryCell(violation.title),
+                  violation.actor,
+                ]),
+              ])
+              .write();
+            core.setFailed(
+              `Found ${violations.length} Barnacle NOT_PLANNED bug closure(s) in the last 48 hours.`,
+            );
+
+  lock-closed-issues:
+    needs: stale
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    permissions:
+      issues: write
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-metadata: read
+      - name: Lock closed issues after 48h of no activity
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const lockAfterHours = 48;
+            const lockAfterMs = lockAfterHours * 60 * 60 * 1000;
+            const maxLocksPerRun = 50;
+            const mutationDelayMs = 1100;
+            const cutoffMs = Date.now() - lockAfterMs;
+            const { owner, repo } = context.repo;
+
+            const cutoff = new Date(cutoffMs).toISOString();
+            const query = [
+              `repo:${owner}/${repo}`,
+              "is:issue",
+              "is:closed",
+              "is:unlocked",
+              `updated:<${cutoff}`,
+            ].join(" ");
+            const { data } = await github.rest.search.issuesAndPullRequests({
+              q: query,
+              sort: "updated",
+              order: "asc",
+              per_page: maxLocksPerRun,
+            });
+            const candidates = data.items.filter(issue => {
+              const updatedAtMs = Date.parse(issue.updated_at);
+              return Number.isFinite(updatedAtMs) && updatedAtMs <= cutoffMs;
+            });
+
+            for (const [index, issue] of candidates.entries()) {
+              await github.rest.issues.lock({
+                owner,
+                repo,
+                issue_number: issue.number,
+                lock_reason: "resolved",
+              });
+              if (index < candidates.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, mutationDelayMs));
+              }
+            }
+
+            core.info(
+              `Found ${data.total_count} unlocked issues inactive for 48h; locked ${candidates.length}.`,
+            );

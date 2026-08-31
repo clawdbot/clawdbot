@@ -1,17 +1,48 @@
+// Discord helper module supports secret config contract behavior.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectNestedChannelFieldAssignments,
-  collectNestedChannelTtsAssignments,
   collectSimpleChannelFieldAssignments,
   getChannelSurface,
+  hasConfiguredSecretInputValue,
   isBaseFieldActiveForChannelSurface,
   isEnabledFlag,
   isRecord,
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
 
-export const secretTargetRegistryEntries = [
+function createVoiceProviderSecretTarget(params: {
+  capability: "realtime" | "tts";
+  scope: "account" | "channel";
+}): SecretTargetRegistryEntry {
+  const prefix = params.scope === "account" ? "channels.discord.accounts.*" : "channels.discord";
+  const path = `${prefix}.voice.${params.capability}.providers.*.apiKey`;
+  return {
+    id: path,
+    targetType: path,
+    configFile: "openclaw.json",
+    pathPattern: path,
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: params.scope === "account" ? 7 : 5,
+  };
+}
+
+export function discordRealtimeVoiceSecretOwnerId(accountId: string, providerId: string): string {
+  return `discord:voice:realtime:${normalizeAccountId(accountId)}:${providerId}`;
+}
+
+function isRealtimeVoiceActive(value: unknown): boolean {
+  return isRecord(value) && isEnabledFlag(value) && value.mode !== "stt-tts";
+}
+
+export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.pluralkit.token",
     targetType: "channels.discord.accounts.*.pluralkit.token",
@@ -34,18 +65,8 @@ export const secretTargetRegistryEntries = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-  {
-    id: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
-    targetType: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 6,
-  },
+  createVoiceProviderSecretTarget({ capability: "realtime", scope: "account" }),
+  createVoiceProviderSecretTarget({ capability: "tts", scope: "account" }),
   {
     id: "channels.discord.pluralkit.token",
     targetType: "channels.discord.pluralkit.token",
@@ -68,23 +89,13 @@ export const secretTargetRegistryEntries = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-  {
-    id: "channels.discord.voice.tts.providers.*.apiKey",
-    targetType: "channels.discord.voice.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.discord.voice.tts.providers.*.apiKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 4,
-  },
-] satisfies SecretTargetRegistryEntry[];
+  createVoiceProviderSecretTarget({ capability: "realtime", scope: "channel" }),
+  createVoiceProviderSecretTarget({ capability: "tts", scope: "channel" }),
+];
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
   const resolved = getChannelSurface(params.config, "discord");
@@ -92,6 +103,21 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: discord, surface } = resolved;
+  const hasImplicitDefault =
+    surface.hasExplicitAccounts &&
+    !surface.accounts.some(({ accountId }) => accountId === "default") &&
+    [discord.token, params.context.env.DISCORD_BOT_TOKEN].some((value) =>
+      hasConfiguredSecretInputValue(value, params.defaults),
+    );
+  if (hasImplicitDefault) {
+    // Account discovery treats either token source as an implicit default. Keep it in
+    // secret collection so named accounts cannot orphan the default's inherited refs.
+    surface.accounts.push({
+      accountId: "default",
+      account: {},
+      enabled: surface.channelEnabled,
+    });
+  }
   collectSimpleChannelFieldAssignments({
     channelKey: "discord",
     field: "token",
@@ -114,6 +140,8 @@ export function collectRuntimeConfigAssignments(params: {
       isBaseFieldActiveForChannelSurface(surface, "pluralkit") &&
       isRecord(discord.pluralkit) &&
       isEnabledFlag(discord.pluralkit),
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !Object.hasOwn(account, "pluralkit") && isEnabledFlag(discord.pluralkit),
     topInactiveReason:
       "no enabled Discord surface inherits this top-level PluralKit config or PluralKit is disabled.",
     accountActive: ({ account, enabled }) =>
@@ -136,5 +164,23 @@ export function collectRuntimeConfigAssignments(params: {
     accountActive: ({ account, enabled }) =>
       enabled && isRecord(account.voice) && isEnabledFlag(account.voice),
     accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
+  });
+  collectNestedChannelTtsAssignments({
+    channelKey: "discord",
+    nestedKey: "voice",
+    providerBlockKey: "realtime",
+    ownerId: ({ accountId, providerId }) =>
+      discordRealtimeVoiceSecretOwnerId(accountId, providerId),
+    channel: discord,
+    surface,
+    defaults: params.defaults,
+    context: params.context,
+    topLevelActive:
+      isBaseFieldActiveForChannelSurface(surface, "voice") && isRealtimeVoiceActive(discord.voice),
+    topInactiveReason:
+      "no enabled Discord surface uses this top-level realtime voice config, voice is disabled, or voice mode is stt-tts.",
+    accountActive: ({ account, enabled }) => enabled && isRealtimeVoiceActive(account.voice),
+    accountInactiveReason:
+      "Discord account is disabled, voice is disabled, or voice mode is stt-tts for this account.",
   });
 }

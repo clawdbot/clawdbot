@@ -2,7 +2,7 @@
 // Keep `core` and channel-specific SDK entrypoints derived from this module
 // so bundled channel entrypoints do not drift across overlapping exports.
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.public.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 
@@ -16,6 +16,7 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";

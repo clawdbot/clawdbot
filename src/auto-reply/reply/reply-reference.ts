@@ -1,6 +1,11 @@
+/** Plans reply/thread references for multi-payload channel sends. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 
-export type ReplyReferencePlanner = {
+/** Stateful planner for reply-to ids across one delivery flow. */
+type ReplyReferencePlanner = {
+  /** Returns the effective reply/thread id for the next send without updating state. */
+  peek(): string | undefined;
   /** Returns the effective reply/thread id for the next send and updates state. */
   use(): string | undefined;
   /** Mark that a reply was sent (needed when no reference is used). */
@@ -9,6 +14,12 @@ export type ReplyReferencePlanner = {
   hasReplied(): boolean;
 };
 
+/** Returns true for modes that use a reply reference only before the first send. */
+export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
+  return mode === "first" || mode === "batched";
+}
+
+/** Creates a planner that tracks whether a reply reference has already been consumed. */
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
   /** Existing thread/reference id (preferred when allowed by replyToMode). */
@@ -22,10 +33,10 @@ export function createReplyReferencePlanner(options: {
 }): ReplyReferencePlanner {
   let hasReplied = options.hasReplied ?? false;
   const allowReference = options.allowReference !== false;
-  const existingId = options.existingId?.trim();
-  const startId = options.startId?.trim();
+  const existingId = normalizeOptionalString(options.existingId);
+  const startId = normalizeOptionalString(options.startId);
 
-  const use = (): string | undefined => {
+  const resolve = (): string | undefined => {
     if (!allowReference) {
       return undefined;
     }
@@ -37,15 +48,21 @@ export function createReplyReferencePlanner(options: {
       return undefined;
     }
     if (options.replyToMode === "all") {
-      hasReplied = true;
       return id;
     }
-    // "first": only the first reply gets a reference.
-    if (!hasReplied) {
-      hasReplied = true;
-      return id;
+    if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
+      return undefined;
     }
-    return undefined;
+    return id;
+  };
+
+  const use = (): string | undefined => {
+    const id = resolve();
+    if (!id) {
+      return undefined;
+    }
+    hasReplied = true;
+    return id;
   };
 
   const markSent = () => {
@@ -53,6 +70,7 @@ export function createReplyReferencePlanner(options: {
   };
 
   return {
+    peek: resolve,
     use,
     markSent,
     hasReplied: () => hasReplied,

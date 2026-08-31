@@ -1,4 +1,6 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+// Discord tests cover resolve channels plugin behavior.
+import { ChannelType } from "discord-api-types/v10";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
@@ -66,7 +68,11 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.guildId).toBe("111");
   }
 
-  it("resolves guild/channel by name", async () => {
+  it.each([
+    ["announcement", ChannelType.AnnouncementThread],
+    ["public", ChannelType.PublicThread],
+    ["private", ChannelType.PrivateThread],
+  ])("prefers a matching guild channel over a %s thread", async (_kind, threadType) => {
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
       if (url.endsWith("/users/@me/guilds")) {
@@ -74,6 +80,7 @@ describe("resolveDiscordChannelAllowlist", () => {
       }
       if (url.endsWith("/guilds/g1/channels")) {
         return jsonResponse([
+          { id: "thread-1", name: "general", guild_id: "g1", type: threadType },
           { id: "c1", name: "general", guild_id: "g1", type: 0 },
           { id: "c2", name: "random", guild_id: "g1", type: 0 },
         ]);
@@ -122,13 +129,14 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: true,
       guildId: "111",
+      guildName: "Guild One",
       channelId: "222",
       channelName: "general",
-      guildName: "Guild One",
+      archived: undefined,
     });
   });
 
@@ -142,7 +150,7 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: false,
       guildId: "111",

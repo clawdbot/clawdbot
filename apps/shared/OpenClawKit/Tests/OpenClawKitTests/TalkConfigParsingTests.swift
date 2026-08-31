@@ -116,4 +116,21 @@ struct TalkConfigParsingTests {
         #expect(TalkConfigParsing.resolvedPositiveInt(AnyCodable(true), fallback: 700) == 700)
         #expect(TalkConfigParsing.resolvedPositiveInt(AnyCodable("1500"), fallback: 700) == 700)
     }
+
+    @Test func resolvesSpeechLocaleID() {
+        #expect(TalkConfigParsing.resolvedSpeechLocaleID(["speechLocale": AnyCodable(" ru_RU ")]) == "ru-RU")
+        #expect(TalkConfigParsing.resolvedSpeechLocaleID(["speechLocale": AnyCodable("")], fallback: "en-US") == "en-US")
+    }
+
+    @Test func resolvesSpeechRecognitionLocaleFromSupportedFallbacks() {
+        let locale = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zz-ZZ", "fr-FR"],
+            supportedLocaleIDs: ["fr-FR", "en-US"])
+        let fallback = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
+            preferredLocaleIDs: ["zz-ZZ", "yy-YY"],
+            supportedLocaleIDs: ["en-US"])
+
+        #expect(locale == "fr-FR")
+        #expect(fallback == "en-US")
+    }
 }

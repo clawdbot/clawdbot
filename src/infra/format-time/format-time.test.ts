@@ -1,5 +1,13 @@
+// Covers duration, UTC/zoned timestamp, timezone, and relative time formatting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
+import { withEnv } from "../../test-utils/env.js";
+import {
+  createTimeZoneDayKeyFormatter,
+  formatUtcTimestamp,
+  formatZonedTimestamp,
+  resolveTimeZoneDayStartMs,
+  resolveTimezone,
+} from "./format-datetime.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -33,6 +41,7 @@ describe("format-duration", () => {
       expectFormatterCases(formatDurationCompact, [
         { input: 500, expected: "500ms" },
         { input: 999, expected: "999ms" },
+        { input: 999.6, expected: "1s" },
         { input: 1000, expected: "1s" },
         { input: 45000, expected: "45s" },
         { input: 59000, expected: "59s" },
@@ -41,6 +50,7 @@ describe("format-duration", () => {
         { input: 90000, expected: "1m30s" },
         { input: 3600000, expected: "1h" },
         { input: 3660000, expected: "1h1m" },
+        { input: 3630000, expected: "1h30s" },
         { input: 5400000, expected: "1h30m" },
         { input: 86400000, expected: "1d" },
         { input: 90000000, expected: "1d1h" },
@@ -52,6 +62,11 @@ describe("format-duration", () => {
       { input: 65000, options: { spaced: true }, expected: "1m 5s" },
       { input: 3660000, options: { spaced: true }, expected: "1h 1m" },
       { input: 90000000, options: { spaced: true }, expected: "1d 1h" },
+      {
+        input: 366 * 86400000,
+        options: { showYears: true, spaced: true },
+        expected: "1y 1d",
+      },
       { input: 59500, expected: "1m" },
       { input: 59400, expected: "59s" },
     ])("formats compact duration for %j", ({ input, options, expected }) => {
@@ -70,6 +85,7 @@ describe("format-duration", () => {
     it("formats single-unit outputs and day threshold behavior", () => {
       expectFormatterCases(formatDurationHuman, [
         { input: 500, expected: "500ms" },
+        { input: 999.6, expected: "1s" },
         { input: 5000, expected: "5s" },
         { input: 180000, expected: "3m" },
         { input: 7200000, expected: "2h" },
@@ -87,11 +103,11 @@ describe("format-duration", () => {
       { input: 999, expected: "999ms" },
       { input: -1, expected: "0ms" },
       { input: -500, expected: "0ms" },
-      { input: 999.6, expected: "1000ms" },
+      { input: 999.6, expected: "1s" },
       { input: 1000, expected: "1s" },
       { input: 1500, expected: "1.5s" },
       { input: 1234, expected: "1.23s" },
-      { input: NaN, expected: "unknown" },
+      { input: Number.NaN, expected: "unknown" },
       { input: Infinity, expected: "unknown" },
     ])("formats precise duration for %j", ({ input, expected }) => {
       expect(formatDurationPrecise(input)).toBe(expected);
@@ -105,7 +121,7 @@ describe("format-duration", () => {
       { input: 1000, options: { decimals: 0 }, expected: "1s" },
       { input: 2000, options: { unit: "seconds" as const }, expected: "2 seconds" },
       { input: -1500, options: { decimals: 1 }, expected: "0s" },
-      { input: NaN, options: undefined, expected: "unknown" },
+      { input: Number.NaN, options: undefined, expected: "unknown" },
       { input: Infinity, options: undefined, expected: "unknown" },
     ])("formats seconds duration for %j", ({ input, options, expected }) => {
       expect(formatDurationSeconds(input, options)).toBe(expected);
@@ -124,6 +140,24 @@ describe("format-datetime", () => {
       { input: "", expected: undefined },
     ] as const)("resolves $input", ({ input, expected }) => {
       expect(resolveTimezone(input)).toBe(expected);
+    });
+  });
+
+  describe("calendar days", () => {
+    it("formats event instants with the offset active in the requested timezone", () => {
+      const formatViennaDay = createTimeZoneDayKeyFormatter("Europe/Vienna");
+
+      expect(formatViennaDay(new Date("2026-03-28T22:30:00.000Z"))).toBe("2026-03-28");
+      expect(formatViennaDay(new Date("2026-03-29T22:30:00.000Z"))).toBe("2026-03-30");
+    });
+
+    it("resolves calendar boundaries across a DST-short day", () => {
+      const start = resolveTimeZoneDayStartMs("2026-03-29", "Europe/Vienna");
+      const next = resolveTimeZoneDayStartMs("2026-03-30", "Europe/Vienna");
+
+      expect(start).toBe(Date.parse("2026-03-28T23:00:00.000Z"));
+      expect(next).toBe(Date.parse("2026-03-29T22:00:00.000Z"));
+      expect(next! - start!).toBe(23 * 60 * 60 * 1000);
     });
   });
 
@@ -152,26 +186,37 @@ describe("format-datetime", () => {
         options: { timeZone: "UTC", displaySeconds: true },
         expected: /2024-01-15 14:30:45/,
       },
+      {
+        date: new Date("2024-01-15T14:30:45.000Z"),
+        options: { timeZone: "UTC", displayWeekday: true },
+        expected: /^Mon 2024-01-15 14:30 UTC$/,
+      },
     ] as const)("formats zoned timestamp", ({ date, options, expected }) => {
       const result = formatZonedTimestamp(date, options);
       expect(result).toMatch(expected);
     });
 
-    it("returns undefined when required Intl parts are missing", () => {
-      function MissingPartsDateTimeFormat() {
-        return {
-          formatToParts: () => [
-            { type: "month", value: "01" },
-            { type: "day", value: "15" },
-            { type: "hour", value: "14" },
-            { type: "minute", value: "30" },
-          ],
-        } as Intl.DateTimeFormat;
+    it("follows host timezone changes while keeping explicit zones fixed", () => {
+      const date = new Date("2024-01-15T14:30:00.000Z");
+      for (const [timezone, expected] of [
+        ["UTC", "2024-01-15 14:30 UTC"],
+        ["America/New_York", "2024-01-15 09:30 EST"],
+        ["UTC", "2024-01-15 14:30 UTC"],
+      ]) {
+        withEnv({ TZ: timezone }, () => {
+          expect(formatZonedTimestamp(date)).toBe(expected);
+          expect(formatZonedTimestamp(date, { timeZone: "UTC" })).toBe("2024-01-15 14:30 UTC");
+        });
       }
+    });
 
-      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
-        MissingPartsDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
-      );
+    it("returns undefined when required Intl parts are missing", () => {
+      vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
+        { type: "month", value: "01" },
+        { type: "day", value: "15" },
+        { type: "hour", value: "14" },
+        { type: "minute", value: "30" },
+      ]);
 
       expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
         undefined,
@@ -179,17 +224,9 @@ describe("format-datetime", () => {
     });
 
     it("returns undefined when Intl formatting throws", () => {
-      function ThrowingDateTimeFormat() {
-        return {
-          formatToParts: () => {
-            throw new Error("boom");
-          },
-        } as unknown as Intl.DateTimeFormat;
-      }
-
-      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
-        ThrowingDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
-      );
+      vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
+        throw new Error("boom");
+      });
 
       expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
         undefined,

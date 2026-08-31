@@ -1,10 +1,14 @@
+/** Classifies systemd/systemctl unavailable errors into user-facing categories. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 export type SystemdUnavailableKind =
   | "missing_systemctl"
   | "user_bus_unavailable"
   | "generic_unavailable";
 
+// Normalizes platform command output before matching known systemd failure families.
 function normalizeDetail(detail?: string): string {
-  return detail?.toLowerCase().trim() ?? "";
+  return normalizeLowercaseStringOrEmpty(detail);
 }
 
 export function isSystemctlMissingDetail(detail?: string): boolean {
@@ -25,6 +29,7 @@ export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
     normalized.includes("failed to connect to user scope bus") ||
     normalized.includes("dbus_session_bus_address") ||
     normalized.includes("xdg_runtime_dir") ||
+    normalized.includes("enomedium") ||
     normalized.includes("no medium found")
   );
 }
@@ -34,6 +39,8 @@ export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavai
   if (!normalized) {
     return null;
   }
+  // Order matters: missing systemctl has different remediation from a live
+  // systemd install whose user bus is unavailable.
   if (isSystemctlMissingDetail(normalized)) {
     return "missing_systemctl";
   }

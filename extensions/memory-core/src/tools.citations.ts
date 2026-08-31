@@ -1,9 +1,11 @@
+// Memory Core plugin module implements tools.citations behavior.
 import {
   parseAgentSessionKey,
   type MemoryCitationsMode,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
@@ -35,32 +37,6 @@ function formatCitation(entry: MemorySearchResult): string {
   return `${entry.path}${lineRange}`;
 }
 
-export function clampResultsByInjectedChars(
-  results: MemorySearchResult[],
-  budget?: number,
-): MemorySearchResult[] {
-  if (!budget || budget <= 0) {
-    return results;
-  }
-  let remaining = budget;
-  const clamped: MemorySearchResult[] = [];
-  for (const entry of results) {
-    if (remaining <= 0) {
-      break;
-    }
-    const snippet = entry.snippet ?? "";
-    if (snippet.length <= remaining) {
-      clamped.push(entry);
-      remaining -= snippet.length;
-    } else {
-      const trimmed = snippet.slice(0, Math.max(0, remaining));
-      clamped.push({ ...entry, snippet: trimmed });
-      break;
-    }
-  }
-  return clamped;
-}
-
 export function shouldIncludeCitations(params: {
   mode: MemoryCitationsMode;
   sessionKey?: string;
@@ -79,7 +55,7 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
   if (!parsed?.rest) {
     return "direct";
   }
-  const tokens = new Set(parsed.rest.toLowerCase().split(":").filter(Boolean));
+  const tokens = new Set(normalizeLowercaseStringOrEmpty(parsed.rest).split(":").filter(Boolean));
   if (tokens.has("channel")) {
     return "channel";
   }

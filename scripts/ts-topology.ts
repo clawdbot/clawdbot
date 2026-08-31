@@ -1,5 +1,10 @@
 #!/usr/bin/env node
+// Ts Topology script supports OpenClaw repository automation.
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { formatErrorMessage } from "../src/infra/errors.ts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { analyzeTopology } from "./lib/ts-topology/analyze.js";
 import { renderTextReport } from "./lib/ts-topology/reports.js";
 import {
@@ -85,7 +90,7 @@ function parseArgs(argv: string[]): CliOptions {
         options.report = (value as TopologyReportName | undefined) ?? options.report;
         break;
       case "--limit":
-        options.limit = Math.max(1, Number.parseInt(value ?? "25", 10));
+        options.limit = parsePositiveInt(expectDefined(value, "--limit value"), "--limit");
         break;
       case "--repo-root":
         options.repoRoot = path.resolve(value ?? options.repoRoot);
@@ -136,7 +141,7 @@ export async function main(argv: string[], io: IoLike = process): Promise<number
   try {
     options = parseArgs(argv);
   } catch (error) {
-    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    io.stderr.write(`${formatErrorMessage(error)}\n`);
     return 1;
   }
 
@@ -158,12 +163,13 @@ export async function main(argv: string[], io: IoLike = process): Promise<number
     io.stdout.write(`${renderTextReport(envelope, options.limit)}\n`);
     return 0;
   } catch (error) {
-    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    io.stderr.write(`${formatErrorMessage(error)}\n`);
     return 1;
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const entrypointPath = process.argv[1];
+if (entrypointPath && import.meta.url === pathToFileURL(entrypointPath).href) {
   const exitCode = await main(process.argv.slice(2));
   if (exitCode !== 0) {
     process.exit(exitCode);

@@ -1,0 +1,102 @@
+title: OTEL stdout log smoke
+
+scenario:
+  id: otel-stdout-log-smoke
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.telemetry-otel
+    secondary:
+      - observability.telemetry-qa-lab
+  objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces and metrics while routing diagnostics-otel logs to stdout JSONL.
+  successCriteria:
+    - The diagnostics-otel plugin starts with trace, metric, and log export enabled.
+    - Diagnostic log records are written as stdout JSONL instead of OTLP logs.
+    - A minimal QA-channel agent turn completes.
+    - The run emits low-cardinality telemetry without content or raw diagnostic identifiers.
+  plugins:
+    - diagnostics-otel
+  gatewayRuntime:
+    preserveDebugArtifacts: true
+  gatewayConfigPatch:
+    logging:
+      file: .artifacts/qa-e2e/otel-smoke-gateway.jsonl
+      level: info
+    diagnostics:
+      enabled: true
+      otel:
+        enabled: true
+        protocol: http/protobuf
+        traces: true
+        metrics: true
+        logs: true
+        logsExporter: stdout
+        sampleRate: 1
+        flushIntervalMs: 1000
+        captureContent: false
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/diagnostics-otel/src/service.ts
+    - test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts
+  execution:
+    kind: flow
+    summary: Emit minimal QA-lab telemetry with diagnostics-otel stdout log export enabled.
+    config:
+      prompt: "OTEL QA marker: reply exactly `OTEL-QA-OK`. Do not repeat OTEL-QA-SECRET."
+      expectedReply: OTEL-QA-OK
+
+flow:
+  steps:
+    - name: emits a traced qa-channel turn with stdout logs
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: startCursor
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey: agent:qa:otel-stdout-log-smoke
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').trim().length > 0).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - assert:
+            expr: "String(outbound.text ?? '').trim().length > 0"
+            message: "expected non-empty qa output"
+        - assert:
+            expr: "String(outbound.text ?? '').includes(config.expectedReply)"
+            message: "expected qa output to include the response sentinel"
+        - set: gatewayLogText
+          value:
+            expr: "String(readGatewayLogs() ?? '')"
+        - set: stdoutDiagnosticLogs
+          value:
+            expr: "gatewayLogText.split('\\n').map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((entry) => entry?.signal === 'openclaw.diagnostic.log')"
+        - assert:
+            expr: "stdoutDiagnosticLogs.length > 0"
+            message: "expected at least one stdout diagnostics-otel JSONL log record"
+        - assert:
+            expr: "stdoutDiagnosticLogs.every((record) => typeof record.ts === 'string' && typeof record['service.name'] === 'string' && typeof record.severityText === 'string' && typeof record.severityNumber === 'number' && Object.hasOwn(record, 'body') && record.attributes && typeof record.attributes === 'object' && !Array.isArray(record.attributes))"
+            message: "expected stdout diagnostics-otel records to keep the documented JSONL shape"
+        - assert:
+            expr: "!JSON.stringify(stdoutDiagnosticLogs).includes('OTEL-QA-SECRET') && !JSON.stringify(stdoutDiagnosticLogs).includes('agent:qa:otel-stdout-log-smoke')"
+            message: "expected stdout diagnostics-otel records to omit raw prompt/session content"
+      detailsExpr: "`stdout diagnostic log records=${stdoutDiagnosticLogs.length}`"

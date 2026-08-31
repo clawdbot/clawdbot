@@ -1,5 +1,6 @@
+// Line plugin module implements runtime behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "../api.js";
 
 type LineChannelRuntime = {
   buildTemplateMessageFromPayload?: typeof import("./template-messages.js").buildTemplateMessageFromPayload;
@@ -15,15 +16,15 @@ type LineChannelRuntime = {
   sendMessageLine?: typeof import("./send.js").sendMessageLine;
 };
 
-export type LineRuntime = PluginRuntime & {
+type LineRuntime = PluginRuntime & {
   channel: PluginRuntime["channel"] & {
     line?: LineChannelRuntime;
   };
 };
 
-const {
-  setRuntime: setLineRuntime,
-  clearRuntime: clearLineRuntime,
-  getRuntime: getLineRuntime,
-} = createPluginRuntimeStore<LineRuntime>("LINE runtime not initialized - plugin not registered");
-export { clearLineRuntime, getLineRuntime, setLineRuntime };
+const { setRuntime: setLineRuntime, getRuntime: getLineRuntime } =
+  createPluginRuntimeStore<LineRuntime>({
+    pluginId: "line",
+    errorMessage: "LINE runtime not initialized - plugin not registered",
+  });
+export { getLineRuntime, setLineRuntime };

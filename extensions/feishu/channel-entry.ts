@@ -1,14 +1,21 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { feishuPlugin } from "./src/channel.js";
-import { setFeishuRuntime } from "./src/runtime.js";
+// Feishu plugin module implements channel entry behavior.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { feishuPlugin } from "./src/channel.js";
-export { setFeishuRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "feishu",
   name: "Feishu",
   description: "Feishu/Lark channel plugin",
-  plugin: feishuPlugin,
-  setRuntime: setFeishuRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "feishuPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setFeishuRuntime",
+  },
 });

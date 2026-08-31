@@ -59,10 +59,6 @@ struct ConfigSchemaNode {
         self.raw["default"]
     }
 
-    var requiredKeys: Set<String> {
-        Set((self.raw["required"] as? [String]) ?? [])
-    }
-
     var typeList: [String] {
         if let type = self.raw["type"] as? String { return [type] }
         if let types = self.raw["type"] as? [String] { return types }
@@ -206,6 +202,25 @@ func isSensitivePath(_ path: ConfigPath) -> Bool {
         || key.contains("secret")
         || key.contains("apikey")
         || key.hasSuffix("key")
+}
+
+func labelForConfigPath(_ path: ConfigPath) -> String? {
+    for segment in path.reversed() {
+        if case let .key(key) = segment {
+            return humanizeConfigKey(key)
+        }
+    }
+    return nil
+}
+
+func humanizeConfigKey(_ key: String) -> String {
+    key.replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+        .replacingOccurrences(
+            of: "([a-z0-9])([A-Z])",
+            with: "$1 $2",
+            options: .regularExpression)
+        .capitalized
 }
 
 func pathKey(_ path: ConfigPath) -> String {

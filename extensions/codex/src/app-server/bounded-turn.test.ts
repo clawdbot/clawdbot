@@ -1,0 +1,777 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { JsonValue } from "./protocol.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
+
+function codexModel(model = "gpt-5.4", id = model) {
+  return {
+    id,
+    model,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: id,
+    description: "test model",
+    hidden: false,
+    isDefault: true,
+    inputModalities: ["text"],
+    supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
+    defaultReasoningEffort: "low",
+    supportsPersonality: false,
+    multiAgentVersion: null,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+  };
+}
+
+function threadStartResult(model: string) {
+  return {
+    thread: {
+      id: "thread-finalizer",
+      sessionId: "session-finalizer",
+      preview: "",
+      ephemeral: true,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      cwd: "/tmp/finalizer",
+      projectId: null,
+      cliVersion: CODEX_APP_SERVER_VERSION,
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      name: null,
+      turns: [],
+    },
+    model,
+    modelProvider: "openai",
+    cwd: "/tmp/finalizer",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandbox: { type: "readOnly", networkAccess: false },
+  };
+}
+
+function completedTurnResult() {
+  return {
+    turn: {
+      id: "turn-finalizer",
+      status: "completed",
+      items: [
+        {
+          id: "answer",
+          type: "agentMessage",
+          text: "The message was sent successfully.",
+          title: null,
+          status: "completed",
+          name: null,
+          tool: null,
+          server: null,
+          command: null,
+          cwd: null,
+          query: null,
+          aggregatedOutput: null,
+          changes: [],
+        },
+      ],
+      error: null,
+      startedAt: 1,
+      completedAt: 2,
+      durationMs: 1,
+    },
+  };
+}
+
+function inProgressTurnResult() {
+  return {
+    turn: {
+      id: "turn-finalizer",
+      status: "inProgress",
+      items: [],
+      error: null,
+      startedAt: 1,
+      completedAt: null,
+      durationMs: null,
+    },
+  };
+}
+
+function createClientFactory(
+  options: {
+    mcpServers?: unknown[];
+    errorBeforeCompletion?: { message: string; willRetry: boolean };
+    terminalStatus?: "completed" | "interrupted";
+    assistantDelta?: string;
+    emptyAnswer?: boolean;
+    completeTurn?: boolean;
+    models?: ReturnType<typeof codexModel>[];
+  } = {},
+) {
+  const methods: string[] = [];
+  const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
+    methods.push(method);
+    if (method === "model/list") {
+      const includeHidden = isRecord(params) && params.includeHidden === true;
+      return {
+        data: (options.models ?? [codexModel()]).filter((model) => includeHidden || !model.hidden),
+        nextCursor: null,
+      };
+    }
+    if (method === "config/read") {
+      return {
+        config: { mcp_servers: { inherited: { command: "unsafe" } } },
+        layers: [{ name: { type: "user" } }],
+      };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
+      return threadStartResult(params.model);
+    }
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: options.mcpServers ?? [
+          {
+            name: "inherited",
+            serverInfo: null,
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+        nextCursor: null,
+      };
+    }
+    if (method === "thread/inject_items") {
+      return {};
+    }
+    if (method === "turn/interrupt") {
+      queueMicrotask(() => {
+        for (const handler of fixture.notifications) {
+          void handler({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turn: { ...inProgressTurnResult().turn, status: "interrupted" },
+            },
+          });
+        }
+      });
+      return {};
+    }
+    if (method === "turn/start") {
+      if (options.completeTurn === false) {
+        return inProgressTurnResult();
+      }
+      queueMicrotask(() => {
+        for (const handler of fixture.notifications) {
+          if (options.errorBeforeCompletion) {
+            void handler({
+              method: "error",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                error: { message: options.errorBeforeCompletion.message },
+                willRetry: options.errorBeforeCompletion.willRetry,
+              },
+            });
+          }
+          if (options.assistantDelta) {
+            void handler({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                itemId: "answer",
+                delta: options.assistantDelta,
+              },
+            });
+          }
+          void handler({
+            method: "rawResponse/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turnId: "turn-finalizer",
+              responseId: "response-finalizer",
+              usage: {
+                totalTokens: 12,
+                inputTokens: 8,
+                cachedInputTokens: 2,
+                cacheWriteInputTokens: 1,
+                outputTokens: 4,
+                reasoningOutputTokens: 3,
+              },
+            },
+          });
+          void handler({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-finalizer",
+              turnId: "turn-finalizer",
+              turn: {
+                ...completedTurnResult().turn,
+                status: options.terminalStatus ?? "completed",
+                ...(options.terminalStatus === "interrupted" || options.emptyAnswer
+                  ? { items: [] }
+                  : {}),
+              },
+            },
+          });
+        }
+      });
+      return inProgressTurnResult();
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const request = fixture.request;
+  const client = Object.assign(fixture.client, { close: vi.fn() });
+  const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
+  return {
+    factory,
+    methods,
+    request,
+    handleServerRequest: (serverRequest: Parameters<typeof fixture.handleServerRequest>[0]) =>
+      fixture.handleServerRequest(serverRequest),
+    notify: (notification: Parameters<typeof fixture.notify>[0]) => fixture.notify(notification),
+  };
+}
+
+describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it("returns an explicit unsupported decline for interactive MCP input", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const run = runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: { clientFactory: fake.factory },
+      taskLabel: "hosted search",
+      developerInstructions: "Search only.",
+      input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "private-stdio",
+    });
+    await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
+
+    await expect(
+      fake.handleServerRequest({
+        id: "bounded-elicitation",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-finalizer",
+          turnId: "turn-finalizer",
+          serverName: "forms",
+          mode: "form",
+          message: "Enter a value",
+          requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+        },
+      }),
+    ).resolves.toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "OpenClaw Codex hosted search does not support interactive input." },
+    });
+
+    await fake.notify({
+      method: "turn/completed",
+      params: { threadId: "thread-finalizer", turn: completedTurnResult().turn },
+    });
+    await expect(run).resolves.toMatchObject({ text: "The message was sent successfully." });
+  });
+
+  it("reports its own timeout with the configured bound", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "codex app-server hosted search turn timed out after 100ms",
+    });
+  });
+
+  it("keeps a caller abort distinct from its own timeout", async () => {
+    const fake = createClientFactory({ completeTurn: false });
+    const caller = new AbortController();
+    const reason = new Error("caller cancelled hosted search");
+    caller.abort(reason);
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find current market news.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server hosted search turn aborted",
+    });
+  });
+
+  it("does not adopt a prior turn's timeout as its own", async () => {
+    const first = createClientFactory({ completeTurn: false });
+    let priorTimeout: unknown;
+    try {
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 100,
+        options: { clientFactory: first.factory },
+        taskLabel: "first hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find first query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      });
+    } catch (error) {
+      priorTimeout = error;
+    }
+    expect(priorTimeout).toMatchObject({ name: "TimeoutError" });
+
+    const caller = new AbortController();
+    caller.abort(priorTimeout);
+    const second = createClientFactory({ completeTurn: false });
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        signal: caller.signal,
+        options: { clientFactory: second.factory },
+        taskLabel: "second hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find second query.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toMatchObject({
+      name: "Error",
+      message: "codex app-server second hosted search turn aborted",
+    });
+  });
+
+  it("continues after a retryable error notification", async () => {
+    const fake = createClientFactory({
+      errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true },
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).resolves.toMatchObject({ text: "The message was sent successfully." });
+  });
+
+  it("can return a completed turn without text when the finalization caller opts in", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+        allowEmptyText: true,
+      }),
+    ).resolves.toMatchObject({ text: "", model: "gpt-5.4" });
+  });
+
+  it("rejects a completed turn without text for ordinary bounded callers", async () => {
+    const fake = createClientFactory({ emptyAnswer: true });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).rejects.toThrow("hosted search turn returned no text");
+
+    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startParams).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
+  });
+
+  it("still fails on a terminal error notification", async () => {
+    const fake = createClientFactory({
+      errorBeforeCompletion: { message: "terminal upstream failure", willRetry: false },
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow("terminal upstream failure");
+  });
+
+  it("rejects an interrupted turn even when it emitted partial assistant text", async () => {
+    const fake = createClientFactory({
+      terminalStatus: "interrupted",
+      assistantDelta: "Partial answer that must not be delivered.",
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow("turn ended with status interrupted");
+  });
+
+  it.each(["prepared", "profile", "implicit"] as const)(
+    "bridges %s auth into the private home when the configured home is native",
+    async (authSelection) => {
+      const fake = createClientFactory();
+      const preparedAuth = { kind: "api-key" as const, apiKey: "test-key" };
+      const profile = "openai:bounded";
+
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        ...(authSelection === "prepared"
+          ? { preparedAuth }
+          : authSelection === "profile"
+            ? { profile }
+            : {}),
+        authRequirement: "api-key",
+        timeoutMs: 5_000,
+        options: {
+          clientFactory: fake.factory,
+          pluginConfig: { appServer: { homeScope: "user" } },
+        },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      });
+
+      expect(fake.factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(authSelection === "prepared"
+            ? { preparedAuth }
+            : { authProfileId: authSelection === "profile" ? profile : undefined }),
+          authRequirement: "api-key",
+          startOptions: expect.objectContaining({
+            homeScope: "agent",
+            env: expect.objectContaining({
+              CODEX_HOME: expect.stringContaining("codex-bounded-turn-"),
+            }),
+          }),
+        }),
+      );
+      expect(vi.mocked(fake.factory).mock.calls[0]?.[0]).not.toHaveProperty(
+        authSelection === "prepared" ? "authProfileId" : "preparedAuth",
+      );
+    },
+  );
+
+  it("carries attached provider overrides into private turns without importing tool policy", async () => {
+    const fake = createClientFactory();
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: {
+          appServer: {
+            args: [
+              '-copenai_base_url="http://127.0.0.1:9/first"',
+              "app-server",
+              '--config=openai_base_url="http://127.0.0.1:9/last"',
+              '-c=model_catalog_json="/tmp/synthetic-models.json"',
+              "-csandbox_workspace_write.exclude_slash_tmp=false",
+              "--config",
+              "features.hooks=true",
+              "--",
+              '-copenai_base_url="http://127.0.0.1:9/ignored"',
+            ],
+          },
+        },
+      },
+      taskLabel: "isolated completion",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "private-stdio",
+    });
+    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.args).toEqual([
+      "app-server",
+      "-c",
+      'openai_base_url="http://127.0.0.1:9/first"',
+      "-c",
+      'openai_base_url="http://127.0.0.1:9/last"',
+      "-c",
+      'model_catalog_json="/tmp/synthetic-models.json"',
+      "--listen",
+      "stdio://",
+    ]);
+    expect(
+      fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+    ).toMatchObject({ sandbox: "read-only", approvalPolicy: "on-request" });
+  });
+
+  it("preserves the configured native model provider when no override is supplied", async () => {
+    const fake = createClientFactory();
+
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: {
+        clientFactory: fake.factory,
+        pluginConfig: { appServer: { homeScope: "user" } },
+      },
+      taskLabel: "isolated completion",
+      developerInstructions: "Answer only.",
+      input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+      requireNoExternalCapabilities: true,
+    });
+
+    const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startParams).not.toHaveProperty("modelProvider");
+    expect(fake.factory).toHaveBeenCalledWith(
+      expect.objectContaining({ startOptions: expect.objectContaining({ homeScope: "user" }) }),
+    );
+  });
+
+  it.each([
+    { label: "visible catalog ID", id: "gpt-5.6-sol", hidden: false, requested: "gpt-5.6-sol" },
+    {
+      label: "hidden catalog ID",
+      id: "test-hidden-catalog",
+      hidden: true,
+      requested: "test-hidden-catalog",
+    },
+    {
+      label: "hidden execution ID",
+      id: "test-hidden-catalog",
+      hidden: true,
+      requested: "codex-execution-model",
+    },
+  ])("uses the execution model for a required $label", async ({ id, hidden, requested }) => {
+    const fake = createClientFactory({
+      models: [
+        { ...codexModel("codex-execution-model", id), hidden, isDefault: !hidden },
+        { ...codexModel(), isDefault: hidden },
+      ],
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: requested },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }),
+    ).resolves.toMatchObject({ model: id, text: "The message was sent successfully." });
+
+    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(threadStart).toMatchObject({ model: "codex-execution-model" });
+    expect(turnStart).toMatchObject({ model: "codex-execution-model" });
+  });
+
+  it("keeps hidden models out of live-default selection", async () => {
+    const fake = createClientFactory({
+      models: [
+        { ...codexModel("test-hidden-catalog"), hidden: true, isDefault: false },
+        { ...codexModel("image-only-default"), inputModalities: ["image"] },
+        { ...codexModel("visible-execution-model", "visible-model"), isDefault: false },
+      ],
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "live-default" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "hosted search",
+        developerInstructions: "Search only.",
+        input: [{ type: "text", text: "Find the answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+      }),
+    ).resolves.toMatchObject({
+      model: "visible-model",
+      text: "The message was sent successfully.",
+    });
+
+    const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(threadStart).toMatchObject({ model: "visible-execution-model" });
+    expect(turnStart).toMatchObject({ model: "visible-execution-model" });
+  });
+
+  it("rejects a missing required model before starting a thread", async () => {
+    const fake = createClientFactory();
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "missing-model" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Answer only.",
+        input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+      }),
+    ).rejects.toThrow("Codex app-server model not found: missing-model");
+    expect(fake.methods).toEqual(["model/list"]);
+  });
+
+  it("attests ring-zero and injects frozen history before starting the final turn", async () => {
+    const fake = createClientFactory();
+    const historyItems: JsonValue[] = [
+      { type: "function_call", call_id: "call-1", name: "message", arguments: "{}" },
+      { type: "function_call_output", call_id: "call-1", output: "sent" },
+    ];
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        historyItems,
+        requireNoExternalCapabilities: true,
+      }),
+    ).resolves.toMatchObject({
+      text: "The message was sent successfully.",
+      model: "gpt-5.4",
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        reasoningTokens: 3,
+        total: 12,
+      },
+    });
+
+    expect(fake.methods).toEqual([
+      "model/list",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/inject_items",
+      "turn/start",
+    ]);
+    const startParams = fake.request.mock.calls.find(
+      ([method]) => method === "thread/start",
+    )?.[1] as Record<string, unknown> | undefined;
+    expect(startParams).toMatchObject({
+      baseInstructions: "",
+      environments: [],
+      dynamicTools: [],
+      ephemeral: true,
+      config: {
+        "agents.enabled": false,
+        "features.hooks": false,
+        "features.multi_agent": false,
+        "features.multi_agent_v2": false,
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+        "skills.include_instructions": false,
+        include_environment_context: false,
+        mcp_servers: { inherited: { enabled: false } },
+        "tools.experimental_request_user_input.enabled": false,
+        "tools.update_plan.enabled": false,
+      },
+    });
+    const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnParams).not.toHaveProperty("cwd");
+    expect(turnParams).not.toHaveProperty("environments");
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/inject_items",
+      { threadId: "thread-finalizer", items: historyItems },
+      expect.any(Object),
+    );
+  });
+
+  it("fails before history injection when the started thread exposes an MCP server", async () => {
+    const fake = createClientFactory({
+      mcpServers: [{ name: "unexpected", serverInfo: null, tools: {} }],
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow(
+      "Codex restricted-tool-surface MCP attestation found unexpected server unexpected",
+    );
+    expect(fake.methods).not.toContain("thread/inject_items");
+    expect(fake.methods).not.toContain("turn/start");
+  });
+});

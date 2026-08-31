@@ -1,13 +1,19 @@
+// Terminal progress reporter used by long-running CLI commands.
 import { spinner } from "@clack/prompts";
-import { createOscProgressController, supportsOscProgress } from "osc-progress";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  createOscProgressController,
+  supportsOscProgress,
+} from "../../packages/terminal-core/src/osc-progress.js";
 import {
   clearActiveProgressLine,
   registerActiveProgressLine,
   unregisterActiveProgressLine,
-} from "../terminal/progress-line.js";
-import { theme } from "../terminal/theme.js";
+} from "../../packages/terminal-core/src/progress-line.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 
 const DEFAULT_DELAY_MS = 0;
+// Only one active progress renderer may own the terminal line at a time.
 let activeProgress = 0;
 
 type ProgressOptions = {
@@ -20,6 +26,7 @@ type ProgressOptions = {
   fallback?: "spinner" | "line" | "log" | "none";
 };
 
+/** Minimal progress API exposed to CLI work callbacks. */
 export type ProgressReporter = {
   setLabel: (label: string) => void;
   setPercent: (percent: number) => void;
@@ -27,11 +34,22 @@ export type ProgressReporter = {
   done: () => void;
 };
 
+/** Completed/total progress update shape used by totals-based commands. */
 export type ProgressTotalsUpdate = {
   completed: number;
   total: number;
   label?: string;
 };
+
+/** Decide whether the interactive spinner is safe for the current terminal state. */
+export function shouldUseInteractiveProgressSpinner(params: {
+  fallback?: ProgressOptions["fallback"];
+  streamIsTty?: boolean;
+  stdinIsRaw?: boolean;
+}): boolean {
+  const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
+  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
+}
 
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
@@ -40,6 +58,7 @@ const noopReporter: ProgressReporter = {
   done: () => {},
 };
 
+/** Create a no-op, spinner, line, log, and OSC-capable progress reporter. */
 export function createCliProgress(options: ProgressOptions): ProgressReporter {
   if (options.enabled === false) {
     return noopReporter;
@@ -55,12 +74,22 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     return noopReporter;
   }
 
-  const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
+  const delayMs = resolveTimerTimeoutMs(options.delayMs, DEFAULT_DELAY_MS, 0);
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
-  const allowSpinner = isTty && (options.fallback === undefined || options.fallback === "spinner");
+  const stdinIsRaw = process.stdin.isRaw;
+  const allowSpinner = shouldUseInteractiveProgressSpinner({
+    fallback: options.fallback,
+    streamIsTty: isTty,
+    stdinIsRaw,
+  });
   const allowLine = isTty && options.fallback === "line";
+  if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+    // Raw stdin usually means an interactive prompt owns cursor movement.
+    return noopReporter;
+  }
 
   let started = false;
+  let finished = false;
   let label = options.label;
   const total = options.total ?? null;
   let completed = 0;
@@ -81,7 +110,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner() : null;
+  const spin = allowSpinner ? spinner({ output: stream }) : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
@@ -116,7 +145,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   let timer: NodeJS.Timeout | null = null;
 
   const applyState = () => {
-    if (!started) {
+    if (!started || finished) {
       return;
     }
     if (controller) {
@@ -175,11 +204,19 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const done = () => {
+    // A finally block may finish an already-stopped reporter; never clear a newer owner's line.
+    if (finished) {
+      return;
+    }
+    finished = true;
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
     if (!started) {
+      if (isTty) {
+        unregisterActiveProgressLine(stream);
+      }
       activeProgress = Math.max(0, activeProgress - 1);
       return;
     }
@@ -199,6 +236,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   return { setLabel, setPercent, tick, done };
 }
 
+/** Run async work with a progress reporter that is always stopped in finally. */
 export async function withProgress<T>(
   options: ProgressOptions,
   work: (progress: ProgressReporter) => Promise<T>,
@@ -211,6 +249,7 @@ export async function withProgress<T>(
   }
 }
 
+/** Run async work with a progress reporter plus a completed/total update adapter. */
 export async function withProgressTotals<T>(
   options: ProgressOptions,
   work: (update: (update: ProgressTotalsUpdate) => void, progress: ProgressReporter) => Promise<T>,

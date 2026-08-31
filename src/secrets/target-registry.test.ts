@@ -1,117 +1,104 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+/** Tests core secret target registry queries without plugin discovery. */
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
+import {
+  buildTalkTestProviderConfig,
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
+  resolveSecretPlanTargetByPathCore,
 } from "./target-registry.js";
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
+
 describe("secret target registry", () => {
-  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
-    const pathname = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-user-supplied-credentials-matrix.json",
-    );
-    const raw = fs.readFileSync(pathname, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-
-    expect(parsed).toEqual(buildSecretRefCredentialMatrix());
-  });
-
-  it("stays in sync with docs/reference/secretref-credential-surface.md", () => {
-    const matrixPath = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-user-supplied-credentials-matrix.json",
-    );
-    const matrixRaw = fs.readFileSync(matrixPath, "utf8");
-    const matrix = JSON.parse(matrixRaw) as ReturnType<typeof buildSecretRefCredentialMatrix>;
-
-    const surfacePath = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-credential-surface.md",
-    );
-    const surface = fs.readFileSync(surfacePath, "utf8");
-    const readMarkedCredentialList = (params: { start: string; end: string }): Set<string> => {
-      const startIndex = surface.indexOf(params.start);
-      const endIndex = surface.indexOf(params.end);
-      expect(startIndex).toBeGreaterThanOrEqual(0);
-      expect(endIndex).toBeGreaterThan(startIndex);
-      const block = surface.slice(startIndex + params.start.length, endIndex);
-      const credentials = new Set<string>();
-      for (const line of block.split(/\r?\n/)) {
-        const match = line.match(/^- `([^`]+)`/);
-        if (!match) {
-          continue;
-        }
-        const candidate = match[1];
-        if (!candidate.includes(".")) {
-          continue;
-        }
-        credentials.add(candidate);
-      }
-      return credentials;
-    };
-
-    const supportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-supported-list-start"',
-      end: '[//]: # "secretref-supported-list-end"',
-    });
-    const unsupportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-unsupported-list-start"',
-      end: '[//]: # "secretref-unsupported-list-end"',
-    });
-
-    const supportedFromMatrix = new Set(
-      matrix.entries.map((entry) =>
-        entry.configFile === "auth-profiles.json" && entry.refPath ? entry.refPath : entry.path,
-      ),
-    );
-    const unsupportedFromMatrix = new Set(matrix.excludedMutableOrRuntimeManaged);
-
-    expect([...supportedFromDocs].toSorted()).toEqual([...supportedFromMatrix].toSorted());
-    expect([...unsupportedFromDocs].toSorted()).toEqual([...unsupportedFromMatrix].toSorted());
-  });
-
   it("supports filtered discovery by target ids", () => {
-    const targets = discoverConfigSecretTargetsByIds(
-      {
-        talk: {
-          providers: {
-            elevenlabs: {
-              apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+    const config = {
+      ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
+      gateway: {
+        remote: {
+          token: { source: "env" as const, provider: "default", id: "REMOTE_TOKEN" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(config, new Set(["talk.providers.*.apiKey"]));
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]?.entry?.id).toBe("talk.providers.*.apiKey");
+    expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
+    expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
+  });
+
+  it("preserves dotted provider header keys during discovery", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": {
+                  source: "env",
+                  provider: "default",
+                  id: "REQUEST_TRACE_HEADER",
+                },
+              },
             },
           },
         },
-        gateway: {
-          remote: {
-            token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      new Set(["talk.providers.*.apiKey"]),
+      },
+    } as unknown as OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["models.providers.*.headers.*", "models.providers.*.request.headers.*"]),
     );
 
-    expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry.id).toBe("talk.providers.*.apiKey");
-    expect(targets[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
+    expect(targets.map(({ path }) => path).toSorted()).toEqual([
+      'models.providers.openai.headers["X.Trace"]',
+      'models.providers.openai.request.headers["X.Request.Trace"]',
+    ]);
   });
 
-  it("resolves config targets by exact path including sibling ref metadata", () => {
-    const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
-    expect(target).not.toBeNull();
-    expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
-    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {
-    expect(resolveConfigSecretTargetByPath(["gateway", "auth", "mode"])).toBeNull();
+    const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
+
+    expect(target).toBeNull();
+  });
+
+  it("resolves plan targets by owning config document", () => {
+    const configTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "openclaw.json",
+      pathSegments: ["models", "providers", "openai", "apiKey"],
+    });
+    const authProfileTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "auth-profile-store",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
+
+    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
+    expect(configTarget?.providerId).toBe("openai");
+    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
   });
 });

@@ -1,15 +1,21 @@
+// Shared test setup installs common Vitest mocks and cleanup behavior.
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    getOAuthApiKey: () => undefined,
-    getOAuthProviders: () => [],
-    loginOpenAICodex: vi.fn(),
-  };
-});
+const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
+type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
+  [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
+};
+
+vi.mock("../src/llm/oauth.js", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+  loginOpenAICodex: vi.fn(),
+  refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
+    (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
+      ...args,
+    ),
+  ),
+}));
 
 vi.mock("@mariozechner/clipboard", () => ({
   availableFormats: () => [],
@@ -34,12 +40,12 @@ vi.mock("@mariozechner/clipboard", () => ({
 
 // Ensure Vitest environment is properly set.
 process.env.VITEST = "true";
-// Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
-// repeated filesystem discovery across suites/workers.
-process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
+// Tests frequently point bundled plugin discovery at temp fixture roots. Production still rejects
+// arbitrary OPENCLAW_BUNDLED_PLUGINS_DIR overrides unless this Vitest-only opt-in is present.
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
 // Vitest fork workers can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
-const TEST_PROCESS_MAX_LISTENERS = 128;
+const TEST_PROCESS_MAX_LISTENERS = 256;
 if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
@@ -51,13 +57,43 @@ type SharedTestSetupOptions = {
   loadProfileEnv?: boolean;
 };
 
+const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+
+type SharedTestSetupHandle = {
+  cleanup: () => void;
+  tempHome: string;
+};
+
 export function installSharedTestSetup(options?: SharedTestSetupOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
+  const globalState = globalThis as typeof globalThis & {
+    [SHARED_TEST_SETUP]?: SharedTestSetupHandle;
+  };
+  const existing = globalState[SHARED_TEST_SETUP];
+  if (existing) {
+    return existing;
+  }
+
   const testEnv = withIsolatedTestHome({
     loadProfileEnv: options?.loadProfileEnv,
   });
   installProcessWarningFilter();
-  return testEnv;
+
+  let cleaned = false;
+  const handle: SharedTestSetupHandle = {
+    tempHome: testEnv.tempHome,
+    cleanup: () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      testEnv.cleanup();
+      delete globalState[SHARED_TEST_SETUP];
+    },
+  };
+  process.once("exit", handle.cleanup);
+  globalState[SHARED_TEST_SETUP] = handle;
+  return handle;
 }

@@ -1,19 +1,11 @@
-import {
-  evaluateSenderGroupAccess,
-  isNormalizedSenderAllowed,
-  resolveOpenProviderRuntimeGroupPolicy,
-  type GroupPolicy,
-  type SenderGroupAccessDecision,
-} from "./runtime-api.js";
+// Zalo plugin module implements group access behavior.
+import type { GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 
 const ZALO_ALLOW_FROM_PREFIX_RE = /^(zalo|zl):/i;
 
-export function isZaloSenderAllowed(senderId: string, allowFrom: string[]): boolean {
-  return isNormalizedSenderAllowed({
-    senderId,
-    allowFrom,
-    stripPrefixRe: ZALO_ALLOW_FROM_PREFIX_RE,
-  });
+export function normalizeZaloAllowEntry(value: string): string {
+  return value.trim().replace(ZALO_ALLOW_FROM_PREFIX_RE, "").trim().toLowerCase();
 }
 
 export function resolveZaloRuntimeGroupPolicy(params: {
@@ -28,22 +20,5 @@ export function resolveZaloRuntimeGroupPolicy(params: {
     providerConfigPresent: params.providerConfigPresent,
     groupPolicy: params.groupPolicy,
     defaultGroupPolicy: params.defaultGroupPolicy,
-  });
-}
-
-export function evaluateZaloGroupAccess(params: {
-  providerConfigPresent: boolean;
-  configuredGroupPolicy?: GroupPolicy;
-  defaultGroupPolicy?: GroupPolicy;
-  groupAllowFrom: string[];
-  senderId: string;
-}): SenderGroupAccessDecision {
-  return evaluateSenderGroupAccess({
-    providerConfigPresent: params.providerConfigPresent,
-    configuredGroupPolicy: params.configuredGroupPolicy,
-    defaultGroupPolicy: params.defaultGroupPolicy,
-    groupAllowFrom: params.groupAllowFrom,
-    senderId: params.senderId,
-    isSenderAllowed: isZaloSenderAllowed,
   });
 }

@@ -1,13 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # OpenClaw OAuth Sync Widget
-# Syncs Claude Code tokens to OpenClaw on l36 server
+# Syncs Claude Code tokens to OpenClaw over SSH
 # Place in ~/.shortcuts/ on phone for Termux:Widget
 
 termux-toast "Syncing OpenClaw auth..."
 
-# Run sync on l36 server
-SERVER="${OPENCLAW_SERVER:-l36}"
-RESULT=$(ssh "$SERVER" '/home/admin/openclaw/scripts/sync-claude-code-auth.sh' 2>&1)
+# Run sync on the configured OpenClaw host.
+SERVER="${OPENCLAW_SERVER:-openclaw-host}"
+RESULT=$(ssh "$SERVER" '$HOME/openclaw/scripts/sync-claude-code-auth.sh' 2>&1)
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then

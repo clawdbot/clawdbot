@@ -1,3 +1,4 @@
+// Message secret scope tests cover CLI secret scoping for message commands.
 import { describe, expect, it } from "vitest";
 import { resolveMessageSecretScope } from "./message-secret-scope.js";
 
@@ -39,7 +40,7 @@ describe("resolveMessageSecretScope", () => {
       resolveMessageSecretScope({
         targets: ["signal:one", "imessage:two"],
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("uses fallback channel/account when direct inputs are missing", () => {

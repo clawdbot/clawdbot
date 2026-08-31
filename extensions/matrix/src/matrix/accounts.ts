@@ -1,17 +1,19 @@
+// Matrix plugin module implements accounts behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
-import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import {
   findMatrixAccountConfig,
   resolveMatrixAccountConfig,
   resolveMatrixBaseConfig,
 } from "./account-config.js";
+import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./client/env-auth.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
 export type ResolvedMatrixAccount = {
@@ -24,40 +26,8 @@ export type ResolvedMatrixAccount = {
   config: MatrixConfig;
 };
 
-type MatrixEnvConfig = {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-  deviceId?: string;
-  deviceName?: string;
-};
-
 function clean(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
-  return {
-    homeserver: clean(env.MATRIX_HOMESERVER),
-    userId: clean(env.MATRIX_USER_ID),
-    accessToken: clean(env.MATRIX_ACCESS_TOKEN) || undefined,
-    password: clean(env.MATRIX_PASSWORD) || undefined,
-    deviceId: clean(env.MATRIX_DEVICE_ID) || undefined,
-    deviceName: clean(env.MATRIX_DEVICE_NAME) || undefined,
-  };
-}
-
-function resolveScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): MatrixEnvConfig {
-  const keys = getMatrixScopedEnvVarNames(accountId);
-  return {
-    homeserver: clean(env[keys.homeserver]),
-    userId: clean(env[keys.userId]),
-    accessToken: clean(env[keys.accessToken]) || undefined,
-    password: clean(env[keys.password]) || undefined,
-    deviceId: clean(env[keys.deviceId]) || undefined,
-    deviceName: clean(env[keys.deviceName]) || undefined,
-  };
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveMatrixAccountAuthView(params: {
@@ -210,11 +180,11 @@ export function resolveMatrixAccount(params: {
           userId: authView.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
+  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || hasStored);
   return {
     accountId,
     enabled,
-    name: base.name?.trim() || undefined,
+    name: normalizeOptionalString(base.name),
     configured,
     homeserver: authView.homeserver || undefined,
     userId: authView.userId || undefined,

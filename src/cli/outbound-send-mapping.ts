@@ -1,19 +1,22 @@
-import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+// Maps CLI send dependency sources into outbound send dependencies with legacy aliases.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveLegacyOutboundSendDepKeys,
+  type OutboundSendDeps,
+} from "../infra/outbound/send-deps.js";
 
-/**
- * CLI-internal send function sources, keyed by channel ID.
- * Each value is a lazily-loaded send function for that channel.
- */
-export type CliOutboundSendSource = { [channelId: string]: unknown };
+export type CliOutboundSendSource = {
+  [channelId: string]: unknown;
+};
 
 function normalizeLegacyChannelStem(raw: string): string {
-  return raw
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/_/g, "-")
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, "");
+  const normalized = normalizeLowercaseStringOrEmpty(
+    raw
+      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+      .replace(/_/g, "-")
+      .trim(),
+  );
+  return normalized.replace(/-/g, "");
 }
 
 function resolveChannelIdFromLegacySourceKey(key: string): string | undefined {
@@ -22,24 +25,7 @@ function resolveChannelIdFromLegacySourceKey(key: string): string | undefined {
     return undefined;
   }
   const normalizedStem = normalizeLegacyChannelStem(match[1] ?? "");
-  return normalizeAnyChannelId(normalizedStem) ?? (normalizedStem || undefined);
-}
-
-function resolveLegacyDepKeysForChannel(channelId: string): string[] {
-  const compact = channelId.replace(/[^a-z0-9]+/gi, "");
-  if (!compact) {
-    return [];
-  }
-  const pascal = compact.charAt(0).toUpperCase() + compact.slice(1);
-  const keys = new Set<string>();
-  keys.add(`send${pascal}`);
-  if (pascal.startsWith("I") && pascal.length > 1) {
-    keys.add(`sendI${pascal.slice(1)}`);
-  }
-  if (pascal.startsWith("Ms") && pascal.length > 2) {
-    keys.add(`sendMS${pascal.slice(2)}`);
-  }
-  return [...keys];
+  return normalizedStem || undefined;
 }
 
 /**
@@ -65,7 +51,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
     if (sourceValue === undefined) {
       continue;
     }
-    for (const legacyDepKey of resolveLegacyDepKeysForChannel(channelId)) {
+    for (const legacyDepKey of resolveLegacyOutboundSendDepKeys(channelId)) {
       if (outbound[legacyDepKey] === undefined) {
         outbound[legacyDepKey] = sourceValue;
       }

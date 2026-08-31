@@ -1,17 +1,16 @@
+// Covers default Vitest scheduling config helpers.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseVitestProcessStats } from "../../test/vitest/vitest.system-load.ts";
 import baseConfig, {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
   resolveLocalVitestScheduling,
 } from "../../vitest.config.ts";
-import { parseVitestProcessStats } from "../../vitest.system-load.ts";
 
-const idleVitestStats = {
-  otherVitestRootCount: 0,
-  otherVitestWorkerCount: 0,
-  otherVitestCpuPercent: 0,
-} as const;
+function normalizeConfigPath(value: unknown): string {
+  return String(value).replaceAll("\\", "/");
+}
 
 describe("resolveLocalVitestMaxWorkers", () => {
   it("uses a moderate local worker cap on larger hosts", () => {
@@ -26,9 +25,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 64 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
-    ).toBe(2);
+    ).toBe(6);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -43,7 +41,6 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
     ).toBe(2);
   });
@@ -60,7 +57,6 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
     ).toBe(3);
   });
@@ -75,9 +71,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 16 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it("lets roomy hosts use more local parallelism", () => {
@@ -90,9 +85,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
-    ).toBe(3);
+    ).toBe(8);
   });
 
   it("backs off further when the host is already busy", () => {
@@ -105,9 +99,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it("caps very large hosts at six local workers", () => {
@@ -120,54 +113,43 @@ describe("resolveLocalVitestMaxWorkers", () => {
           totalMemoryBytes: 256 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
-    ).toBe(3);
+    ).toBe(12);
   });
 });
 
 describe("resolveLocalVitestScheduling", () => {
-  it("falls back to serial when other Vitest workers are already active", () => {
+  it("scales back to half capacity when the host load is already saturated", () => {
     expect(
       resolveLocalVitestScheduling(
         {},
         {
           cpuCount: 16,
-          loadAverage1m: 0.5,
+          loadAverage1m: 16,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        {
-          otherVitestRootCount: 1,
-          otherVitestWorkerCount: 3,
-          otherVitestCpuPercent: 120,
-        },
       ),
     ).toEqual({
-      maxWorkers: 1,
-      fileParallelism: false,
+      maxWorkers: 2,
+      fileParallelism: true,
       throttledBySystem: true,
     });
   });
 
-  it("caps moderate contention to two workers", () => {
+  it("keeps big hosts parallel under moderate host contention", () => {
     expect(
       resolveLocalVitestScheduling(
         {},
         {
           cpuCount: 16,
-          loadAverage1m: 0.5,
+          loadAverage1m: 12,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        {
-          otherVitestRootCount: 1,
-          otherVitestWorkerCount: 0,
-          otherVitestCpuPercent: 10,
-        },
       ),
     ).toEqual({
-      maxWorkers: 2,
+      maxWorkers: 5,
       fileParallelism: true,
       throttledBySystem: true,
     });
@@ -185,10 +167,9 @@ describe("resolveLocalVitestScheduling", () => {
           totalMemoryBytes: 128 * 1024 ** 3,
         },
         "threads",
-        idleVitestStats,
       ),
     ).toEqual({
-      maxWorkers: 3,
+      maxWorkers: 8,
       fileParallelism: true,
       throttledBySystem: false,
     });
@@ -203,7 +184,7 @@ describe("parseVitestProcessStats", () => {
           "101 0.0 node /Users/me/project/node_modules/.bin/vitest run --config vitest.config.ts",
           "102 41.3 /opt/homebrew/bin/node /Users/me/project/node_modules/vitest/dist/workers/forks.js",
           "103 37.4 /opt/homebrew/bin/node /Users/me/project/node_modules/vitest/dist/workers/forks.js",
-          "200 12.0 node /Users/me/project/node_modules/.bin/vitest run --config vitest.unit.config.ts",
+          "200 12.0 node /Users/me/project/node_modules/.bin/vitest run --config test/vitest/vitest.unit.config.ts",
           "201 25.5 node unrelated-script.mjs",
         ].join("\n"),
         200,
@@ -227,12 +208,40 @@ describe("base vitest config", () => {
   });
 
   it("keeps the base setup file minimal", () => {
-    expect(baseConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(baseConfig.test?.setupFiles).toHaveLength(1);
+    expect(normalizeConfigPath(baseConfig.test?.setupFiles?.[0])).toMatch(
+      /(?:^|\/)test\/setup\.ts$/u,
+    );
   });
 
   it("keeps the base runner non-isolated by default", () => {
     expect(baseConfig.test?.isolate).toBe(false);
-    expect(baseConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(normalizeConfigPath(baseConfig.test?.runner)).toMatch(
+      /(?:^|\/)test\/non-isolated-runner\.ts$/u,
+    );
+  });
+
+  it("classifies Crabbox shared dependencies as external dependencies", () => {
+    expect(baseConfig.test?.deps?.moduleDirectories).toEqual([
+      "/node_modules/",
+      "/openclaw-pnpm-node-modules/",
+    ]);
+
+    const externalPatterns = baseConfig.test?.server?.deps?.external ?? [];
+    expect(
+      externalPatterns.some(
+        (pattern) =>
+          pattern instanceof RegExp &&
+          pattern.test("/tmp/openclaw-pnpm-node-modules/some-dep/dist/index.mjs"),
+      ),
+    ).toBe(true);
+    expect(
+      externalPatterns.some(
+        (pattern) =>
+          pattern instanceof RegExp &&
+          pattern.test("/tmp/openclaw-pnpm-node-modules/vite/dist/client/env.mjs"),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -245,12 +254,39 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
+      "node --import ./scripts/tsx.mjs scripts/test-projects-serial.mts",
+    );
+    expect(pkg.scripts?.["test:max"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts",
+    );
+    expect(pkg.scripts?.["test:changed:max"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-projects-max.mts --changed origin/main",
+    );
+    expect(pkg.scripts?.["test:perf:imports"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-projects-imports.mts",
+    );
+    expect(pkg.scripts?.["test:perf:imports:changed"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-projects-imports.mts --changed origin/main",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
-      "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     );
-    expect(pkg.scripts?.["test:gateway"]).toBe("vitest run --config vitest.gateway.config.ts");
+    expect(pkg.scripts?.["test:unit"]).toBe(
+      "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
+    );
+    expect(pkg.scripts?.["test:unit:fast"]).toBe(
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts",
+    );
+    expect(pkg.scripts?.["test:unit:fast:audit"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-unit-fast-audit.mts",
+    );
+    expect(pkg.scripts?.["test"]).toBe("node --import ./scripts/tsx.mjs scripts/test-projects.mts");
+    expect(pkg.scripts?.["test:force"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/test-force.ts",
+    );
+    expect(pkg.scripts?.["test:gateway"]).toBe(
+      "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
+    );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });
 });

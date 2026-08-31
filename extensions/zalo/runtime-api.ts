@@ -1,20 +1,18 @@
-// Private runtime barrel for the bundled Zalo extension.
-// Keep this barrel thin and aligned with the local extension surface.
-
-export * from "./api.js";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-export type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+export type {
+  GroupPolicy,
+  MarkdownTableMode,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 export type {
   BaseProbeResult,
+  BaseTokenResolution,
   ChannelAccountSnapshot,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-export type { SenderGroupAccessDecision } from "openclaw/plugin-sdk/group-access";
 export type { ChannelPlugin, PluginRuntime, WizardPrompter } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -29,6 +27,7 @@ export {
   resolveClientIp,
 } from "openclaw/plugin-sdk/core";
 export {
+  addWildcardAllowFrom,
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   buildSingleChannelSecretPromptState,
@@ -54,32 +53,26 @@ export {
   formatAllowFromLowercase,
   isNormalizedSenderAllowed,
 } from "openclaw/plugin-sdk/allow-from";
-export { addWildcardAllowFrom } from "openclaw/plugin-sdk/setup";
-export { evaluateSenderGroupAccess } from "openclaw/plugin-sdk/group-access";
-export { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 export {
-  warnMissingProviderGroupPolicyFallbackOnce,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export {
   deliverTextOrMediaReply,
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-export {
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-} from "openclaw/plugin-sdk/command-auth";
-export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
 export {
   applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
+  registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   resolveWebhookPath,
@@ -92,3 +85,4 @@ export type {
   RegisterWebhookPluginRouteOptions,
   RegisterWebhookTargetOptions,
 } from "openclaw/plugin-sdk/webhook-ingress";
+export { setZaloRuntime } from "./src/runtime.js";

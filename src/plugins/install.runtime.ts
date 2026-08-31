@@ -1,5 +1,6 @@
-import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
-import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
+/** Lazy runtime barrel for plugin installation helpers used by install flows. */
+import { resolveArchiveKind } from "../infra/archive.js";
+import { pathExists, root } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
 import {
   resolveInstallModeOptions,
@@ -15,6 +16,7 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
+import { readJson } from "../infra/json-files.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -23,6 +25,7 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
+  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
@@ -35,13 +38,16 @@ import {
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside } from "./path-safety.js";
 
+/** npm install resolution metadata re-exported for lazy plugin install callers. */
 export type { NpmIntegrityDrift, NpmSpecResolution };
 
+/** Lazy runtime barrel for plugin install helpers used outside the main install module. */
 export {
   checkMinHostVersion,
+  root,
   detectBundleManifestFormat,
   ensureInstallTargetAvailable,
-  fileExists,
+  pathExists as fileExists,
   finalizeNpmSpecArchiveInstall,
   getPackageManifestMetadata,
   installFromNpmSpecArchiveWithInstaller,
@@ -49,7 +55,7 @@ export {
   isPathInside,
   loadBundleManifest,
   loadPluginManifest,
-  readJsonFile,
+  readJson as readJsonFile,
   resolveArchiveKind,
   resolveArchiveSourcePath,
   resolveCanonicalInstallTarget,
@@ -59,10 +65,10 @@ export {
   resolveCompatibilityHostVersion,
   resolveRuntimeServiceVersion,
   resolveTimedInstallModeOptions,
+  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
   validateRegistryNpmSpec,
   withExtractedArchiveRoot,
-  writeFileFromPathWithinRoot,
 };

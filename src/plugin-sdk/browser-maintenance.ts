@@ -1,63 +1,54 @@
-import { randomBytes } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+/**
+ * Public SDK facade for browser cleanup and trash operations.
+ */
+import {
+  canLoadActivatedBundledPluginPublicSurface,
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
+export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 
-type BrowserRuntimeModule = PluginSdkFacadeTypeMap["browser-runtime"]["module"];
+type CloseTrackedBrowserTabsParams = {
+  sessionKeys: Array<string | undefined>;
+  closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
+  onWarn?: (message: string) => void;
+};
 
-function createTrashCollisionSuffix(): string {
-  return randomBytes(6).toString("hex");
+type BrowserMaintenanceSurface = {
+  closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
+};
+
+function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
+  return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
-export const closeTrackedBrowserTabsForSessions: BrowserRuntimeModule["closeTrackedBrowserTabsForSessions"] =
-  (async (...args) => {
-    const [params] = args;
-    if (!Array.isArray(params?.sessionKeys) || params.sessionKeys.length === 0) {
-      return 0;
-    }
-    // Session reset always attempts browser cleanup, even when browser is disabled.
-    // Keep that path a no-op unless the browser runtime is actually active.
-    const closeTrackedTabs = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<
-      Pick<BrowserRuntimeModule, "closeTrackedBrowserTabsForSessions">
-    >({
-      dirName: "browser",
-      artifactBasename: "runtime-api.js",
-    })?.closeTrackedBrowserTabsForSessions;
-    if (typeof closeTrackedTabs !== "function") {
-      return 0;
-    }
-    return await closeTrackedTabs(...args);
-  }) as BrowserRuntimeModule["closeTrackedBrowserTabsForSessions"];
-
-export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = (async (...args) => {
-  const [targetPath] = args;
-  try {
-    const result = await runCommandWithTimeout(["trash", targetPath], { timeoutMs: 10_000 });
-    if (result.code !== 0) {
-      throw new Error(`trash exited with code ${result.code ?? "unknown"}`);
-    }
-    return targetPath;
-  } catch {
-    const homeDir = os.homedir();
-    const pathRuntime = homeDir.startsWith("/") ? path.posix : path;
-    const trashDir = pathRuntime.join(homeDir, ".Trash");
-    await fs.mkdir(trashDir, { recursive: true });
-    const base = pathRuntime.basename(targetPath);
-    const timestamp = Date.now();
-    let destination = pathRuntime.join(trashDir, `${base}-${timestamp}`);
-    try {
-      await fs.access(destination);
-      destination = pathRuntime.join(
-        trashDir,
-        `${base}-${timestamp}-${createTrashCollisionSuffix()}`,
-      );
-    } catch {
-      // The initial destination is free to use.
-    }
-    await fs.rename(targetPath, destination);
-    return destination;
+function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
+  const request = {
+    dirName: "browser",
+    artifactBasename: "browser-maintenance.js",
+  };
+  if (!canLoadActivatedBundledPluginPublicSurface(request)) {
+    return null;
   }
-}) as BrowserRuntimeModule["movePathToTrash"];
+  return tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request);
+}
+
+/** Closes tracked browser tabs for requested session keys when the browser plugin is active. */
+export async function closeTrackedBrowserTabsForSessions(
+  params: CloseTrackedBrowserTabsParams,
+): Promise<number> {
+  if (!hasRequestedSessionKeys(params.sessionKeys)) {
+    return 0;
+  }
+
+  let surface: BrowserMaintenanceSurface | null;
+  try {
+    surface = loadBrowserMaintenanceSurface();
+  } catch (error) {
+    params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
+    return 0;
+  }
+  if (!surface) {
+    return 0;
+  }
+  return await surface.closeTrackedBrowserTabsForSessions(params);
+}

@@ -1,3 +1,4 @@
+// Outbound send mapping tests cover CLI-to-channel outbound payload mapping.
 import { describe, expect, it, vi } from "vitest";
 import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
@@ -28,5 +29,13 @@ describe("createOutboundSendDepsFromCliSource", () => {
       sendSignal: deps.signal,
       sendImessage: deps.imessage,
     });
+  });
+
+  it("preserves explicitly provided Discord voice helper deps", () => {
+    const discordVoice = vi.fn();
+    const outbound = createOutboundSendDepsFromCliSource({ discordVoice });
+
+    expect(outbound.discordVoice).toBe(discordVoice);
+    expect(outbound.sendDiscordVoice).toBe(discordVoice);
   });
 });

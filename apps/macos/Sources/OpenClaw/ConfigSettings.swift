@@ -6,8 +6,8 @@ struct ConfigSettings: View {
     private let isNixMode = ProcessInfo.processInfo.isNixMode
     @Bindable var store: ChannelsStore
     @State private var hasLoaded = false
-    @State private var activeSectionKey: String?
-    @State private var activeSubsection: SubsectionSelection?
+    @State private var activePath: String?
+    @State private var failedLookupPaths: Set<String> = []
 
     init(store: ChannelsStore = .shared) {
         self.store = store
@@ -19,34 +19,37 @@ struct ConfigSettings: View {
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .settingsDetailContent()
         .task {
             guard !self.hasLoaded else { return }
             guard !self.isPreview else { return }
             self.hasLoaded = true
-            await self.store.loadConfigSchema()
-            await self.store.loadConfig()
+            Task { await self.store.loadConfig(force: false) }
+            _ = await self.store.loadConfigSchemaLookup(path: ".")
+            self.ensureSelection()
+        }
+        .task(id: self.activePath) {
+            guard let activePath = self.activePath else { return }
+            await self.loadPath(activePath)
         }
         .onAppear { self.ensureSelection() }
-        .onChange(of: self.store.configSchemaLoading) { _, loading in
-            if !loading { self.ensureSelection() }
+        .onChange(of: self.store.configLookupRoot?.path) { _, _ in
+            self.failedLookupPaths.removeAll()
+            self.ensureSelection()
         }
     }
 }
 
 extension ConfigSettings {
-    private enum SubsectionSelection: Hashable {
-        case all
-        case key(String)
-    }
-
     private struct ConfigSection: Identifiable {
         let key: String
         let label: String
         let help: String?
-        let node: ConfigSchemaNode
+        let path: String
+        let hasChildren: Bool
 
         var id: String {
-            self.key
+            self.path
         }
     }
 
@@ -54,21 +57,22 @@ extension ConfigSettings {
         let key: String
         let label: String
         let help: String?
-        let node: ConfigSchemaNode
-        let path: ConfigPath
+        let path: String
+        let hasChildren: Bool
 
         var id: String {
-            self.key
+            self.path
         }
     }
 
     private var sections: [ConfigSection] {
-        guard let schema = self.store.configSchema else { return [] }
-        return self.resolveSections(schema)
+        guard let root = self.store.configLookupRoot else { return [] }
+        return self.resolveSections(root.children)
     }
 
     private var activeSection: ConfigSection? {
-        self.sections.first { $0.key == self.activeSectionKey }
+        guard let activePath = self.activePath else { return nil }
+        return self.sections.first { activePath == $0.path || activePath.hasPrefix("\($0.path).") }
     }
 
     private var sidebar: some View {
@@ -91,19 +95,20 @@ extension ConfigSettings {
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if self.store.configSchemaLoading {
+            if self.store.configLookupRoot == nil,
+               !self.hasLoaded || self.store.configLookupLoadingPaths.contains(".")
+            {
                 ProgressView().controlSize(.small)
             } else if let section = self.activeSection {
                 self.sectionDetail(section)
-            } else if self.store.configSchema != nil {
+            } else if self.store.configLookupRoot != nil {
                 self.emptyDetail
             } else {
-                Text("Schema unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                self.schemaUnavailableDetail
             }
         }
-        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
     }
 
     private var emptyDetail: some View {
@@ -113,8 +118,20 @@ extension ConfigSettings {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
+    }
+
+    private var schemaUnavailableDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            self.header
+            Text(self.store.configStatus ?? "Schema unavailable.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            self.actionRow
+        }
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private func sectionDetail(_ section: ConfigSection) -> some View {
@@ -137,8 +154,8 @@ extension ConfigSettings {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+            .padding(.vertical, SettingsLayout.detailVerticalPadding)
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
     }
@@ -176,13 +193,14 @@ extension ConfigSettings {
             Button(self.store.isSavingConfig ? "Saving…" : "Save") {
                 Task { await self.store.saveConfigDraft() }
             }
-            .disabled(self.isNixMode || self.store.isSavingConfig || !self.store.configDirty)
+            .disabled(self.isNixMode || self.store.isSavingConfig || !self.store.configLoaded || !self.store
+                .configDirty)
         }
         .buttonStyle(.bordered)
     }
 
     private func sidebarSection(_ section: ConfigSection) -> some View {
-        let isExpanded = self.activeSectionKey == section.key
+        let isExpanded = self.activePath == section.path || self.activePath?.hasPrefix("\(section.path).") == true
         let subsections = isExpanded ? self.resolveSubsections(for: section) : []
 
         return VStack(alignment: .leading, spacing: 2) {
@@ -200,7 +218,7 @@ extension ConfigSettings {
                 .padding(.vertical, 5)
                 .padding(.horizontal, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isExpanded && subsections.isEmpty
+                .background(self.activePath == section.path
                     ? Color.accentColor.opacity(0.18)
                     : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -211,9 +229,8 @@ extension ConfigSettings {
 
             if isExpanded, !subsections.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
-                    self.sidebarSubRow(title: "All", key: nil, sectionKey: section.key)
                     ForEach(subsections) { sub in
-                        self.sidebarSubRow(title: sub.label, key: sub.key, sectionKey: section.key)
+                        self.sidebarSubRow(sub)
                     }
                 }
                 .padding(.leading, 20)
@@ -223,21 +240,12 @@ extension ConfigSettings {
         .animation(.easeInOut(duration: 0.18), value: isExpanded)
     }
 
-    private func sidebarSubRow(title: String, key: String?, sectionKey: String) -> some View {
-        let isSelected: Bool = {
-            guard self.activeSectionKey == sectionKey else { return false }
-            if let key { return self.activeSubsection == .key(key) }
-            return self.activeSubsection == .all
-        }()
-
+    private func sidebarSubRow(_ subsection: ConfigSubsection) -> some View {
+        let isSelected = self.activePath == subsection.path
         return Button {
-            if let key {
-                self.activeSubsection = .key(key)
-            } else {
-                self.activeSubsection = .all
-            }
+            self.selectPath(subsection.path)
         } label: {
-            Text(title)
+            Text(subsection.label)
                 .font(.callout)
                 .lineLimit(1)
                 .padding(.vertical, 4)
@@ -252,123 +260,190 @@ extension ConfigSettings {
     }
 
     private func sectionForm(_ section: ConfigSection) -> some View {
-        let subsection = self.activeSubsection
-        let defaultPath: ConfigPath = [.key(section.key)]
-        let subsections = self.resolveSubsections(for: section)
-        let resolved: (ConfigSchemaNode, ConfigPath) = {
-            if case let .key(key) = subsection,
-               let match = subsections.first(where: { $0.key == key })
-            {
-                return (match.node, match.path)
+        let path = self.activePath ?? section.path
+        if self.store.configLookupLoadingPaths.contains(path) {
+            return AnyView(ProgressView().controlSize(.small))
+        }
+        guard let node = self.store.configLookupNode(path: path) else {
+            if self.failedLookupPaths.contains(path) {
+                return AnyView(self.lookupUnavailable(path: path))
             }
-            return (self.resolvedSchemaNode(section.node), defaultPath)
-        }()
-
-        return ConfigSchemaForm(store: self.store, schema: resolved.0, path: resolved.1)
-            .disabled(self.isNixMode)
+            return AnyView(ProgressView().controlSize(.small))
+        }
+        if !node.children.isEmpty, !Self.shouldRenderFormEditor(for: node.schema) {
+            return AnyView(self.lookupChildrenList(node))
+        }
+        guard self.store.configLoaded else {
+            return AnyView(
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading current values…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                })
+        }
+        guard let configPath = Self.configPath(from: node.path) else {
+            return AnyView(
+                Text("Wildcard config entries are edited from their concrete key.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary))
+        }
+        return AnyView(
+            ConfigSchemaForm(store: self.store, schema: node.schema, path: configPath)
+                .disabled(self.isNixMode))
     }
 
     private func ensureSelection() {
-        guard let schema = self.store.configSchema else { return }
-        let sections = self.resolveSections(schema)
+        let sections = self.sections
         guard !sections.isEmpty else { return }
 
-        let active = sections.first { $0.key == self.activeSectionKey } ?? sections[0]
-        if self.activeSectionKey != active.key {
-            self.activeSectionKey = active.key
-        }
-        self.ensureSubsection(for: active)
-    }
-
-    private func ensureSubsection(for section: ConfigSection) {
-        let subsections = self.resolveSubsections(for: section)
-        guard !subsections.isEmpty else {
-            self.activeSubsection = nil
+        if let activePath = self.activePath,
+           sections.contains(where: { activePath == $0.path || activePath.hasPrefix("\($0.path).") })
+        {
             return
         }
 
-        switch self.activeSubsection {
-        case .all:
-            return
-        case let .key(key):
-            if subsections.contains(where: { $0.key == key }) { return }
-        case .none:
-            break
-        }
-
-        if let first = subsections.first {
-            self.activeSubsection = .key(first.key)
-        }
+        self.selectSection(sections[0])
     }
 
     private func selectSection(_ section: ConfigSection) {
-        guard self.activeSectionKey != section.key else { return }
-        self.activeSectionKey = section.key
-        let subsections = self.resolveSubsections(for: section)
-        if let first = subsections.first {
-            self.activeSubsection = .key(first.key)
-        } else {
-            self.activeSubsection = nil
+        self.activePath = section.path
+    }
+
+    private func selectPath(_ path: String) {
+        self.activePath = path
+    }
+
+    private func lookupUnavailable(path: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(self.store.configStatus ?? "Schema unavailable.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Retry") {
+                self.failedLookupPaths.remove(path)
+                Task { await self.loadPath(path) }
+            }
+            .buttonStyle(.bordered)
         }
     }
 
-    private func resolveSections(_ root: ConfigSchemaNode) -> [ConfigSection] {
-        let node = self.resolvedSchemaNode(root)
-        let hints = self.store.configUiHints
-        let keys = node.properties.keys.sorted { lhs, rhs in
-            let orderA = hintForPath([.key(lhs)], hints: hints)?.order ?? 0
-            let orderB = hintForPath([.key(rhs)], hints: hints)?.order ?? 0
-            if orderA != orderB { return orderA < orderB }
-            return lhs < rhs
+    private func lookupChildrenList(_ node: ConfigSchemaLookupNode) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(node.children) { child in
+                Button {
+                    self.selectPath(child.path)
+                } label: {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(self.label(for: child))
+                                .font(.callout.weight(.semibold))
+                            if let help = child.hint?.help {
+                                Text(help)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            } else if let type = child.typeLabel {
+                                Text(type)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if child.required {
+                            Text("Required")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Image(systemName: child.hasChildren ? "chevron.right" : "slider.horizontal.3")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
+    }
 
-        return keys.compactMap { key in
-            guard let child = node.properties[key] else { return nil }
-            let path: ConfigPath = [.key(key)]
-            let hint = hintForPath(path, hints: hints)
-            let label = hint?.label
-                ?? child.title
-                ?? self.humanize(key)
-            let help = hint?.help ?? child.description
-            return ConfigSection(key: key, label: label, help: help, node: child)
-        }
+    private func resolveSections(_ children: [ConfigSchemaLookupChild]) -> [ConfigSection] {
+        children
+            .sorted(by: self.sortLookupChildren)
+            .map { child in
+                ConfigSection(
+                    key: child.key,
+                    label: self.label(for: child),
+                    help: child.hint?.help,
+                    path: child.path,
+                    hasChildren: child.hasChildren)
+            }
     }
 
     private func resolveSubsections(for section: ConfigSection) -> [ConfigSubsection] {
-        let node = self.resolvedSchemaNode(section.node)
-        guard node.schemaType == "object" else { return [] }
-        let hints = self.store.configUiHints
-        let keys = node.properties.keys.sorted { lhs, rhs in
-            let orderA = hintForPath([.key(section.key), .key(lhs)], hints: hints)?.order ?? 0
-            let orderB = hintForPath([.key(section.key), .key(rhs)], hints: hints)?.order ?? 0
-            if orderA != orderB { return orderA < orderB }
-            return lhs < rhs
+        guard let node = self.store.configLookupNode(path: section.path) else {
+            return []
         }
+        return node.children
+            .sorted(by: self.sortLookupChildren)
+            .map { child in
+                ConfigSubsection(
+                    key: child.key,
+                    label: self.label(for: child),
+                    help: child.hint?.help,
+                    path: child.path,
+                    hasChildren: child.hasChildren)
+            }
+    }
 
-        return keys.compactMap { key in
-            guard let child = node.properties[key] else { return nil }
-            let path: ConfigPath = [.key(section.key), .key(key)]
-            let hint = hintForPath(path, hints: hints)
-            let label = hint?.label
-                ?? child.title
-                ?? self.humanize(key)
-            let help = hint?.help ?? child.description
-            return ConfigSubsection(
-                key: key,
-                label: label,
-                help: help,
-                node: child,
-                path: path)
+    private func loadPath(_ path: String) async {
+        guard self.store.configLookupNode(path: path) == nil else {
+            self.failedLookupPaths.remove(path)
+            return
+        }
+        guard !self.store.configLookupLoadingPaths.contains(path) else { return }
+        if await self.store.loadConfigSchemaLookup(path: path) == nil {
+            self.failedLookupPaths.insert(path)
+        } else {
+            self.failedLookupPaths.remove(path)
         }
     }
 
-    private func resolvedSchemaNode(_ node: ConfigSchemaNode) -> ConfigSchemaNode {
-        let variants = node.anyOf.isEmpty ? node.oneOf : node.anyOf
-        if !variants.isEmpty {
-            let nonNull = variants.filter { !$0.isNullSchema }
-            if nonNull.count == 1, let only = nonNull.first { return only }
+    private func label(for child: ConfigSchemaLookupChild) -> String {
+        child.hint?.label
+            ?? self.humanize(child.key)
+    }
+
+    private func sortLookupChildren(_ lhs: ConfigSchemaLookupChild, _ rhs: ConfigSchemaLookupChild) -> Bool {
+        let orderA = lhs.hint?.order ?? 0
+        let orderB = rhs.hint?.order ?? 0
+        if orderA != orderB { return orderA < orderB }
+        return lhs.key < rhs.key
+    }
+
+    private static func configPath(from lookupPath: String) -> ConfigPath? {
+        guard lookupPath != "." else { return [] }
+        let normalized = lookupPath
+            .replacingOccurrences(of: "[", with: ".")
+            .replacingOccurrences(of: "]", with: "")
+        let parts = normalized
+            .split(separator: ".")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !parts.contains("*") else { return nil }
+        return parts.map { part in
+            if let index = Int(part) {
+                return .index(index)
+            }
+            return .key(part)
         }
-        return node
+    }
+
+    private static func shouldRenderFormEditor(for schema: ConfigSchemaNode) -> Bool {
+        if schema.schemaType == "array" { return true }
+        return schema.additionalProperties != nil
     }
 
     private func humanize(_ key: String) -> String {

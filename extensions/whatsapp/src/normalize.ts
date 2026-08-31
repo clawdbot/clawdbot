@@ -1,8 +1,9 @@
+// Whatsapp helper module supports normalize behavior.
 export {
   looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntries,
+  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   isWhatsAppGroupJid,
-  isWhatsAppUserTarget,
+  isWhatsAppNewsletterJid,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";

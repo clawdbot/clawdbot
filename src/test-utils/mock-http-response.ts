@@ -1,8 +1,13 @@
-import type { ServerResponse } from "node:http";
+// Provides a lightweight ServerResponse mock for HTTP handler tests.
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
+/** Minimal ServerResponse double for route tests that inspect headers and body. */
 export function createMockServerResponse(): ServerResponse & { body?: string } {
   const headers: Record<string, string> = {};
   const res: {
+    req: IncomingMessage;
     headersSent: boolean;
     statusCode: number;
     body?: string;
@@ -10,13 +15,14 @@ export function createMockServerResponse(): ServerResponse & { body?: string } {
     getHeader: (key: string) => string | undefined;
     end: (body?: string) => unknown;
   } = {
+    req: new IncomingMessage(new Socket()),
     headersSent: false,
     statusCode: 200,
     setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
+      headers[lowercasePreservingWhitespace(key)] = value;
       return res;
     },
-    getHeader: (key: string) => headers[key.toLowerCase()],
+    getHeader: (key: string) => headers[lowercasePreservingWhitespace(key)],
     end: (body?: string) => {
       res.headersSent = true;
       res.body = body;

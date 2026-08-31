@@ -1,2 +1,2 @@
-export { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+// Telegram plugin module implements monitor webhook behavior.
 export { startTelegramWebhook } from "./webhook.js";

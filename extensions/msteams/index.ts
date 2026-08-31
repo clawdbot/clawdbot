@@ -1,14 +1,21 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { msteamsPlugin } from "./src/channel.js";
-import { setMSTeamsRuntime } from "./src/runtime.js";
+// Msteams plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { msteamsPlugin } from "./src/channel.js";
-export { setMSTeamsRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "msteams",
   name: "Microsoft Teams",
   description: "Microsoft Teams channel plugin (Bot Framework)",
-  plugin: msteamsPlugin,
-  setRuntime: setMSTeamsRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "msteamsPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setMSTeamsRuntime",
+  },
 });

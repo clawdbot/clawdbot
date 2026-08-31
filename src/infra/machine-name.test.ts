@@ -1,18 +1,18 @@
+// Covers machine name resolution fallback behavior.
 import os from "node:os";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
+  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeChildProcessExecFile(
+    Object.assign(execFileMock, {
+      [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
   );
 });
 

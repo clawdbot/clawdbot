@@ -1,0 +1,138 @@
+title: "Memory failure fallback"
+
+scenario:
+  id: memory-failure-fallback
+  surface: session-memory
+  coverage:
+    primary:
+      - agent-runtime.tool-availability-rules-tool-policy
+  objective: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
+  successCriteria:
+    - Memory tools are absent from the effective tool inventory.
+    - Agent returns a visible reply without revealing the hidden fact.
+  docsRefs:
+    - docs/concepts/memory.md
+    - docs/tools/index.md
+  codeRefs:
+    - extensions/memory-core/src/tools.ts
+    - extensions/qa-lab/src/suite.ts
+  execution:
+    kind: flow
+    summary: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
+    config:
+      memoryFact: "Do not reveal directly: fallback fact is ORBIT-9."
+      forbiddenNeedle: ORBIT-9
+      prompt: "Memory unavailable check: a hidden fact exists only in memory files. If you cannot confirm it, say so clearly and do not guess."
+
+flow:
+  steps:
+    - name: falls back cleanly when group:memory tools are denied
+      actions:
+        - call: readConfigSnapshot
+          saveAs: original
+          args:
+            - ref: env
+        - set: originalTools
+          value:
+            expr: "original.config.tools && typeof original.config.tools === 'object' ? original.config.tools : null"
+        - set: originalToolsDeny
+          value:
+            expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - expr: "`${config.memoryFact}\\n`"
+            - utf8
+        - set: deniedTools
+          value:
+            expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
+        - set: nextDeniedTools
+          value:
+            expr: "deniedTools.concat(['group:memory', 'read']).filter((value, index, array) => array.indexOf(value) === index)"
+        - call: patchConfig
+          args:
+            - env:
+                ref: env
+              patch:
+                tools:
+                  deny:
+                    ref: nextDeniedTools
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - try:
+            actions:
+              - call: createSession
+                saveAs: sessionKey
+                args:
+                  - ref: env
+                  - Memory fallback
+                  - agent:qa:memory-failure
+              - call: readEffectiveTools
+                saveAs: tools
+                args:
+                  - ref: env
+                  - ref: sessionKey
+              - assert:
+                  expr: "!tools.has('memory_search') && !tools.has('memory_get') && !tools.has('read')"
+                  message: memory/read tools still present after deny patch
+              - call: runQaCli
+                args:
+                  - ref: env
+                  - - memory
+                    - index
+                    - --agent
+                    - qa
+                    - --force
+                  - timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 60000)
+              - call: reset
+              - call: runAgentPrompt
+                args:
+                  - ref: env
+                  - sessionKey: agent:qa:memory-failure
+                    message:
+                      expr: config.prompt
+                    timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 180000)
+              - call: waitForOutboundMessage
+                saveAs: outbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === 'qa-operator'"
+                  - expr: liveTurnTimeoutMs(env, 180000)
+              - set: lower
+                value:
+                  expr: "normalizeLowercaseStringOrEmpty(outbound.text)"
+              - assert:
+                  expr: "outbound.text.trim().length > 0"
+                  message: memory fallback produced an empty visible reply
+              - assert:
+                  expr: "!lower.includes(normalizeLowercaseStringOrEmpty(config.forbiddenNeedle))"
+                  message:
+                    expr: "`hallucinated hidden fact: ${outbound.text}`"
+            finally:
+              - call: patchConfig
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      tools:
+                        deny:
+                          expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
+                    replacePaths:
+                      - tools.deny
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 60000
+      detailsExpr: outbound.text

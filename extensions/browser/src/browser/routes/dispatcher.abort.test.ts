@@ -1,4 +1,6 @@
+// Browser tests cover dispatcher.abort plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { toErrorObject } from "../../infra/errors.js";
 import type { BrowserRouteContext } from "../server-context.js";
 
 let createBrowserRouteDispatcher: typeof import("./dispatcher.js").createBrowserRouteDispatcher;
@@ -14,10 +16,15 @@ describe("browser route dispatcher (abort)", () => {
               const signal = req.signal;
               await new Promise<void>((resolve, reject) => {
                 if (signal?.aborted) {
-                  reject(signal.reason ?? new Error("aborted"));
+                  reject(
+                    toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+                  );
                   return;
                 }
-                const onAbort = () => reject(signal?.reason ?? new Error("aborted"));
+                const onAbort = () =>
+                  reject(
+                    toErrorObject(signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
+                  );
                 signal?.addEventListener("abort", onAbort, { once: true });
                 queueMicrotask(() => {
                   signal?.removeEventListener("abort", onAbort);
@@ -29,10 +36,7 @@ describe("browser route dispatcher (abort)", () => {
           );
           app.get(
             "/echo/:id",
-            async (
-              req: { params?: Record<string, string> },
-              res: { json: (body: unknown) => void },
-            ) => {
+            (req: { params?: Record<string, string> }, res: { json: (body: unknown) => void }) => {
               res.json({ id: req.params?.id ?? null });
             },
           );
@@ -54,23 +58,21 @@ describe("browser route dispatcher (abort)", () => {
 
     ctrl.abort(new Error("timed out"));
 
-    await expect(promise).resolves.toMatchObject({
-      status: 500,
-      body: { error: expect.stringContaining("timed out") },
-    });
+    const result = await promise;
+    expect(result.status).toBe(500);
+    const body = result.body as { error?: unknown };
+    expect(body.error).toBe("Error: timed out");
   });
 
   it("returns 400 for malformed percent-encoding in route params", async () => {
     const dispatcher = createBrowserRouteDispatcher({} as BrowserRouteContext);
 
-    await expect(
-      dispatcher.dispatch({
-        method: "GET",
-        path: "/echo/%E0%A4%A",
-      }),
-    ).resolves.toMatchObject({
-      status: 400,
-      body: { error: expect.stringContaining("invalid path parameter encoding") },
+    const result = await dispatcher.dispatch({
+      method: "GET",
+      path: "/echo/%E0%A4%A",
     });
+    expect(result.status).toBe(400);
+    const body = result.body as { error?: unknown };
+    expect(body.error).toBe("invalid path parameter encoding: id");
   });
 });

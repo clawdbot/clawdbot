@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import { cancelTaskById, listTasksForFlowId } from "../../tasks/runtime-internal.js";
+// Runtime task helpers expose task-flow operations to activated plugin runtimes.
+import { listTasksForFlowId } from "../../tasks/runtime-internal.js";
 import {
   mapTaskFlowDetail,
   mapTaskFlowView,
@@ -7,7 +7,7 @@ import {
   mapTaskRunDetail,
   mapTaskRunView,
 } from "../../tasks/task-domain-views.js";
-import { getFlowTaskSummary } from "../../tasks/task-executor.js";
+import { cancelDetachedTaskRunById, getFlowTaskSummary } from "../../tasks/task-executor.js";
 import {
   getTaskFlowByIdForOwner,
   listTaskFlowsForOwner,
@@ -20,17 +20,17 @@ import {
   listTasksForRelatedSessionKeyForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "../../tasks/task-owner-access.js";
-import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import type { OpenClawPluginToolContext } from "../types.js";
-import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
 import type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
   TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
   TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "./task-domain-types.js";
+} from "./runtime-tasks.types.js";
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
@@ -41,7 +41,7 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
 }
 
 function mapCancelledTaskResult(
-  result: Awaited<ReturnType<typeof cancelTaskById>>,
+  result: Awaited<ReturnType<typeof cancelDetachedTaskRunById>>,
 ): TaskRunCancelResult {
   return {
     found: result.found,
@@ -51,55 +51,9 @@ function mapCancelledTaskResult(
   };
 }
 
-export type BoundTaskRunsRuntime = {
-  readonly sessionKey: string;
-  readonly requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
-  get: (taskId: string) => TaskRunDetail | undefined;
-  list: () => TaskRunView[];
-  findLatest: () => TaskRunDetail | undefined;
-  resolve: (token: string) => TaskRunDetail | undefined;
-  cancel: (params: { taskId: string; cfg: OpenClawConfig }) => Promise<TaskRunCancelResult>;
-};
-
-export type PluginRuntimeTaskRuns = {
-  bindSession: (params: {
-    sessionKey: string;
-    requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
-  }) => BoundTaskRunsRuntime;
-  fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
-  ) => BoundTaskRunsRuntime;
-};
-
-export type BoundTaskFlowsRuntime = {
-  readonly sessionKey: string;
-  readonly requesterOrigin?: ReturnType<typeof normalizeDeliveryContext>;
-  get: (flowId: string) => TaskFlowDetail | undefined;
-  list: () => TaskFlowView[];
-  findLatest: () => TaskFlowDetail | undefined;
-  resolve: (token: string) => TaskFlowDetail | undefined;
-  getTaskSummary: (flowId: string) => TaskRunAggregateSummary | undefined;
-};
-
-export type PluginRuntimeTaskFlows = {
-  bindSession: (params: {
-    sessionKey: string;
-    requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
-  }) => BoundTaskFlowsRuntime;
-  fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
-  ) => BoundTaskFlowsRuntime;
-};
-
-export type PluginRuntimeTasks = {
-  runs: PluginRuntimeTaskRuns;
-  flows: PluginRuntimeTaskFlows;
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  flow: PluginRuntimeTaskFlow;
-};
-
 function createBoundTaskRunsRuntime(params: {
   sessionKey: string;
+  agentId?: string;
   requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
 }): BoundTaskRunsRuntime {
   const ownerKey = assertSessionKey(
@@ -113,18 +67,24 @@ function createBoundTaskRunsRuntime(params: {
     sessionKey: ownerKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     get: (taskId) => {
-      const task = getTaskByIdForOwner({ taskId, callerOwnerKey: ownerKey });
+      const task = getTaskByIdForOwner({
+        taskId,
+        callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
+      });
       return task ? mapTaskRunDetail(task) : undefined;
     },
     list: () =>
       listTasksForRelatedSessionKeyForOwner({
         relatedSessionKey: ownerKey,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       }).map((task) => mapTaskRunView(task)),
     findLatest: () => {
       const task = findLatestTaskForRelatedSessionKeyForOwner({
         relatedSessionKey: ownerKey,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       return task ? mapTaskRunDetail(task) : undefined;
     },
@@ -132,6 +92,7 @@ function createBoundTaskRunsRuntime(params: {
       const task = resolveTaskForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       return task ? mapTaskRunDetail(task) : undefined;
     },
@@ -139,6 +100,7 @@ function createBoundTaskRunsRuntime(params: {
       const task = getTaskByIdForOwner({
         taskId,
         callerOwnerKey: ownerKey,
+        callerAgentId: params.agentId,
       });
       if (!task) {
         return {
@@ -148,7 +110,7 @@ function createBoundTaskRunsRuntime(params: {
         };
       }
       return mapCancelledTaskResult(
-        await cancelTaskById({
+        await cancelDetachedTaskRunById({
           cfg,
           taskId: task.taskId,
         }),
@@ -216,11 +178,12 @@ function createBoundTaskFlowsRuntime(params: {
   };
 }
 
-export function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
+function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
   return {
     bindSession: (params) =>
       createBoundTaskRunsRuntime({
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         requesterOrigin: params.requesterOrigin,
       }),
     fromToolContext: (ctx) =>
@@ -229,12 +192,13 @@ export function createRuntimeTaskRuns(): PluginRuntimeTaskRuns {
           ctx.sessionKey,
           "Tasks runtime requires tool context with a sessionKey.",
         ),
+        agentId: ctx.agentId,
         requesterOrigin: ctx.deliveryContext,
       }),
   };
 }
 
-export function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
+function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
   return {
     bindSession: (params) =>
       createBoundTaskFlowsRuntime({
@@ -253,11 +217,11 @@ export function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
 }
 
 export function createRuntimeTasks(params: {
-  legacyTaskFlow: PluginRuntimeTaskFlow;
+  managedTaskFlow: PluginRuntimeTaskFlow;
 }): PluginRuntimeTasks {
   return {
     runs: createRuntimeTaskRuns(),
     flows: createRuntimeTaskFlows(),
-    flow: params.legacyTaskFlow,
+    managedFlows: params.managedTaskFlow,
   };
 }

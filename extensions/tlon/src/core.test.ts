@@ -1,33 +1,63 @@
-import { describe, expect, it, vi } from "vitest";
+// Tlon tests cover core plugin behavior.
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
-import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
+import { tlonChannelConfigSchema } from "./config-schema.js";
+import { tlonSetupWizard } from "./setup-surface.js";
 import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
-const tlonConfigure = createPluginSetupWizardConfigure(tlonPlugin);
-const tlonStatus = createPluginSetupWizardStatus(tlonPlugin);
+const tlonTestPlugin = {
+  id: "tlon",
+  meta: { label: "Tlon" },
+  setupWizard: tlonSetupWizard,
+  config: tlonPlugin.config,
+  setup: {
+    resolveAccountId: ({ accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+      accountId ?? "default",
+  },
+};
+
+const tlonConfigure = createPluginSetupWizardConfigure(tlonTestPlugin);
+const tlonStatus = createPluginSetupWizardStatus(tlonTestPlugin);
+
+function parseTlonConfig(value: unknown) {
+  const runtime = tlonChannelConfigSchema.runtime;
+  if (!runtime) {
+    throw new Error("expected Tlon channel config runtime");
+  }
+  return runtime.safeParse(value);
+}
 
 describe("tlon core", () => {
   it("formats dm allowlist entries through the shared hybrid adapter", () => {
     expect(
-      tlonPlugin.config.formatAllowFrom?.({
+      tlonTestPlugin.config.formatAllowFrom?.({
         cfg: {} as OpenClawConfig,
         allowFrom: ["zod", " ~nec "],
       }),
     ).toEqual(["~zod", "~nec"]);
   });
 
+  it("returns an empty dm allowlist when the default account is unconfigured", () => {
+    expect(
+      tlonTestPlugin.config.resolveAllowFrom?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("resolves dm allowlist from the default account", () => {
     expect(
-      tlonPlugin.config.resolveAllowFrom?.({
+      tlonTestPlugin.config.resolveAllowFrom?.({
         cfg: {
           channels: {
             tlon: {
@@ -44,30 +74,61 @@ describe("tlon core", () => {
   });
 
   it("accepts channelRules with string keys", () => {
-    const parsed = TlonAuthorizationSchema.parse({
-      channelRules: {
-        "chat/~zod/test": {
-          mode: "open",
-          allowedShips: ["~zod"],
+    expect(
+      parseTlonConfig({
+        authorization: {
+          channelRules: {
+            "chat/~zod/test": {
+              mode: "open",
+              allowedShips: ["~zod"],
+            },
+          },
         },
-      },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: { authorization: { channelRules: { "chat/~zod/test": { mode: "open" } } } },
     });
-
-    expect(parsed.channelRules?.["chat/~zod/test"]?.mode).toBe("open");
   });
 
   it("accepts accounts with string keys", () => {
-    const parsed = TlonConfigSchema.parse({
-      accounts: {
-        primary: {
-          ship: "~zod",
-          url: "https://example.com",
-          code: "code-123",
+    expect(
+      parseTlonConfig({
+        accounts: {
+          primary: {
+            ship: "~zod",
+            url: "https://example.com",
+            code: "code-123",
+          },
         },
+      }),
+    ).toMatchObject({ success: true, data: { accounts: { primary: { ship: "~zod" } } } });
+  });
+
+  it("exposes group invite allowlists in channel config schema", () => {
+    expect(
+      parseTlonConfig({
+        groupInviteAllowlist: ["~zod"],
+        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        groupInviteAllowlist: ["~zod"],
+        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
       },
     });
+  });
 
-    expect(parsed.accounts?.primary?.ship).toBe("~zod");
+  it("accepts implicit mention policy at root and account scope", () => {
+    expect(
+      parseTlonConfig({
+        implicitMentions: { threadParticipation: false },
+        accounts: {
+          primary: { implicitMentions: { replyToBot: false } },
+        },
+      }),
+    ).toMatchObject({ success: true });
   });
 
   it("configures ship, auth, and discovery settings", async () => {
@@ -122,7 +183,56 @@ describe("tlon core", () => {
     ]);
     expect(result.cfg.channels?.tlon?.dmAllowlist).toEqual(["~zod", "~nec"]);
     expect(result.cfg.channels?.tlon?.autoDiscoverChannels).toBe(true);
-    expect(result.cfg.channels?.tlon?.allowPrivateNetwork).toBe(false);
+    expect(result.cfg.channels?.tlon?.network?.dangerouslyAllowPrivateNetwork).toBe(false);
+  });
+
+  it("never sends an existing login code back through setup prompts", async () => {
+    const existingCode = "lidlut-existing-secret-code";
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Login code") {
+        return "lidlut-replacement-code";
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    });
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message.startsWith("Ship name") || message.startsWith("Ship URL")) {
+        return true;
+      }
+      if (message.startsWith("Login code")) {
+        return false;
+      }
+      if (message === "Enable auto-discovery of group channels?") {
+        return true;
+      }
+      return false;
+    });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: tlonConfigure,
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~sampel-palnet",
+            url: "https://urbit.example.com",
+            code: existingCode,
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.tlon?.code).toBe("lidlut-replacement-code");
+    expect(JSON.stringify({ confirms: confirm.mock.calls, texts: text.mock.calls })).not.toContain(
+      existingCode,
+    );
+    const codePrompt = text.mock.calls.find(([args]) => args.message === "Login code")?.[0];
+    expect(codePrompt).toMatchObject({ sensitive: true });
+    expect(codePrompt).not.toHaveProperty("initialValue");
   });
 
   it("resolves dm targets to normalized ships", () => {
@@ -146,6 +256,11 @@ describe("tlon core", () => {
       throw new Error("expected invalid target");
     }
     expect(resolved.error.message).toMatch(/invalid tlon target/i);
+  });
+
+  it("does not invent an account when the Tlon channel is unconfigured", () => {
+    expect(listTlonAccountIds({} as OpenClawConfig)).toEqual([]);
+    expect(listTlonAccountIds({ channels: { tlon: {} } } as OpenClawConfig)).toEqual([]);
   });
 
   it("lists named accounts and the implicit default account", () => {

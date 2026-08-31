@@ -1,18 +1,17 @@
+// Verifies models.json writes and repairs use private file permissions.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
-  CUSTOM_PROXY_MODELS_CONFIG,
-  installModelsConfigTestHooks,
-  withModelsTempHome as withTempHome,
-} from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } from "./models-config.js";
+  ensureModelsFileModeForModelsJson,
+  writeModelsFileAtomicForModelsJson,
+} from "./models-config.test-support.js";
 
-installModelsConfigTestHooks();
+const tempDirs = new Set<string>();
 
 afterEach(() => {
-  resetModelsJsonReadyCacheForTest();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("models-config file mode", () => {
@@ -20,28 +19,26 @@ describe("models-config file mode", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempHome(async () => {
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-      const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
-      const stat = await fs.stat(modelsPath);
-      expect(stat.mode & 0o777).toBe(0o600);
-    });
+    const dir = makeTempDir(tempDirs, "models-json-mode-");
+    const modelsPath = path.join(dir, "models.json");
+    await writeModelsFileAtomicForModelsJson(modelsPath, '{"providers":{}}\n');
+    const stat = await fs.stat(modelsPath);
+    expect(stat.mode & 0o777).toBe(0o600);
   });
 
   it("repairs models.json mode to 0600 on no-content-change paths", async () => {
+    // No-op content updates should still harden existing file permissions.
     if (process.platform === "win32") {
       return;
     }
-    await withTempHome(async () => {
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-      const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
-      await fs.chmod(modelsPath, 0o644);
+    const dir = makeTempDir(tempDirs, "models-json-mode-");
+    const modelsPath = path.join(dir, "models.json");
+    await writeModelsFileAtomicForModelsJson(modelsPath, '{"providers":{}}\n');
+    await fs.chmod(modelsPath, 0o644);
 
-      const result = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
-      expect(result.wrote).toBe(false);
+    await ensureModelsFileModeForModelsJson(modelsPath);
 
-      const stat = await fs.stat(modelsPath);
-      expect(stat.mode & 0o777).toBe(0o600);
-    });
+    const stat = await fs.stat(modelsPath);
+    expect(stat.mode & 0o777).toBe(0o600);
   });
 });

@@ -1,3 +1,4 @@
+#if Talk
 import XCTest
 @testable import OpenClawKit
 
@@ -17,3 +18,4 @@ final class ElevenLabsTTSValidationTests: XCTestCase {
         XCTAssertNil(ElevenLabsTTSClient.validatedNormalize("maybe"))
     }
 }
+#endif

@@ -1,35 +1,41 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
-import type { PluginOrigin } from "../plugins/types.js";
+/** Collects plugin config secret refs from runtime plugin metadata. */
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  collectSecretInputAssignment,
+  collectPluginConfigContractMatches,
+  resolvePluginConfigContractsById,
+} from "../plugins/config-contracts.js";
+import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
+import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import {
+  collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
-const ACPX_PLUGIN_ID = "acpx";
-const ACPX_ENABLED_BY_DEFAULT = false;
-
 /**
- * Walk plugin config entries and collect SecretRef assignments for MCP server
- * env vars. Without this, SecretRefs in paths like
- * `plugins.entries.acpx.config.mcpServers.*.env.*` are never resolved and
- * remain as raw objects at runtime.
- *
- * This surface is intentionally scoped to ACPX. Third-party plugins may define
- * their own `mcpServers`-shaped config, but that is not a documented SecretRef
- * surface and should not be rewritten here.
+ * Walk manifest-declared plugin config SecretRef surfaces and collect
+ * assignments for runtime materialization. Plugin-owned metadata controls which
+ * config paths support SecretRefs and whether bundled plugins stay inactive on
+ * that surface until explicitly enabled.
  *
  * When `loadablePluginOrigins` is provided, entries whose ID is not in the map
  * are treated as inactive (stale config entries for plugins that are no longer
  * installed). This prevents resolution failures for SecretRefs belonging to
  * non-loadable plugins from blocking startup or preflight validation.
  */
+/** Collects SecretRef assignments from plugin-owned config contract paths. */
 export function collectPluginConfigAssignments(params: {
+  /** Mutable config snapshot whose plugin config values will receive resolved secrets. */
   config: OpenClawConfig;
+  /** Defaults from the source config, used while matching manifest-declared SecretInput paths. */
   defaults: SecretDefaults | undefined;
+  /** Resolver context that receives assignments and inactive-surface warnings. */
   context: ResolverContext;
+  /** Optional installed plugin roots; missing IDs are treated as stale inactive config. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
@@ -38,9 +44,49 @@ export function collectPluginConfigAssignments(params: {
   }
 
   const normalizedConfig = normalizePluginsConfig(params.config.plugins);
+  const manifestRegistry =
+    params.context.manifestRegistry ??
+    resolveConfigWidePluginManifestRegistry({
+      config: params.config,
+      env: params.context.env,
+    });
+  const bundledLoadablePluginIds = params.context.manifestRegistry
+    ? []
+    : [...(params.loadablePluginOrigins?.entries() ?? [])]
+        .filter(([, origin]) => origin === "bundled")
+        .map(([pluginId]) => pluginId);
+  const pluginSecretInputs = new Map(
+    [
+      ...resolvePluginConfigContractsById({
+        config: params.config,
+        env: params.context.env,
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
+        fallbackBundledPluginIds: bundledLoadablePluginIds,
+        pluginIds: Object.keys(entries),
+        manifestRegistry,
+      }).entries(),
+    ].flatMap(([pluginId, metadata]) => {
+      const secretInputs = metadata.configContracts.secretInputs;
+      if (!secretInputs?.paths.length) {
+        return [];
+      }
+      return [
+        [
+          pluginId,
+          {
+            origin: metadata.origin,
+            bundledDefaultEnabled: secretInputs.bundledDefaultEnabled,
+            paths: secretInputs.paths,
+          },
+        ] as const,
+      ];
+    }),
+  );
 
   for (const [pluginId, entry] of Object.entries(entries)) {
-    if (pluginId !== ACPX_PLUGIN_ID) {
+    const secretInputs = pluginSecretInputs.get(pluginId);
+    if (!secretInputs) {
       continue;
     }
     if (!isRecord(entry)) {
@@ -53,9 +99,10 @@ export function collectPluginConfigAssignments(params: {
 
     const pluginOrigin = params.loadablePluginOrigins?.get(pluginId);
     if (params.loadablePluginOrigins && !pluginOrigin) {
-      collectMcpServerEnvAssignments({
+      collectConfiguredPluginSecretAssignments({
         pluginId,
         pluginConfig,
+        secretPaths: secretInputs.paths,
         active: false,
         inactiveReason: "plugin is not loadable (stale config entry).",
         defaults: params.defaults,
@@ -64,17 +111,17 @@ export function collectPluginConfigAssignments(params: {
       continue;
     }
 
+    const resolvedOrigin = pluginOrigin ?? secretInputs.origin;
     const enableState = resolveEnableState(
       pluginId,
-      pluginOrigin ?? "config",
+      resolvedOrigin,
       normalizedConfig,
-      pluginId === ACPX_PLUGIN_ID && pluginOrigin === "bundled"
-        ? ACPX_ENABLED_BY_DEFAULT
-        : undefined,
+      resolvedOrigin === "bundled" ? secretInputs.bundledDefaultEnabled : undefined,
     );
-    collectMcpServerEnvAssignments({
+    collectConfiguredPluginSecretAssignments({
       pluginId,
       pluginConfig,
+      secretPaths: secretInputs.paths,
       active: enableState.enabled,
       inactiveReason: enableState.reason ?? "plugin is disabled.",
       defaults: params.defaults,
@@ -83,42 +130,61 @@ export function collectPluginConfigAssignments(params: {
   }
 }
 
-function collectMcpServerEnvAssignments(params: {
+function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
+  secretPaths: readonly PluginManifestSecretInputPath[];
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
-  const mcpServers = params.pluginConfig.mcpServers;
-  if (!isRecord(mcpServers)) {
-    return;
-  }
+  const pluginConfigPath = formatConcreteConfigPath([
+    "plugins",
+    "entries",
+    params.pluginId,
+    "config",
+  ]);
+  const seenPaths = new Set<string>();
+  for (const secretPath of params.secretPaths) {
+    for (const match of collectPluginConfigContractMatches({
+      root: params.pluginConfig,
+      pathPattern: secretPath.path,
+    })) {
+      const relativePath = match.path.startsWith("[") ? match.path : `.${match.path}`;
+      const fullPath = `${pluginConfigPath}${relativePath}`;
+      if (seenPaths.has(fullPath)) {
+        continue;
+      }
+      seenPaths.add(fullPath);
+      // Routes may retain an unchanged secret during a transient outage.
+      // Tool capabilities become unavailable so a stale API key cannot remain active.
+      const ownerContract = secretPath.ownerKind === "route" ? params.pluginConfig : undefined;
 
-  for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
-    if (!isRecord(serverConfig)) {
-      continue;
-    }
-    const env = serverConfig.env;
-    if (!isRecord(env)) {
-      continue;
-    }
-
-    for (const [envKey, envValue] of Object.entries(env)) {
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
-      // collectSecretInputAssignment ignores them.
-      collectSecretInputAssignment({
-        value: envValue,
-        path: `plugins.entries.${params.pluginId}.config.mcpServers.${serverName}.env.${envKey}`,
-        expected: "string",
+      // collectRuntimeSecretInputAssignment ignores them.
+      collectRuntimeSecretInputAssignment({
+        value: match.value,
+        path: fullPath,
+        expected: secretPath.expected ?? "string",
         defaults: params.defaults,
         context: params.context,
         active: params.active,
         inactiveReason: `plugin "${params.pluginId}": ${params.inactiveReason}`,
+        ...(secretPath.ownerKind
+          ? {
+              owner: {
+                ownerKind: secretPath.ownerKind,
+                ownerId: fullPath,
+                requiredForGateway: false,
+                disposition: "isolate" as const,
+                ...(ownerContract ? { contract: ownerContract } : {}),
+              },
+            }
+          : {}),
         apply: (value) => {
-          env[envKey] = value;
+          Reflect.set(match.parent, match.key, value);
         },
       });
     }

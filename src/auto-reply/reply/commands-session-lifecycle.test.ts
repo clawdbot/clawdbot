@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Tests conversation binding lifecycle updates and non-destructive detach.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -15,8 +18,32 @@ type ResolveCommandConversationParams = {
   fallbackTo?: string;
 };
 
+type IdleLifecycleScenario = {
+  name: string;
+  createParams: (commandBody: string) => HandleCommandsParams;
+  createBinding: () => SessionBindingRecord;
+  updateBinding: ReturnType<typeof vi.fn>;
+  expectedConversation?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId: string;
+    threadId: string;
+  };
+};
+
 function firstText(values: Array<string | undefined>): string | undefined {
   return values.map((value) => value?.trim() ?? "").find(Boolean) || undefined;
+}
+
+function normalizeCommandContextText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value).trim().toLowerCase();
+  }
+  return "";
 }
 
 function resolveThreadTargetId(raw?: string): string | undefined {
@@ -105,59 +132,50 @@ const hoisted = vi.hoisted(() => {
   const setTelegramThreadBindingIdleTimeoutBySessionKeyMock = vi.fn();
   const setTelegramThreadBindingMaxAgeBySessionKeyMock = vi.fn();
   const sessionBindingResolveByConversationMock = vi.fn();
+  const sessionBindingUnbindMock = vi.fn();
+  function createRuntimeChannel(
+    id: string,
+    resolveCommandConversation: (params: ResolveCommandConversationParams) => {
+      conversationId: string;
+      parentConversationId?: string;
+    } | null,
+    setIdleTimeoutBySessionKey: typeof setThreadBindingIdleTimeoutBySessionKeyMock,
+    setMaxAgeBySessionKey: typeof setThreadBindingMaxAgeBySessionKeyMock,
+  ) {
+    return {
+      plugin: {
+        id,
+        meta: {},
+        config: { hasPersistedAuthState: () => false },
+        bindings: { resolveCommandConversation },
+        conversationBindings: {
+          supportsCurrentConversationBinding: true,
+          setIdleTimeoutBySessionKey,
+          setMaxAgeBySessionKey,
+        },
+      },
+    };
+  }
   const runtimeChannelRegistry = {
     channels: [
-      {
-        plugin: {
-          id: threadChannel,
-          meta: {},
-          config: {
-            hasPersistedAuthState: () => false,
-          },
-          bindings: {
-            resolveCommandConversation: resolveThreadCommandConversation,
-          },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            setIdleTimeoutBySessionKey: setThreadBindingIdleTimeoutBySessionKeyMock,
-            setMaxAgeBySessionKey: setThreadBindingMaxAgeBySessionKeyMock,
-          },
-        },
-      },
-      {
-        plugin: {
-          id: roomChannel,
-          meta: {},
-          config: {
-            hasPersistedAuthState: () => false,
-          },
-          bindings: {
-            resolveCommandConversation: resolveRoomCommandConversation,
-          },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            setIdleTimeoutBySessionKey: setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
-            setMaxAgeBySessionKey: setMatrixThreadBindingMaxAgeBySessionKeyMock,
-          },
-        },
-      },
-      {
-        plugin: {
-          id: topicChannel,
-          meta: {},
-          config: {
-            hasPersistedAuthState: () => false,
-          },
-          bindings: {
-            resolveCommandConversation: resolveTopicCommandConversation,
-          },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            setIdleTimeoutBySessionKey: setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
-            setMaxAgeBySessionKey: setTelegramThreadBindingMaxAgeBySessionKeyMock,
-          },
-        },
-      },
+      createRuntimeChannel(
+        threadChannel,
+        resolveThreadCommandConversation,
+        setThreadBindingIdleTimeoutBySessionKeyMock,
+        setThreadBindingMaxAgeBySessionKeyMock,
+      ),
+      createRuntimeChannel(
+        roomChannel,
+        resolveRoomCommandConversation,
+        setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
+        setMatrixThreadBindingMaxAgeBySessionKeyMock,
+      ),
+      createRuntimeChannel(
+        topicChannel,
+        resolveTopicCommandConversation,
+        setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+        setTelegramThreadBindingMaxAgeBySessionKeyMock,
+      ),
     ],
   };
   return {
@@ -168,6 +186,7 @@ const hoisted = vi.hoisted(() => {
     setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
     setTelegramThreadBindingMaxAgeBySessionKeyMock,
     sessionBindingResolveByConversationMock,
+    sessionBindingUnbindMock,
     runtimeChannelRegistry,
   };
 });
@@ -183,6 +202,52 @@ vi.mock("../../plugins/runtime.js", () => {
   };
 });
 
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  getLoadedChannelPlugin: (channelId: string) =>
+    hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  normalizeChannelId: (raw?: string | null) => {
+    const normalized = raw?.trim().toLowerCase();
+    return normalized || null;
+  },
+}));
+
+vi.mock("../../channels/plugins/conversation-bindings.js", () => ({
+  setChannelConversationBindingIdleTimeoutBySessionKey: (params: {
+    channelId: string;
+    targetSessionKey: string;
+    accountId?: string | null;
+    idleTimeoutMs: number;
+  }) => {
+    return (
+      hoisted.runtimeChannelRegistry.channels
+        .find((entry) => entry.plugin.id === params.channelId)
+        ?.plugin.conversationBindings.setIdleTimeoutBySessionKey({
+          targetSessionKey: params.targetSessionKey,
+          accountId: params.accountId,
+          idleTimeoutMs: params.idleTimeoutMs,
+        }) ?? []
+    );
+  },
+  setChannelConversationBindingMaxAgeBySessionKey: (params: {
+    channelId: string;
+    targetSessionKey: string;
+    accountId?: string | null;
+    maxAgeMs: number;
+  }) => {
+    return (
+      hoisted.runtimeChannelRegistry.channels
+        .find((entry) => entry.plugin.id === params.channelId)
+        ?.plugin.conversationBindings.setMaxAgeBySessionKey({
+          targetSessionKey: params.targetSessionKey,
+          accountId: params.accountId,
+          maxAgeMs: params.maxAgeMs,
+        }) ?? []
+    );
+  },
+}));
+
 vi.mock("../../infra/outbound/session-binding-service.js", () => {
   return {
     getSessionBindingService: () => ({
@@ -191,20 +256,69 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => {
       listBySession: vi.fn(),
       resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
       touch: vi.fn(),
-      unbind: vi.fn(),
+      unbind: hoisted.sessionBindingUnbindMock,
     }),
   };
 });
 
-const { handleSessionCommand } = await import("./commands-session.js");
-const { buildCommandTestParams } = await import("./commands.test-harness.js");
-
+let handleSessionCommand: (typeof import("./commands-session.js"))["handleSessionCommand"];
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function buildSessionCommandParams(
+  commandBody: string,
+  ctxOverrides?: Record<string, unknown>,
+): HandleCommandsParams {
+  const ctx = {
+    Body: commandBody,
+    CommandBody: commandBody,
+    CommandSource: "text",
+    CommandAuthorized: true,
+    Provider: "quietchat",
+    Surface: "quietchat",
+    From: "+1222",
+    To: "+1222",
+    SenderId: "user-1",
+    ...ctxOverrides,
+  } as HandleCommandsParams["ctx"];
+  const channel = normalizeCommandContextText(ctx.Provider ?? ctx.Surface);
+  const senderId = typeof ctx.SenderId === "string" ? ctx.SenderId : undefined;
+  return {
+    ctx,
+    cfg: baseCfg,
+    command: {
+      surface: normalizeCommandContextText(ctx.Surface ?? ctx.Provider),
+      channel,
+      channelId: channel,
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      senderId,
+      abortKey: senderId,
+      rawBodyNormalized: commandBody.trim(),
+      commandBodyNormalized: commandBody.trim().toLowerCase(),
+      from: typeof ctx.From === "string" ? ctx.From : undefined,
+      to: typeof ctx.To === "string" ? ctx.To : undefined,
+    },
+    directives: parseInlineSessionDirectives(commandBody),
+    elevated: { enabled: true, allowed: true, failures: [] },
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    workspaceDir: "/tmp",
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    provider: channel,
+    model: "test-model",
+    contextTokens: 0,
+    isGroup: false,
+  };
+}
+
 function createThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: THREAD_CHANNEL,
     Surface: THREAD_CHANNEL,
     OriginatingChannel: THREAD_CHANNEL,
@@ -216,7 +330,7 @@ function createThreadCommandParams(commandBody: string, overrides?: Record<strin
 }
 
 function createTopicCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: TOPIC_CHANNEL,
     Surface: TOPIC_CHANNEL,
     OriginatingChannel: TOPIC_CHANNEL,
@@ -228,7 +342,7 @@ function createTopicCommandParams(commandBody: string, overrides?: Record<string
 }
 
 function createRoomThreadCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -243,7 +357,7 @@ function createRoomTriggerThreadCommandParams(
   commandBody: string,
   overrides?: Record<string, unknown>,
 ) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -255,7 +369,7 @@ function createRoomTriggerThreadCommandParams(
 }
 
 function createRoomCommandParams(commandBody: string, overrides?: Record<string, unknown>) {
-  return buildCommandTestParams(commandBody, baseCfg, {
+  return buildSessionCommandParams(commandBody, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
     OriginatingChannel: ROOM_CHANNEL,
@@ -265,72 +379,60 @@ function createRoomCommandParams(commandBody: string, overrides?: Record<string,
   });
 }
 
-function createThreadBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
+function createLifecycleBinding(
+  conversation: SessionBindingRecord["conversation"],
+  overrides?: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
   return {
-    bindingId: "default:thread-1",
+    bindingId: `default:${conversation.conversationId}`,
     targetSessionKey: "agent:main:subagent:child",
     targetKind: "subagent",
-    conversation: {
+    conversation,
+    status: "active",
+    boundAt: Date.now(),
+    metadata: {
+      boundBy: "user-1",
+      lastActivityAt: Date.now(),
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    },
+    ...overrides,
+  };
+}
+
+function createThreadBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
+  return createLifecycleBinding(
+    {
       channel: THREAD_CHANNEL,
       accountId: "default",
       conversationId: "thread-1",
       parentConversationId: "thread-1",
     },
-    status: "active",
-    boundAt: Date.now(),
-    metadata: {
-      boundBy: "user-1",
-      lastActivityAt: Date.now(),
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-    },
-    ...overrides,
-  };
+    overrides,
+  );
 }
 
 function createTopicBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
-  return {
-    bindingId: "default:-100200300:topic:77",
-    targetSessionKey: "agent:main:subagent:child",
-    targetKind: "subagent",
-    conversation: {
+  return createLifecycleBinding(
+    {
       channel: TOPIC_CHANNEL,
       accountId: "default",
       conversationId: "-100200300:topic:77",
     },
-    status: "active",
-    boundAt: Date.now(),
-    metadata: {
-      boundBy: "user-1",
-      lastActivityAt: Date.now(),
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-    },
-    ...overrides,
-  };
+    overrides,
+  );
 }
 
 function createRoomBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
-  return {
-    bindingId: "default:$thread-1",
-    targetSessionKey: "agent:main:subagent:child",
-    targetKind: "subagent",
-    conversation: {
+  return createLifecycleBinding(
+    {
       channel: ROOM_CHANNEL,
       accountId: "default",
       conversationId: "$thread-1",
       parentConversationId: "!room:example.org",
     },
-    status: "active",
-    boundAt: Date.now(),
-    metadata: {
-      boundBy: "user-1",
-      lastActivityAt: Date.now(),
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-    },
-    ...overrides,
-  };
+    overrides,
+  );
 }
 
 function createRoomTriggerBinding(overrides?: Partial<SessionBindingRecord>): SessionBindingRecord {
@@ -361,7 +463,11 @@ function expectIdleTimeoutSetReply(
   expect(text).toContain("2026-02-20T02:00:00.000Z");
 }
 
-describe("/session idle and /session max-age", () => {
+describe("/session conversation bindings", () => {
+  beforeAll(async () => {
+    ({ handleSessionCommand } = await import("./commands-session.js"));
+  });
+
   beforeEach(() => {
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();
@@ -370,31 +476,151 @@ describe("/session idle and /session max-age", () => {
     hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
     vi.useRealTimers();
   });
 
-  it("sets idle timeout for the focused thread-chat session", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+  it.each([
+    { name: "thread", createParams: createThreadCommandParams, createBinding: createThreadBinding },
+    { name: "topic", createParams: createTopicCommandParams, createBinding: createTopicBinding },
+    { name: "room", createParams: createRoomThreadCommandParams, createBinding: createRoomBinding },
+    {
+      name: "triggering thread",
+      createParams: createRoomTriggerThreadCommandParams,
+      createBinding: createRoomTriggerBinding,
+    },
+  ])("unbinds only the current $name conversation", async ({ createParams, createBinding }) => {
+    const binding = createBinding();
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
 
+    const result = await handleSessionCommand(createParams("/session unbind"), true);
+
+    expect(result?.reply?.text).toBe("✅ Conversation unbound.");
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
+      bindingId: binding.bindingId,
+      scope: binding.conversation,
+      reason: "manual",
+    });
+  });
+
+  it("unbinds generic current conversations without channel lifecycle support", async () => {
+    const binding = createLifecycleBinding({
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "chat-1",
+    });
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
+    const params = buildSessionCommandParams("/session unbind", {
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      OriginatingTo: "chat-1",
+    });
+
+    const result = await handleSessionCommand(params, true);
+
+    expect(result?.reply?.text).toBe("✅ Conversation unbound.");
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
+      bindingId: binding.bindingId,
+      scope: binding.conversation,
+      reason: "manual",
+    });
+  });
+
+  it("requires the binding owner to unbind a conversation", async () => {
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
-    hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        idleTimeoutMs: 2 * 60 * 60 * 1000,
+
+    const result = await handleSessionCommand(
+      createThreadCommandParams("/session unbind", { SenderId: "other-user" }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Only user-1 can unbind this conversation.");
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["/session unbind other-session", "/session unbind all"])(
+    "does not accept a detach target in %s",
+    async (command) => {
+      const result = await handleSessionCommand(createThreadCommandParams(command), true);
+      expect(result?.reply?.text).toContain("Usage:");
+      expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "sets idle timeout for the bound thread-chat session",
+      createParams: createThreadCommandParams,
+      createBinding: createThreadBinding,
+      updateBinding: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+    },
+    {
+      name: "sets idle timeout for bound topic-chat conversations",
+      createParams: createTopicCommandParams,
+      createBinding: createTopicBinding,
+      updateBinding: hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+    },
+    {
+      name: "sets idle timeout for bound room-chat threads",
+      createParams: createRoomThreadCommandParams,
+      createBinding: createRoomBinding,
+      updateBinding: hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
+    },
+    {
+      name: "sets idle timeout for the triggering room-chat always-thread turn",
+      createParams: createRoomTriggerThreadCommandParams,
+      createBinding: createRoomTriggerBinding,
+      updateBinding: hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
+      expectedConversation: {
+        channel: ROOM_CHANNEL,
+        accountId: "default",
+        conversationId: "$root",
+        parentConversationId: "!room:example.org",
+        threadId: "$root",
       },
-    ]);
+    },
+  ] satisfies IdleLifecycleScenario[])(
+    "$name",
+    async ({
+      createParams,
+      createBinding,
+      updateBinding,
+      expectedConversation,
+    }: IdleLifecycleScenario) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+      hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createBinding());
+      updateBinding.mockReturnValue([
+        {
+          targetSessionKey: "agent:main:subagent:child",
+          boundAt: Date.now(),
+          lastActivityAt: Date.now(),
+          idleTimeoutMs: 2 * 60 * 60 * 1000,
+        },
+      ]);
 
-    const result = await handleSessionCommand(createThreadCommandParams("/session idle 2h"), true);
-    const text = result?.reply?.text ?? "";
+      const result = await handleSessionCommand(createParams("/session idle 2h"), true);
+      if (expectedConversation) {
+        expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith(
+          expectedConversation,
+        );
+      }
+      expectIdleTimeoutSetReply(updateBinding, result?.reply?.text ?? "", 2 * 60 * 60 * 1000, "2h");
+    },
+  );
 
-    expectIdleTimeoutSetReply(
-      hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-      text,
-      2 * 60 * 60 * 1000,
-      "2h",
+  it("rejects unsafe bare-hour lifecycle durations", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+
+    const result = await handleSessionCommand(
+      createThreadCommandParams("/session idle 9999999999999"),
+      true,
+    );
+
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toBe(
+      "Usage: /session idle <duration|off> | /session max-age <duration|off> | /session unbind (example: /session idle 24h)",
     );
   });
 
@@ -418,183 +644,100 @@ describe("/session idle and /session max-age", () => {
     expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
   });
 
-  it("sets max age for the focused thread-chat session", async () => {
+  it("falls back to bind time when idle activity timestamp is out of range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
 
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
-    hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        maxAgeMs: 3 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createThreadCommandParams("/session max-age 3h"),
-      true,
-    );
-    const text = result?.reply?.text ?? "";
-
-    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 3 * 60 * 60 * 1000,
-    });
-    expect(text).toContain("Max age set to 3h");
-    expect(text).toContain("2026-02-20T03:00:00.000Z");
-  });
-
-  it("sets idle timeout for focused topic-chat conversations", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createTopicBinding());
-    hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        idleTimeoutMs: 2 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(createTopicCommandParams("/session idle 2h"), true);
-    const text = result?.reply?.text ?? "";
-
-    expectIdleTimeoutSetReply(
-      hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
-      text,
-      2 * 60 * 60 * 1000,
-      "2h",
-    );
-  });
-
-  it("sets idle timeout for focused room-chat threads", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createRoomBinding());
-    hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        idleTimeoutMs: 2 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createRoomThreadCommandParams("/session idle 2h"),
-      true,
-    );
-    const text = result?.reply?.text ?? "";
-
-    expectIdleTimeoutSetReply(
-      hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
-      text,
-      2 * 60 * 60 * 1000,
-      "2h",
-    );
-  });
-
-  it("sets idle timeout for the triggering room-chat always-thread turn", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createRoomTriggerBinding());
-    hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        idleTimeoutMs: 2 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createRoomTriggerThreadCommandParams("/session idle 2h"),
-      true,
-    );
-    const text = result?.reply?.text ?? "";
-
-    expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith({
-      channel: ROOM_CHANNEL,
-      accountId: "default",
-      conversationId: "$root",
-      parentConversationId: "!room:example.org",
-      threadId: "$root",
-    });
-    expectIdleTimeoutSetReply(
-      hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
-      text,
-      2 * 60 * 60 * 1000,
-      "2h",
-    );
-  });
-
-  it("sets max age for focused room-chat threads", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    const boundAt = Date.parse("2026-02-19T22:00:00.000Z");
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createRoomBinding({ boundAt }));
-    hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt,
-        lastActivityAt: Date.now(),
-        maxAgeMs: 3 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createRoomThreadCommandParams("/session max-age 3h"),
-      true,
-    );
-    const text = result?.reply?.text ?? "";
-
-    expect(hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 3 * 60 * 60 * 1000,
-    });
-    expect(text).toContain("Max age set to 3h");
-    expect(text).toContain("2026-02-20T01:00:00.000Z");
-  });
-
-  it("reports topic-chat max-age expiry from the original bind time", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    const boundAt = Date.parse("2026-02-19T22:00:00.000Z");
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createTopicBinding({ boundAt }),
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: 8_700_000_000_000_000,
+          idleTimeoutMs: 2 * 60 * 60 * 1000,
+          maxAgeMs: 0,
+        },
+      }),
     );
-    hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toContain("Idle timeout active (2h");
+    expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("treats overflowed idle timeout metadata as disabled", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: Date.now(),
+          idleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          maxAgeMs: 0,
+        },
+      }),
+    );
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toBe(
+      "ℹ️ Idle timeout is currently disabled for this bound session.",
+    );
+  });
+
+  it.each([
+    {
+      name: "sets max age for the bound thread-chat session",
+      createParams: createThreadCommandParams,
+      createBinding: createThreadBinding,
+      updateBinding: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+      boundAt: undefined,
+      expiry: "2026-02-20T03:00:00.000Z",
+    },
+    {
+      name: "sets max age for bound room-chat threads",
+      createParams: createRoomThreadCommandParams,
+      createBinding: createRoomBinding,
+      updateBinding: hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock,
+      boundAt: "2026-02-19T22:00:00.000Z",
+      expiry: "2026-02-20T01:00:00.000Z",
+    },
+    {
+      name: "reports topic-chat max-age expiry from the original bind time",
+      createParams: createTopicCommandParams,
+      createBinding: createTopicBinding,
+      updateBinding: hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
+      boundAt: "2026-02-19T22:00:00.000Z",
+      expiry: "2026-02-20T01:00:00.000Z",
+    },
+  ] satisfies Array<{
+    name: string;
+    createParams: (commandBody: string) => HandleCommandsParams;
+    createBinding: (overrides?: Partial<SessionBindingRecord>) => SessionBindingRecord;
+    updateBinding: ReturnType<typeof vi.fn>;
+    boundAt: string | undefined;
+    expiry: string;
+  }>)("$name", async ({ createParams, createBinding, updateBinding, boundAt, expiry }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+    const bindingTime = boundAt ? Date.parse(boundAt) : Date.now();
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createBinding({ boundAt: bindingTime }),
+    );
+    updateBinding.mockReturnValue([
       {
         targetSessionKey: "agent:main:subagent:child",
-        boundAt,
+        boundAt: bindingTime,
         lastActivityAt: Date.now(),
         maxAgeMs: 3 * 60 * 60 * 1000,
       },
     ]);
 
-    const result = await handleSessionCommand(
-      createTopicCommandParams("/session max-age 3h"),
-      true,
-    );
-    const text = result?.reply?.text ?? "";
-
-    expect(hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
+    const result = await handleSessionCommand(createParams("/session max-age 3h"), true);
+    expect(updateBinding).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:child",
       accountId: "default",
       maxAgeMs: 3 * 60 * 60 * 1000,
     });
-    expect(text).toContain("Max age set to 3h");
-    expect(text).toContain("2026-02-20T01:00:00.000Z");
+    expect(result?.reply?.text).toContain("Max age set to 3h");
+    expect(result?.reply?.text).toContain(expiry);
   });
 
   it("disables max age when set to off", async () => {
@@ -631,17 +774,17 @@ describe("/session idle and /session max-age", () => {
   });
 
   it("is unavailable outside bindable channels", async () => {
-    const params = buildCommandTestParams("/session idle 2h", baseCfg);
+    const params = buildSessionCommandParams("/session idle 2h");
     const result = await handleSessionCommand(params, true);
     expect(result?.reply?.text).toContain(
-      "currently available only on channels that support focused conversation bindings",
+      "currently available only on channels that support conversation binding lifecycle updates",
     );
   });
 
-  it("requires a focused room-chat thread for lifecycle updates", async () => {
+  it("requires a bound room-chat thread for lifecycle updates", async () => {
     const result = await handleSessionCommand(createRoomCommandParams("/session idle 2h"), true);
 
-    expect(result?.reply?.text).toContain("This conversation is not currently focused.");
+    expect(result?.reply?.text).toContain("This conversation is not currently bound.");
     expect(hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
   });
 

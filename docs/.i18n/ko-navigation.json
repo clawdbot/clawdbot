@@ -1,0 +1,18 @@
+{
+  "language": "ko",
+  "tabs": [
+    {
+      "tab": "시작하기",
+      "groups": [
+        {
+          "group": "개요",
+          "pages": ["ko/index"]
+        },
+        {
+          "group": "첫 단계",
+          "pages": ["ko/start/getting-started", "ko/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

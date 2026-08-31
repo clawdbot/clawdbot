@@ -5,8 +5,8 @@ public enum PhotoCapture {
         rawData: Data,
         maxWidthPx: Int,
         quality: Double,
-        maxPayloadBytes: Int = 5 * 1024 * 1024
-    ) throws -> (data: Data, widthPx: Int, heightPx: Int) {
+        maxPayloadBytes: Int = 5 * 1024 * 1024) throws -> (data: Data, widthPx: Int, heightPx: Int)
+    {
         // Base64 inflates payloads by ~4/3; cap encoded bytes so the payload stays under maxPayloadBytes (API limit).
         let maxEncodedBytes = (maxPayloadBytes / 4) * 3
         return try JPEGTranscoder.transcodeToJPEG(
@@ -16,4 +16,3 @@ public enum PhotoCapture {
             maxBytes: maxEncodedBytes)
     }
 }
-

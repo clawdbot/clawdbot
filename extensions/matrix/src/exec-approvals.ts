@@ -1,3 +1,4 @@
+// Matrix plugin module implements exec approvals behavior.
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   createChannelExecApprovalProfile,
@@ -6,21 +7,20 @@ import {
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { doesApprovalRequestSelectChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { listMatrixAccountIds, resolveMatrixAccount } from "./matrix/accounts.js";
-import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
+import { getMatrixApprovalAuthApprovers } from "./approval-auth.js";
+import { normalizeMatrixApproverId } from "./approval-ids.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
+import type { CoreConfig } from "./types.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-
-export function normalizeMatrixApproverId(value: string | number): string | undefined {
-  const normalized = normalizeMatrixUserId(String(value));
-  return normalized || undefined;
-}
-
 function normalizeMatrixExecApproverId(value: string | number): string | undefined {
   const normalized = normalizeMatrixApproverId(value);
   return normalized === "*" ? undefined : normalized;
@@ -41,66 +41,48 @@ function resolveMatrixExecApprovalConfig(params: {
   };
 }
 
-function countMatrixExecApprovalEligibleAccounts(params: {
+function isMatrixExecApprovalAccountEligible(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   request: ApprovalRequest;
-}): number {
-  return listMatrixAccountIds(params.cfg).filter((accountId) => {
-    const account = resolveMatrixAccount({ cfg: params.cfg, accountId });
-    if (!account.enabled || !account.configured) {
-      return false;
-    }
-    const config = resolveMatrixExecApprovalConfig({
-      cfg: params.cfg,
-      accountId,
-    });
-    const filters = config?.enabled
-      ? {
-          agentFilter: config.agentFilter,
-          sessionFilter: config.sessionFilter,
-        }
-      : {
-          agentFilter: undefined,
-          sessionFilter: undefined,
-        };
-    return (
-      isChannelExecApprovalClientEnabledFromConfig({
-        enabled: config?.enabled,
-        approverCount: getMatrixExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
-      }) &&
-      matchesApprovalRequestFilters({
-        request: params.request.request,
-        agentFilter: filters.agentFilter,
-        sessionFilter: filters.sessionFilter,
-      })
-    );
-  }).length;
+  approvalKind: ChannelApprovalKind;
+}): boolean {
+  const account = resolveMatrixAccount(params);
+  if (!account.enabled || !account.configured) {
+    return false;
+  }
+  const config = resolveMatrixExecApprovalConfig(params);
+  const filters = config?.enabled
+    ? { agentFilter: config.agentFilter, sessionFilter: config.sessionFilter }
+    : { agentFilter: undefined, sessionFilter: undefined };
+  return (
+    isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: getMatrixApprovalApprovers(params).length,
+    }) &&
+    matchesApprovalRequestFilters({
+      request: params.request.request,
+      agentFilter: filters.agentFilter,
+      sessionFilter: filters.sessionFilter,
+    })
+  );
 }
 
 function matchesMatrixRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const boundAccountId = resolveApprovalRequestChannelAccountId({
-    cfg: params.cfg,
-    request: params.request,
+  const accountId = params.accountId ?? resolveDefaultMatrixAccountId(params.cfg);
+  return doesApprovalRequestSelectChannelAccount({
+    ...params,
     channel: "matrix",
+    defaultAccountId: resolveDefaultMatrixAccountId(params.cfg),
+    eligibleAccountIds: isMatrixExecApprovalAccountEligible({ ...params, accountId })
+      ? [accountId]
+      : [],
   });
-  if (turnSourceChannel && turnSourceChannel !== "matrix" && !boundAccountId) {
-    return (
-      countMatrixExecApprovalEligibleAccounts({
-        cfg: params.cfg,
-        request: params.request,
-      }) <= 1
-    );
-  }
-  return (
-    !boundAccountId ||
-    !params.accountId ||
-    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
-  );
 }
 
 export function getMatrixExecApprovalApprovers(params: {
@@ -115,7 +97,21 @@ export function getMatrixExecApprovalApprovers(params: {
   });
 }
 
-export function isMatrixExecApprovalTargetRecipient(params: {
+export function getMatrixApprovalApprovers(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  approvalKind: ChannelApprovalKind;
+}): string[] {
+  if (params.approvalKind === "plugin") {
+    return getMatrixApprovalAuthApprovers({
+      cfg: params.cfg as CoreConfig,
+      accountId: params.accountId,
+    });
+  }
+  return getMatrixExecApprovalApprovers(params);
+}
+
+function isMatrixExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
   accountId?: string | null;
@@ -134,19 +130,103 @@ const matrixExecApprovalProfile = createChannelExecApprovalProfile({
   resolveApprovers: getMatrixExecApprovalApprovers,
   normalizeSenderId: normalizeMatrixApproverId,
   isTargetRecipient: isMatrixExecApprovalTargetRecipient,
-  matchesRequestAccount: matchesMatrixRequestAccount,
+  matchesRequestAccount: (params) =>
+    matchesMatrixRequestAccount({
+      ...params,
+      approvalKind: "exec",
+    }),
 });
 
 export const isMatrixExecApprovalClientEnabled = matrixExecApprovalProfile.isClientEnabled;
-export const isMatrixExecApprovalApprover = matrixExecApprovalProfile.isApprover;
 export const isMatrixExecApprovalAuthorizedSender = matrixExecApprovalProfile.isAuthorizedSender;
 export const resolveMatrixExecApprovalTarget = matrixExecApprovalProfile.resolveTarget;
-export const shouldHandleMatrixExecApprovalRequest = matrixExecApprovalProfile.shouldHandleRequest;
+
+export function isMatrixApprovalClientEnabled(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  approvalKind: ChannelApprovalKind;
+}): boolean {
+  if (params.approvalKind === "exec") {
+    return isMatrixExecApprovalClientEnabled(params);
+  }
+  const config = resolveMatrixExecApprovalConfig(params);
+  return isChannelExecApprovalClientEnabledFromConfig({
+    enabled: config?.enabled,
+    approverCount: getMatrixApprovalApprovers(params).length,
+  });
+}
+
+export function isMatrixAnyApprovalClientEnabled(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  return (
+    isMatrixApprovalClientEnabled({
+      ...params,
+      approvalKind: "exec",
+    }) ||
+    isMatrixApprovalClientEnabled({
+      ...params,
+      approvalKind: "plugin",
+    })
+  );
+}
+
+export function shouldHandleMatrixApprovalRequest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  approvalKind: ChannelApprovalKind;
+  request: ApprovalRequest;
+}): boolean {
+  if (params.approvalKind !== "exec" && params.approvalKind !== "plugin") {
+    return false;
+  }
+  if (
+    !matchesMatrixRequestAccount({
+      ...params,
+      approvalKind: params.approvalKind,
+    })
+  ) {
+    return false;
+  }
+  const config = resolveMatrixExecApprovalConfig(params);
+  if (
+    !isChannelExecApprovalClientEnabledFromConfig({
+      enabled: config?.enabled,
+      approverCount: getMatrixApprovalApprovers({
+        ...params,
+        approvalKind: params.approvalKind,
+      }).length,
+    })
+  ) {
+    return false;
+  }
+  return matchesApprovalRequestFilters({
+    request: params.request.request,
+    agentFilter: config?.agentFilter,
+    sessionFilter: config?.sessionFilter,
+  });
+}
 
 function buildFilterCheckRequest(params: {
   metadata: NonNullable<ReturnType<typeof getExecApprovalReplyMetadata>>;
-}): ExecApprovalRequest {
+}): ApprovalRequest {
+  if (params.metadata.approvalKind === "plugin") {
+    return {
+      approvalKind: "plugin",
+      id: params.metadata.approvalId,
+      request: {
+        title: "Plugin Approval Required",
+        description: "",
+        agentId: params.metadata.agentId ?? null,
+        sessionKey: params.metadata.sessionKey ?? null,
+      },
+      createdAtMs: 0,
+      expiresAtMs: 0,
+    };
+  }
   return {
+    approvalKind: "exec",
     id: params.metadata.approvalId,
     request: {
       command: "",
@@ -170,15 +250,13 @@ export function shouldSuppressLocalMatrixExecApprovalPrompt(params: {
   if (!metadata) {
     return false;
   }
-  if (metadata.approvalKind !== "exec") {
-    return false;
-  }
   const request = buildFilterCheckRequest({
     metadata,
   });
-  return shouldHandleMatrixExecApprovalRequest({
+  return shouldHandleMatrixApprovalRequest({
     cfg: params.cfg,
     accountId: params.accountId,
+    approvalKind: metadata.approvalKind,
     request,
   });
 }

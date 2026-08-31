@@ -1,3 +1,4 @@
+// Voice Call tests cover call status plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isProviderStatusTerminal,

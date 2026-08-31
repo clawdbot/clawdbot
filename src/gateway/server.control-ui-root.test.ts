@@ -1,3 +1,5 @@
+// Control UI root tests protect packaged UI root validation, including global
+// package hardlink rejection for unsafe configured roots.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

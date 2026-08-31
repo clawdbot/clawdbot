@@ -1,3 +1,6 @@
+// Telegram helper module supports command config behavior.
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export const TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 
 export type TelegramCustomCommandInput = {
@@ -17,7 +20,7 @@ export function normalizeTelegramCommandName(value: string): string {
     return "";
   }
   const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-  return withoutSlash.trim().toLowerCase().replace(/-/g, "_");
+  return (normalizeOptionalLowercaseString(withoutSlash) ?? "").replace(/-/g, "_");
 }
 
 export function normalizeTelegramCommandDescription(value: string): string {
@@ -43,7 +46,7 @@ export function resolveTelegramCustomCommands(params: {
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
-    const normalized = normalizeTelegramCommandName(String(entry?.command ?? ""));
+    const normalized = normalizeTelegramCommandName(entry?.command ?? "");
     if (!normalized) {
       issues.push({
         index,
@@ -76,7 +79,7 @@ export function resolveTelegramCustomCommands(params: {
       });
       continue;
     }
-    const description = normalizeTelegramCommandDescription(String(entry?.description ?? ""));
+    const description = normalizeTelegramCommandDescription(entry?.description ?? "");
     if (!description) {
       issues.push({
         index,

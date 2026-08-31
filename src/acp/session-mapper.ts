@@ -1,8 +1,9 @@
+/** Resolves ACP request metadata into OpenClaw Gateway session keys and reset behavior. */
+import { readBool, readMetadataString } from "@openclaw/acp-core/meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import type { GatewayClient } from "../gateway/client.js";
-import { readBool, readString } from "./meta.js";
-import type { AcpServerOptions } from "./types.js";
 
-export type AcpSessionMeta = {
+type AcpSessionMeta = {
   sessionKey?: string;
   sessionLabel?: string;
   resetSession?: boolean;
@@ -10,21 +11,23 @@ export type AcpSessionMeta = {
   prefixCwd?: boolean;
 };
 
+/** Parses ACP request metadata into OpenClaw session routing hints. */
 export function parseSessionMeta(meta: unknown): AcpSessionMeta {
   if (!meta || typeof meta !== "object") {
     return {};
   }
   const record = meta as Record<string, unknown>;
   return {
-    sessionKey: readString(record, ["sessionKey", "session", "key"]),
-    sessionLabel: readString(record, ["sessionLabel", "label"]),
+    sessionKey: readMetadataString(record, ["sessionKey", "session", "key"]),
+    sessionLabel: readMetadataString(record, ["sessionLabel", "label"]),
     resetSession: readBool(record, ["resetSession", "reset"]),
     requireExisting: readBool(record, ["requireExistingSession", "requireExisting"]),
     prefixCwd: readBool(record, ["prefixCwd"]),
   };
 }
 
-export async function resolveSessionKey(params: {
+/** Resolves the Gateway session key for an ACP request using metadata, defaults, or fallback. */
+export async function resolveAcpSessionKey(params: {
   meta: AcpSessionMeta;
   fallbackKey: string;
   gateway: GatewayClient;
@@ -84,6 +87,7 @@ export async function resolveSessionKey(params: {
   return params.fallbackKey;
 }
 
+/** Sends a Gateway session reset when ACP metadata or server defaults request it. */
 export async function resetSessionIfNeeded(params: {
   meta: AcpSessionMeta;
   sessionKey: string;

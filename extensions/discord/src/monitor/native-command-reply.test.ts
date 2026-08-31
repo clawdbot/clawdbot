@@ -1,0 +1,238 @@
+// Discord tests cover native command reply plugin behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Container, TextDisplay } from "../internal/discord.js";
+import { createDiscordLoopbackRest } from "../send.test-harness.js";
+import {
+  deliverDiscordInteractionReply,
+  hasRenderableReplyPayload,
+  settleDiscordInteractionWithoutVisibleReply,
+} from "./native-command-reply.js";
+
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
+  loadWebMedia: loadWebMediaMock,
+}));
+
+function createInteraction() {
+  return {
+    reply: vi.fn().mockResolvedValue({ ok: true }),
+    followUp: vi.fn().mockResolvedValue({ ok: true }),
+  };
+}
+
+describe("deliverDiscordInteractionReply", () => {
+  beforeEach(() => {
+    loadWebMediaMock.mockReset();
+  });
+
+  it("sends component-only native command replies as follow-ups", async () => {
+    const interaction = createInteraction();
+    const components = [new Container([new TextDisplay("Pick a model")])];
+    const payload = {
+      channelData: {
+        discord: {
+          components,
+        },
+      },
+    };
+
+    expect(hasRenderableReplyPayload(payload)).toBe(true);
+
+    await deliverDiscordInteractionReply({
+      interaction: interaction as never,
+      payload,
+      textLimit: 2000,
+      preferFollowUp: true,
+      responseEphemeral: true,
+      chunkMode: "length",
+    });
+
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      components,
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("sends component-only native command replies through the initial reply when not deferred", async () => {
+    const interaction = createInteraction();
+    const components = [new Container([new TextDisplay("Choose an action")])];
+
+    await deliverDiscordInteractionReply({
+      interaction: interaction as never,
+      payload: {
+        channelData: {
+          discord: {
+            components,
+          },
+        },
+      },
+      textLimit: 2000,
+      preferFollowUp: false,
+      chunkMode: "length",
+    });
+
+    expect(interaction.reply).toHaveBeenCalledWith({
+      components,
+    });
+    expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "sends embed-only native command replies with preferFollowUp=%s",
+    async (preferFollowUp) => {
+      const interaction = createInteraction();
+      const embeds = [{ title: "Status", description: "All systems operational" }];
+      const payload = { channelData: { discord: { embeds } } };
+
+      expect(hasRenderableReplyPayload(payload)).toBe(true);
+      await expect(
+        deliverDiscordInteractionReply({
+          interaction: interaction as never,
+          payload,
+          textLimit: 2000,
+          preferFollowUp,
+          responseEphemeral: true,
+          chunkMode: "length",
+        }),
+      ).resolves.toBe(true);
+
+      const sender = preferFollowUp ? interaction.followUp : interaction.reply;
+      expect(sender).toHaveBeenCalledWith({ embeds, ephemeral: true });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps native reply embeds on the first chunk with media=%s",
+    async (includeMedia) => {
+      const interaction = createInteraction();
+      const embeds = [{ title: "Status" }];
+      if (includeMedia) {
+        loadWebMediaMock.mockResolvedValue({
+          buffer: Buffer.from("image"),
+          fileName: "status.png",
+          contentType: "image/png",
+        });
+      }
+
+      await deliverDiscordInteractionReply({
+        interaction: interaction as never,
+        payload: {
+          text: "x".repeat(2_100),
+          ...(includeMedia ? { mediaUrls: ["file:///tmp/status.png"] } : {}),
+          channelData: { discord: { embeds } },
+        },
+        textLimit: 2000,
+        preferFollowUp: false,
+        chunkMode: "length",
+      });
+
+      expect(interaction.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ embeds, ...(includeMedia ? { files: expect.any(Array) } : {}) }),
+      );
+      expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
+    },
+  );
+
+  it("omits legacy content and embeds from native Components V2 replies", async () => {
+    const interaction = createInteraction();
+    const components = [{ type: 17, components: [{ type: 10, content: "Choose" }] }];
+
+    await deliverDiscordInteractionReply({
+      interaction: interaction as never,
+      payload: {
+        text: "legacy fallback",
+        channelData: {
+          discord: { components, embeds: [{ title: "legacy embed" }] },
+        },
+      },
+      textLimit: 2000,
+      preferFollowUp: false,
+      chunkMode: "length",
+    });
+
+    expect(interaction.reply).toHaveBeenCalledWith({ components });
+    expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "plural media URLs",
+      media: { mediaUrls: ["file:///tmp/sticker.webp"] },
+    },
+    {
+      name: "singular media URL after blank plural URLs",
+      media: { mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" },
+    },
+  ])(
+    "sends detected WebP media across a real interaction multipart request ($name)",
+    async ({ media }) => {
+      const loopback = await createDiscordLoopbackRest();
+      loadWebMediaMock.mockResolvedValue({
+        buffer: Buffer.from("webp"),
+        fileName: "sticker.webp",
+        contentType: "image/webp",
+        kind: "image",
+      });
+      const interaction = {
+        reply: vi.fn(async (data: unknown) =>
+          loopback.rest.post("/interactions/123/token/callback", {
+            body: { type: 4, data },
+          }),
+        ),
+        followUp: vi.fn(),
+      };
+
+      try {
+        const payload = { text: "sticker", ...media };
+        expect(hasRenderableReplyPayload(payload)).toBe(true);
+
+        await deliverDiscordInteractionReply({
+          interaction: interaction as never,
+          payload,
+          textLimit: 2000,
+          preferFollowUp: false,
+          chunkMode: "length",
+        });
+
+        expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
+          localRoots: undefined,
+        });
+        const upload = loopback.requests.find((request) => request.method === "POST");
+        expect(upload?.path).toContain("/interactions/123/token/callback");
+        expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+        expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
+        expect(upload?.body).toContain("Content-Type: image/webp");
+      } finally {
+        await loopback.close();
+      }
+    },
+  );
+});
+
+describe("settleDiscordInteractionWithoutVisibleReply", () => {
+  it("deletes a deferred slash-command loading response", async () => {
+    const interaction = {
+      responseState: "deferred",
+      deleteReply: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unacknowledged", "deferred-update", "replied"])(
+    "does not delete an interaction in the %s state",
+    async (responseState) => {
+      const interaction = {
+        responseState,
+        deleteReply: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+
+      expect(interaction.deleteReply).not.toHaveBeenCalled();
+    },
+  );
+});

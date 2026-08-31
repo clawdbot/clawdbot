@@ -1,34 +1,21 @@
 import Foundation
 
-public extension AnyCodable {
-    var stringValue: String? {
+extension AnyCodable {
+    public var stringValue: String? {
         self.value as? String
     }
 
-    var boolValue: Bool? {
-        if let value = self.value as? Bool {
-            return value
-        }
-        if let number = self.value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
-            return number.boolValue
-        }
+    public var boolValue: Bool? {
+        self.value as? Bool
+    }
+
+    public var intValue: Int? {
+        if let value = self.value as? any BinaryInteger { return Int(exactly: value) }
+        if let value = self.value as? any BinaryFloatingPoint { return Int(exactly: value) }
         return nil
     }
 
-    var intValue: Int? {
-        if let value = self.value as? Int {
-            return value
-        }
-        if let number = self.value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-            let value = number.doubleValue
-            if value > 0, value.rounded(.towardZero) == value, value <= Double(Int.max) {
-                return Int(value)
-            }
-        }
-        return nil
-    }
-
-    var doubleValue: Double? {
+    public var doubleValue: Double? {
         if let value = self.value as? Double {
             return value
         }
@@ -41,7 +28,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var dictionaryValue: [String: AnyCodable]? {
+    public var dictionaryValue: [String: AnyCodable]? {
         if let value = self.value as? [String: AnyCodable] {
             return value
         }
@@ -58,7 +45,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var arrayValue: [AnyCodable]? {
+    public var arrayValue: [AnyCodable]? {
         if let value = self.value as? [AnyCodable] {
             return value
         }
@@ -71,7 +58,7 @@ public extension AnyCodable {
         return nil
     }
 
-    var foundationValue: Any {
+    public var foundationValue: Any {
         switch self.value {
         case let dict as [String: AnyCodable]:
             dict.mapValues(\.foundationValue)

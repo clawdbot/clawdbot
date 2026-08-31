@@ -1,0 +1,76 @@
+name: Docs bug report
+description: Report documentation defects (incorrect, missing, outdated, or contradictory docs).
+title: "[Docs Bug]: "
+labels:
+  - bug
+  - docs
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report a documentation defect with concrete evidence from current docs behavior/content.
+        Please only report one documentation defect per submission.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence statement of what is wrong in the docs.
+      placeholder: The WhatsApp config example defines duplicate top-level keys in one JSON5 block.
+    validations:
+      required: true
+  - type: input
+    id: doc_paths
+    attributes:
+      label: Affected docs path(s) or URL(s)
+      description: Repo-relative docs file path(s) or published docs URL(s).
+      placeholder: docs/gateway/config-channels.md or https://docs.openclaw.ai/gateway/config-channels
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce / verify
+      description: Minimal steps to observe the docs defect in the current docs.
+      placeholder: |
+        1. Open docs/gateway/config-channels.md
+        2. Go to the WhatsApp example block
+        3. Observe duplicate top-level key definitions
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected docs behavior/content
+      description: What the docs should say/show instead.
+      placeholder: The example should use a single merged top-level object with no duplicate keys.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual docs behavior/content
+      description: What the docs currently say/show.
+      placeholder: The snippet defines the same top-level key twice in one object.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who is affected and practical consequence.
+      placeholder: Users who copy-paste the snippet can end up with ambiguous config behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Links/snippets/screenshots proving the docs defect.
+      placeholder: Include exact file links and line ranges.
+    validations:
+      required: true
+  - type: textarea
+    id: additional_information
+    attributes:
+      label: Additional information
+      description: Optional context, related issues/PRs, or constraints.

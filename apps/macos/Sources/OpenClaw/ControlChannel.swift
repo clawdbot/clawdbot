@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
@@ -39,6 +40,48 @@ enum ControlChannelError: Error, LocalizedError {
     }
 }
 
+struct ControlChannelStateDebouncer {
+    private let interval: TimeInterval
+    private var lastAppliedAt: Date
+
+    init(interval: TimeInterval = 0.5, lastAppliedAt: Date = .distantPast) {
+        self.interval = interval
+        self.lastAppliedAt = lastAppliedAt
+    }
+
+    mutating func delayBeforeApplying(
+        currentState: ControlChannel.ConnectionState,
+        newState: ControlChannel.ConnectionState,
+        now: Date) -> TimeInterval?
+    {
+        if Self.isTerminal(currentState) || Self.isTerminal(newState) {
+            self.lastAppliedAt = now
+            return nil
+        }
+
+        let elapsed = now.timeIntervalSince(self.lastAppliedAt)
+        guard elapsed < self.interval else {
+            self.lastAppliedAt = now
+            return nil
+        }
+
+        return self.interval - max(0, elapsed)
+    }
+
+    mutating func recordDeferredApply(at date: Date) {
+        self.lastAppliedAt = date
+    }
+
+    private static func isTerminal(_ state: ControlChannel.ConnectionState) -> Bool {
+        switch state {
+        case .connected, .disconnected:
+            true
+        case .connecting, .degraded:
+            false
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class ControlChannel {
@@ -60,6 +103,11 @@ final class ControlChannel {
         didSet {
             CanvasManager.shared.refreshDebugStatus()
             guard oldValue != self.state else { return }
+            if self.state != .connected {
+                self.lastPingMs = nil
+                self.authSourceLabel = nil
+            }
+            NotificationCenter.default.post(name: .controlChannelStateDidChange, object: nil)
             switch self.state {
             case .connected:
                 self.logger.info("control channel state -> connected")
@@ -85,6 +133,45 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
+    // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
+    private var pendingStateTask: Task<Void, Never>?
+    private var stateDebouncer = ControlChannelStateDebouncer()
+
+    private func setStateThrottled(_ newState: ConnectionState) {
+        let now = Date()
+        if let delay = self.stateDebouncer.delayBeforeApplying(
+            currentState: self.state,
+            newState: newState,
+            now: now)
+        {
+            self.pendingStateTask?.cancel()
+            self.pendingStateTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+                guard let self, !Task.isCancelled else { return }
+                self.pendingStateTask = nil
+                self.stateDebouncer.recordDeferredApply(at: Date())
+                self.applyState(newState)
+            }
+            return
+        }
+
+        self.cancelPendingStateTask()
+        self.applyState(newState)
+    }
+
+    private func cancelPendingStateTask() {
+        self.pendingStateTask?.cancel()
+        self.pendingStateTask = nil
+    }
+
+    private func applyState(_ newState: ConnectionState) {
+        self.state = newState
+    }
+
+    private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
+        UInt64(max(0, interval) * 1_000_000_000)
+    }
+
     private init() {
         self.startEventStream()
     }
@@ -105,11 +192,11 @@ final class ControlChannel {
                 self.logger.info(
                     "control channel configure mode=remote " +
                         "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.state = .connecting
+                self.setStateThrottled(.connecting)
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.refreshEndpoint(reason: "configure")
             } catch {
-                self.state = .degraded(error.localizedDescription)
+                self.setStateThrottled(.degraded(error.localizedDescription))
                 throw error
             }
         }
@@ -117,22 +204,20 @@ final class ControlChannel {
 
     func refreshEndpoint(reason: String) async {
         self.logger.info("control channel refresh endpoint reason=\(reason, privacy: .public)")
-        self.state = .connecting
+        self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
-            self.state = .connected
+            self.setStateThrottled(.connected)
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
-            let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+            self.setStateThrottled(.degraded(message))
         }
     }
 
     func disconnect() async {
+        self.setStateThrottled(.disconnected)
         await GatewayConnection.shared.shutdown()
-        self.state = .disconnected
-        self.lastPingMs = nil
-        self.authSourceLabel = nil
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
@@ -146,11 +231,11 @@ final class ControlChannel {
             let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
             let ms = Date().timeIntervalSince(start) * 1000
             self.lastPingMs = ms
-            self.state = .connected
+            self.setStateThrottled(.connected)
             return payload
         } catch {
-            let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
@@ -163,7 +248,8 @@ final class ControlChannel {
     func request(
         method: String,
         params: [String: AnyHashable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        retryTransportFailures: Bool = true) async throws -> Data
     {
         do {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
@@ -172,17 +258,35 @@ final class ControlChannel {
             let data = try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
-                timeoutMs: timeoutMs)
-            self.state = .connected
+                timeoutMs: timeoutMs,
+                retryTransportFailures: retryTransportFailures)
+            self.setStateThrottled(.connected)
             return data
         } catch {
-            let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
 
-    private func friendlyGatewayMessage(_ error: Error) -> String {
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                request,
+                retryTransportFailures: retryTransportFailures)
+            self.setStateThrottled(.connected)
+            return data
+        } catch {
+            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+            self.setStateThrottled(.degraded(message))
+            throw ControlChannelError.badResponse(message)
+        }
+    }
+
+    static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
         // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
@@ -192,12 +296,24 @@ final class ControlChannel {
             return authIssue.statusMessage
         }
 
+        let mode = ConnectionModeResolver.resolve(root: configRoot).mode
+        let transport = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
+        let localPort = GatewayEnvironment.gatewayPort()
+        let directURL = mode == .remote && transport.transport == .direct ? transport.directURL : nil
+        let endpoint = if let url = directURL, let host = url.host,
+                          let port = GatewayRemoteConfig.defaultPort(for: url)
+        {
+            "\(host.contains(":") && !host.hasPrefix("[") ? "[" + host + "]" : host):\(port)"
+        } else {
+            "localhost:\(localPort)"
+        }
+
         // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
         if let urlErr = error as? URLError,
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
         {
             let reason = urlErr.failureURLString ?? urlErr.localizedDescription
-            let tokenKey = CommandResolver.connectionModeIsRemote()
+            let tokenKey = mode == .remote
                 ? "gateway.remote.token"
                 : "gateway.auth.token"
             return
@@ -213,33 +329,42 @@ final class ControlChannel {
         if nsError.domain == "Gateway",
            nsError.localizedDescription.contains("hello failed (unexpected response)")
         {
-            let port = GatewayEnvironment.gatewayPort()
+            if directURL != nil {
+                return "Gateway handshake got non-gateway data on \(endpoint); check the Gateway URL and server."
+            }
             return """
-            Gateway handshake got non-gateway data on localhost:\(port).
+            Gateway handshake got non-gateway data on \(endpoint).
             Another process is using that port or the SSH forward failed.
-            Stop the local gateway/port-forward on \(port) and retry Remote mode.
+            Stop the local gateway/port-forward on \(localPort) and retry Remote mode.
             """
         }
 
         if let urlError = error as? URLError {
-            let port = GatewayEnvironment.gatewayPort()
             switch urlError.code {
             case .cancelled:
-                return "Gateway connection was closed; start the gateway (localhost:\(port)) and retry."
+                return "Gateway connection was closed; start the gateway (\(endpoint)) and retry."
             case .cannotFindHost, .cannotConnectToHost:
-                let isRemote = CommandResolver.connectionModeIsRemote()
-                if isRemote {
+                if directURL != nil {
+                    return "Cannot reach gateway at \(endpoint); check the Gateway URL and remote gateway."
+                }
+                if mode == .remote {
                     return """
-                    Cannot reach gateway at localhost:\(port).
+                    Cannot reach gateway at \(endpoint).
                     Remote mode uses an SSH tunnel—check the SSH target and that the tunnel is running.
                     """
                 }
-                return "Cannot reach gateway at localhost:\(port); ensure the gateway is running."
+                return "Cannot reach gateway at \(endpoint); ensure the gateway is running."
             case .networkConnectionLost:
                 return "Gateway connection dropped; gateway likely restarted—retry."
             case .timedOut:
-                return "Gateway request timed out; check gateway on localhost:\(port)."
+                return "Gateway request timed out; check gateway on \(endpoint)."
             case .notConnectedToInternet:
+                if Self.isLikelyLocalNetworkPermissionBlock(configRoot: configRoot) {
+                    return """
+                    macOS is blocking OpenClaw Local Network access.
+                    Allow OpenClaw in System Settings → Privacy & Security → Local Network, then relaunch the app.
+                    """
+                }
                 return "No network connectivity; cannot reach gateway."
             default:
                 break
@@ -247,14 +372,28 @@ final class ControlChannel {
         }
 
         if nsError.domain == "Gateway", nsError.code == 5 {
-            let port = GatewayEnvironment.gatewayPort()
-            return "Gateway request timed out; check the gateway process on localhost:\(port)."
+            return "Gateway request timed out; check the gateway process on \(endpoint)."
         }
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
         let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
         return "Gateway error: \(trimmed)"
+    }
+
+    private static func isLikelyLocalNetworkPermissionBlock(configRoot: [String: Any]) -> Bool {
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
+        guard ConnectionModeResolver.resolve(root: configRoot).mode == .remote,
+              resolution.transport == .direct,
+              let url = resolution.directURL,
+              url.scheme?.lowercased() == "ws",
+              let host = url.host,
+              GatewayRemoteConfig.isTrustedPlaintextRemoteHost(host),
+              !LoopbackHost.isLoopbackHost(host)
+        else {
+            return false
+        }
+        return true
     }
 
     private func scheduleRecovery(reason: String) {
@@ -283,10 +422,10 @@ final class ControlChannel {
             if mode == .remote {
                 do {
                     let port = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                    self.logger.info("control channel recovery ensured SSH tunnel port=\(port, privacy: .public)")
+                    self.logger.info("control channel recovery ensured remote endpoint port=\(port, privacy: .public)")
                 } catch {
                     self.logger.error(
-                        "control channel recovery tunnel failed \(error.localizedDescription, privacy: .public)")
+                        "control channel remote endpoint failed \(error.localizedDescription, privacy: .public)")
                 }
             }
 
@@ -364,11 +503,45 @@ final class ControlChannel {
                 NotificationCenter.default.post(name: .controlHeartbeat, object: data)
             }
         case let .event(evt) where evt.event == "shutdown":
-            self.state = .degraded("gateway shutdown")
+            self.setStateThrottled(.degraded("gateway shutdown"))
+        case let .event(evt) where evt.event == "users.prefs.changed":
+            // The gateway targets this event at connections bound to the
+            // caller's own profile; receipt means our profile appearance
+            // changed on another device.
+            self.refreshProfileAccent()
         case .snapshot:
-            self.state = .connected
+            self.setStateThrottled(.connected)
+            self.refreshProfileAccent()
         default:
             break
+        }
+    }
+
+    private func refreshProfileAccent() {
+        Task {
+            let accent = await Self.fetchProfileAccentHex()
+            AppStateStore.shared.profileAccentHex = accent
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). nil covers profile-less
+    /// connections (no_durable_identity), older gateways without the method,
+    /// and malformed stored values, so the gateway seam color stays the
+    /// fallback. Goes straight through GatewayConnection: routing this through
+    /// ControlChannel.request would mark the channel degraded on the expected
+    /// older-gateway failure.
+    private static func fetchProfileAccentHex() async -> String? {
+        do {
+            let data = try await GatewayConnection.shared.requestRaw(
+                method: "users.prefs.get",
+                params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
+                timeoutMs: 8000)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["status"] as? String == "ok"
+            else { return nil }
+            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+        } catch {
+            return nil
         }
     }
 
@@ -421,6 +594,6 @@ final class ControlChannel {
 }
 
 extension Notification.Name {
+    static let controlChannelStateDidChange = Notification.Name("openclaw.control-channel.state-did-change")
     static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
-    static let controlAgentEvent = Notification.Name("openclaw.control.agent")
 }

@@ -14,50 +14,48 @@ run_step() {
   "$@"
 }
 
-run_protocol_ci_mirror() {
-  local targets=(
-    "dist/protocol.schema.json"
-    "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"
-    "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"
-  )
-  local before after
-  before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
-
-  run_step pnpm protocol:gen
-  run_step pnpm protocol:gen:swift
-
-  after="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
-  if [[ "$before" != "$after" ]]; then
-    echo "Protocol generation changed tracked outputs beyond the pre-run worktree." >&2
-    echo "Refresh generated protocol files and include the updated outputs before pushing." >&2
-    git --no-pager diff -- "${targets[@]}"
-    return 1
-  fi
-}
-
 has_native_swift_changes() {
+  local native_paths=(
+    apps/macos
+    apps/macos-mlx-tts
+    apps/ios
+    apps/shared/OpenClawKit
+    apps/swabble
+    config/swiftformat
+    config/swiftlint.yml
+    scripts/check-swift-tools.sh
+    scripts/format-swift.sh
+    scripts/install-swift-tools.sh
+    scripts/install-xcodegen.sh
+    scripts/ios-write-swift-filelist.mjs
+    scripts/ios-write-swift-filelist.mts
+    scripts/lint-swift.sh
+    scripts/test-macos-native.mts
+  )
+
   if git rev-parse --verify --quiet origin/main >/dev/null; then
-    if git diff --name-only --relative origin/main...HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .; then
+    if git diff --name-only --relative origin/main...HEAD -- "${native_paths[@]}" | rg -q .; then
       return 0
     fi
   fi
 
   if git rev-parse --verify --quiet HEAD^ >/dev/null; then
-    git diff --name-only --relative HEAD^..HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+    git diff --name-only --relative HEAD^..HEAD -- "${native_paths[@]}" | rg -q .
     return $?
   fi
 
-  git show --name-only --relative --pretty='' HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+  git show --name-only --relative --pretty='' HEAD -- "${native_paths[@]}" | rg -q .
 }
 
 run_linux_ci_mirror() {
   run_step pnpm check
   run_step pnpm build:strict-smoke
   run_step pnpm lint:ui:no-raw-window-open
-  run_protocol_ci_mirror
-  run_step pnpm canvas:a2ui:bundle
-  run_step pnpm exec vitest run --config vitest.extensions.config.ts --maxWorkers=1
-  run_step env CI=true pnpm exec vitest run --config vitest.unit.config.ts --maxWorkers=1
+  run_step pnpm protocol:gen
+  run_step pnpm protocol:check:swift
+  run_step pnpm plugins:assets:build
+  run_step node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
+  run_step env CI=true node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
 
   log_step "OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
   OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
@@ -81,10 +79,12 @@ run_macos_ci_mirror() {
     return 0
   fi
 
-  run_step swiftlint --config .swiftlint.yml
-  run_step swiftformat --lint apps/macos/Sources --config .swiftformat
+  run_step pnpm lint:swift
+  run_step pnpm format:swift
   run_step swift build --package-path apps/macos --configuration release
-  run_step swift test --package-path apps/macos --parallel
+  echo "Native tests were NOT run: use the disposable macos-swift GitHub CI job for this exact commit." >&2
+  echo "Local lint/build passed; prepush cannot certify the native suite on an operator desktop." >&2
+  return 1
 }
 
 main() {

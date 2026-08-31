@@ -1,16 +1,21 @@
-import { Type } from "@sinclair/typebox";
-import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
+// Matrix plugin module implements actions behavior.
 import {
   createActionGate,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionContext,
-  type ChannelMessageActionName,
-  type ChannelMessageToolDiscovery,
-  type ChannelToolSend,
-} from "./runtime-api.js";
+  ToolAuthorizationError,
+} from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+  ChannelMessageToolSchemaContribution,
+} from "openclaw/plugin-sdk/channel-contract";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
+import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -18,6 +23,7 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "poll-vote",
   "react",
   "reactions",
+  "emoji-list",
   "read",
   "edit",
   "delete",
@@ -29,10 +35,38 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "channel-info",
   "permissions",
 ]);
+const MATRIX_PROFILE_MEDIA_PROPERTIES = {
+  avatarUrl: Type.Optional(
+    Type.String({
+      description:
+        "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatar_url: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatarPath: Type.Optional(
+    Type.String({
+      description:
+        "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+  avatar_path: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+} as const;
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
   encryptionEnabled: boolean;
+  senderIsOwner?: boolean;
 }) {
   const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
   if (params.gate("messages")) {
@@ -44,13 +78,14 @@ function createMatrixExposedActions(params: {
   if (params.gate("reactions")) {
     actions.add("react");
     actions.add("reactions");
+    actions.add("emoji-list");
   }
   if (params.gate("pins")) {
     actions.add("pin");
     actions.add("unpin");
     actions.add("list-pins");
   }
-  if (params.gate("profile")) {
+  if (params.gate("profile") && params.senderIsOwner === true) {
     actions.add("set-profile");
   }
   if (params.gate("memberInfo")) {
@@ -59,14 +94,15 @@ function createMatrixExposedActions(params: {
   if (params.gate("channelInfo")) {
     actions.add("channel-info");
   }
-  if (params.encryptionEnabled && params.gate("verification")) {
+  if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
     actions.add("permissions");
   }
   return actions;
 }
 
-function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
+function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
   return {
+    actions: ["set-profile"],
     properties: {
       displayName: Type.Optional(
         Type.String({
@@ -78,70 +114,75 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
           description: "snake_case alias of displayName for Matrix self-profile update actions.",
         }),
       ),
-      avatarUrl: Type.Optional(
-        Type.String({
-          description:
-            "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatar_url: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatarPath: Type.Optional(
-        Type.String({
-          description:
-            "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
-      avatar_path: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
+      ...MATRIX_PROFILE_MEDIA_PROPERTIES,
     },
   };
 }
 
+function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
+  if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
+    return null;
+  }
+  const account = resolveMatrixAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  });
+  return account.enabled && account.configured ? account : null;
+}
+
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
+  providerOwnedReadGates: true,
+  describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
-      return { actions: [], capabilities: [] };
-    }
-    const account = resolveMatrixAccount({
-      cfg: resolvedCfg,
-      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
-    });
-    if (!account.enabled || !account.configured) {
+    const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });
+    if (!account) {
       return { actions: [], capabilities: [] };
     }
     const gate = createActionGate(account.config.actions);
     const actions = createMatrixExposedActions({
       gate,
       encryptionEnabled: account.config.encryption === true,
+      senderIsOwner,
     });
     const listedActions = Array.from(actions);
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("set-profile")) {
+      schema.push(buildMatrixProfileToolSchema());
+    }
+    if (actions.has("react")) {
+      schema.push({
+        actions: ["react", "reactions"],
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description: `Unicode emoji or custom emote shortcode.${actions.has("emoji-list") ? ' Discover room and personal custom emotes with action:"emoji-list".' : ""}`,
+            }),
+          ),
+        },
+      });
+    }
     return {
       actions: listedActions,
-      capabilities: [],
-      schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
+      capabilities: ["presentation"],
+      schema: schema.length > 1 ? schema : (schema[0] ?? null),
+      mediaSourceParams: listedActions.includes("set-profile")
+        ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
+        : null,
     };
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
-  extractToolSend: ({ args }): ChannelToolSend | null => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
+  extractToolSend: ({ args }) => {
+    return extractToolSend(args, "sendMessage");
+  },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
       return null;
     }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    return { to };
+    const account = resolveMatrixActionAccount({
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId,
+    });
+    return account && createActionGate(account.config.actions)("messages") ? payload : null;
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
@@ -153,7 +194,18 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           ...(accountId ? { accountId } : {}),
         },
         cfg as CoreConfig,
-        { mediaLocalRoots },
+        {
+          ...(action === "send" && ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+          mediaLocalRoots,
+          readContext: {
+            accountId,
+            requesterAccountId: ctx.requesterAccountId,
+            currentChannelId: ctx.toolContext?.currentChannelId,
+            currentChannelProvider: ctx.toolContext?.currentChannelProvider,
+            currentChatType: ctx.toolContext?.currentChatType,
+            conversationReadOrigin: ctx.conversationReadOrigin,
+          },
+        },
       );
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
@@ -170,6 +222,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const content = readStringParam(params, "message", {
         required: !mediaUrl,
         allowEmpty: true,
+        trim: false,
       });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
@@ -212,7 +265,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "reactions",
         roomId: resolveRoomId(),
@@ -221,20 +276,40 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       });
     }
 
+    if (action === "emoji-list") {
+      const roomId =
+        readStringParam(params, "roomId") ??
+        readStringParam(params, "channelId") ??
+        readStringParam(params, "to") ??
+        (ctx.toolContext?.currentChannelProvider === "matrix"
+          ? ctx.toolContext.currentChannelId
+          : undefined);
+      if (!roomId) {
+        throw new Error("Matrix emoji-list requires a roomId or current Matrix conversation.");
+      }
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
+      return await dispatch({ action: "emoji-list", roomId, limit });
+    }
+
     if (action === "read") {
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "readMessages",
         roomId: resolveRoomId(),
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
+        threadId: readStringParam(params, "threadId"),
       });
     }
 
     if (action === "edit") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const content = readStringParam(params, "message", { required: true });
+      const content = readStringParam(params, "message", { required: true, trim: false });
       return await dispatch({
         action: "editMessage",
         roomId: resolveRoomId(),
@@ -265,6 +340,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "set-profile") {
+      if (ctx.senderIsOwner !== true) {
+        throw new ToolAuthorizationError("Matrix profile updates require owner access.");
+      }
       const avatarPath =
         readStringParam(params, "avatarPath") ??
         readStringParam(params, "path") ??
@@ -282,7 +360,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       return await dispatch({
         action: "memberInfo",
         userId,
-        roomId: readStringParam(params, "roomId") ?? readStringParam(params, "channelId"),
+        roomId: resolveRoomId(),
       });
     }
 
@@ -294,13 +372,14 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
-      const operation = (
+      if (ctx.senderIsOwner !== true) {
+        throw new ToolAuthorizationError("Matrix verification actions require owner access.");
+      }
+      const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
-        readStringParam(params, "mode") ??
-        "verification-list"
-      )
-        .trim()
-        .toLowerCase();
+          readStringParam(params, "mode") ??
+          "verification-list",
+      );
       const operationToAction: Record<string, string> = {
         "encryption-status": "encryptionStatus",
         "verification-status": "verificationStatus",

@@ -1,0 +1,127 @@
+title: Cron condition watcher
+
+scenario:
+  id: cron-condition-watcher
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.cron-rpcs
+  objective: Verify quiet condition-watcher ticks persist state without run rows, then one natural fired tick runs the payload and disarms a once trigger.
+  successCriteria:
+    - At least two quiet trigger evaluations persist replacement state without creating run history.
+    - A later natural scheduler tick runs exactly one payload with triggerFired evidence.
+    - once disables the job only after the fired payload succeeds.
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/cron/trigger-script.ts
+    - src/cron/service/timer.ts
+    - src/agents/code-mode.ts
+  gatewayConfigPatch:
+    cron:
+      triggers:
+        enabled: true
+  execution:
+    kind: flow
+    summary: Poll a stateful headless condition, prove quiet ticks stay artifact-free, then observe one natural fired command payload and once disarm.
+    channel: qa-channel
+    timeoutMs: 180000
+
+flow:
+  steps:
+    - name: quiet ticks persist state without run history
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: startedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - name:
+                expr: "`qa-condition-watcher-${randomUUID()}`"
+              enabled: true
+              schedule:
+                kind: every
+                everyMs: 30000
+              trigger:
+                script: "const count = (trigger.state?.count ?? 0) + 1; return { fire: count >= 3, state: { count } };"
+                once: true
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: command
+                argv:
+                  - node
+                  - -e
+                  - "process.stdout.write('QA-CONDITION-WATCHER-OK')"
+              delivery:
+                mode: none
+            - timeoutMs: 30000
+        - set: jobId
+          value:
+            expr: added.id
+        - assert:
+            expr: Boolean(jobId)
+            message: missing condition-watcher job id
+        - call: waitForCondition
+          saveAs: quiet
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const job = await env.gateway.call('cron.get', { id: jobId }, { timeoutMs: 30000 }); const runs = await env.gateway.call('cron.runs', { id: jobId, limit: 10 }, { timeoutMs: 30000 }); return job.state?.triggerEvalCount === 2 && job.state?.triggerState?.count === 2 && runs.entries.length === 0 ? { job, runs } : undefined; })()"
+            - 90000
+            - 250
+        - assert:
+            expr: "quiet.job.state.triggerEvalCount === 2 && quiet.job.state.triggerState?.count === 2 && quiet.runs.entries.length === 0"
+            message:
+              expr: "`expected quiet state with no runs, got ${JSON.stringify(quiet)}`"
+      detailsExpr: "`job=${jobId} quietEvals=${quiet.job.state.triggerEvalCount} runRows=${quiet.runs.entries.length}`"
+
+    - name: natural fired tick runs once and disarms
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: env.gateway.call.bind(env.gateway)
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: startedAt
+              timeoutMs: 60000
+        - call: env.gateway.call
+          saveAs: finalJob
+          args:
+            - cron.get
+            - id:
+                ref: jobId
+            - timeoutMs: 30000
+        - call: env.gateway.call
+          saveAs: finalRuns
+          args:
+            - cron.runs
+            - id:
+                ref: jobId
+              limit: 10
+            - timeoutMs: 30000
+        - assert:
+            expr: "completedRun?.status === 'ok' && completedRun?.summary === 'QA-CONDITION-WATCHER-OK' && completedRun?.triggerFired === true"
+            message:
+              expr: "`expected fired command run, got ${JSON.stringify(completedRun)}`"
+        - assert:
+            expr: "finalJob.enabled === false && finalJob.state?.triggerEvalCount === 3 && finalJob.state?.triggerState?.count === 3"
+            message:
+              expr: "`expected once disarm with persisted state, got ${JSON.stringify(finalJob)}`"
+        - assert:
+            expr: "finalRuns.entries.length === 1 && finalRuns.entries[0].triggerFired === true"
+            message:
+              expr: "`expected exactly one fired run row, got ${JSON.stringify(finalRuns.entries)}`"
+      detailsExpr: "`status=${completedRun.status} triggerFired=${completedRun.triggerFired} evals=${finalJob.state.triggerEvalCount} enabled=${finalJob.enabled}`"

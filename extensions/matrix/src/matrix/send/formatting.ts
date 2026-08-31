@@ -1,5 +1,10 @@
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+// Matrix helper module supports formatting behavior.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
+  markdownToMatrixBody,
+  markdownToMatrixHtml,
   resolveMatrixMentionsInMarkdown,
   renderMarkdownToMatrixHtmlWithMentions,
   type MatrixMentions,
@@ -13,20 +18,49 @@ import {
   type MatrixRelation,
   type MatrixReplyRelation,
   type MatrixTextContent,
+  type MatrixTextMsgType,
   type MatrixThreadRelation,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
+async function renderMatrixFormattedContent(params: {
+  client: MatrixClient;
+  markdown?: string | null;
+  preparedBody?: string;
+  includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
+}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
+  const markdown = params.markdown ?? "";
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
+  if (params.includeMentions === false) {
+    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
+    return { body, html: html || undefined };
+  }
+  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
+    markdown,
+    client: params.client,
+    tableMode: params.tableMode,
+  });
+  return { body, html, mentions };
+}
+
+export function buildTextContent(
+  body: string,
+  relation?: MatrixRelation,
+  opts: {
+    msgtype?: MatrixTextMsgType;
+  } = {},
+): MatrixTextContent {
+  const msgtype = opts.msgtype ?? MsgType.Text;
   return relation
     ? {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
         "m.relates_to": relation,
       }
     : {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
       };
 }
@@ -35,12 +69,23 @@ export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
   markdown?: string | null;
+  preparedBody?: string;
+  includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
-    markdown: params.markdown ?? "",
+  const { body, html, mentions } = await renderMatrixFormattedContent({
     client: params.client,
+    markdown: params.markdown,
+    preparedBody: params.preparedBody,
+    includeMentions: params.includeMentions,
+    tableMode: params.tableMode,
   });
-  params.content["m.mentions"] = mentions;
+  params.content.body = body || params.content.body;
+  if (mentions) {
+    params.content["m.mentions"] = mentions;
+  } else {
+    delete params.content["m.mentions"];
+  }
   if (!html) {
     delete params.content.format;
     delete params.content.formatted_body;
@@ -111,12 +156,16 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
 
 export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
   const trimmed = threadId.trim();
-  return {
+  const relation: MatrixThreadRelation = {
     rel_type: RelationType.Thread,
     event_id: trimmed,
-    is_falling_back: true,
-    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
   };
+  const fallbackReplyToId = replyToId?.trim();
+  if (fallbackReplyToId) {
+    relation.is_falling_back = true;
+    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
+  }
+  return relation;
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
@@ -150,7 +199,7 @@ export function resolveMatrixVoiceDecision(opts: {
 function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
   // Matrix currently shares the core voice compatibility policy.
   // Keep this wrapper as the seam if Matrix policy diverges later.
-  return getCore().media.isVoiceCompatibleAudio({
+  return isVoiceMessageCompatibleAudio({
     contentType: opts.contentType,
     fileName: opts.fileName,
   });

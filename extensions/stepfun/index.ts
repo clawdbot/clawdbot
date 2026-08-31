@@ -4,6 +4,8 @@ import {
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyStepFunPlanConfig,
   applyStepFunPlanConfigCn,
@@ -38,7 +40,7 @@ function inferRegionFromBaseUrl(baseUrl: string | undefined): StepFunRegion | un
     return undefined;
   }
   try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
     if (host === "api.stepfun.com") {
       return "cn";
     }
@@ -86,7 +88,7 @@ function resolveDefaultBaseUrl(surface: StepFunSurface, region: StepFunRegion): 
   return region === "cn" ? STEPFUN_STANDARD_CN_BASE_URL : STEPFUN_STANDARD_INTL_BASE_URL;
 }
 
-function resolveStepFunCatalog(
+async function resolveStepFunCatalog(
   ctx: ProviderCatalogContext,
   params: { providerId: string; surface: StepFunSurface },
 ) {
@@ -105,11 +107,15 @@ function resolveStepFunCatalog(
   // Keep discovery working for legacy/manual auth profiles that resolved a
   // key but do not encode region in the profile id.
   const baseUrl = explicitBaseUrl ?? resolveDefaultBaseUrl(params.surface, region ?? "intl");
+  const providerConfig =
+    params.surface === "plan" ? buildStepFunPlanProvider(baseUrl) : buildStepFunProvider(baseUrl);
   return {
-    provider:
-      params.surface === "plan"
-        ? { ...buildStepFunPlanProvider(baseUrl), apiKey }
-        : { ...buildStepFunProvider(baseUrl), apiKey },
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: params.providerId,
+      providerConfig,
+      apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+    }),
   };
 }
 
@@ -144,6 +150,7 @@ function createStepFunApiKeyMethod(params: {
     profileIds: resolveProfileIds(params.region),
     allowProfile: false,
     defaultModel: params.defaultModel,
+    preserveExistingPrimary: true,
     expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
     applyConfig: params.applyConfig,
     wizard: {
@@ -203,6 +210,10 @@ export default definePluginEntry({
             surface: "standard",
           }),
       },
+      staticCatalog: {
+        order: "paired",
+        run: async () => ({ provider: buildStepFunProvider() }),
+      },
     });
 
     api.registerProvider({
@@ -245,6 +256,10 @@ export default definePluginEntry({
             providerId: STEPFUN_PLAN_PROVIDER_ID,
             surface: "plan",
           }),
+      },
+      staticCatalog: {
+        order: "paired",
+        run: async () => ({ provider: buildStepFunPlanProvider() }),
       },
     });
   },

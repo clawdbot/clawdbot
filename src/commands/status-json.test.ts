@@ -1,3 +1,4 @@
+// Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { statusJsonCommand } from "./status-json.js";
@@ -75,6 +76,34 @@ function createScanResult() {
   };
 }
 
+function createExpectedStatusPayload() {
+  return {
+    ok: true,
+    configuredChannels: [],
+    os: { platform: "linux" },
+    update: { installKind: "npm", git: { tag: null, branch: null } },
+    updateChannel: "stable",
+    updateChannelSource: "config",
+    memory: null,
+    memoryPlugin: null,
+    gateway: {
+      mode: "local",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: false,
+      connectLatencyMs: null,
+      self: null,
+      error: null,
+      authWarning: null,
+    },
+    gatewayService: { installed: false },
+    nodeService: { installed: false },
+    agents: [],
+    secretDiagnostics: [],
+  };
+}
+
 describe("statusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -95,23 +124,71 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).not.toHaveProperty("securityAudit");
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toEqual(createExpectedStatusPayload());
+    expect(payload).not.toHaveProperty("securityAudit");
   });
 
-  it("includes security audit details only when --all is requested", async () => {
+  it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const { runtime, logs } = createRuntimeCapture();
+    const compatibilityNotice = {
+      pluginId: "legacy-plugin",
+      code: "hook-only",
+      severity: "warn",
+      message: "plugin registers only legacy hooks",
+    };
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      pluginCompatibility: [compatibilityNotice],
+    });
 
     await statusJsonCommand({ all: true }, runtime);
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: expect.any(Object),
-      sourceConfig: expect.any(Object),
+    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
+      config: { update: { channel: "stable" } },
+      sourceConfig: {},
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
     });
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toEqual({
+      ...createExpectedStatusPayload(),
+      securityAudit: {
+        summary: { critical: 1, warn: 0, info: 0 },
+        findings: [],
+      },
+      pluginCompatibility: {
+        count: 1,
+        warnings: [compatibilityNotice],
+      },
+    });
+  });
+
+  it("reports deep gateway probe failures and runs the documented security audit", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayReachable: true,
+    });
+    mocks.callGateway.mockImplementation(async (params: { method?: string }) => {
+      if (params.method === "health") {
+        throw new Error("gateway health probe timed out");
+      }
+      return null;
+    });
+
+    await statusJsonCommand({ deep: true }, runtime);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      health?: { error?: string };
+      securityAudit?: { summary?: { critical?: number } };
+    };
+    expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
+    expect(payload.securityAudit?.summary?.critical).toBe(1);
   });
 });

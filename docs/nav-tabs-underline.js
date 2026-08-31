@@ -1,3 +1,7 @@
+/**
+ * Docs UI enhancement that mirrors the active nav tab underline with a stable
+ * animated underline element.
+ */
 (() => {
   const NAV_TABS_SELECTOR = ".nav-tabs";
   const ACTIVE_UNDERLINE_SELECTOR = ".nav-tabs-item > div.bg-primary";

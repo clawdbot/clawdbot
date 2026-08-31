@@ -5,54 +5,53 @@ import OSLog
 final class ConnectionModeCoordinator {
     static let shared = ConnectionModeCoordinator()
 
+    struct Transition {
+        private(set) var generation: UInt64 = 0
+        private(set) var mode: AppState.ConnectionMode?
+
+        mutating func begin(_ mode: AppState.ConnectionMode) -> UInt64 {
+            self.generation &+= 1
+            self.mode = mode
+            return self.generation
+        }
+
+        func isCurrent(_ generation: UInt64, mode: AppState.ConnectionMode) -> Bool {
+            self.generation == generation && self.mode == mode
+        }
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
-    private var lastMode: AppState.ConnectionMode?
+    private var transition = Transition()
+    private var portSweepTask: Task<Void, Never>?
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
-        if let lastMode = self.lastMode, lastMode != mode {
+        self.portSweepTask?.cancel()
+        let previousMode = self.transition.mode
+        let applyGeneration = self.transition.begin(mode)
+        if let previousMode, previousMode != mode {
             GatewayProcessManager.shared.clearLastFailure()
             NodesStore.shared.lastError = nil
         }
-        self.lastMode = mode
+        if mode != .remote {
+            _ = await NodeServiceManager.stop()
+            guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
+            NodesStore.shared.lastError = nil
+            await RemoteTunnelManager.shared.stopAll()
+            guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
+            WebChatManager.shared.resetTunnels()
+        }
+
         switch mode {
         case .unconfigured:
-            _ = await NodeServiceManager.stop()
-            NodesStore.shared.lastError = nil
-            await RemoteTunnelManager.shared.stopAll()
-            WebChatManager.shared.resetTunnels()
             GatewayProcessManager.shared.stop()
-            await GatewayConnection.shared.shutdown()
             await ControlChannel.shared.disconnect()
-            Task.detached { await PortGuardian.shared.sweep(mode: .unconfigured) }
+            guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
 
         case .local:
-            _ = await NodeServiceManager.stop()
-            NodesStore.shared.lastError = nil
-            await RemoteTunnelManager.shared.stopAll()
-            WebChatManager.shared.resetTunnels()
-            let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
-            if shouldStart {
-                GatewayProcessManager.shared.setActive(true)
-                if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
-                    mode: .local,
-                    paused: paused)
-                {
-                    Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }
-                }
-                _ = await GatewayProcessManager.shared.waitForGatewayReady()
-            } else {
-                GatewayProcessManager.shared.stop()
-            }
-            do {
-                try await ControlChannel.shared.configure(mode: .local)
-            } catch {
-                // Control channel will mark itself degraded; nothing else to do here.
-                self.logger.error(
-                    "control channel local configure failed: \(error.localizedDescription, privacy: .public)")
-            }
-            Task.detached { await PortGuardian.shared.sweep(mode: .local) }
+            await self.applyLocalMode(paused: paused, generation: applyGeneration)
+            guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
 
         case .remote:
             // Never run a local gateway in remote mode.
@@ -61,19 +60,51 @@ final class ConnectionModeCoordinator {
 
             do {
                 NodesStore.shared.lastError = nil
-                if let error = await NodeServiceManager.start() {
+                let nodeError = await NodeServiceManager.start()
+                guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
+                if let error = nodeError {
                     NodesStore.shared.lastError = "Node service start failed: \(error)"
                 }
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
+                guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
                 let settings = CommandResolver.connectionSettings()
                 try await ControlChannel.shared.configure(mode: .remote(
                     target: settings.target,
                     identity: settings.identity))
+                guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
             } catch {
+                guard self.transition.isCurrent(applyGeneration, mode: mode) else { return }
                 self.logger.error("remote tunnel/configure failed: \(error.localizedDescription, privacy: .public)")
             }
+        }
 
-            Task.detached { await PortGuardian.shared.sweep(mode: .remote) }
+        self.portSweepTask = Task { await PortGuardian.shared.sweep(mode: mode) }
+    }
+
+    private func applyLocalMode(paused: Bool, generation: UInt64) async {
+        if GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused) {
+            GatewayProcessManager.shared.setActive(true)
+            await GatewayProcessManager.shared.waitForStartupAttempt()
+            guard self.transition.isCurrent(generation, mode: .local) else { return }
+            var launchAgentInstalled = false
+            if GatewayAutostartPolicy.shouldEnsureLaunchAgent(mode: .local, paused: paused) {
+                launchAgentInstalled = await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded()
+            }
+            guard self.transition.isCurrent(generation, mode: .local) else { return }
+            // Finish persistence before readiness so a newer lifecycle cannot clear its repair marker.
+            _ = await GatewayProcessManager.shared.waitForGatewayReady(
+                launchAgentInstalled: launchAgentInstalled)
+            guard self.transition.isCurrent(generation, mode: .local) else { return }
+        } else {
+            GatewayProcessManager.shared.stop()
+        }
+
+        do {
+            try await ControlChannel.shared.configure(mode: .local)
+        } catch {
+            guard self.transition.isCurrent(generation, mode: .local) else { return }
+            self.logger.error(
+                "control channel local configure failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

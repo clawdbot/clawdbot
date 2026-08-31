@@ -1,4 +1,6 @@
+// Account lookup tests cover account matching by id, alias, and chat metadata.
 import { describe, expect, it } from "vitest";
+import { normalizeAccountId as normalizeRoutingAccountId } from "./account-id.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
 
 function createAccountsWithPrototypePollution() {
@@ -73,6 +75,33 @@ describe("resolveNormalizedAccountEntry", () => {
       expected: {
         id: "ops",
       },
+    },
+    {
+      name: "does not resolve blocked raw keys as the default account",
+      accounts: JSON.parse('{"__proto__":{"id":"blocked"}}') as Record<string, { id: string }>,
+      resolve: (accounts: Record<string, { id: string }>) =>
+        resolveNormalizedAccountEntry(accounts, "default", normalizeRoutingAccountId),
+      expected: undefined,
+    },
+    {
+      name: "does not resolve keys that normalize to blocked object keys",
+      accounts: {
+        "constructor ": { id: "blocked" },
+      } as Record<string, { id: string }>,
+      resolve: (accounts: Record<string, { id: string }>) =>
+        resolveNormalizedAccountEntry(accounts, "constructor", (accountId) =>
+          accountId.trim().toLowerCase(),
+        ),
+      expected: undefined,
+    },
+    {
+      name: "does not resolve invalid raw keys through the default account fallback",
+      accounts: {
+        "constructor ": { id: "blocked" },
+      } as Record<string, { id: string }>,
+      resolve: (accounts: Record<string, { id: string }>) =>
+        resolveNormalizedAccountEntry(accounts, "default", normalizeRoutingAccountId),
+      expected: undefined,
     },
     {
       name: "ignores prototype-chain values",

@@ -1,0 +1,6 @@
+{"message":{"role":"system","content":"Curated replay fixture: approval denial then safe retry."}}
+{"message":{"role":"user","content":"Read the guarded config file, but do not modify anything without approval."}}
+{"message":{"role":"assistant","content":"I will request the read and stop before any write."}}
+{"message":{"role":"tool","content":"approval denied for write attempt; read-only path remains allowed"}}
+{"message":{"role":"user","content":"Retry with read-only inspection and summarize the safe path."}}
+{"message":{"role":"assistant","content":"The safe path is read-only inspection followed by a summary."}}

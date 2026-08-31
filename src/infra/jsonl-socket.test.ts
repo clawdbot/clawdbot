@@ -1,121 +1,151 @@
+// Covers JSONL socket request framing and response handling.
+import { getEventListeners } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import timers from "node:timers";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
-async function listenOnSocket(server: net.Server, socketPath: string): Promise<boolean> {
-  try {
+async function withSocketServer(
+  server: net.Server,
+  run: (socketPath: string) => Promise<void>,
+): Promise<void> {
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  await withTestDir({ prefix: "oc-jsonl-", parentDir: "/tmp" }, async (dir) => {
+    const socketPath = path.join(dir, "socket.sock");
+    const sockets: net.Socket[] = [];
+    const closed: Promise<void>[] = [];
+    server.on("connection", (socket) => {
+      sockets.push(socket);
+      closed.push(
+        new Promise<void>((resolve) => {
+          socket.once("close", resolve);
+        }),
+      );
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, resolve);
     });
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES") {
-      return false;
+    try {
+      await run(socketPath);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await Promise.all(closed);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
-    throw err;
-  }
+  });
+}
+
+function acceptDoneValue(msg: unknown): number | null | undefined {
+  const value = msg as { type?: string; value?: number };
+  return value.type === "done" ? (value.value ?? null) : undefined;
 }
 
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
-    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer((socket) => {
-        socket.on("data", () => {
-          socket.write("{bad json}\n");
-          socket.write('{"type":"ignore"}\n');
-          socket.write('{"type":"done","value":42}\n');
-        });
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.write("{bad json}\n");
+        socket.write('{"type":"ignore"}\n');
+        socket.write('{"type":"done","value":42}\n');
       });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
-
-      try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: '{"hello":"world"}',
-            timeoutMs: 500,
-            accept: (msg) => {
-              const value = msg as { type?: string; value?: number };
-              return value.type === "done" ? (value.value ?? null) : undefined;
-            },
-          }),
-        ).resolves.toBe(42);
-      } finally {
-        server.close();
-      }
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: '{"hello":"world"}',
+          timeoutMs: 500,
+          accept: acceptDoneValue,
+        }),
+      ).resolves.toBe(42);
     });
   });
 
-  it("half-closes the write side after sending the request line", async () => {
-    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      let receivedBuffer: string | null = null;
-      const server = net.createServer((socket) => {
-        let buffer = "";
-        socket.on("data", (chunk) => {
-          buffer += chunk.toString("utf8");
-        });
-        socket.on("end", () => {
-          receivedBuffer = buffer;
-          socket.end('{"type":"done","value":7}\n');
-        });
-      });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
+  it("does not connect or send an already-aborted request", async () => {
+    const connected = vi.fn();
+    const server = net.createServer((socket) => {
+      connected();
+      socket.resume();
+      socket.on("end", () => socket.end('{"type":"done","value":7}\n'));
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: '{"hello":"world"}',
+          timeoutMs: 500,
+          accept: acceptDoneValue,
+          signal: AbortSignal.abort(),
+        }),
+      ).resolves.toBeNull();
+      expect(connected).not.toHaveBeenCalled();
+    });
+  });
 
+  it.each([false, true])("half-closes the request and settles after abort=%s", async (abort) => {
+    const received = createDeferred<{ socket: net.Socket; buffer: string }>();
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+      });
+      socket.on("end", () => received.resolve({ socket, buffer }));
+    });
+    await withSocketServer(server, async (socketPath) => {
+      const controller = new AbortController();
+      const completed = vi.fn();
+      const pending = requestJsonlSocket({
+        socketPath,
+        requestLine: '{"hello":"world"}',
+        timeoutMs: 10_000,
+        accept: acceptDoneValue,
+        signal: controller.signal,
+      }).then(completed);
       try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: '{"hello":"world"}',
-            timeoutMs: 500,
-            accept: (msg) => {
-              const value = msg as { type?: string; value?: number };
-              return value.type === "done" ? (value.value ?? null) : undefined;
-            },
-          }),
-        ).resolves.toBe(7);
-        expect(receivedBuffer).toBe('{"hello":"world"}\n');
+        const { socket, buffer } = await received.promise;
+        expect(buffer).toBe('{"hello":"world"}\n');
+        expect(completed).not.toHaveBeenCalled();
+        if (abort) {
+          controller.abort();
+          await expect.poll(() => completed.mock.calls.length, { timeout: 1_000 }).toBe(1);
+          expect(completed).toHaveBeenCalledWith(null);
+          // EOF already arrived from the normal half-close. A failed peer write
+          // proves cancellation also closed the client's remaining read side.
+          const writeError = vi.fn();
+          socket.once("error", writeError);
+          socket.write('{"type":"done","value":7}\n');
+          await expect.poll(() => writeError.mock.calls.length, { timeout: 1_000 }).toBe(1);
+          expect(writeError).toHaveBeenCalledWith(expect.objectContaining({ code: "EPIPE" }));
+        } else {
+          socket.end('{"type":"done","value":7}\n');
+          await pending;
+          expect(completed).toHaveBeenCalledWith(7);
+        }
+        expect(getEventListeners(controller.signal, "abort")).toEqual([]);
       } finally {
-        server.close();
+        controller.abort();
+        await pending;
       }
     });
   });
 
   it("returns null on timeout and on socket errors", async () => {
-    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer(() => {
-        // Intentionally never reply.
-      });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
-
-      try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: "{}",
-            timeoutMs: 50,
-            accept: () => undefined,
-          }),
-        ).resolves.toBeNull();
-      } finally {
-        server.close();
-      }
-
+    let closedSocketPath = "";
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      socket.resume();
+      // Intentionally keep the response side open after the request half-close.
+    });
+    await withSocketServer(server, async (socketPath) => {
+      closedSocketPath = socketPath;
       await expect(
         requestJsonlSocket({
           socketPath,
@@ -124,6 +154,45 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           accept: () => undefined,
         }),
       ).resolves.toBeNull();
+    });
+    await expect(
+      requestJsonlSocket({
+        socketPath: closedSocketPath,
+        requestLine: "{}",
+        timeoutMs: 50,
+        accept: () => undefined,
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("returns null when the socket closes without an accepted response", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.destroy();
+      });
+    });
+    await withSocketServer(server, async (socketPath) => {
+      // Leave the deadline frozen: only the real socket close can settle this request.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
+      const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
+      syncBuiltinESMExports();
+      try {
+        const pending = requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 250,
+          accept: () => undefined,
+        });
+        expect(vi.getTimerCount()).toBe(1);
+        await expect(pending).resolves.toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        schedule.mockRestore();
+        clear.mockRestore();
+        vi.useRealTimers();
+        syncBuiltinESMExports();
+      }
     });
   });
 });

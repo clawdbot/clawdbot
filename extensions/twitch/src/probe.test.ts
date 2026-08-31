@@ -1,3 +1,4 @@
+// Twitch tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
@@ -47,7 +48,7 @@ vi.mock("@twurple/chat", () => ({
 }));
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {},
+  StaticAuthProvider: function StaticAuthProvider() {},
 }));
 
 describe("probeTwitch", () => {
@@ -121,7 +122,8 @@ describe("probeTwitch", () => {
       const result = await resultPromise;
 
       expect(result.ok).toBe(false);
-      expect(result.error).toContain("timeout");
+      expect(result.error).toBe("timeout after 100ms");
+      expect(mockQuit).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
       mockConnect.mockImplementation(defaultConnectImpl);

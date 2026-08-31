@@ -1,7 +1,13 @@
+/**
+ * Integration coverage for workspace bootstrap cache reads.
+ * Uses temp workspaces to verify real file loading through the cache layer.
+ */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 describe("workspace bootstrap file caching", () => {
@@ -13,6 +19,11 @@ describe("workspace bootstrap file caching", () => {
 
   const loadAgentsFile = async (dir: string) => {
     const result = await loadWorkspaceBootstrapFiles(dir);
+    return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
+  };
+
+  const loadSessionAgentsFile = async (dir: string, sessionKey: string) => {
+    const result = await getOrLoadBootstrapFiles({ workspaceDir: dir, sessionKey });
     return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
   };
 
@@ -74,6 +85,32 @@ describe("workspace bootstrap file caching", () => {
     expectAgentsContent(agentsFile2, content2);
   });
 
+  it("refreshes session bootstrap snapshots after workspace file changes", async () => {
+    const content1 = "# Initial content";
+    const content2 = "# Updated content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+
+    const agentsFile1 = await loadSessionAgentsFile(workspaceDir, "agent:main:main");
+    expectAgentsContent(agentsFile1, content1);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content2,
+    });
+    const bumpedTime = new Date(Date.now() + 1_000);
+    await fs.utimes(filePath, bumpedTime, bumpedTime);
+
+    const agentsFile2 = await loadSessionAgentsFile(workspaceDir, "agent:main:main");
+    expectAgentsContent(agentsFile2, content2);
+  });
+
   it("invalidates cache when inode changes with same mtime", async () => {
     if (process.platform === "win32") {
       return;
@@ -88,6 +125,10 @@ describe("workspace bootstrap file caching", () => {
       name: DEFAULT_AGENTS_FILENAME,
       content: content1,
     });
+    // Use integer-second mtime so utimes can restore it exactly, isolating ctime as the
+    // only changed stat field after the in-place edit.
+    const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(filePath, cleanTime, cleanTime);
     const originalStat = await fs.stat(filePath);
 
     const agentsFile1 = await loadAgentsFile(workspaceDir);
@@ -100,6 +141,88 @@ describe("workspace bootstrap file caching", () => {
 
     const agentsFile2 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile2, content2);
+  });
+
+  it("invalidates cache when content changes in-place with restored mtime", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const content1 = "# old guidance";
+    const content2 = "# new guidance";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+    // Use integer-second mtime so utimes can restore it exactly, isolating ctime as the
+    // only changed stat field after the in-place edit.
+    const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(filePath, cleanTime, cleanTime);
+    const originalStat = await fs.stat(filePath);
+
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content1);
+
+    // A loaded runner can complete both writes within one ctime tick. Wait for the
+    // fixture's cache identity to change before asserting the production reload.
+    await vi.waitFor(
+      async () => {
+        await fs.writeFile(filePath, content2, "utf-8");
+        await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+        expect((await fs.stat(filePath)).ctimeMs).not.toBe(originalStat.ctimeMs);
+      },
+      { interval: 1, timeout: 1_000 },
+    );
+
+    const editedStat = await fs.stat(filePath);
+    expect(editedStat.dev).toBe(originalStat.dev);
+    expect(editedStat.ino).toBe(originalStat.ino);
+    expect(editedStat.size).toBe(originalStat.size);
+    expect(editedStat.mtimeMs).toBe(originalStat.mtimeMs);
+
+    const originalFstatSync = fsSync.fstatSync;
+    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+      const stat = originalFstatSync(fd);
+      // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
+      stat.ctimeMs = originalStat.ctimeMs + 1;
+      return stat;
+    });
+    try {
+      const agentsFile2 = await loadAgentsFile(workspaceDir);
+      expectAgentsContent(agentsFile2, content2);
+    } finally {
+      fstatSync.mockRestore();
+    }
+  });
+
+  it("replaces a session snapshot when inode changes with identical bytes", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const content = "# stable-content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+    const tempPath = path.join(workspaceDir, ".AGENTS.replacement");
+    const sessionKey = "agent:main:identity-refresh";
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content,
+    });
+    const originalStat = await fs.stat(filePath);
+    const agentsFile1 = await loadSessionAgentsFile(workspaceDir, sessionKey);
+    expectAgentsContent(agentsFile1, content);
+
+    await fs.writeFile(tempPath, content, "utf-8");
+    await fs.utimes(tempPath, originalStat.atime, originalStat.mtime);
+    await fs.rename(tempPath, filePath);
+    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+
+    const agentsFile2 = await loadSessionAgentsFile(workspaceDir, sessionKey);
+    expectAgentsContent(agentsFile2, content);
+    expect(agentsFile2).not.toBe(agentsFile1);
   });
 
   it("handles file deletion gracefully", async () => {

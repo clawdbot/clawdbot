@@ -1,9 +1,15 @@
+// Slack helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   createResolvedDirectoryEntriesLister,
   type DirectoryConfigParams,
-} from "openclaw/plugin-sdk/directory-runtime";
-import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
+} from "openclaw/plugin-sdk/directory-config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  mergeSlackAccountConfig,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccountAllowFrom,
+} from "./accounts.js";
 import { parseSlackTarget } from "./targets.js";
 
 function resolveSlackDirectoryConfigAccount(
@@ -16,6 +22,7 @@ function resolveSlackDirectoryConfigAccount(
     accountId: resolvedAccountId,
     config,
     dm: config.dm,
+    allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId: resolvedAccountId }) ?? [],
   };
 }
 
@@ -25,11 +32,10 @@ export const listSlackDirectoryPeersFromConfig = createResolvedDirectoryEntriesL
   kind: "user",
   resolveAccount: (cfg, accountId) => resolveSlackDirectoryConfigAccount(cfg, accountId),
   resolveSources: (account) => {
-    const allowFrom = account.config.allowFrom ?? account.dm?.allowFrom ?? [];
     const channelUsers = Object.values(account.config.channels ?? {}).flatMap(
       (channel) => channel.users ?? [],
     );
-    return [allowFrom, Object.keys(account.config.dms ?? {}), channelUsers];
+    return [account.allowFrom, Object.keys(account.config.dms ?? {}), channelUsers];
   },
   normalizeId: (raw) => {
     const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
@@ -39,7 +45,9 @@ export const listSlackDirectoryPeersFromConfig = createResolvedDirectoryEntriesL
     }
     const target = `user:${normalizedUserId}`;
     const normalized = parseSlackTarget(target, { defaultKind: "user" });
-    return normalized?.kind === "user" ? `user:${normalized.id.toLowerCase()}` : null;
+    return normalized?.kind === "user"
+      ? `user:${normalizeLowercaseStringOrEmpty(normalized.id)}`
+      : null;
   },
 });
 
@@ -51,6 +59,8 @@ export const listSlackDirectoryGroupsFromConfig = createResolvedDirectoryEntries
   resolveSources: (account) => [Object.keys(account.config.channels ?? {})],
   normalizeId: (raw) => {
     const normalized = parseSlackTarget(raw, { defaultKind: "channel" });
-    return normalized?.kind === "channel" ? `channel:${normalized.id.toLowerCase()}` : null;
+    return normalized?.kind === "channel"
+      ? `channel:${normalizeLowercaseStringOrEmpty(normalized.id)}`
+      : null;
   },
 });

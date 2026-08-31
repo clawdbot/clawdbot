@@ -1,15 +1,26 @@
+// Tests Gemini provider usage fetch normalization.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchGeminiUsage } from "./provider-usage.fetch.gemini.js";
+
+const usageProvider = "openai" as const;
 
 describe("fetchGeminiUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(429, { error: "rate_limited" }),
     );
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
 
     expect(result.error).toBe("HTTP 429");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+
+    expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -29,7 +40,7 @@ describe("fetchGeminiUsage", () => {
       });
     });
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
 
     expect(result.windows).toHaveLength(2);
     expect(result.windows[0]).toEqual({ label: "Pro", usedPercent: 70 });
@@ -44,13 +55,48 @@ describe("fetchGeminiUsage", () => {
       }),
     );
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
 
     expect(result).toEqual({
-      provider: "google-gemini-cli",
-      displayName: "Gemini",
+      provider: usageProvider,
+      displayName: "OpenAI",
       windows: [],
     });
+  });
+
+  it.each([
+    ["null response", null],
+    ["array response", []],
+    ["non-array buckets", { buckets: {} }],
+  ])("treats %s as empty usage", async (_name, payload) => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+
+    expect(result).toEqual({
+      provider: usageProvider,
+      displayName: "OpenAI",
+      windows: [],
+    });
+  });
+
+  it("ignores malformed buckets and preserves a zero remaining fraction", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        buckets: [
+          null,
+          [],
+          "invalid",
+          { modelId: 42, remainingFraction: "0.2" },
+          { modelId: "gemini-pro", remainingFraction: 0 },
+          { modelId: "gemini-pro", remainingFraction: 0.5 },
+        ],
+      }),
+    );
+
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+
+    expect(result.windows).toEqual([{ label: "Pro", usedPercent: 100 }]);
   });
 
   it("defaults missing fractions to fully available and clamps invalid fractions", async () => {
@@ -64,7 +110,7 @@ describe("fetchGeminiUsage", () => {
       }),
     );
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
 
     expect(result.windows).toEqual([
       { label: "Pro", usedPercent: 100 },

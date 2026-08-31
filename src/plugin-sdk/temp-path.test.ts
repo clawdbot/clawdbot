@@ -1,3 +1,5 @@
+// Temp path tests cover plugin SDK temp directory creation and cleanup helpers.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,8 +7,13 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 
 function expectPathInsideTmpRoot(resultPath: string) {
-  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
-  const resolved = path.resolve(resultPath);
+  const tmpRoot = fsSync.realpathSync(resolvePreferredOpenClawTmpDir());
+  let resolved = path.resolve(resultPath);
+  try {
+    resolved = path.join(fsSync.realpathSync(path.dirname(resultPath)), path.basename(resultPath));
+  } catch {
+    // The temp parent is intentionally gone after withTempDownloadPath cleanup.
+  }
   const rel = path.relative(tmpRoot, resolved);
   expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
   expect(resultPath).not.toContain("..");
@@ -80,7 +87,13 @@ describe("withTempDownloadPath", () => {
       expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     }
     if (expectCleanup) {
-      await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      let statError: NodeJS.ErrnoException | undefined;
+      try {
+        await fs.stat(capturedPath);
+      } catch (error) {
+        statError = error as NodeJS.ErrnoException;
+      }
+      expect(statError?.code).toBe("ENOENT");
     }
   });
 });

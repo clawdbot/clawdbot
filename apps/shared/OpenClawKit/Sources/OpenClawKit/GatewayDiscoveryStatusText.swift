@@ -2,9 +2,17 @@ import Foundation
 import Network
 
 public enum GatewayDiscoveryStatusText {
+    public static var idle: String {
+        String(localized: "Idle")
+    }
+
+    public static var stopped: String {
+        String(localized: "Stopped")
+    }
+
     public static func make(states: [NWBrowser.State], hasBrowsers: Bool) -> String {
         if states.isEmpty {
-            return hasBrowsers ? "Setup" : "Idle"
+            return hasBrowsers ? String(localized: "Setup") : self.idle
         }
 
         if let failed = states.first(where: { state in
@@ -12,7 +20,7 @@ public enum GatewayDiscoveryStatusText {
             return false
         }) {
             if case let .failed(err) = failed {
-                return "Failed: \(err)"
+                return "\(String(localized: "Failed")): \(err)"
             }
         }
 
@@ -21,19 +29,30 @@ public enum GatewayDiscoveryStatusText {
             return false
         }) {
             if case let .waiting(err) = waiting {
-                return "Waiting: \(err)"
+                return "\(String(localized: "Waiting")): \(err)"
             }
         }
 
-        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
-            return "Searching…"
+        if states.contains(where: {
+            if case .ready = $0 {
+                true
+            } else {
+                false
+            }
+        }) {
+            return String(localized: "Searching…")
         }
 
-        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
-            return "Setup"
+        if states.contains(where: {
+            if case .setup = $0 {
+                true
+            } else {
+                false
+            }
+        }) {
+            return String(localized: "Setup")
         }
 
-        return "Searching…"
+        return String(localized: "Searching…")
     }
 }
-

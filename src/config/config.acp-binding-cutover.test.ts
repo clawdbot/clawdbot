@@ -1,3 +1,4 @@
+// Regresses ACP binding cutover config compatibility behavior.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -5,10 +6,9 @@ describe("ACP binding cutover schema", () => {
   it("accepts top-level typed ACP bindings with per-agent runtime defaults", () => {
     const parsed = OpenClawSchema.safeParse({
       agents: {
-        list: [
-          { id: "main", default: true, runtime: { type: "embedded" } },
-          {
-            id: "coding",
+        entries: {
+          main: { default: true, runtime: { type: "embedded" } },
+          coding: {
             runtime: {
               type: "acp",
               acp: {
@@ -19,7 +19,7 @@ describe("ACP binding cutover schema", () => {
               },
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -38,6 +38,29 @@ describe("ACP binding cutover schema", () => {
           acp: {
             label: "codex-main",
             backend: "acpx",
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts global and route-binding session scope overrides", () => {
+    const parsed = OpenClawSchema.safeParse({
+      session: { groupScope: "per-group" },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: "1497598990336790559" },
+          },
+          session: {
+            dmScope: "per-account-channel-peer",
+            groupScope: "main",
           },
         },
       ],
@@ -154,7 +177,7 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts deprecated dm peer kind for backward compatibility", () => {
+  it("accepts the canonical direct peer kind", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
@@ -163,7 +186,7 @@ describe("ACP binding cutover schema", () => {
           match: {
             channel: "plugin-chat",
             accountId: "default",
-            peer: { kind: "dm", id: "legacy-peer" },
+            peer: { kind: "direct", id: "peer" },
           },
         },
       ],

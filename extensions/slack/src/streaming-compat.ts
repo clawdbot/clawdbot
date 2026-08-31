@@ -1,11 +1,25 @@
+// Slack plugin module implements streaming compat behavior.
+// channel-streaming-config exports the same helpers without channel-outbound's
+// reply-pipeline/channel-registry graph, which doctor enumeration cold-loads.
+import {
+  getChannelStreamingConfigObject,
+  resolveChannelStreamingNativeTransport,
+} from "openclaw/plugin-sdk/channel-streaming-config";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type StreamingMode = "off" | "partial" | "block" | "progress";
-export type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
+// Inbound-only: doctor migration still parses these legacy draft-mode values.
+type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
 
 function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized =
+    normalizeOptionalString(value) == null ? "" : normalizeLowercaseStringOrEmpty(value);
   return normalized || null;
 }
 
@@ -40,23 +54,15 @@ function mapSlackLegacyDraftStreamModeToStreaming(mode: SlackLegacyDraftStreamMo
   return "partial";
 }
 
-export function mapStreamingModeToSlackLegacyDraftStreamMode(mode: StreamingMode) {
-  if (mode === "block") {
-    return "append" as const;
-  }
-  if (mode === "progress") {
-    return "status_final" as const;
-  }
-  return "replace" as const;
-}
-
 export function resolveSlackStreamingMode(
   params: {
     streamMode?: unknown;
     streaming?: unknown;
   } = {},
 ): StreamingMode {
-  const parsedStreaming = parseStreamingMode(params.streaming);
+  const parsedStreaming = parseStreamingMode(
+    getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
+  );
   if (parsedStreaming) {
     return parsedStreaming;
   }
@@ -67,7 +73,7 @@ export function resolveSlackStreamingMode(
   if (typeof params.streaming === "boolean") {
     return params.streaming ? "partial" : "off";
   }
-  return "partial";
+  return "progress";
 }
 
 export function resolveSlackNativeStreaming(
@@ -76,6 +82,13 @@ export function resolveSlackNativeStreaming(
     streaming?: unknown;
   } = {},
 ): boolean {
+  const canonical = resolveChannelStreamingNativeTransport(params);
+  if (typeof canonical === "boolean") {
+    return canonical;
+  }
+  // Doctor migration input: the runtime helper no longer reads the legacy flat
+  // key, so raw pre-migration configs must resolve it here or `nativeStreaming:
+  // false` would migrate to `streaming.nativeTransport: true`.
   if (typeof params.nativeStreaming === "boolean") {
     return params.nativeStreaming;
   }
@@ -83,18 +96,4 @@ export function resolveSlackNativeStreaming(
     return params.streaming;
   }
   return true;
-}
-
-export function formatSlackStreamModeMigrationMessage(
-  pathPrefix: string,
-  resolvedStreaming: string,
-): string {
-  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
-}
-
-export function formatSlackStreamingBooleanMigrationMessage(
-  pathPrefix: string,
-  resolvedNativeStreaming: boolean,
-): string {
-  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
 }

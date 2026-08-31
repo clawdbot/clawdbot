@@ -1,4 +1,5 @@
-export type MatrixRoomKeyBackupStatusLike = {
+// Matrix plugin module implements backup health behavior.
+type MatrixRoomKeyBackupStatusLike = {
   serverVersion: string | null;
   activeVersion: string | null;
   trusted: boolean | null;
@@ -8,7 +9,7 @@ export type MatrixRoomKeyBackupStatusLike = {
   keyLoadError: string | null;
 };
 
-export type MatrixRoomKeyBackupIssueCode =
+type MatrixRoomKeyBackupIssueCode =
   | "missing-server-backup"
   | "key-load-failed"
   | "key-not-loaded"
@@ -18,7 +19,7 @@ export type MatrixRoomKeyBackupIssueCode =
   | "indeterminate"
   | "ok";
 
-export type MatrixRoomKeyBackupIssue = {
+type MatrixRoomKeyBackupIssue = {
   code: MatrixRoomKeyBackupIssueCode;
   summary: string;
   message: string | null;
@@ -98,6 +99,7 @@ export function resolveMatrixRoomKeyBackupIssue(
 export function resolveMatrixRoomKeyBackupReadinessError(
   backup: MatrixRoomKeyBackupStatusLike,
   opts: {
+    allowUntrustedMatchingKey?: boolean;
     requireServerBackup: boolean;
   },
 ): string | null {
@@ -106,6 +108,14 @@ export function resolveMatrixRoomKeyBackupReadinessError(
     return opts.requireServerBackup ? "Matrix room key backup is missing on the homeserver." : null;
   }
   if (issue.code === "ok") {
+    return null;
+  }
+  if (
+    issue.code === "untrusted-signature" &&
+    opts.allowUntrustedMatchingKey === true &&
+    backup.matchesDecryptionKey === true &&
+    backup.decryptionKeyCached === true
+  ) {
     return null;
   }
   if (issue.message) {

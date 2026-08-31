@@ -1,14 +1,21 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { slackPlugin } from "./src/channel.js";
-import { setSlackRuntime } from "./src/runtime.js";
+// Slack plugin module implements channel entry behavior.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { slackPlugin } from "./src/channel.js";
-export { setSlackRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "slack",
   name: "Slack",
   description: "Slack channel plugin",
-  plugin: slackPlugin,
-  setRuntime: setSlackRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "slackPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+  runtime: {
+    specifier: "./runtime-setter-api.js",
+    exportName: "setSlackRuntime",
+  },
 });

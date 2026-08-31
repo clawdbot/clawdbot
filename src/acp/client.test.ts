@@ -1,15 +1,52 @@
+/** Tests ACP client permission handling, env sanitization, and spawn invocation resolution. */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  listKnownProviderAuthEnvVarNames: () => [
+    "OPENAI_API_KEY",
+    "OPENAI_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_API_KEY",
+    "GITHUB_TOKEN",
+    "HF_TOKEN",
+  ],
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
+  omitEnvKeysCaseInsensitive: (
+    baseEnv: NodeJS.ProcessEnv,
+    keys: Iterable<string>,
+  ): NodeJS.ProcessEnv => {
+    const denied = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().toUpperCase();
+      if (normalized) {
+        denied.add(normalized);
+      }
+    }
+    const env = { ...baseEnv };
+    for (const key of Object.keys(env)) {
+      if (denied.has(key.toUpperCase())) {
+        delete env[key];
+      }
+    }
+    return env;
+  },
+}));
+
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client.js";
+} from "./client-helpers.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
@@ -43,12 +80,7 @@ function makePermissionRequest(
   };
 }
 
-const tempDirs = createTrackedTempDirs();
-const createTempDir = () => tempDirs.make("openclaw-acp-client-test-");
-
-afterEach(async () => {
-  await tempDirs.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveAcpClientSpawnEnv", () => {
   it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
@@ -154,7 +186,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
 
-  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+  it("preserves provider auth env vars when no strip keys are provided", () => {
     const env = resolveAcpClientSpawnEnv({
       OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
       GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
@@ -226,6 +258,9 @@ describe("buildAcpClientStripKeys", () => {
 
     expect(stripKeys.has("SKILL_SECRET")).toBe(true);
     expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("OPENAI_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_API_KEY")).toBe(true);
     expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
     expect(stripKeys.has("HF_TOKEN")).toBe(true);
     expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);
@@ -251,7 +286,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("unwraps .cmd shim entrypoint on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const scriptPath = path.join(dir, "openclaw", "dist", "entry.js");
     const shimPath = path.join(dir, "openclaw.cmd");
     await mkdir(path.dirname(scriptPath), { recursive: true });
@@ -273,7 +308,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("fails closed for unresolved wrappers on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const shimPath = path.join(dir, "openclaw.cmd");
     await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
 
@@ -412,15 +447,8 @@ describe("resolvePermissionRequest", () => {
         action: "list",
       },
     },
-    {
-      toolName: "whatsapp_login",
-      title: "whatsapp_login: start",
-      rawInput: {
-        name: "whatsapp_login",
-      },
-    },
   ] as const)(
-    "prompts for shared owner-only backstop tools: $toolName",
+    "prompts for shared backstop tools: $toolName",
     async ({ toolName, title, rawInput }) => {
       const prompt = vi.fn(async () => true);
       const res = await resolvePermissionRequest(
@@ -470,6 +498,104 @@ describe("resolvePermissionRequest", () => {
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it("auto-approves search when rawInput path resolves inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-inside-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO", path: "src" },
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when rawInput path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-escape-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "key", path: "../.ssh" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: ignored-by-raw-input");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("auto-approves search when query-like title text contains a path label", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-title-query-path-label",
+          title: "search: query: literal text, path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "literal text, path: ~/.ssh" },
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd/workspace",
+    });
+  });
+
+  it("prompts for search when explicit title path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-title-escape-cwd",
+          title: "search: path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "key" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: path: ~/.ssh");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("auto-approves search when only locations resolve inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-location-inside-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "src/index.ts" }],
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when only locations escape cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-location-escape-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "/etc/passwd" }],
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: TODO");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
   it("prompts when raw input spoofs a safe tool name for a dangerous title", async () => {
@@ -533,6 +659,27 @@ describe("resolvePermissionRequest", () => {
       cwd: "/tmp/openclaw-acp-cwd",
     });
   });
+
+  it.each(["FILE:///tmp/outside/marker.txt", "file:/tmp/outside/marker.txt"])(
+    "prompts for read when non-canonical file URL escapes cwd: %s",
+    async (fileUrl) => {
+      const prompt = vi.fn(async () => false);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: "tool-read-file-url-escape-cwd",
+            title: "read: ignored-by-raw-input",
+            status: "pending",
+            rawInput: { path: fileUrl },
+          },
+        }),
+        { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd" },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith("read", "read: ignored-by-raw-input");
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+    },
+  );
 
   it("prompts for read when rawInput path escapes cwd via traversal", async () => {
     const prompt = vi.fn(async () => false);
@@ -640,6 +787,27 @@ describe("resolvePermissionRequest", () => {
       { prompt, log: () => {} },
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject-always" } });
+  });
+
+  it("cancels auto-approved requests when no allow option is available", async () => {
+    const prompt = vi.fn(async () => true);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-read-no-allow",
+          title: "read: src/index.ts",
+          status: "pending",
+          kind: "read",
+        },
+        options: [{ kind: "reject_once", name: "Reject", optionId: "reject" }],
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("[permission cancelled] read: missing allow option");
+    expect(res).toEqual({ outcome: { outcome: "cancelled" } });
   });
 
   it("prompts when tool identity is unknown and can still approve", async () => {
@@ -770,8 +938,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])]");
-    expect(text).toContain("https://example.com/path?\\nq=1\\u2028tail");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])] https://example.com/path?\\nq=1\\u2028tail",
+    );
     expect(text).not.toContain("IGNORE\n");
   });
 
@@ -785,8 +954,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("https://example.com/path?\\x85q=1\\x1etail");
-    expect(text).toContain("[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])]");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])] https://example.com/path?\\x85q=1\\x1etail",
+    );
     expect(hasRawInlineControlChars(text)).toBe(false);
   });
 
@@ -817,7 +987,7 @@ describe("acp event mapper", () => {
       { type: "resource_link", uri: "https://example.com", name: "Spec", title: longTitle },
     ]);
 
-    expect(text).toContain(`(${longTitle})`);
+    expect(text).toBe(`[Resource link (${longTitle})] https://example.com`);
   });
 
   it("counts newline separators toward prompt byte limits", () => {

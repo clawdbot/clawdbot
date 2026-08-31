@@ -14,12 +14,24 @@ assembly, and contract enforcement.
   - `src/plugins/types.ts`
   - `src/plugins/runtime/types.ts`
   - `src/plugins/contracts/registry.ts`
-  - `src/plugins/public-artifacts.ts`
+  - `src/plugins/public-surface-loader.ts`
+  - `src/plugins/public-surface-runtime.ts`
+  - `src/plugins/provider-public-artifacts.ts`
+  - `src/plugins/web-provider-public-artifacts.ts`
 
 ## Boundary Rules
 
+- Keep control-plane and runtime-plane concerns separate:
+  discovery, manifest parsing, config validation, setup/onboarding hints, and
+  activation planning belong to the control plane; actual plugin execution
+  belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
+- Cache concept: gateway plugin metadata is stable while gateway runs. Reuse
+  current snapshots, install records, discovery, lookup tables, and bounded
+  process caches; avoid per-call stat/read/hash freshness. Plugin metadata
+  changes require restart or explicit plugin owner reload/install/doctor flow.
+  No broad persistent caches; lifecycle-owned facts only, test-clearable.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
@@ -31,6 +43,9 @@ assembly, and contract enforcement.
   needs the heavy module.
 - If a loader or registry change affects plugin authors, update the public SDK,
   docs, and contract tests instead of relying on incidental internals.
+- Prefer explicit activation planning from manifest/descriptor ownership over
+  “load everything in this scope” behavior. Broad registry materialization
+  should be the exception, not the design center.
 - Do not normalize "plugin-owned" into "core-owned" by scattering direct reads
   of `plugins.entries.<id>.config` through unrelated core paths. Prefer generic
   helpers, plugin runtime hooks, manifest metadata, and explicit auto-enable
@@ -52,6 +67,15 @@ assembly, and contract enforcement.
 - When a provider hook grows a nested chain of wrapper composition or repeated
   compat flags, treat that as a regression signal. Extract the shared helper or
   composer instead of letting one more plugin carry a near-copy.
+- Treat mutable global runtime registry state as compatibility scaffolding, not
+  the desired source of truth for request-time execution. Prefer immutable or
+  request-scoped handles when adding new runtime flows.
+- If setup, discovery, or doctor flows need plugin runtime, make that need
+  explicit and narrow. Do not let cold control-plane paths quietly import broad
+  runtime surfaces.
+- Resolver and public-surface loader tests must use generated tiny plugin
+  fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
+  those tests at real bundled plugin source APIs just to prove path resolution.
 
 ## Verification
 
@@ -59,4 +83,4 @@ assembly, and contract enforcement.
   change bundled plugin import fanout, run `pnpm build`.
 - If the change can alter bundled plugin startup cost, re-profile the affected
   plugin entrypoint with:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`

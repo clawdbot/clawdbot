@@ -1,3 +1,4 @@
+// Message hook tests cover message hook dispatch and failure handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
@@ -106,6 +107,14 @@ const actionCases: ActionCase[] = [
   },
 ];
 
+function requireHookEvent(handler: ReturnType<typeof vi.fn>): InternalHookEvent {
+  const call = handler.mock.calls[0];
+  if (!call) {
+    throw new Error("expected hook handler call");
+  }
+  return call[0] as InternalHookEvent;
+}
+
 describe("message hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
@@ -126,7 +135,7 @@ describe("message hooks", () => {
         );
 
         expect(handler).toHaveBeenCalledOnce();
-        const event = handler.mock.calls[0][0] as InternalHookEvent;
+        const event = requireHookEvent(handler);
         expect(event.type).toBe("message");
         expect(event.action).toBe(testCase.action);
         testCase.assertContext(event.context);
@@ -198,11 +207,9 @@ describe("message hooks", () => {
       });
       registerInternalHook("message:received", badHandler);
 
-      await expect(
-        triggerInternalHook(
-          createInternalHookEvent("message", "received", "s1", { content: "test" }),
-        ),
-      ).resolves.not.toThrow();
+      await triggerInternalHook(
+        createInternalHookEvent("message", "received", "s1", { content: "test" }),
+      );
       expect(badHandler).toHaveBeenCalledOnce();
     });
 
@@ -228,9 +235,9 @@ describe("message hooks", () => {
       });
       registerInternalHook("message:sent", asyncFailHandler);
 
-      await expect(
-        triggerInternalHook(createInternalHookEvent("message", "sent", "s1", { content: "reply" })),
-      ).resolves.not.toThrow();
+      await triggerInternalHook(
+        createInternalHookEvent("message", "sent", "s1", { content: "reply" }),
+      );
       expect(asyncFailHandler).toHaveBeenCalledOnce();
     });
   });
@@ -246,7 +253,7 @@ describe("message hooks", () => {
       );
       const after = new Date();
 
-      const event = handler.mock.calls[0][0] as InternalHookEvent;
+      const event = requireHookEvent(handler);
       expect(event.timestamp).toBeInstanceOf(Date);
       expect(event.timestamp.getTime()).toBeGreaterThanOrEqual(before.getTime());
       expect(event.timestamp.getTime()).toBeLessThanOrEqual(after.getTime());

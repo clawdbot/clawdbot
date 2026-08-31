@@ -1,7 +1,6 @@
+// Public attachment facade for normalization, selection, and local media caching helpers.
 export {
   isAudioAttachment,
-  isImageAttachment,
-  isVideoAttachment,
   normalizeAttachments,
   resolveAttachmentKind,
 } from "./attachments.normalize.js";

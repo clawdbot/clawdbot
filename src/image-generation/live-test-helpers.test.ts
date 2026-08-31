@@ -1,19 +1,18 @@
+/** Tests live image-generation helper parsing and provider selection. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   parseCaseFilter,
-  parseCsvFilter,
-  parseProviderModelMap,
-  redactLiveApiKey,
+  parseImageProviderFilter,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
 } from "./live-test-helpers.js";
 
 describe("image-generation live-test helpers", () => {
   it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" openai , google ")).toEqual(new Set(["openai", "google"]));
+    expect(parseImageProviderFilter()).toBeNull();
+    expect(parseImageProviderFilter("all")).toBeNull();
+    expect(parseImageProviderFilter(" openai , google ")).toEqual(new Set(["openai", "google"]));
   });
 
   it("parses live case filters and treats empty/all as unfiltered", () => {
@@ -24,24 +23,15 @@ describe("image-generation live-test helpers", () => {
     );
   });
 
-  it("parses provider model overrides by provider id", () => {
-    expect(
-      parseProviderModelMap("openai/gpt-image-1, google/gemini-3.1-flash-image-preview, invalid"),
-    ).toEqual(
-      new Map([
-        ["openai", "openai/gpt-image-1"],
-        ["google", "google/gemini-3.1-flash-image-preview"],
-      ]),
-    );
-  });
-
   it("collects configured models from primary and fallbacks", () => {
     const cfg = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openai/gpt-image-1",
-            fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-2",
+              fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+            },
           },
         },
       },
@@ -49,7 +39,7 @@ describe("image-generation live-test helpers", () => {
 
     expect(resolveConfiguredLiveImageModels(cfg)).toEqual(
       new Map([
-        ["openai", "openai/gpt-image-1"],
+        ["openai", "openai/gpt-image-2"],
         ["google", "google/gemini-3.1-flash-image-preview"],
       ]),
     );
@@ -80,11 +70,5 @@ describe("image-generation live-test helpers", () => {
         hasLiveKeys: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("short-key")).toBe("short-key");
-    expect(redactLiveApiKey("sk-proj-1234567890")).toBe("sk-proj-...7890");
   });
 });

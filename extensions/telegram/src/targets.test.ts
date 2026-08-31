@@ -1,5 +1,11 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Telegram tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  isNumericTelegramSenderUserId,
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
@@ -10,9 +16,15 @@ import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
+  normalizeTelegramOutboundTarget,
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
+
+const numericTelegramTargetNormalizers = [
+  { name: "normalizeTelegramChatId", normalize: normalizeTelegramChatId },
+  { name: "normalizeTelegramLookupTarget", normalize: normalizeTelegramLookupTarget },
+];
 
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
@@ -63,6 +75,23 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("parses channel Direct Messages topic markers without forum inference", () => {
+    expect(parseTelegramTarget("telegram:group:-1001234567890:direct-topic:77")).toEqual({
+      chatId: "-1001234567890",
+      directMessagesTopicId: 77,
+      chatType: "group",
+    });
+  });
+
+  it("rejects non-positive and unsafe channel Direct Messages topic ids", () => {
+    for (const target of [
+      "-1001234567890:direct-topic:0",
+      "-1001234567890:direct-topic:9007199254740992",
+    ]) {
+      expect(parseTelegramTarget(target)).toEqual({ chatId: target, chatType: "unknown" });
+    }
+  });
+
   it("trims whitespace", () => {
     expect(parseTelegramTarget("  -1001234567890:99  ")).toEqual({
       chatId: "-1001234567890",
@@ -78,6 +107,17 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("does not route unsafe topic suffixes", () => {
+    expect(parseTelegramTarget("-1001234567890:9007199254740992")).toEqual({
+      chatId: "-1001234567890:9007199254740992",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("-1001234567890:topic:9007199254740992")).toEqual({
+      chatId: "-1001234567890:topic:9007199254740992",
+      chatType: "unknown",
+    });
+  });
+
   it("strips internal prefixes before parsing", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
@@ -87,17 +127,40 @@ describe("parseTelegramTarget", () => {
   });
 });
 
+describe("telegram numeric target normalization", () => {
+  it.each(numericTelegramTargetNormalizers)(
+    "$name keeps numeric chat ids unchanged",
+    ({ normalize }) => {
+      expect(normalize("-1001234567890")).toBe("-1001234567890");
+      expect(normalize("123456789")).toBe("123456789");
+    },
+  );
+});
+
+describe("normalizeTelegramOutboundTarget", () => {
+  it("normalizes legacy durable group retry targets with topic suffixes", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:topic:77")).toBe(
+      "-1001234567890:topic:77",
+    );
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:77")).toBe("-1001234567890:77");
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:direct-topic:77")).toBe(
+      "-1001234567890:direct-topic:77",
+    );
+  });
+
+  it("keeps already-valid numeric and non-numeric targets on the send path", () => {
+    expect(normalizeTelegramOutboundTarget("-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramOutboundTarget("group:not-a-number")).toBe("group:not-a-number");
+    expect(normalizeTelegramOutboundTarget("@mychannel")).toBe("@mychannel");
+  });
+});
+
 describe("normalizeTelegramChatId", () => {
   it("rejects username and t.me forms", () => {
     expect(normalizeTelegramChatId("telegram:https://t.me/MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("tg:t.me/mychannel")).toBeUndefined();
     expect(normalizeTelegramChatId("@MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("MyChannel")).toBeUndefined();
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramChatId("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramChatId("123456789")).toBe("123456789");
   });
 
   it("returns undefined for empty input", () => {
@@ -111,11 +174,6 @@ describe("normalizeTelegramLookupTarget", () => {
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
   });
 
   it("rejects invalid username forms", () => {
@@ -159,8 +217,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    } as OpenClawConfig;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
     ).toBe(false);
@@ -202,8 +259,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    } as OpenClawConfig;
 
     expect(
       resolveTelegramGroupRequireMention({
@@ -237,6 +293,17 @@ describe("telegram allow-from helpers", () => {
       expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
     }
   });
+
+  it("accepts only positive numeric sender user IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: false },
+      { value: "@someone", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramSenderUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
 });
 
 describe("telegram target normalization", () => {
@@ -245,6 +312,9 @@ describe("telegram target normalization", () => {
     expect(normalizeTelegramMessagingTarget("tg:group:-100123")).toBe("telegram:group:-100123");
     expect(normalizeTelegramMessagingTarget("telegram:-100123:topic:99")).toBe(
       "telegram:-100123:topic:99",
+    );
+    expect(normalizeTelegramMessagingTarget("telegram:-100123:direct-topic:77")).toBe(
+      "telegram:-100123:direct-topic:77",
     );
   });
 
@@ -260,4 +330,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-installMaybePersistResolvedTelegramTargetTests();
+installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

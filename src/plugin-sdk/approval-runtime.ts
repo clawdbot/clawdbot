@@ -1,5 +1,6 @@
 // Approval request/reply helpers for exec and plugin approval flows.
 
+export type { ApprovalScope } from "../infra/approval-scope.js";
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -19,6 +20,7 @@ export {
   type ExecApprovalReplyMetadata,
 } from "../infra/exec-approval-reply.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
+export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,

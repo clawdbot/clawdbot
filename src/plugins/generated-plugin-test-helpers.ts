@@ -1,3 +1,4 @@
+// Generates tiny plugin fixtures for plugin loader tests.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,7 @@ export function createGeneratedPluginTempRoot(prefix: string): string {
 
 export function installGeneratedPluginTempRootCleanup() {
   afterEach(() => {
-    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+    for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

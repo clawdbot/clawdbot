@@ -1,94 +1,78 @@
-import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
-import { logVerbose } from "../../globals.js";
-import { handleSubagentsAgentsAction } from "./commands-subagents/action-agents.js";
-import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
-import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
-import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
-import { handleSubagentsKillAction } from "./commands-subagents/action-kill.js";
-import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
-import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
-import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
-import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
+// Dispatches subagent inspection commands.
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import {
-  type SubagentsCommandContext,
-  extractMessageText,
-  resolveHandledPrefix,
+  buildSubagentsHelp,
   resolveRequesterSessionKey,
-  resolveSubagentsAction,
-  stopWithText,
+  type SubagentsCommandContext,
 } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export { extractMessageText };
+const actionAgentsLoader = createLazyImportLoader(
+  () => import("./commands-subagents/action-agents.js"),
+);
+const actionInfoLoader = createLazyImportLoader(
+  () => import("./commands-subagents/action-info.js"),
+);
+const actionListLoader = createLazyImportLoader(
+  () => import("./commands-subagents/action-list.js"),
+);
+const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
+const controlRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/subagents/registry/subagent-control-scope.js"),
+);
 
-export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
+export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/subagents",
+    match: (
+      body,
+    ): { action: "agents" | "list" | "info" | "log" | "help"; restTokens: string[] } | null => {
+      const rest = matchCommandPrefix(body, "/subagents");
+      if (rest !== null) {
+        const [rawAction = "list", ...restTokens] = rest.split(/\s+/).filter(Boolean);
+        const action = rawAction.toLowerCase();
+        return {
+          action: action === "list" || action === "info" || action === "log" ? action : "help",
+          restTokens,
+        };
+      }
+      return matchCommandPrefix(body, "/agents") === null
+        ? null
+        : { action: "agents", restTokens: [] };
+    },
+    silentUnauthorized: true,
+  },
+  async (params, { action, restTokens }) => {
+    if (action === "help") {
+      return commandReply(buildSubagentsHelp());
+    }
 
-  const normalized = params.command.commandBodyNormalized;
-  const handledPrefix = resolveHandledPrefix(normalized);
-  if (!handledPrefix) {
-    return null;
-  }
+    const requesterKey = resolveRequesterSessionKey(params);
+    if (!requesterKey) {
+      return commandReply("⚠️ Missing session key.");
+    }
 
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring ${handledPrefix} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
+    const ctx: SubagentsCommandContext = {
+      params,
+      requesterKey,
+      runs: (await controlRuntimeLoader.load()).listControlledSubagentRuns(
+        requesterKey,
+        params.agentId,
+        params.cfg,
+      ),
+      restTokens,
+    };
 
-  const rest = normalized.slice(handledPrefix.length).trim();
-  const restTokens = rest.split(/\s+/).filter(Boolean);
-  const action = resolveSubagentsAction({ handledPrefix, restTokens });
-  if (!action) {
-    return handleSubagentsHelpAction();
-  }
-
-  const requesterKey =
-    action === "spawn"
-      ? resolveRequesterSessionKey(params, {
-          preferCommandTarget: true,
-        })
-      : resolveRequesterSessionKey(params);
-  if (!requesterKey) {
-    return stopWithText("⚠️ Missing session key.");
-  }
-
-  const ctx: SubagentsCommandContext = {
-    params,
-    handledPrefix,
-    requesterKey,
-    runs: listControlledSubagentRuns(requesterKey),
-    restTokens,
-  };
-
-  switch (action) {
-    case "help":
-      return handleSubagentsHelpAction();
-    case "agents":
-      return handleSubagentsAgentsAction(ctx);
-    case "focus":
-      return await handleSubagentsFocusAction(ctx);
-    case "unfocus":
-      return await handleSubagentsUnfocusAction(ctx);
-    case "list":
-      return handleSubagentsListAction(ctx);
-    case "kill":
-      return await handleSubagentsKillAction(ctx);
-    case "info":
-      return handleSubagentsInfoAction(ctx);
-    case "log":
-      return await handleSubagentsLogAction(ctx);
-    case "send":
-      return await handleSubagentsSendAction(ctx, false);
-    case "steer":
-      return await handleSubagentsSendAction(ctx, true);
-    case "spawn":
-      return await handleSubagentsSpawnAction(ctx);
-    default:
-      return handleSubagentsHelpAction();
-  }
-};
+    if (action === "agents") {
+      return (await actionAgentsLoader.load()).handleSubagentsAgentsAction(ctx);
+    }
+    if (action === "list") {
+      return (await actionListLoader.load()).handleSubagentsListAction(ctx);
+    }
+    if (action === "info") {
+      return (await actionInfoLoader.load()).handleSubagentsInfoAction(ctx);
+    }
+    return await (await actionLogLoader.load()).handleSubagentsLogAction(ctx);
+  },
+);

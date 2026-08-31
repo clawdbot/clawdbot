@@ -1,8 +1,25 @@
-import { getBundledChannelContractSurfaceEntries } from "../../channels/plugins/contract-surfaces.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+// Message-action specs describe which actions need destinations and which
+// legacy/plugin aliases count as an existing target.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import type {
+  ChannelMessageActionName,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
-export type MessageActionTargetMode = "to" | "channelId" | "none";
+/**
+ * Canonical parameter shape used by an outbound message action target.
+ */
+type MessageActionTargetMode = "to" | "channelId" | "none";
 
+/**
+ * Target-parameter policy for each supported channel message action.
+ */
 export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, MessageActionTargetMode> =
   {
     send: "to",
@@ -43,6 +60,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "channel-info": "channelId",
     "channel-list": "none",
     "channel-create": "none",
+    "conversation-open": "none",
     "channel-edit": "channelId",
     "channel-delete": "channelId",
     "channel-move": "channelId",
@@ -67,6 +85,16 @@ type ActionTargetAliasSpec = {
   aliases: string[];
 };
 
+export type ActionDeliveryTargetAliasSpec = ActionTargetAliasSpec & {
+  deliveryTargetAliases?: string[];
+  resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+  matchesCurrentConversation?: (params: {
+    args: Record<string, unknown>;
+    accountId: string;
+    toolContext: ChannelThreadingToolContext;
+  }) => boolean;
+};
+
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
   unsend: { aliases: ["messageId"] },
   edit: { aliases: ["messageId"] },
@@ -78,22 +106,9 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
   leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
 
-type ChannelMessageActionAliasSurface = {
-  messageActionTargetAliases?: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>>;
-};
-
-function listChannelMessageActionAliasSurfaces(): Array<{
-  pluginId: string;
-  surface: ChannelMessageActionAliasSurface;
-}> {
-  return getBundledChannelContractSurfaceEntries() as Array<{
-    pluginId: string;
-    surface: ChannelMessageActionAliasSurface;
-  }>;
-}
-
 function listActionTargetAliasSpecs(
   action: ChannelMessageActionName,
+  params: Record<string, unknown>,
   channel?: string,
 ): ActionTargetAliasSpec[] {
   const specs: ActionTargetAliasSpec[] = [];
@@ -101,40 +116,101 @@ function listActionTargetAliasSpecs(
   if (coreSpec) {
     specs.push(coreSpec);
   }
-  const normalizedChannel = channel?.trim().toLowerCase();
-  if (!normalizedChannel) {
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
+  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
     return specs;
   }
-  for (const entry of listChannelMessageActionAliasSurfaces()) {
-    if (entry.pluginId !== normalizedChannel) {
-      continue;
-    }
-    const channelSpec = entry.surface.messageActionTargetAliases?.[action];
-    if (channelSpec) {
-      specs.push(channelSpec);
-    }
+  // Plugin aliases are only checked after cheap param-shape screening to avoid bootstrap reads.
+  const plugin = getBootstrapChannelPlugin(normalizedChannel);
+  const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
+  if (channelSpec) {
+    specs.push(channelSpec);
   }
   return specs;
 }
 
+/** Resolves a plugin-declared delivery alias into the shared target contract. */
+export function resolveActionDeliveryTargetAlias(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: { channel?: string; aliasSpec?: ActionDeliveryTargetAliasSpec },
+): string | undefined {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return undefined;
+  }
+  const aliases =
+    options?.aliasSpec ??
+    getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
+  const resolved = aliases?.resolveDeliveryTarget?.({ args: params });
+  if (resolved !== undefined) {
+    return normalizeOptionalString(resolved);
+  }
+  const deliveryAliases = aliases?.deliveryTargetAliases ?? [];
+  const targets = deliveryAliases
+    .map((alias) => normalizeOptionalStringifiedId(params[alias]))
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    throw new Error(`Action ${action} received conflicting delivery target aliases.`);
+  }
+  return targets[0];
+}
+
+/** Reports whether a plugin alias identifies an existing resource rather than a conversation. */
+export function actionHasResourceReference(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: { channel?: string; aliasSpec?: ActionDeliveryTargetAliasSpec },
+): boolean {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return false;
+  }
+  const aliases =
+    options?.aliasSpec ??
+    getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
+  // Legacy alias specs do not distinguish conversations from resources.
+  // Do not infer ambient authority unless the owner explicitly partitions them.
+  if (!aliases?.deliveryTargetAliases) {
+    return false;
+  }
+  const deliveryAliases = new Set(aliases.deliveryTargetAliases);
+  return aliases.aliases.some((alias) => {
+    if (deliveryAliases.has(alias)) {
+      return false;
+    }
+    const value = params[alias];
+    if (typeof value === "string") {
+      return Boolean(normalizeOptionalString(value));
+    }
+    return typeof value === "number" && Number.isFinite(value);
+  });
+}
+
+/**
+ * Reports whether an action normally needs a destination target.
+ */
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
+/**
+ * Detects whether an action invocation already carries a usable target.
+ */
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
-  const specs = listActionTargetAliasSpecs(action, options?.channel);
+  const specs = listActionTargetAliasSpecs(action, params, options?.channel);
   if (specs.length === 0) {
     return false;
   }
@@ -142,7 +218,7 @@ export function actionHasTarget(
     spec.aliases.some((alias) => {
       const value = params[alias];
       if (typeof value === "string") {
-        return value.trim().length > 0;
+        return Boolean(normalizeOptionalString(value));
       }
       if (typeof value === "number") {
         return Number.isFinite(value);

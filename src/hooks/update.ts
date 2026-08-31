@@ -1,23 +1,30 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Hook update helpers refresh installed hook records and config references.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
+  isPackageVersionDowngrade,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
 import {
   installHooksFromNpmSpec,
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { recordHookInstall } from "./installs.js";
+import { readHookInstalls, recordHookInstall } from "./installs.js";
 
-export type HookPackUpdateLogger = {
+/** Logger contract for hook pack update operations. */
+type HookPackUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
-export type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
+/** Per-pack update status emitted by updateNpmInstalledHookPacks. */
+type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type HookPackUpdateOutcome = {
+/** Outcome for one hook pack update attempt. */
+type HookPackUpdateOutcome = {
   hookId: string;
   status: HookPackUpdateStatus;
   message: string;
@@ -25,13 +32,15 @@ export type HookPackUpdateOutcome = {
   nextVersion?: string;
 };
 
-export type HookPackUpdateSummary = {
+/** Aggregate update result with the possibly updated config. */
+type HookPackUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: HookPackUpdateOutcome[];
 };
 
-export type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
+/** Integrity drift payload enriched with hook pack identity and dry-run state. */
+type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
   hookId: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
@@ -61,12 +70,15 @@ function createHookPackUpdateIntegrityDriftHandler(params: {
     params.logger.warn?.(
       `Integrity drift for hook pack "${params.hookId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
     );
-    return true;
+    return false;
   };
 }
 
+/** Update npm-installed hook packs and return config changes plus per-pack outcomes. */
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   logger?: HookPackUpdateLogger;
   hookIds?: string[];
   dryRun?: boolean;
@@ -74,7 +86,7 @@ export async function updateNpmInstalledHookPacks(params: {
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
-  const installs = params.config.hooks?.internal?.installs ?? {};
+  const installs = readHookInstalls();
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
   let next = params.config;
@@ -100,6 +112,8 @@ export async function updateNpmInstalledHookPacks(params: {
     }
 
     const effectiveSpec = params.specOverrides?.[hookId] ?? record.spec;
+    // Only enforce the stored integrity when the update uses the same spec.
+    // Spec overrides intentionally resolve a new tarball identity.
     const expectedIntegrity =
       effectiveSpec === record.spec
         ? expectedIntegrityForUpdate(record.spec, record.integrity)
@@ -126,6 +140,9 @@ export async function updateNpmInstalledHookPacks(params: {
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
     const result = await installHooksFromNpmSpec({
+      config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       spec: effectiveSpec,
       mode: "update",
       dryRun: params.dryRun,
@@ -154,6 +171,7 @@ export async function updateNpmInstalledHookPacks(params: {
     const nextLabel = nextVersion ?? "unknown";
     const status =
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
+    const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
     if (params.dryRun) {
       outcomes.push({
@@ -164,7 +182,7 @@ export async function updateNpmInstalledHookPacks(params: {
         message:
           status === "unchanged"
             ? `Hook pack "${hookId}" is up to date (${currentLabel}).`
-            : `Would update hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+            : `${downgraded ? "Would downgrade" : "Would update"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
       });
       continue;
     }
@@ -175,9 +193,7 @@ export async function updateNpmInstalledHookPacks(params: {
       spec: effectiveSpec,
       installPath: result.targetDir,
       version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
+      ...buildNpmResolutionFields(result.npmResolution),
       hooks: result.hooks,
     });
     changed = true;
@@ -190,7 +206,7 @@ export async function updateNpmInstalledHookPacks(params: {
       message:
         status === "unchanged"
           ? `Hook pack "${hookId}" already at ${currentLabel}.`
-          : `Updated hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+          : `${downgraded ? "Downgraded" : "Updated"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
     });
   }
 

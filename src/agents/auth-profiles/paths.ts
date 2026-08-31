@@ -1,33 +1,24 @@
-import fs from "node:fs";
+/**
+ * Public path barrel for auth-profile stores.
+ * Import through this file for canonical SQLite display and lock paths.
+ */
 import path from "node:path";
-import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { AUTH_PROFILE_FILENAME, AUTH_STORE_VERSION, LEGACY_AUTH_FILENAME } from "./constants.js";
-import type { AuthProfileStore } from "./types.js";
+import { resolveOAuthRefreshLockPath, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { inspectPersistedAuthProfileStoreRaw } from "./sqlite.js";
 
-export function resolveAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
-  return path.join(resolved, AUTH_PROFILE_FILENAME);
-}
+export { resolveOAuthRefreshLockPath };
 
-export function resolveLegacyAuthStorePath(agentDir?: string): string {
-  const resolved = resolveUserPath(agentDir ?? resolveOpenClawAgentDir());
-  return path.join(resolved, LEGACY_AUTH_FILENAME);
-}
-
+/** Resolve the user-facing path for the database selected by the auth store loader. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = resolveAuthStorePath(agentDir);
+  const pathname =
+    agentDir && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing"
+      ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+      : resolveSharedAuthStorePath();
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
-export function ensureAuthStoreFile(pathname: string) {
-  if (fs.existsSync(pathname)) {
-    return;
-  }
-  const payload: AuthProfileStore = {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-  };
-  saveJsonFile(pathname, payload);
+/** Retained name for callers that present auth runtime state from the same selected store. */
+export function resolveAuthStatePathForDisplay(agentDir?: string): string {
+  return resolveAuthStorePathForDisplay(agentDir);
 }

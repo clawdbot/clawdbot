@@ -1,22 +1,28 @@
+// Gateway network address helpers.
+// Normalizes host/IP inputs and classifies local/private gateway requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   normalizeIpAddress,
-} from "../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayBindMode } from "../config/types.gateway.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
+import {
+  pickMatchingExternalInterfaceAddress,
+  readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
+} from "../infra/network-interfaces.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
-/**
- * Pick the primary non-internal IPv4 address (LAN IP).
- * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
- */
+/** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
   return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
     family: "IPv4",
@@ -24,10 +30,12 @@ export function pickPrimaryLanIPv4(): string | undefined {
   });
 }
 
+/** Normalize a raw Host header for gateway origin and local-request checks. */
 export function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
+/** Extract hostname from a Host header while preserving unbracketed IPv6 hosts. */
 export function resolveHostName(hostHeader?: string): string {
   const host = normalizeHostHeader(hostHeader);
   if (!host) {
@@ -51,12 +59,64 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
 }
 
+/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
+export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+  const headers = req.headers ?? {};
+  return Object.keys(headers).some((header) => {
+    const normalized = normalizeLowercaseStringOrEmpty(header);
+    return (
+      normalized === "forwarded" ||
+      normalized === "x-real-ip" ||
+      normalized.startsWith("x-forwarded-")
+    );
+  });
+}
+
+/** Return whether a request is a clean loopback request without forwarded identity headers. */
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  _trustedProxies?: string[],
+  _allowRealIpFallback = false,
+): boolean {
+  return Boolean(
+    req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Returns true if the IP belongs to a private or loopback network range.
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
+ * Excludes RFC8215 local-use NAT64: SSRF policy blocks that allocation, but
+ * Gateway trust decisions cannot infer a private mapped destination from it.
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
-  return isPrivateOrLoopbackIpAddress(ip);
+  return isPrivateOrLoopbackIpAddress(ip) && !isRfc8215LocalUseNat64Ipv6Address(ip);
 }
 
 function normalizeIp(ip: string | undefined): string | undefined {
@@ -200,52 +260,28 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
-    return true;
-  }
-  return false;
-}
+export { isContainerEnvironment };
 
 /**
  * Resolves gateway bind host with fallback strategy.
  *
  * Modes:
- * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
+ * - loopback: always 127.0.0.1
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
- * - auto: Loopback if available, else 0.0.0.0
- * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
+ * - auto: 0.0.0.0 inside containers (Docker/Podman/K8s); loopback otherwise
+ * - custom: User-specified IPv4; unavailable values resolve to 0.0.0.0 for caller validation
  *
  * @returns The bind address to use (never null)
  */
 export async function resolveGatewayBindHost(
-  bind: import("../config/config.js").GatewayBindMode | undefined,
+  bind: GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";
 
   if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0"; // extreme fallback
+    return "127.0.0.1";
   }
 
   if (mode === "tailnet") {
@@ -272,11 +308,16 @@ export async function resolveGatewayBindHost(
     if (isValidIPv4(host) && (await canBindToHost(host))) {
       return host;
     }
-    // Custom IP failed → fall back to LAN
+    // Runtime startup rejects this fallback; status/display callers remain best-effort.
     return "0.0.0.0";
   }
 
   if (mode === "auto") {
+    // Inside a container, loopback is unreachable from the host network
+    // namespace, so prefer 0.0.0.0 to make port-forwarding work.
+    if (isContainerEnvironment()) {
+      return "0.0.0.0";
+    }
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";
     }
@@ -287,13 +328,34 @@ export async function resolveGatewayBindHost(
 }
 
 /**
+ * Returns the effective default bind mode when `gateway.bind` is not explicitly
+ * configured. Inside a detected container environment the default is `"auto"`
+ * (which resolves to `0.0.0.0` for port-forwarding compatibility); on bare-metal
+ * / VM hosts the default remains `"loopback"`.
+ *
+ * When {@link tailscaleMode} is `"serve"` or `"funnel"`, the function always
+ * returns `"loopback"` because Tailscale serve/funnel architecturally requires
+ * a loopback bind — container auto-detection must never override this.
+ *
+ * Use this only in gateway startup codepaths that execute in the same
+ * environment as the eventual bind decision. Host-side diagnostics should keep
+ * their own explicit defaults instead of inferring from the caller process.
+ */
+export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode {
+  if (tailscaleMode && tailscaleMode !== "off") {
+    return "loopback";
+  }
+  return isContainerEnvironment() ? "auto" : "loopback";
+}
+
+/**
  * Test if we can bind to a specific host address.
  * Creates a temporary server, attempts to bind, then closes it.
  *
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -312,7 +374,14 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
+  const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
+    return requiredHosts;
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
@@ -320,6 +389,16 @@ export async function resolveGatewayListenHosts(
     return [bindHost, "::1"];
   }
   return [bindHost];
+}
+
+/** Returns every address whose bind must succeed for Gateway startup to succeed. */
+export function resolveGatewayRequiredListenHosts(bindHost: string): string[] {
+  if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0" || bindHost === "127.0.0.1") {
+    return [bindHost];
+  }
+  // Same-host clients use the canonical loopback URL even when external access is
+  // pinned to one interface. Lifecycle checks must therefore cover both listeners.
+  return [bindHost, "127.0.0.1"];
 }
 
 /**
@@ -399,7 +478,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };
@@ -419,8 +498,8 @@ function parseHostForAddressChecks(
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -441,8 +520,7 @@ export function isSecureWebSocketUrl(
   // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
   // Treat those aliases the same way here so loopback cron announce delivery
   // and TLS-backed https endpoints follow the same security policy.
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
 
   if (protocol === "wss:") {
     return true;
@@ -452,11 +530,15 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy allows local/Tailnet endpoints that cannot be given public TLS
+  // without extra operator setup. Public DNS hostnames still require wss://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  // Optional break-glass for trusted private-network overlays.
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
@@ -470,4 +552,12 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+  if (isPrivateOrLoopbackHost(hostname)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
+  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }

@@ -1,45 +1,41 @@
 // Real workspace contract for memory engine foundation concerns.
 
 export {
+  resolveAgentContextLimits,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
-} from "../../../src/agents/agent-scope.js";
+} from "./host/openclaw-runtime-agent.js";
 export {
   resolveMemorySearchConfig,
+  resolveMemorySearchSyncConfig,
   type ResolvedMemorySearchConfig,
-} from "../../../src/agents/memory-search.js";
-export { parseDurationMs } from "../../../src/cli/parse-duration.js";
-export { loadConfig } from "../../../src/config/config.js";
-export { resolveStateDir } from "../../../src/config/paths.js";
-export { resolveSessionTranscriptsDirForAgent } from "../../../src/config/sessions/paths.js";
+  type ResolvedMemorySearchSyncConfig,
+} from "./host/openclaw-runtime-agent.js";
+export { parseDurationMs } from "./host/openclaw-runtime-config.js";
+export { loadConfig } from "./host/openclaw-runtime-session.js";
+export { resolveStateDir } from "./host/openclaw-runtime-config.js";
+export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
-} from "../../../src/config/types.secrets.js";
-export { writeFileWithinRoot } from "../../../src/infra/fs-safe.js";
-export { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-export { detectMime } from "../../../src/media/mime.js";
-export { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
-export { onSessionTranscriptUpdate } from "../../../src/sessions/transcript-events.js";
-export { splitShellArgs } from "../../../src/utils/shell-argv.js";
-export { runTasksWithConcurrency } from "../../../src/utils/run-with-concurrency.js";
+} from "./host/openclaw-runtime-config.js";
+export { root } from "./host/openclaw-runtime-io.js";
+export { isPathInside } from "./host/fs-utils.js";
+export { createSubsystemLogger } from "./host/openclaw-runtime-io.js";
+export { detectMime } from "./host/openclaw-runtime-io.js";
+export { resolveGlobalSingleton } from "./host/openclaw-runtime-io.js";
+export { onSessionTranscriptUpdate } from "./host/openclaw-runtime-session.js";
+export { splitShellArgs } from "./host/openclaw-runtime-io.js";
+export { runTasksWithConcurrency } from "./host/openclaw-runtime-io.js";
 export {
   shortenHomeInString,
   shortenHomePath,
   resolveUserPath,
   truncateUtf16Safe,
-} from "../../../src/utils.js";
-export type { OpenClawConfig } from "../../../src/config/config.js";
-export type { SessionSendPolicyConfig } from "../../../src/config/types.base.js";
-export type { SecretInput } from "../../../src/config/types.secrets.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
-  MemoryQmdSearchMode,
-} from "../../../src/config/types.memory.js";
-export type { MemorySearchConfig } from "../../../src/config/types.tools.js";
+} from "./host/openclaw-runtime-io.js";
+export type { OpenClawConfig } from "./host/openclaw-runtime-config.js";
+export type { SecretInput } from "./host/openclaw-runtime-config.js";
+export type { MemoryCitationsMode } from "./host/openclaw-runtime-config.js";
+export type { MemorySearchConfig } from "./host/openclaw-runtime-config.js";

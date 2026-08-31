@@ -1,5 +1,5 @@
+/** Shared setup helpers for isolated-agent run test suites. */
 import { afterEach, beforeEach } from "vitest";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   clearFastTestEnv,
   makeCronSession,
@@ -8,10 +8,14 @@ import {
   restoreFastTestEnv,
 } from "./run.test-harness.js";
 
-export function setupRunCronIsolatedAgentTurnSuite() {
+/** Installs the common before/after hooks for isolated-agent run suites. */
+export function setupRunCronIsolatedAgentTurnSuite(options?: { fast?: boolean }) {
   let previousFastTestEnv: string | undefined;
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
+    if (options?.fast) {
+      process.env.OPENCLAW_TEST_FAST = "1";
+    }
     resetRunCronIsolatedAgentTurnHarness();
     resolveCronSessionMock.mockReturnValue(makeCronSession());
   });
@@ -19,6 +23,3 @@ export function setupRunCronIsolatedAgentTurnSuite() {
     restoreFastTestEnv(previousFastTestEnv);
   });
 }
-
-export const makeIsolatedAgentTurnJob = makeIsolatedAgentJobFixture;
-export const makeIsolatedAgentTurnParams = makeIsolatedAgentParamsFixture;

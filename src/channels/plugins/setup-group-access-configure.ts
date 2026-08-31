@@ -1,7 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Channel setup group access configurator.
+ *
+ * Applies prompted group policy and allowlist entries through channel-specific hooks.
+ */
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./setup-group-access.js";
 
+/**
+ * Applies prompted group access config through channel-specific policy/allowlist hooks.
+ */
 export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -29,6 +37,8 @@ export async function configureChannelAccessWithAllowlist<TResolved>(params: {
     return next;
   }
   if (accessConfig.policy !== "allowlist") {
+    // Non-allowlist policies intentionally bypass resolver hooks so stale
+    // allowlist entries are not re-applied after choosing open/disabled.
     return params.setPolicy(next, accessConfig.policy);
   }
   if (params.skipAllowlistEntries || !params.resolveAllowlist || !params.applyAllowlist) {

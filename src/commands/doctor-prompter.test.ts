@@ -1,3 +1,4 @@
+// Doctor prompter tests cover confirmation prompt behavior and cancellation paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -80,6 +81,42 @@ describe("createDoctorPrompter", () => {
       prompter.confirmAggressiveAutoFix({
         message: "Overwrite gateway service config?",
         initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-accept runtime repairs that require interactive confirmation", async () => {
+    const prompter = createRepairPrompter();
+
+    await expect(
+      prompter.confirmRuntimeRepair({
+        message: "Archive orphan transcripts?",
+        initialValue: false,
+        requiresInteractiveConfirmation: true,
+      }),
+    ).resolves.toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("does not accept interactive-only runtime repairs through --yes defaults", async () => {
+    setNonInteractiveTerminal();
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        yes: true,
+      },
+    });
+
+    await expect(
+      prompter.confirmRuntimeRepair({
+        message: "Archive orphan transcripts?",
+        initialValue: true,
+        requiresInteractiveConfirmation: true,
       }),
     ).resolves.toBe(false);
     expect(confirmMock).not.toHaveBeenCalled();

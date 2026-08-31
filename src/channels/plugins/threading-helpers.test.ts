@@ -1,3 +1,4 @@
+// Threading helper tests cover channel thread metadata and reply-thread helper behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -37,10 +38,12 @@ describe("createScopedAccountReplyToModeResolver", () => {
       resolveAccount: (cfg, accountId) =>
         ((
           cfg.channels as {
-            demo?: { accounts?: Record<string, { replyToMode?: "off" | "first" | "all" }> };
+            demo?: {
+              accounts?: Record<string, { replyToMode?: "off" | "first" | "all" | "batched" }>;
+            };
           }
         ).demo?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
-          replyToMode?: "off" | "first" | "all";
+          replyToMode?: "off" | "first" | "all" | "batched";
         },
       resolveReplyToMode: (account) => account.replyToMode,
     });

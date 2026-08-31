@@ -6,7 +6,7 @@
  */
 
 import { TwitchClientManager } from "./twitch-client.js";
-import type { ChannelLogSink } from "./types.js";
+import type { ChannelAccountSnapshot, ChannelLogSink } from "./types.js";
 
 /**
  * Registry entry tracking a client manager and its associated account.
@@ -38,13 +38,15 @@ const registry = new Map<string, RegistryEntry>();
 export function getOrCreateClientManager(
   accountId: string,
   logger: ChannelLogSink,
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void,
 ): TwitchClientManager {
   const existing = registry.get(accountId);
   if (existing) {
+    existing.manager.setStatusSink(statusSink);
     return existing.manager;
   }
 
-  const manager = new TwitchClientManager(logger);
+  const manager = new TwitchClientManager(logger, statusSink);
   registry.set(accountId, {
     manager,
     accountId,
@@ -78,38 +80,10 @@ export async function removeClientManager(accountId: string): Promise<void> {
     return;
   }
 
-  // Disconnect the client manager
-  await entry.manager.disconnectAll();
-
-  // Remove from registry
   registry.delete(accountId);
-  entry.logger.info(`Unregistered client manager for account: ${accountId}`);
-}
-
-/**
- * Disconnect and remove all client managers from the registry.
- *
- * @returns Promise that resolves when all cleanup is complete
- */
-export async function removeAllClientManagers(): Promise<void> {
-  const promises = [...registry.keys()].map((accountId) => removeClientManager(accountId));
-  await Promise.all(promises);
-}
-
-/**
- * Get the number of registered client managers.
- *
- * @returns The count of registered managers
- */
-export function getRegisteredClientManagerCount(): number {
-  return registry.size;
-}
-
-/**
- * Clear all client managers without disconnecting.
- *
- * This is primarily for testing purposes.
- */
-export function _clearAllClientManagersForTest(): void {
-  registry.clear();
+  try {
+    await entry.manager.disconnectAll();
+  } finally {
+    entry.logger.info(`Unregistered client manager for account: ${accountId}`);
+  }
 }

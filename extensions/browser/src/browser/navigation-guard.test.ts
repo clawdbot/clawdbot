@@ -1,3 +1,4 @@
+// Browser tests cover navigation guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
@@ -5,7 +6,6 @@ import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -81,8 +81,8 @@ describe("browser navigation guard", () => {
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
-  it("allows blocked hostnames when explicitly allowed", async () => {
-    const lookupFn = createLookupFn("127.0.0.1");
+  it("allows explicitly trusted hostnames that resolve to private addresses", async () => {
+    const lookupFn = createLookupFn("10.0.0.1");
     await expect(
       assertBrowserNavigationAllowed({
         url: "http://agent.internal:3000",
@@ -116,7 +116,98 @@ describe("browser navigation guard", () => {
     expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
-  it("blocks strict policy navigation when env proxy is configured", async () => {
+  it("blocks hostname navigation when strict SSRF policy is explicitly configured", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toThrow(/dns rebinding protections are unavailable/i);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("allows hostname navigation when the default strict policy object is present", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: {},
+      }),
+    ).resolves.toBeUndefined();
+    expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
+  });
+
+  it("allows explicitly allowed hostnames in strict mode", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://agent.internal",
+        lookupFn,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["agent.internal"],
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows wildcard-allowlisted hostnames in strict mode", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://sub.example.com",
+        lookupFn,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["*.example.com"],
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not treat the bare suffix as matching a wildcard allowlist entry", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["*.example.com"],
+        },
+      }),
+    ).rejects.toThrow(/dns rebinding protections are unavailable/i);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("does not match sibling domains against wildcard allowlist entries", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://evil-example.com",
+        lookupFn,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["*.example.com"],
+        },
+      }),
+    ).rejects.toThrow(/dns rebinding protections are unavailable/i);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("treats bracketed IPv6 URL hostnames as IP literals in strict mode", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://[2606:4700:4700::1111]/",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows public navigation when only Gateway env proxy is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(
@@ -124,16 +215,29 @@ describe("browser navigation guard", () => {
         url: "https://example.com",
         lookupFn,
       }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    ).resolves.toBeUndefined();
+    expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
-  it("allows env proxy navigation when private-network mode is explicitly enabled", async () => {
-    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+  it("blocks explicit browser proxy routing in strict SSRF mode", async () => {
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(
       assertBrowserNavigationAllowed({
         url: "https://example.com",
         lookupFn,
+        browserProxyMode: "explicit-browser-proxy",
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit browser proxy routing when private-network mode is enabled", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        browserProxyMode: "explicit-browser-proxy",
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       }),
     ).resolves.toBeUndefined();
@@ -145,6 +249,26 @@ describe("browser navigation guard", () => {
         url: "not a url",
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("blocks network URLs with embedded credentials before lookup", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    const result = assertBrowserNavigationAllowed({
+      url: "https://user:secret@example.com/private",
+      lookupFn,
+    });
+    await expect(result).rejects.toThrow("URL-embedded credentials are not supported");
+    await expect(result).rejects.toThrow("openclaw browser set credentials");
+    await expect(result).rejects.not.toThrow("secret");
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("redacts malformed credential-bearing URLs from diagnostics", async () => {
+    const result = assertBrowserNavigationAllowed({
+      url: "https://user:secret@",
+    });
+    await expect(result).rejects.toThrow("Invalid URL: [redacted credential-bearing URL]");
+    await expect(result).rejects.not.toThrow("secret");
   });
 
   it("validates final network URLs after navigation", async () => {
@@ -163,6 +287,15 @@ describe("browser navigation guard", () => {
         url: "chrome-error://chromewebdata/",
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("blocks final hostname URLs in strict mode after navigation", async () => {
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "https://example.com/final",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
   });
 
   it("blocks private intermediate redirect hops", async () => {
@@ -210,12 +343,5 @@ describe("browser navigation guard", () => {
         lookupFn,
       }),
     ).resolves.toBeUndefined();
-  });
-
-  it("treats default browser SSRF mode as requiring redirect-hop inspection", () => {
-    expect(requiresInspectableBrowserNavigationRedirects()).toBe(true);
-    expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
-      false,
-    );
   });
 });

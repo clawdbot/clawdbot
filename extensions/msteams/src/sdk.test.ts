@@ -1,291 +1,489 @@
+// Msteams tests cover sdk plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createBotFrameworkJwtValidator,
-  createMSTeamsAdapter,
-  createMSTeamsApp,
-  type MSTeamsTeamsSdk,
-} from "./sdk.js";
-import type { MSTeamsCredentials } from "./token.js";
+import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 
-const jwtValidatorState = vi.hoisted(() => ({
-  instances: [] as Array<{ config: Record<string, unknown> }>,
-  behaviorByJwks: new Map<string, "success" | "null" | "throw">(),
-  calls: [] as Array<{ jwksUri: string; token: string; overrideOptions?: unknown }>,
+const privateQaRuntimeSymbol = Symbol.for("openclaw.msteams.privateQaRuntime");
+const privateQaBotToken = [
+  Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+  Buffer.from(JSON.stringify({ appid: "test-app-id", tid: "test-tenant" })).toString("base64url"),
+  "qa",
+].join(".");
+
+const { readSecretFile } = vi.hoisted(() => ({
+  readSecretFile: vi
+    .fn<(filePath: string, label: string) => Promise<string>>()
+    .mockResolvedValue("-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----"),
 }));
 
-const clientConstructorState = vi.hoisted(() => ({
-  calls: [] as Array<{ serviceUrl: string; options: unknown }>,
-}));
-
-vi.mock("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js", () => ({
-  JwtValidator: class JwtValidator {
-    private readonly config: Record<string, unknown>;
-
-    constructor(config: Record<string, unknown>) {
-      this.config = config;
-      jwtValidatorState.instances.push({ config });
-    }
-
-    async validateAccessToken(token: string, overrideOptions?: unknown): Promise<object | null> {
-      const jwksUri = String((this.config.jwksUriOptions as { uri?: string })?.uri ?? "");
-      jwtValidatorState.calls.push({ jwksUri, token, overrideOptions });
-      const behavior = jwtValidatorState.behaviorByJwks.get(jwksUri) ?? "null";
-      if (behavior === "throw") {
-        throw new Error("validator error");
-      }
-      return behavior === "success" ? { sub: "ok" } : null;
-    }
-  },
-}));
-
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  clientConstructorState.calls.length = 0;
-  jwtValidatorState.instances.length = 0;
-  jwtValidatorState.calls.length = 0;
-  jwtValidatorState.behaviorByJwks.clear();
-  vi.restoreAllMocks();
+vi.mock("openclaw/plugin-sdk/secret-file", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/secret-file")>();
+  return {
+    ...actual,
+    readSecretFile,
+  };
 });
 
-function createSdkStub(): MSTeamsTeamsSdk {
-  class AppStub {
-    async getBotToken() {
-      return {
-        toString() {
-          return "bot-token";
-        },
-      };
-    }
+const { mockGetToken } = vi.hoisted(() => {
+  const mockGetTokenLocal = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
+  return { mockGetToken: mockGetTokenLocal };
+});
+vi.mock("@azure/identity", () => {
+  class ManagedIdentityCredential {
+    getToken = mockGetToken;
   }
-
-  class ClientStub {
-    constructor(serviceUrl: string, options: unknown) {
-      clientConstructorState.calls.push({ serviceUrl, options });
-    }
-
-    conversations = {
-      activities: (_conversationId: string) => ({
-        create: async (_activity: unknown) => ({ id: "created" }),
-      }),
-    };
+  class DefaultAzureCredential {
+    getToken = mockGetToken;
   }
+  class ClientCertificateCredential {
+    getToken = mockGetToken;
+  }
+  return { ManagedIdentityCredential, DefaultAzureCredential, ClientCertificateCredential };
+});
 
-  return {
-    App: AppStub as unknown as MSTeamsTeamsSdk["App"],
-    Client: ClientStub as unknown as MSTeamsTeamsSdk["Client"],
-  };
+afterEach(() => {
+  vi.unstubAllEnvs();
+  delete (
+    globalThis as typeof globalThis & {
+      [privateQaRuntimeSymbol]?: unknown;
+    }
+  )[privateQaRuntimeSymbol];
+  vi.restoreAllMocks();
+  readSecretFile
+    .mockReset()
+    .mockResolvedValue("-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----");
+});
+
+async function createMSTeamsApp(...args: Parameters<typeof loadMSTeamsSdkWithAuth>) {
+  return (await loadMSTeamsSdkWithAuth(...args)).app;
 }
 
 describe("createMSTeamsApp", () => {
   it("does not crash with express 5 path-to-regexp (#55161)", async () => {
-    // Regression test for: https://github.com/openclaw/openclaw/issues/55161
-    // createMSTeamsApp passes a no-op httpServerAdapter to prevent the SDK from
-    // creating its default HttpPlugin (which registers `/api*` — invalid in Express 5).
-    const { App } = await import("@microsoft/teams.apps");
-    const { Client } = await import("@microsoft/teams.api");
-    const sdk: MSTeamsTeamsSdk = { App, Client };
     const creds: MSTeamsCredentials = {
+      type: "secret",
       appId: "test-app-id",
       appPassword: "test-secret",
       tenantId: "test-tenant",
     };
 
-    // This would throw "Missing parameter name at index 5: /api*" without the fix
-    const app = await createMSTeamsApp(creds, sdk);
+    const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
-    // Verify token methods are available (the reason we use the App class)
-    expect(typeof (app as unknown as Record<string, unknown>).getBotToken).toBe("function");
+    expect(app.tokenManager).toBeDefined();
   });
-});
 
-describe("createMSTeamsAdapter", () => {
-  it("provides deleteActivity in proactive continueConversation contexts", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const creds = {
-      appId: "app-id",
-      appPassword: "secret",
-      tenantId: "tenant-id",
-    } satisfies MSTeamsCredentials;
-    const sdk = createSdkStub();
-    const app = new sdk.App({
-      clientId: creds.appId,
-      clientSecret: creds.appPassword,
-      tenantId: creds.tenantId,
+  it("keeps private QA App options absent in production", async () => {
+    const app = await createMSTeamsApp({
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
     });
-    const adapter = createMSTeamsAdapter(app, sdk);
+    const options = (app as unknown as { options?: Record<string, unknown> }).options;
+    expect(options?.skipAuth).toBeUndefined();
+    expect(options?.token).toBeUndefined();
+  });
 
-    await adapter.continueConversation(
-      creds.appId,
-      {
-        serviceUrl: "https://service.example.com/",
-        conversation: { id: "19:conversation@thread.tacv2" },
-        channelId: "msteams",
+  it("passes the complete private QA bootstrap into the SDK App", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("CLIENT_SECRET", "ambient-private-qa-secret");
+    (
+      globalThis as typeof globalThis & {
+        [privateQaRuntimeSymbol]?: {
+          connectorUrl: string;
+          nonce: string;
+          botToken: string;
+        };
+      }
+    )[privateQaRuntimeSymbol] = {
+      connectorUrl: "http://127.0.0.1:43123/",
+      nonce: "qa-nonce",
+      botToken: privateQaBotToken,
+    };
+
+    const app = await createMSTeamsApp({
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    });
+    const options = (app as unknown as { options?: Record<string, unknown> }).options;
+    expect(options?.skipAuth).toBe(true);
+    expect(options?.clientSecret).toBe("");
+    expect(options?.client).toEqual(expect.objectContaining({ clone: expect.any(Function) }));
+    expect(options?.token).toEqual(expect.any(Function));
+    const token = options?.token;
+    if (typeof token !== "function") {
+      throw new Error("expected private QA token factory");
+    }
+    await expect(token()).resolves.toBe(privateQaBotToken);
+    const credentials = (
+      app as unknown as {
+        credentials?: Record<string, unknown>;
+      }
+    ).credentials;
+    expect(credentials).toMatchObject({
+      clientId: "test-app-id",
+      token: expect.any(Function),
+    });
+    expect(credentials).not.toHaveProperty("clientSecret");
+    expect(String(await app.tokenManager.getBotToken())).toBe(privateQaBotToken);
+  });
+
+  it("routes a private QA proactive send through the loopback Connector", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("CLIENT_SECRET", "ambient-private-qa-secret");
+    const outbound: Array<{
+      activity: Record<string, unknown>;
+      activityId: string;
+      conversationId: string;
+      threadId?: string;
+    }> = [];
+    const connector = await startMSTeamsQaBotFrameworkServer({
+      botToken: privateQaBotToken,
+      nonce: "qa-nonce",
+      onOutbound: async (activity) => {
+        outbound.push(activity);
       },
-      async (ctx) => {
-        await ctx.deleteActivity("activity-123");
+    });
+    (
+      globalThis as typeof globalThis & {
+        [privateQaRuntimeSymbol]?: {
+          connectorUrl: string;
+          nonce: string;
+          botToken: string;
+        };
+      }
+    )[privateQaRuntimeSymbol] = {
+      connectorUrl: connector.baseUrl,
+      nonce: "qa-nonce",
+      botToken: privateQaBotToken,
+    };
+
+    try {
+      const app = await createMSTeamsApp({
+        type: "secret",
+        appId: "test-app-id",
+        appPassword: "test-secret",
+        tenantId: "test-tenant",
+      });
+      const result = await sendMSTeamsActivityWithReference(
+        app,
+        {
+          serviceUrl: "https://smba.trafficmanager.net/qa",
+          agent: { id: "test-app-id", name: "OpenClaw QA", role: "bot" },
+          user: { id: "qa-driver" },
+          conversation: {
+            id: "19:qa-primary@thread.tacv2",
+            conversationType: "channel",
+            tenantId: "test-tenant",
+          },
+          channelId: "msteams",
+        },
+        { type: "message", text: "qa outbound" },
+        { threadActivityId: "thread-root" },
+      );
+
+      expect(result.id).toMatch(/^qa-outbound-/u);
+      expect(outbound).toEqual([
+        {
+          activity: expect.objectContaining({
+            type: "message",
+            text: "qa outbound",
+          }),
+          activityId: result.id,
+          conversationId: "19:qa-primary@thread.tacv2",
+          threadId: "thread-root",
+        },
+      ]);
+    } finally {
+      await connector.close();
+    }
+  });
+
+  it("creates app with federated certificate credentials", async () => {
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+      certificatePath: "/path/to/cert.pem",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    expect(app).toBeDefined();
+    expect(readSecretFile).toHaveBeenCalledWith("/path/to/cert.pem", "Microsoft Teams certificate");
+  });
+
+  it.each([
+    {
+      label: "certificate",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        certificatePath: "/path/to/cert.pem",
       },
+      expected: { clientId: "test-app-id", token: expect.any(Function) },
+    },
+    {
+      label: "managed identity",
+      credentials: {
+        type: "federated" as const,
+        appId: "test-app-id",
+        tenantId: "test-tenant",
+        useManagedIdentity: true,
+      },
+      expected: {
+        clientId: "test-app-id",
+        managedIdentityClientId: "system",
+        managedIdentityType: "system",
+      },
+    },
+  ])("prevents ambient CLIENT_SECRET from overriding $label authentication", async (mode) => {
+    vi.stubEnv("CLIENT_SECRET", "ambient-secret-must-not-win");
+
+    const app = await createMSTeamsApp(mode.credentials);
+    const credentials = (app as unknown as { credentials?: Record<string, unknown> }).credentials;
+
+    expect(credentials).toMatchObject(mode.expected);
+    expect(credentials).not.toHaveProperty("clientSecret");
+  });
+
+  it("throws when certificate file is missing", async () => {
+    const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
+    readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
+
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+      certificatePath,
+    };
+
+    const error = await createMSTeamsApp(creds).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toContain("Failed to read certificate file");
+      expect(error.message).not.toContain(certificatePath);
+    }
+  });
+
+  it("creates app with user-assigned managed identity", async () => {
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+      useManagedIdentity: true,
+      managedIdentityClientId: "custom-mi-id",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    expect(app).toBeDefined();
+  });
+
+  it("throws when federated credentials lack certificate and managed identity", async () => {
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+    };
+
+    await expect(createMSTeamsApp(creds)).rejects.toThrow(
+      "Federated credentials require either a certificate path or managed identity",
     );
+  });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://service.example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
+  it("preserves both Teams SDK and OpenClaw User-Agent fragments", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    const headers = (
+      app as unknown as { client?: { options?: { headers?: Record<string, string> } } }
+    ).client?.options?.headers;
+
+    expect(headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/\S+ OpenClaw\/\S+$/);
+  });
+
+  it("bounds Teams SDK API requests", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds);
+    const timeout = (app as unknown as { client?: { options?: { timeout?: number } } }).client
+      ?.options?.timeout;
+
+    expect(timeout).toBe(30_000);
+  });
+
+  it("accepts custom messagingEndpoint", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      messagingEndpoint: "/custom/webhook",
+    });
+    expect(app).toBeDefined();
+  });
+
+  it("passes configured cloud and serviceUrl to the SDK App", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      cloud: "USGov",
+      serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams/",
+    });
+
+    const internals = app as unknown as {
+      api?: { serviceUrl?: string };
+      cloud?: { botScope?: string; graphScope?: string };
+    };
+    expect(internals.api?.serviceUrl).toBe("https://smba.infra.gov.teams.microsoft.us/teams");
+    expect(internals.cloud?.botScope).toBe("https://api.botframework.us/.default");
+    expect(internals.cloud?.graphScope).toBe("https://graph.microsoft.us/.default");
+  });
+
+  it("passes China cloud to the SDK App without requiring a configured serviceUrl", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      cloud: "China",
+    });
+
+    const internals = app as unknown as {
+      api?: { serviceUrl?: string };
+      cloud?: { botScope?: string; graphScope?: string };
+    };
+    // @microsoft/teams.apps still gives app-level sends its public serviceUrl
+    // default. OpenClaw proactive sends use stored reference serviceUrls instead.
+    expect(internals.api?.serviceUrl).toBe("https://smba.trafficmanager.net/teams");
+    expect(internals.cloud?.botScope).toBe("https://api.botframework.azure.cn/.default");
+    expect(internals.cloud?.graphScope).toBe("https://microsoftgraph.chinacloudapi.cn/.default");
+  });
+
+  it("fails closed for Graph tokens when China cloud is configured", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+    const app = await createMSTeamsApp(creds, { cloud: "China" });
+    const tokenProvider = createMSTeamsTokenProvider(app);
+
+    await expect(tokenProvider.getAccessToken("https://graph.microsoft.com")).rejects.toThrow(
+      /Graph operations are not supported .*cloud=China/,
+    );
+  });
+
+  it("rejects configured serviceUrls outside the Bot Framework allowlist", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    await expect(
+      createMSTeamsApp(creds, {
+        serviceUrl: "https://attacker.example.com/teams/",
+      }),
+    ).rejects.toThrow(/Blocked Microsoft Teams serviceUrl host: attacker\.example\.com/);
+  });
+
+  it("uses the configured cloud serviceUrl for proactive HTTP posts", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+    const post = vi.fn(async () => ({ data: { id: "sent-1" } }));
+    const httpClient = {
+      request: vi.fn(),
+      post,
+      clone: vi.fn(() => httpClient),
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      cloud: "USGov",
+      serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
+      httpClient,
+    });
+
+    await app.send("19:conversation@thread.tacv2", { type: "message", text: "hello" });
+
+    expect(post).toHaveBeenCalledWith(
+      "https://smba.infra.gov.teams.microsoft.us/teams/v3/conversations/19:conversation@thread.tacv2/activities",
       expect.objectContaining({
-        method: "DELETE",
-        headers: expect.objectContaining({
-          Authorization: "Bearer bot-token",
-        }),
+        type: "message",
+        text: "hello",
+        conversation: { id: "19:conversation@thread.tacv2" },
       }),
     );
   });
-
-  it("passes the OpenClaw User-Agent to the Bot Framework connector client", async () => {
-    const creds = {
-      appId: "app-id",
-      appPassword: "secret",
-      tenantId: "tenant-id",
-    } satisfies MSTeamsCredentials;
-    const sdk = createSdkStub();
-    const app = new sdk.App({
-      clientId: creds.appId,
-      clientSecret: creds.appPassword,
-      tenantId: creds.tenantId,
-    });
-    const adapter = createMSTeamsAdapter(app, sdk);
-
-    await adapter.continueConversation(
-      creds.appId,
-      {
-        serviceUrl: "https://service.example.com/",
-        conversation: { id: "19:conversation@thread.tacv2" },
-        channelId: "msteams",
-      },
-      async (ctx) => {
-        await ctx.sendActivity("hello");
-      },
-    );
-
-    expect(clientConstructorState.calls).toHaveLength(1);
-    expect(clientConstructorState.calls[0]).toMatchObject({
-      serviceUrl: "https://service.example.com/",
-      options: {
-        headers: {
-          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
-        },
-      },
-    });
-  });
 });
 
-describe("createBotFrameworkJwtValidator", () => {
-  const creds = {
-    appId: "app-id",
-    appPassword: "secret",
-    tenantId: "tenant-id",
-  } satisfies MSTeamsCredentials;
-
-  it("validates with legacy Bot Framework JWKS and issuer first", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "success",
-    );
-
-    const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-1", "https://service.example.com")).resolves.toBe(
-      true,
-    );
-
-    expect(jwtValidatorState.instances).toHaveLength(2);
-    expect(jwtValidatorState.calls).toHaveLength(1);
-    expect(jwtValidatorState.calls[0]).toMatchObject({
-      jwksUri: "https://login.botframework.com/v1/.well-known/keys",
-      token: "token-1",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
+describe("createMSTeamsTokenProvider", () => {
+  function createMockApp() {
+    return {
+      tokenManager: {
+        getBotToken: async () => ({ toString: () => "bot-token" }),
+        getGraphToken: async () => ({ toString: () => "graph-token" }),
       },
-    });
+    } as unknown as import("./sdk.js").MSTeamsApp;
+  }
+
+  it("returns bot token for bot framework scope", async () => {
+    const app = createMockApp();
+    const provider = createMSTeamsTokenProvider(app);
+
+    const token = await provider.getAccessToken("https://api.botframework.com");
+    expect(token).toBe("bot-token");
   });
 
-  it("falls back to Entra JWKS when Bot Framework validation fails", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "null",
-    );
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      "success",
-    );
+  it("returns graph token for graph scope", async () => {
+    const app = createMockApp();
+    const provider = createMSTeamsTokenProvider(app);
 
-    const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-2")).resolves.toBe(true);
-
-    expect(jwtValidatorState.calls).toHaveLength(2);
-    expect(jwtValidatorState.calls[0]?.jwksUri).toBe(
-      "https://login.botframework.com/v1/.well-known/keys",
-    );
-    expect(jwtValidatorState.calls[1]?.jwksUri).toBe(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-    );
-
-    const entraConfig = jwtValidatorState.instances
-      .map((instance) => instance.config)
-      .find(
-        (config) =>
-          String((config.jwksUriOptions as { uri?: string })?.uri) ===
-          "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      );
-    expect(entraConfig).toBeDefined();
-    expect(entraConfig?.validateIssuer).toEqual({ allowedTenantIds: ["tenant-id"] });
+    const token = await provider.getAccessToken("https://graph.microsoft.com");
+    expect(token).toBe("graph-token");
   });
 
-  it("falls back to Entra JWKS when Bot Framework validation throws", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "throw",
-    );
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      "success",
-    );
-
-    const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(
-      validator.validate("Bearer token-throw", "https://service.example.com"),
-    ).resolves.toBe(true);
-
-    expect(jwtValidatorState.calls).toHaveLength(2);
-    expect(jwtValidatorState.calls[0]).toMatchObject({
-      jwksUri: "https://login.botframework.com/v1/.well-known/keys",
-      token: "token-throw",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
+  it("returns empty string when token is null", async () => {
+    const app = {
+      tokenManager: {
+        getBotToken: async () => null,
+        getGraphToken: async () => null,
       },
-    });
-    expect(jwtValidatorState.calls[1]).toMatchObject({
-      jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      token: "token-throw",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
-      },
-    });
-  });
+    } as unknown as import("./sdk.js").MSTeamsApp;
+    const provider = createMSTeamsTokenProvider(app);
 
-  it("returns false when all validator paths fail", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "throw",
-    );
-
-    const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-3")).resolves.toBe(false);
-    expect(jwtValidatorState.calls).toHaveLength(2);
-  });
-
-  it("returns false for empty bearer token", async () => {
-    const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer ")).resolves.toBe(false);
-    expect(jwtValidatorState.calls).toHaveLength(0);
+    expect(await provider.getAccessToken("https://api.botframework.com")).toBe("");
+    expect(await provider.getAccessToken("https://graph.microsoft.com")).toBe("");
   });
 });

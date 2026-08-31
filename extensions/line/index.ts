@@ -1,47 +1,32 @@
-import { defineChannelPluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { linePlugin } from "./src/channel.js";
-import { setLineRuntime } from "./src/runtime.js";
+// Line plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-export { linePlugin } from "./src/channel.js";
-export { setLineRuntime } from "./src/runtime.js";
+const loadLineCardCommand = createLazyRuntimeModule(() => import("./src/card-command.js"));
 
-type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
-
-let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
-
-async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLineCardCommand> {
-  lineCardCommandPromise ??= (async () => {
-    let registered: RegisteredLineCardCommand | null = null;
-    const { registerLineCardCommand } = await import("./src/card-command.js");
-    registerLineCardCommand({
-      ...api,
-      registerCommand(command) {
-        registered = command;
-      },
-    });
-    if (!registered) {
-      throw new Error("LINE card command registration unavailable");
-    }
-    return registered;
-  })();
-  return await lineCardCommandPromise;
-}
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "line",
   name: "LINE",
   description: "LINE Messaging API channel plugin",
-  plugin: linePlugin,
-  setRuntime: setLineRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "linePlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setLineRuntime",
+  },
   registerFull(api) {
     api.registerCommand({
       name: "card",
-      description: "Send a rich card message (LINE).",
+      description: "Send a rich card message.",
+      channels: ["line"],
       acceptsArgs: true,
       requireAuth: false,
       async handler(ctx) {
-        const command = await loadLineCardCommand(api);
-        return await command.handler(ctx);
+        const { handleLineCardCommand } = await loadLineCardCommand();
+        return await handleLineCardCommand(ctx.args);
       },
     });
   },

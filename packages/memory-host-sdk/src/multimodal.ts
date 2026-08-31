@@ -1,6 +1,6 @@
+// Public multimodal memory facade for feature flag and settings normalization.
 export {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
-  supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "./host/multimodal.js";

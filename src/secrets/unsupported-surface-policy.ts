@@ -1,77 +1,177 @@
-import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
+/** Defines unsupported secret-ref surfaces and operator-facing policy messages. */
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { isRecord } from "../utils.js";
 
-type ChannelUnsupportedSecretRefSurface = {
-  unsupportedSecretRefSurfacePatterns?: readonly string[];
-  collectUnsupportedSecretRefConfigCandidates?: (
-    raw: unknown,
-  ) => UnsupportedSecretRefConfigCandidate[];
-};
-
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
   "auth-profiles.oauth.*",
 ] as const;
 
-type BundledChannelContractSurfacesModule = {
-  getBundledChannelContractSurfaces?: () => unknown[];
-};
+const CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS = [
+  "hooks.token",
+  "hooks.gmail.pushToken",
+  "hooks.mappings[].sessionKey",
+] as const;
 
-const CONTRACT_SURFACES_MODULE_PATH = fileURLToPath(
-  new URL("../channels/plugins/contract-surfaces.js", import.meta.url),
-);
-let bundledChannelContractSurfacesModule: BundledChannelContractSurfacesModule | null | undefined;
-let bundledChannelContractSurfacesLoader: ReturnType<typeof createJiti> | undefined;
+type PatternToken =
+  | { kind: "key"; key: string }
+  | { kind: "array"; key: string }
+  | { kind: "wildcard" };
 
-function loadBundledChannelContractSurfacesModule(): BundledChannelContractSurfacesModule | null {
-  if (bundledChannelContractSurfacesModule !== undefined) {
-    return bundledChannelContractSurfacesModule;
+const bundledChannelUnsupportedSecretRefSurfacePatterns = [
+  ...new Set(
+    GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.flatMap((entry) =>
+      "unsupportedSecretRefSurfacePatterns" in entry
+        ? (entry.unsupportedSecretRefSurfacePatterns ?? [])
+        : [],
+    ),
+  ),
+];
+
+const unsupportedSecretRefSurfacePatterns = [
+  ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+  ...bundledChannelUnsupportedSecretRefSurfacePatterns,
+];
+
+// Candidate scanning only sees openclaw.json; auth-profile-only surfaces are audited elsewhere.
+const unsupportedSecretRefConfigCandidatePatterns = [
+  ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
+  ...bundledChannelUnsupportedSecretRefSurfacePatterns,
+];
+
+const parsedPatternCache = new Map<string, PatternToken[]>();
+
+function parseUnsupportedSecretRefSurfacePattern(pattern: string): PatternToken[] {
+  const cached = parsedPatternCache.get(pattern);
+  if (cached) {
+    return cached;
   }
-  try {
-    bundledChannelContractSurfacesLoader ??= createJiti(import.meta.url, { interopDefault: true });
-    bundledChannelContractSurfacesModule = bundledChannelContractSurfacesLoader(
-      CONTRACT_SURFACES_MODULE_PATH,
-    ) as BundledChannelContractSurfacesModule;
-  } catch {
-    bundledChannelContractSurfacesModule = null;
+  const parsed = pattern
+    .split(".")
+    .filter((segment) => segment.length > 0)
+    .map<PatternToken>((segment) => {
+      if (segment === "*") {
+        return { kind: "wildcard" };
+      }
+      if (segment.endsWith("[]")) {
+        return {
+          kind: "array",
+          key: segment.slice(0, -2),
+        };
+      }
+      return {
+        kind: "key",
+        key: segment,
+      };
+    });
+  parsedPatternCache.set(pattern, parsed);
+  return parsed;
+}
+
+function collectPatternCandidates(params: {
+  current: unknown;
+  tokens: readonly PatternToken[];
+  tokenIndex: number;
+  pathSegments: string[];
+  candidates: UnsupportedSecretRefConfigCandidate[];
+}): void {
+  if (params.tokenIndex >= params.tokens.length) {
+    params.candidates.push({
+      path: params.pathSegments.join("."),
+      value: params.current,
+    });
+    return;
   }
-  return bundledChannelContractSurfacesModule;
-}
 
-function listChannelUnsupportedSecretRefSurfaces(): ChannelUnsupportedSecretRefSurface[] {
-  const module = loadBundledChannelContractSurfacesModule();
-  if (typeof module?.getBundledChannelContractSurfaces !== "function") {
-    return [];
+  const token = params.tokens[params.tokenIndex];
+  if (!token) {
+    return;
   }
-  return module.getBundledChannelContractSurfaces() as ChannelUnsupportedSecretRefSurface[];
+
+  if (token.kind === "wildcard") {
+    if (Array.isArray(params.current)) {
+      // Wildcards traverse both objects and arrays because plugin/channel configs use both
+      // shapes for owner-defined maps.
+      for (const [index, value] of params.current.entries()) {
+        collectPatternCandidates({
+          ...params,
+          current: value,
+          tokenIndex: params.tokenIndex + 1,
+          pathSegments: [...params.pathSegments, String(index)],
+        });
+      }
+      return;
+    }
+    if (!isRecord(params.current)) {
+      return;
+    }
+    for (const [key, value] of Object.entries(params.current)) {
+      collectPatternCandidates({
+        ...params,
+        current: value,
+        tokenIndex: params.tokenIndex + 1,
+        pathSegments: [...params.pathSegments, key],
+      });
+    }
+    return;
+  }
+
+  if (!isRecord(params.current)) {
+    return;
+  }
+
+  if (token.kind === "array") {
+    if (!Object.hasOwn(params.current, token.key)) {
+      return;
+    }
+    const value = params.current[token.key];
+    if (!Array.isArray(value)) {
+      return;
+    }
+    // Array tokens preserve the named field in the reported path, matching config dot-paths.
+    for (const [index, entry] of value.entries()) {
+      collectPatternCandidates({
+        ...params,
+        current: entry,
+        tokenIndex: params.tokenIndex + 1,
+        pathSegments: [...params.pathSegments, token.key, String(index)],
+      });
+    }
+    return;
+  }
+
+  if (!Object.hasOwn(params.current, token.key)) {
+    return;
+  }
+  collectPatternCandidates({
+    ...params,
+    current: params.current[token.key],
+    tokenIndex: params.tokenIndex + 1,
+    pathSegments: [...params.pathSegments, token.key],
+  });
 }
 
-function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
-  return listChannelUnsupportedSecretRefSurfaces().flatMap(
-    (surface) => surface.unsupportedSecretRefSurfacePatterns ?? [],
-  );
+/**
+ * Returns canonical config/auth-profile path patterns that do not support SecretRef values.
+ */
+function listUnsupportedSecretRefSurfacePatterns(): string[] {
+  return [...unsupportedSecretRefSurfacePatterns];
 }
 
-let cachedUnsupportedSecretRefSurfacePatterns: string[] | null = null;
-
-export function getUnsupportedSecretRefSurfacePatterns(): string[] {
-  cachedUnsupportedSecretRefSurfacePatterns ??= [
-    ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
-    ...collectChannelUnsupportedSecretRefSurfacePatterns(),
-  ];
-  return cachedUnsupportedSecretRefSurfacePatterns;
-}
-
-export type UnsupportedSecretRefConfigCandidate = {
+/**
+ * Concrete unsupported config value discovered from an openclaw.json-like object.
+ */
+type UnsupportedSecretRefConfigCandidate = {
   path: string;
   value: unknown;
 };
 
-export function collectUnsupportedSecretRefConfigCandidates(
+/**
+ * Finds configured openclaw.json values whose surfaces currently reject SecretRef objects.
+ */
+function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
   if (!isRecord(raw)) {
@@ -79,50 +179,19 @@ export function collectUnsupportedSecretRefConfigCandidates(
   }
 
   const candidates: UnsupportedSecretRefConfigCandidate[] = [];
-
-  const commands = isRecord(raw.commands) ? raw.commands : null;
-  if (commands) {
-    candidates.push({
-      path: "commands.ownerDisplaySecret",
-      value: commands.ownerDisplaySecret,
+  for (const pattern of unsupportedSecretRefConfigCandidatePatterns) {
+    collectPatternCandidates({
+      current: raw,
+      tokens: parseUnsupportedSecretRefSurfacePattern(pattern),
+      tokenIndex: 0,
+      pathSegments: [],
+      candidates,
     });
   }
-
-  const hooks = isRecord(raw.hooks) ? raw.hooks : null;
-  if (hooks) {
-    candidates.push({ path: "hooks.token", value: hooks.token });
-
-    const gmail = isRecord(hooks.gmail) ? hooks.gmail : null;
-    if (gmail) {
-      candidates.push({
-        path: "hooks.gmail.pushToken",
-        value: gmail.pushToken,
-      });
-    }
-
-    const mappings = hooks.mappings;
-    if (Array.isArray(mappings)) {
-      for (const [index, mapping] of mappings.entries()) {
-        if (!isRecord(mapping)) {
-          continue;
-        }
-        candidates.push({
-          path: `hooks.mappings.${index}.sessionKey`,
-          value: mapping.sessionKey,
-        });
-      }
-    }
-  }
-
-  if (isRecord(raw.channels)) {
-    for (const surface of listChannelUnsupportedSecretRefSurfaces()) {
-      const channelCandidates = surface.collectUnsupportedSecretRefConfigCandidates?.(raw);
-      if (!channelCandidates?.length) {
-        continue;
-      }
-      candidates.push(...channelCandidates);
-    }
-  }
-
   return candidates;
 }
+
+export const unsupportedSecretRefSurfacePolicy = {
+  listPatterns: listUnsupportedSecretRefSurfacePatterns,
+  collectConfigCandidates: collectUnsupportedSecretRefConfigCandidates,
+};

@@ -1,5 +1,9 @@
+// Voice Call plugin module implements lookup behavior.
 import type { CallId, CallRecord } from "../types.js";
 
+// Lookup helpers for active calls by internal or provider call ids.
+
+/** Resolve an active call from provider call id with map lookup plus stale-map fallback scan. */
 export function getCallByProviderCallId(params: {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
@@ -18,6 +22,7 @@ export function getCallByProviderCallId(params: {
   return undefined;
 }
 
+/** Resolve an active call by internal call id or provider call id. */
 export function findCall(params: {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;

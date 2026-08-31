@@ -1,10 +1,13 @@
+// Bootstrap extra files hook tests cover extra file context injection.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import type { AgentBootstrapHookContext } from "../../hooks.js";
-import { createHookEvent } from "../../hooks.js";
+import {
+  type AgentBootstrapHookContext,
+  createInternalHookEvent as createHookEvent,
+} from "../../internal-hooks.js";
 import handler from "./handler.js";
 
 function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {
@@ -68,34 +71,50 @@ describe("bootstrap-extra-files hook", () => {
 
     const injected = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
     expect(injected).toHaveLength(2);
-    expect(injected.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md")))).toBe(
-      true,
+    expect(injected.map((f) => path.relative(tempDir, f.path))).toContain(
+      path.join("packages", "core", "AGENTS.md"),
     );
   });
 
-  it("re-applies subagent bootstrap allowlist after extras are added", async () => {
+  it("appends configured nested memory without applying session policy", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-memory-");
+    const extraDir = path.join(tempDir, "packages", "core");
+    const sessionKey = "agent:main:slack:channel:c1";
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "MEMORY.md"), "nested memory", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["packages/*/MEMORY.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey,
+      rootFiles: [{ name: "MEMORY.md", content: "private root memory" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", sessionKey, context);
+    await handler(event);
+
+    const relativePaths = context.bootstrapFiles.map((file) => path.relative(tempDir, file.path));
+    expect(relativePaths).toContain("MEMORY.md");
+    expect(relativePaths).toContain(path.join("packages", "core", "MEMORY.md"));
+  });
+
+  it("leaves subagent allowlist enforcement to the final resolver", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "SOUL.md"), "evil", "utf-8");
+    await fs.writeFile(path.join(extraDir, "SOUL.md"), "extra persona", "utf-8");
 
     const cfg = createBootstrapExtraConfig(["packages/*/SOUL.md"]);
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
       sessionKey: "agent:main:subagent:abc",
-      rootFiles: [
-        { name: "AGENTS.md", content: "root agents" },
-        { name: "TOOLS.md", content: "root tools" },
-      ],
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
     });
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
-    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
-      "AGENTS.md",
-      "SOUL.md",
-      "TOOLS.md",
-    ]);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "SOUL.md"]);
   });
 });

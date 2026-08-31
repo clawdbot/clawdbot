@@ -1,8 +1,4 @@
-export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
-export {
-  collectRuntimeConfigAssignments,
-  secretTargetRegistryEntries,
-} from "./src/secret-contract.js";
+// Telegram API module exposes the plugin public contract.
 export {
   TELEGRAM_COMMAND_NAME_PATTERN,
   normalizeTelegramCommandDescription,
@@ -11,6 +7,7 @@ export {
 } from "./src/command-config.js";
 export { parseTelegramTopicConversation } from "./src/topic-conversation.js";
 export { singleAccountKeysToMove } from "./src/setup-contract.js";
+export { mergeTelegramAccountConfig } from "./src/accounts.js";
 export {
   buildCommandsPaginationKeyboard,
   buildTelegramModelsProviderChannelData,
@@ -18,5 +15,5 @@ export {
 export type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
+  TelegramInteractiveHandlerResult,
 } from "./src/interactive-dispatch.js";
-export { collectTelegramSecurityAuditFindings } from "./src/security-audit.js";

@@ -1,7 +1,9 @@
+// Test helper for simulating symlink rebind races around filesystem reads.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
 
+/** Repoints a symlink or junction to a new target for realpath race tests. */
 export async function createRebindableDirectoryAlias(params: {
   aliasPath: string;
   targetPath: string;
@@ -21,6 +23,7 @@ export async function withRealpathSymlinkRebindRace<T>(params: {
 }): Promise<T> {
   const realRealpath = fs.realpath.bind(fs);
   let flipped = false;
+  // Flip exactly once around realpath so tests can model TOCTOU behavior deterministically.
   const realpathSpy = vi
     .spyOn(fs, "realpath")
     .mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {

@@ -1,0 +1,30 @@
+{
+  "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    // Follow explicit imports of retained plain-Node script exceptions only.
+    "allowJs": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/test-root.tsbuildinfo"
+  },
+  "include": [
+    "../../test/**/*.ts",
+    "../../test/**/*.tsx",
+    "../../test/**/*.d.mts",
+    "../../test/**/*.d.cts",
+    "../../src/**/*.d.ts",
+    "../../packages/**/*.d.ts",
+    "../../ui/**/*.d.ts"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../test/fixtures/**",
+    // These Docker E2E clients statically import built dist/** artifacts and are
+    // validated by their Docker lanes, so they cannot join this source-only program
+    // (same rationale as the scripts/e2e exclusion in tsconfig.scripts.json).
+    "../../test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
+    "../../test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"
+  ]
+}

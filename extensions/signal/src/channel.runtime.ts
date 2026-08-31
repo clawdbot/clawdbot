@@ -1,3 +1,4 @@
+// Signal plugin module implements channel behavior.
 import { signalSetupWizard as signalSetupWizardImpl } from "./setup-surface.js";
 
 type SignalSetupWizard = typeof import("./setup-surface.js").signalSetupWizard;

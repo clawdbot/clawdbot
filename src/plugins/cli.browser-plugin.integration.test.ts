@@ -1,16 +1,13 @@
+// Exercises browser plugin CLI integration behavior.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearPluginDiscoveryCache } from "./discovery.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
+import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   resetPluginRuntimeStateForTest();
 }
 

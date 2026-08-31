@@ -1,0 +1,12 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendReadReceipt","data":{"target":"$inbound-1"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":true},"target":"!room:example.org"}}
+{"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Working on the fix"}}
+{"seq":5,"at":0,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"Working on the fix","format":"org.matrix.custom.html","formatted_body":"<p>Working on the fix</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e1"},"target":"!room:example.org"}}
+{"seq":6,"at":300,"dir":"in","kind":"partial","data":{"text":"Working on the fix: patching now."}}
+{"seq":7,"at":600,"dir":"in","kind":"cancel"}
+{"seq":8,"at":600,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e1"}}
+{"seq":9,"at":600,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Working on the fix: patching now.","format":"org.matrix.custom.html","formatted_body":"* <p>Working on the fix: patching now.</p>","m.new_content":{"body":"Working on the fix: patching now.","format":"org.matrix.custom.html","formatted_body":"<p>Working on the fix: patching now.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"m.relates_to":{"event_id":"$e1","rel_type":"m.replace"},"msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e2"},"target":"!room:example.org"}}
+{"seq":10,"at":600,"dir":"out","kind":"redactEvent","data":{"result":{"event_id":"$e3"},"target":"$e1"}}
+{"seq":11,"at":600,"dir":"in","kind":"idle"}
+{"seq":12,"at":600,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":false},"target":"!room:example.org"}}

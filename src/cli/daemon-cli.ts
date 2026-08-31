@@ -1,3 +1,4 @@
+// Public daemon CLI barrel retained for gateway service command compatibility.
 export { registerDaemonCli } from "./daemon-cli/register.js";
 export { addGatewayServiceCommands } from "./daemon-cli/register-service-commands.js";
 export {

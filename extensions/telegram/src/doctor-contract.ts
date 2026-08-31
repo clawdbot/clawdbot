@@ -1,75 +1,169 @@
+// Telegram plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelAccounts,
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "telegram",
+  // Runtime mode resolution dropped legacy streamMode reads; the doctor
+  // resolver keeps them so migration preserves configured intent.
+  streaming: { defaultMode: "partial", includePreviewChunk: true },
+});
+
+const RETIRED_TUNING_KEYS = new Set([
+  "timeoutSeconds",
+  "mediaGroupFlushMs",
+  "pollingStallThresholdMs",
+  "retry",
+  "errorCooldownMs",
+]);
+
+function hasRetiredTelegramDmConfig(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  if (asObjectRecord(entry.dm)) {
+    return true;
+  }
+  return Object.values(asObjectRecord(entry.direct) ?? {}).some(
+    (direct) => asObjectRecord(direct)?.threadReplies !== undefined,
+  );
 }
 
-function normalizeTelegramStreamingAliases(params: {
+function hasRetiredTelegramNativeDraftConfig(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  const streaming = asObjectRecord(entry?.streaming);
+  const preview = asObjectRecord(streaming?.preview);
+  return (
+    preview?.nativeToolProgress !== undefined || preview?.nativeToolProgressAllowFrom !== undefined
+  );
+}
+
+function hasRetiredTelegramGroupHistoryContextConfig(value: unknown): boolean {
+  return asObjectRecord(value)?.includeGroupHistoryContext !== undefined;
+}
+
+function removeRetiredTelegramDmConfig(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
   let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const beforeStreaming = updated.streaming;
-  const resolved = resolveTelegramPreviewStreamMode(updated);
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof beforeStreaming === "boolean" ||
-    (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
-  if (!shouldNormalize) {
-    return { entry: updated, changed: false };
+  let changed = false;
+  const dm = asObjectRecord(updated.dm);
+  if (dm) {
+    const { dm: _ignored, ...rest } = updated;
+    updated = rest;
+    params.changes.push(
+      dm.threadReplies === undefined
+        ? `Removed ${params.pathPrefix}.dm.`
+        : `Removed ${params.pathPrefix}.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
+    );
+    changed = true;
   }
 
-  let changed = false;
-  if (beforeStreaming !== resolved) {
-    updated = { ...updated, streaming: resolved };
-    changed = true;
+  const direct = asObjectRecord(updated.direct);
+  if (direct) {
+    let directChanged = false;
+    const nextDirect = { ...direct };
+    for (const [chatId, rawDirectConfig] of Object.entries(direct)) {
+      const directConfig = asObjectRecord(rawDirectConfig);
+      if (!directConfig || directConfig.threadReplies === undefined) {
+        continue;
+      }
+      const nextDirectConfig = { ...directConfig };
+      delete nextDirectConfig.threadReplies;
+      nextDirect[chatId] = nextDirectConfig;
+      params.changes.push(
+        `Removed ${params.pathPrefix}.direct.${chatId}.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
+      );
+      directChanged = true;
+    }
+    if (directChanged) {
+      updated = { ...updated, direct: nextDirect };
+      changed = true;
+    }
   }
-  if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-    );
-  }
-  if (typeof beforeStreaming === "boolean") {
-    params.changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-  } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
-    params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
-    );
-  }
+
   return { entry: updated, changed };
 }
 
-function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
+function removeRetiredTelegramNativeDraftConfig(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const streaming = asObjectRecord(params.entry.streaming);
+  const preview = asObjectRecord(streaming?.preview);
+  if (
+    !streaming ||
+    !preview ||
+    (preview.nativeToolProgress === undefined && preview.nativeToolProgressAllowFrom === undefined)
+  ) {
+    return { entry: params.entry, changed: false };
   }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    (typeof entry.streaming === "string" &&
-      entry.streaming !== resolveTelegramPreviewStreamMode(entry))
+
+  const nextPreview = { ...preview };
+  delete nextPreview.nativeToolProgress;
+  delete nextPreview.nativeToolProgressAllowFrom;
+  const nextStreaming = { ...streaming };
+  if (Object.keys(nextPreview).length > 0) {
+    nextStreaming.preview = nextPreview;
+  } else {
+    delete nextStreaming.preview;
+  }
+
+  const updated =
+    Object.keys(nextStreaming).length > 0
+      ? { ...params.entry, streaming: nextStreaming }
+      : Object.fromEntries(Object.entries(params.entry).filter(([key]) => key !== "streaming"));
+  params.changes.push(
+    `Removed ${params.pathPrefix}.streaming.preview native draft keys; Telegram previews now use rich send/edit messages.`,
   );
+  return { entry: updated, changed: true };
 }
 
-function hasLegacyTelegramAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
+function removeRetiredTelegramGroupHistoryContextConfig(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  preserveRecentHistoryLimit?: number;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  if (params.entry.includeGroupHistoryContext === undefined) {
+    return { entry: params.entry, changed: false };
   }
-  return Object.values(accounts).some((account) => hasLegacyTelegramStreamingAliases(account));
+  const { includeGroupHistoryContext, ...rest } = params.entry;
+  let updated = includeGroupHistoryContext === "none" ? { ...rest, historyLimit: 0 } : rest;
+  if (
+    includeGroupHistoryContext === "recent" &&
+    params.preserveRecentHistoryLimit !== undefined &&
+    updated.historyLimit === undefined
+  ) {
+    updated = { ...updated, historyLimit: params.preserveRecentHistoryLimit };
+  }
+  const historyLimitNote =
+    includeGroupHistoryContext === "none"
+      ? " and set historyLimit to 0"
+      : includeGroupHistoryContext === "recent" &&
+          params.preserveRecentHistoryLimit !== undefined &&
+          params.entry.historyLimit === undefined
+        ? ` and set historyLimit to ${params.preserveRecentHistoryLimit}`
+        : "";
+  params.changes.push(
+    `Removed ${params.pathPrefix}.includeGroupHistoryContext${historyLimitNote}; Telegram group history is always on for groups and bounded by historyLimit.`,
+  );
+  return { entry: updated, changed: true };
 }
 
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
@@ -94,20 +188,46 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram", "groupMentionsOnly"],
     message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead (auto-migrated on load).',
+      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
   },
   {
     path: ["channels", "telegram"],
     message:
-      'channels.telegram.streamMode and boolean channels.telegram.streaming are legacy; use channels.telegram.streaming="off|partial|block".',
-    match: hasLegacyTelegramStreamingAliases,
+      'channels.telegram.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramDmConfig,
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      'channels.telegram.accounts.<id>.streamMode and boolean channels.telegram.accounts.<id>.streaming are legacy; use channels.telegram.accounts.<id>.streaming="off|partial|block".',
-    match: hasLegacyTelegramAccountStreamingAliases,
+      'channels.telegram.accounts.<id>.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasRetiredTelegramDmConfig),
   },
+  {
+    path: ["channels", "telegram"],
+    message:
+      'channels.telegram.streaming.preview.nativeToolProgress and nativeToolProgressAllowFrom were removed; Telegram previews now use rich send/edit messages. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramNativeDraftConfig,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.streaming.preview.nativeToolProgress and nativeToolProgressAllowFrom were removed; Telegram previews now use rich send/edit messages. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasRetiredTelegramNativeDraftConfig),
+  },
+  {
+    path: ["channels", "telegram"],
+    message:
+      'channels.telegram.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: hasRetiredTelegramGroupHistoryContextConfig,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, hasRetiredTelegramGroupHistoryContextConfig),
+  },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
 export function normalizeCompatibilityConfig({
@@ -115,14 +235,55 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const changes: string[] = [];
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const tuningKnobs = stripRetiredChannelKeys({
+    cfg: aliases.config,
+    channelId: "telegram",
+    keys: RETIRED_TUNING_KEYS,
+    scope: "recursive",
+  });
+  const rawEntry = asObjectRecord(
+    (tuningKnobs.config.channels as Record<string, unknown> | undefined)?.telegram,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
 
-  const changes: string[] = [];
   let updated = rawEntry;
-  let changed = false;
+  let changed = tuningKnobs.config !== cfg;
+  if (tuningKnobs.changed) {
+    changes.push("Removed retired Telegram tuning knobs.");
+  }
+  const rootGroupHistoryContextMode = updated.includeGroupHistoryContext;
+  const rootGroupHistoryLimitBeforeMigration =
+    typeof updated.historyLimit === "number"
+      ? updated.historyLimit
+      : (cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT);
+
+  const removedThreadReplies = removeRetiredTelegramDmConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedThreadReplies.entry;
+  changed = changed || removedThreadReplies.changed;
+
+  const removedNativeDraft = removeRetiredTelegramNativeDraftConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedNativeDraft.entry;
+  changed = changed || removedNativeDraft.changed;
+
+  const removedGroupHistoryContext = removeRetiredTelegramGroupHistoryContextConfig({
+    entry: updated,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = removedGroupHistoryContext.entry;
+  changed = changed || removedGroupHistoryContext.changed;
 
   if (updated.groupMentionsOnly !== undefined) {
     const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
@@ -150,47 +311,46 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  const base = normalizeTelegramStreamingAliases({
+  const accounts = normalizeChannelAccounts({
     entry: updated,
     pathPrefix: "channels.telegram",
     changes,
-  });
-  updated = base.entry;
-  changed = changed || base.changed;
-
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (rawAccounts) {
-    let accountsChanged = false;
-    const accounts = { ...rawAccounts };
-    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      const accountStreaming = normalizeTelegramStreamingAliases({
+    normalizeAccount: ({ account, pathPrefix, changes: accountChanges }) => {
+      const dm = removeRetiredTelegramDmConfig({
         entry: account,
-        pathPrefix: `channels.telegram.accounts.${accountId}`,
-        changes,
+        pathPrefix,
+        changes: accountChanges,
       });
-      if (accountStreaming.changed) {
-        accounts[accountId] = accountStreaming.entry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts };
-      changed = true;
-    }
-  }
+      const nativeDraft = removeRetiredTelegramNativeDraftConfig({
+        entry: dm.entry,
+        pathPrefix,
+        changes: accountChanges,
+      });
+      const history = removeRetiredTelegramGroupHistoryContextConfig({
+        entry: nativeDraft.entry,
+        pathPrefix,
+        changes: accountChanges,
+        ...(rootGroupHistoryContextMode === "none"
+          ? { preserveRecentHistoryLimit: rootGroupHistoryLimitBeforeMigration }
+          : {}),
+      });
+      return {
+        entry: history.entry,
+        changed: dm.changed || nativeDraft.changed || history.changed,
+      };
+    },
+  });
+  updated = accounts.entry;
+  changed = changed || accounts.changed;
 
   if (!changed && changes.length === 0) {
     return { config: cfg, changes: [] };
   }
   return {
     config: {
-      ...cfg,
+      ...tuningKnobs.config,
       channels: {
-        ...cfg.channels,
+        ...tuningKnobs.config.channels,
         telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
       } as OpenClawConfig["channels"],
     },

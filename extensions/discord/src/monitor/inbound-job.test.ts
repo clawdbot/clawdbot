@@ -1,35 +1,16 @@
-import { Message } from "@buape/carbon";
-import { describe, expect, it } from "vitest";
-import {
-  buildDiscordInboundJob,
-  materializeDiscordInboundJob,
-  resolveDiscordInboundJobQueueKey,
-} from "./inbound-job.js";
+// Discord tests cover inbound job plugin behavior.
+import { describe, expect, it, vi } from "vitest";
+import { Message } from "../internal/discord.js";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
+import { buildDiscordInboundJob, materializeDiscordInboundJob } from "./inbound-job.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 describe("buildDiscordInboundJob", () => {
-  it("prefers route session key, then base session key, then channel id for queueing", async () => {
-    const routed = await createBaseDiscordMessageContext({
-      route: { sessionKey: "agent:main:discord:direct:routed" },
-      baseSessionKey: "agent:main:discord:direct:base",
-      messageChannelId: "channel-routed",
-    });
-    const baseOnly = await createBaseDiscordMessageContext({
-      route: { sessionKey: "" },
-      baseSessionKey: "agent:main:discord:direct:base-only",
-      messageChannelId: "channel-base",
-    });
-    const channelFallback = await createBaseDiscordMessageContext({
-      route: { sessionKey: "   " },
-      baseSessionKey: "   ",
-      messageChannelId: "channel-fallback",
-    });
-
-    expect(resolveDiscordInboundJobQueueKey(routed)).toBe("agent:main:discord:direct:routed");
-    expect(resolveDiscordInboundJobQueueKey(baseOnly)).toBe("agent:main:discord:direct:base-only");
-    expect(resolveDiscordInboundJobQueueKey(channelFallback)).toBe("channel-fallback");
-  });
-
   it("keeps live runtime references out of the payload", async () => {
     const ctx = await createBaseDiscordMessageContext({
       message: {
@@ -65,6 +46,12 @@ describe("buildDiscordInboundJob", () => {
         },
         ownerId: "user-1",
       },
+      preparedMedia: [
+        {
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+        },
+      ],
     });
 
     const job = buildDiscordInboundJob(ctx);
@@ -87,12 +74,58 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    expect(() => JSON.stringify(job.payload)).not.toThrow();
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.preparedMedia).toEqual(ctx.preparedMedia);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+      name: "codex",
+      parentId: "forum-1",
+      parent: {
+        id: "forum-1",
+        name: "Forum",
+      },
+      ownerId: "user-1",
+    });
+  });
+
+  it("normalizes partial thread channels without reading throwing getters", async () => {
+    const threadChannel = createPartialDiscordChannelWithThrowingGetters(
+      {
+        id: "thread-1",
+        name: "codex",
+        parentId: "forum-1",
+        parent: { id: "forum-1", name: "Forum" },
+        ownerId: "user-1",
+      },
+      ["name", "parentId", "parent", "ownerId"],
+    );
+    const ctx = await createBaseDiscordMessageContext({
+      threadChannel,
+    });
+
+    const job = buildDiscordInboundJob(ctx);
+
+    expect(job.payload.threadChannel).toEqual({
+      id: "thread-1",
+      name: undefined,
+      parentId: undefined,
+      parent: undefined,
+      ownerId: undefined,
+    });
+    const serializedPayload = jsonRoundTrip(job.payload);
+    expect(serializedPayload.threadChannel).toEqual({
+      id: "thread-1",
+    });
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const job = buildDiscordInboundJob(ctx);
+    const ingressSettlement = {
+      settle: vi.fn(async () => {}),
+      abandon: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+    };
+    const job = buildDiscordInboundJob(ctx, { ingressSettlement });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -103,9 +136,10 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
+    expect(job.ingressSettlement).toBe(ingressSettlement);
   });
 
-  it("preserves Carbon message getters across queued jobs", async () => {
+  it("preserves Discord message getters across queued jobs", async () => {
     const ctx = await createBaseDiscordMessageContext();
     const message = new Message(
       ctx.client as never,

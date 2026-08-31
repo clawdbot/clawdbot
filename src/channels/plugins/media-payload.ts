@@ -1,33 +1,33 @@
-export type MediaPayloadInput = {
-  path: string;
-  contentType?: string;
-};
+import {
+  projectMediaFacts,
+  type MediaFact,
+  type MediaFactLegacyProjection,
+} from "../../media/media-facts.js";
 
-export type MediaPayload = {
-  MediaPath?: string;
-  MediaType?: string;
-  MediaUrl?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-};
+/** Input media item used by channel outbound payload builders. */
+export type MediaPayloadInput = Required<Pick<MediaFact, "path">> & Pick<MediaFact, "contentType">;
 
+/**
+ * Legacy-compatible media payload shape consumed by plugin send helpers.
+ * @deprecated Inbound contexts use `media`; outbound replies use lowercase
+ * `ReplyPayload.mediaUrl`/`mediaUrls`.
+ */
+export type MediaPayload = Omit<MediaFactLegacyProjection, "MediaTranscribedIndexes">;
+
+/**
+ * Builds single-item and list legacy media fields.
+ * @deprecated Inbound contexts use `media`; outbound replies use lowercase
+ * `ReplyPayload.mediaUrl`/`mediaUrls`.
+ */
 export function buildMediaPayload(
   mediaList: MediaPayloadInput[],
   opts?: { preserveMediaTypeCardinality?: boolean },
 ): MediaPayload {
-  const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const rawMediaTypes = mediaList.map((media) => media.contentType ?? "");
-  const mediaTypes = opts?.preserveMediaTypeCardinality
-    ? rawMediaTypes
-    : rawMediaTypes.filter((value): value is string => Boolean(value));
-  return {
-    MediaPath: first?.path,
-    MediaType: first?.contentType,
-    MediaUrl: first?.path,
-    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-  };
+  const projected = projectMediaFacts(mediaList, "compact");
+  return opts?.preserveMediaTypeCardinality
+    ? {
+        ...projected,
+        MediaTypes: mediaList.map((entry) => entry.contentType ?? ""),
+      }
+    : projected;
 }

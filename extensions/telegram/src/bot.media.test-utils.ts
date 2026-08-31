@@ -1,6 +1,8 @@
+// Telegram helper module supports bot.media utils behavior.
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
-import * as harness from "./bot.media.e2e-harness.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import * as harness from "./bot.media.e2e.test-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
 
@@ -21,16 +23,16 @@ let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
 let onSpyRef: Mock;
 let sendChatActionSpyRef: Mock;
-let fetchRemoteMediaSpyRef: Mock;
+let readRemoteMediaBufferSpyRef: Mock;
 let undiciFetchSpyRef: Mock;
-let resetFetchRemoteMediaMockRef: () => void;
+let resetReadRemoteMediaBufferMockRef: () => void;
 
 type FetchMockHandle = Mock & { mockRestore: () => void };
 
 function createFetchMockHandle(): FetchMockHandle {
-  return Object.assign(fetchRemoteMediaSpyRef, {
+  return Object.assign(readRemoteMediaBufferSpyRef, {
     mockRestore: () => {
-      resetFetchRemoteMediaMockRef();
+      resetReadRemoteMediaBufferMockRef();
     },
   }) as FetchMockHandle;
 }
@@ -61,15 +63,20 @@ export async function createBotHandlerWithOptions(options: {
   const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
   createTelegramBotRef({
     token: "tok",
+    // Production always constructs the bot from getMe(), so inbound handlers may
+    // resolve the bot user id from botInfo when a test ctx carries only a username.
+    botInfo: telegramBotInfoForTest,
+    config: harness.telegramBotDepsForTest.getRuntimeConfig(),
     testTimings: TELEGRAM_TEST_TIMINGS,
     ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),
     runtime: {
       log: runtimeLog as (...data: unknown[]) => void,
       error: runtimeError as (...data: unknown[]) => void,
+      getRuntimeConfig: () => harness.telegramBotDepsForTest.getRuntimeConfig(),
       exit: () => {
         throw new Error("exit");
       },
-    },
+    } as Parameters<typeof createTelegramBotRef>[0]["runtime"],
   });
   const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
     ctx: Record<string, unknown>,
@@ -88,7 +95,7 @@ export function mockTelegramFileDownload(params: {
       headers: { "content-type": params.contentType },
     }),
   );
-  fetchRemoteMediaSpyRef.mockResolvedValueOnce({
+  readRemoteMediaBufferSpyRef.mockResolvedValueOnce({
     buffer: Buffer.from(params.bytes),
     contentType: params.contentType,
     fileName: "mock-file",
@@ -103,7 +110,7 @@ export function mockTelegramPngDownload(): FetchMockHandle {
       headers: { "content-type": "image/png" },
     }),
   );
-  fetchRemoteMediaSpyRef.mockResolvedValue({
+  readRemoteMediaBufferSpyRef.mockResolvedValue({
     buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
     contentType: "image/png",
     fileName: "mock-file.png",
@@ -118,15 +125,10 @@ export function watchTelegramFetch(): FetchMockHandle {
 async function loadTelegramBotHarness() {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
-  fetchRemoteMediaSpyRef = harness.fetchRemoteMediaSpy;
+  readRemoteMediaBufferSpyRef = harness.readRemoteMediaBufferSpy;
   undiciFetchSpyRef = harness.undiciFetchSpy;
-  resetFetchRemoteMediaMockRef = harness.resetFetchRemoteMediaMock;
+  resetReadRemoteMediaBufferMockRef = harness.resetReadRemoteMediaBufferMock;
   const botModule = await import("./bot.js");
-  botModule.setTelegramBotRuntimeForTest(
-    harness.telegramBotRuntimeForTest as unknown as Parameters<
-      typeof botModule.setTelegramBotRuntimeForTest
-    >[0],
-  );
   createTelegramBotRef = (opts) =>
     botModule.createTelegramBot({
       ...opts,

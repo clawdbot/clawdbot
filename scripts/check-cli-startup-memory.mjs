@@ -1,67 +1,145 @@
 #!/usr/bin/env node
-
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// Measures CLI startup memory with an isolated home and an in-process bench entry.
+import { spawnSync as defaultSpawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-const isLinux = process.platform === "linux";
-const isMac = process.platform === "darwin";
-
-if (!isLinux && !isMac) {
-  console.log(`[startup-memory] Skipping on unsupported platform: ${process.platform}`);
-  process.exit(0);
-}
-
-const repoRoot = process.cwd();
-const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
+import { pathToFileURL } from "node:url";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
-const rssHookPath = path.join(tmpHome, "measure-rss.mjs");
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
-
-writeFileSync(
-  rssHookPath,
-  [
-    "process.on('exit', () => {",
-    "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-    `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
-    "});",
-    "",
-  ].join("\n"),
-  "utf8",
+const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+const STARTUP_MEMORY_SAMPLE_COUNT = 3;
+const STARTUP_MEMORY_RSS_TOLERANCE_MB = 1;
+const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
+  "OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS",
+  DEFAULT_COMMAND_TIMEOUT_MS,
 );
-
-const DEFAULT_LIMITS_MB = {
-  help: 100,
-  statusJson: 400,
-  gatewayStatus: 500,
-};
-
+let tmpHome = null;
+let benchEntryPath = null;
+const PASS = "pass";
+const FAIL = "fail";
+function readPositiveIntEnv(name, fallback, env = process.env) {
+  const value = readPositiveNumberEnv(name, fallback, env);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+function readPositiveNumberEnv(name, fallback, env = process.env) {
+  const raw = env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return value;
+}
+function readNonEmptyEnv(name) {
+  const value = process.env[name];
+  return value === undefined || value.length === 0 ? null : value;
+}
+function readRequiredPathOption(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a path`);
+  }
+  return value;
+}
+function parseArgs(argv) {
+  const options = {
+    jsonPath:
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_JSON_PATH") ??
+      path.join(repoRoot, ".artifacts", "startup-memory", "startup-memory.json"),
+    summaryPath:
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH") ??
+      path.join(repoRoot, ".artifacts", "startup-memory", "summary.md"),
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === undefined) {
+      break;
+    }
+    if (arg === "--json") {
+      const value = readRequiredPathOption(argv, index, "--json");
+      options.jsonPath = path.resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === "--summary") {
+      const value = readRequiredPathOption(argv, index, "--summary");
+      options.summaryPath = path.resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === "--help") {
+      console.log(
+        "Usage: node scripts/check-cli-startup-memory.mjs [--json <path>] [--summary <path>]",
+      );
+      process.exit(0);
+    }
+    throw new Error(`Unknown option: ${arg}`);
+  }
+  return options;
+}
+function resolveDefaultLimitsMb(platform = process.platform) {
+  return {
+    // Linux CI is the tight startup regression signal. macOS consistently reports
+    // higher RSS for the same launcher path, so keep it supported without hiding
+    // Linux help-path regressions.
+    help: platform === "darwin" ? 300 : 100,
+    // Plugin discovery is heavier than help, but must stay below the doctor/channel
+    // runtime graph that an empty metadata-only invocation must not import.
+    pluginsList: platform === "darwin" ? 500 : 400,
+    // Node 24 status startup reaches ~430 MB on current Linux runner images;
+    // retain useful regression headroom without failing on allocator variance.
+    statusJson: 450,
+    gatewayStatus: 500,
+  };
+}
+const DEFAULT_LIMITS_MB = resolveDefaultLimitsMb();
 const cases = [
   {
     id: "help",
     label: "--help",
     args: ["openclaw.mjs", "--help"],
-    limitMb: Number(process.env.OPENCLAW_STARTUP_MEMORY_HELP_MB ?? DEFAULT_LIMITS_MB.help),
+    limitMb: readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", DEFAULT_LIMITS_MB.help),
+  },
+  {
+    id: "pluginsList",
+    label: "plugins list --json",
+    args: ["openclaw.mjs", "plugins", "list", "--json"],
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB",
+      DEFAULT_LIMITS_MB.pluginsList,
+    ),
   },
   {
     id: "statusJson",
     label: "status --json",
     args: ["openclaw.mjs", "status", "--json"],
-    limitMb: Number(
-      process.env.OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB ?? DEFAULT_LIMITS_MB.statusJson,
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB",
+      DEFAULT_LIMITS_MB.statusJson,
     ),
   },
   {
     id: "gatewayStatus",
     label: "gateway status",
     args: ["openclaw.mjs", "gateway", "status"],
-    limitMb: Number(
-      process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB",
+      DEFAULT_LIMITS_MB.gatewayStatus,
     ),
   },
 ];
-
 function formatFixGuidance(testCase, details) {
   const command = `node ${testCase.args.join(" ")}`;
   const guidance = [
@@ -77,7 +155,6 @@ function formatFixGuidance(testCase, details) {
   ];
   return `${guidance.join("\n")}\n`;
 }
-
 function formatFailure(testCase, message, details = "") {
   const trimmedDetails = details.trim();
   const sections = [message];
@@ -87,23 +164,42 @@ function formatFailure(testCase, message, details = "") {
   sections.push(formatFixGuidance(testCase, trimmedDetails || message));
   return sections.join("\n\n");
 }
-
+function failResult(report, testCase, error, details = "") {
+  return {
+    ...report,
+    status: FAIL,
+    error,
+    failureMessage: formatFailure(testCase, error, details),
+  };
+}
 function parseMaxRssMb(stderr) {
   const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
   const lastMatch = matches.at(-1);
   if (!lastMatch) {
     return null;
   }
-  return Number(lastMatch[1]) / 1024;
+  const maxRssKb = Number(lastMatch[1]);
+  return Number.isFinite(maxRssKb) && maxRssKb > 0 ? maxRssKb / 1024 : null;
 }
-
-function buildBenchEnv() {
+function formatMb(value) {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)} MB` : "n/a";
+}
+function formatCaseCommand(testCase) {
+  return `node ${testCase.args.join(" ")}`;
+}
+function nodeImportSpecifierForPath(filePath) {
+  return pathToFileURL(filePath).href;
+}
+function buildBenchEnv(homeDir = tmpHome) {
+  if (!homeDir) {
+    throw new Error("temporary home is not initialized");
+  }
   const env = {
-    HOME: tmpHome,
-    USERPROFILE: tmpHome,
-    XDG_CONFIG_HOME: path.join(tmpHome, ".config"),
-    XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
-    XDG_CACHE_HOME: path.join(tmpHome, ".cache"),
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    XDG_CONFIG_HOME: path.join(homeDir, ".config"),
+    XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
+    XDG_CACHE_HOME: path.join(homeDir, ".cache"),
     PATH: process.env.PATH ?? "",
     TMPDIR: tmpDir,
     TEMP: tmpDir,
@@ -111,7 +207,6 @@ function buildBenchEnv() {
     LANG: process.env.LANG ?? "C.UTF-8",
     TERM: process.env.TERM ?? "dumb",
   };
-
   if (process.env.LC_ALL) {
     env.LC_ALL = process.env.LC_ALL;
   }
@@ -128,57 +223,210 @@ function buildBenchEnv() {
   // Keep the benchmark on a single process so RSS reflects the actual command
   // path rather than the warning-suppression respawn wrapper.
   env.OPENCLAW_NO_RESPAWN = "1";
-
   return env;
 }
-
-function runCase(testCase) {
-  const env = buildBenchEnv();
-  const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
+function runCaseSample(testCase, sampleIndex, params = {}) {
+  if (!benchEntryPath) {
+    throw new Error("bench entry path is not initialized");
+  }
+  if (!tmpHome) {
+    throw new Error("temporary home is not initialized");
+  }
+  const sampleHome = path.join(tmpHome, "homes", `${testCase.id}-${sampleIndex + 1}`);
+  mkdirSync(sampleHome, { recursive: true });
+  const env = buildBenchEnv(sampleHome);
+  const spawn = params.spawnSync ?? defaultSpawnSync;
+  const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
+  const result = spawn(process.execPath, [benchEntryPath, ...testCase.args.slice(1)], {
     cwd: repoRoot,
     env,
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
-  const stderr = result.stderr ?? "";
+  const stderr = String(result.stderr ?? "");
+  const stdout = String(result.stdout ?? "");
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
-
+  const report = {
+    id: testCase.id,
+    label: testCase.label,
+    command: formatCaseCommand(testCase),
+    limitMb: testCase.limitMb,
+    rssToleranceMb: STARTUP_MEMORY_RSS_TOLERANCE_MB,
+    effectiveLimitMb: testCase.limitMb + STARTUP_MEMORY_RSS_TOLERANCE_MB,
+    maxRssMb,
+    status: PASS,
+    exitCode: result.status,
+    signal: result.signal ?? null,
+    error: null,
+  };
+  if (result.error) {
+    const timedOut = result.error.code === "ETIMEDOUT";
+    const error = timedOut
+      ? `${testCase.label} timed out after ${timeoutMs}ms`
+      : `${testCase.label} failed to start: ${result.error.message}`;
+    return failResult(report, testCase, error, stderr.trim() || stdout);
+  }
   if (result.status !== 0) {
-    throw new Error(
-      formatFailure(
-        testCase,
-        `${testCase.label} exited with ${String(result.status)}`,
-        stderr.trim() || result.stdout || "",
-      ),
-    );
+    const exitDetail = result.status ?? result.signal ?? "unknown";
+    const error = `${testCase.label} exited with ${String(exitDetail)}`;
+    return failResult(report, testCase, error, stderr.trim() || stdout);
   }
   if (maxRssMb == null) {
-    throw new Error(formatFailure(testCase, `${testCase.label} did not report max RSS`, stderr));
+    const error = `${testCase.label} did not report max RSS`;
+    return failResult(report, testCase, error, stderr);
   }
   if (matrixBootstrapWarning) {
-    throw new Error(
-      formatFailure(testCase, `${testCase.label} triggered Matrix crypto bootstrap during startup`),
-    );
+    const error = `${testCase.label} triggered Matrix crypto bootstrap during startup`;
+    return failResult(report, testCase, error);
   }
-  if (maxRssMb > testCase.limitMb) {
-    throw new Error(
-      formatFailure(
-        testCase,
-        `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
-      ),
-    );
-  }
-
-  console.log(
-    `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
-  );
+  return report;
 }
-
-try {
-  for (const testCase of cases) {
-    runCase(testCase);
+function median(values) {
+  const sorted = values.toSorted((left, right) => left - right);
+  const middle = sorted.at(Math.floor(sorted.length / 2));
+  if (middle === undefined) {
+    throw new Error("cannot compute median of an empty sample set");
   }
-} finally {
-  rmSync(tmpHome, { recursive: true, force: true });
+  return middle;
+}
+function formatRssSamples(samplesMb) {
+  return samplesMb.map((value) => value.toFixed(1)).join(", ");
+}
+function runCase(testCase, params = {}) {
+  let report = runCaseSample(testCase, 0, params);
+  if (report.status !== "pass" || report.maxRssMb == null) {
+    return report;
+  }
+  const samples = [report.maxRssMb];
+  // Shared CI runners occasionally produce a single allocator/RSS spike. Independent
+  // homes plus a median keep that outlier from masking regressions; two high samples fail.
+  for (let sampleIndex = 1; sampleIndex < STARTUP_MEMORY_SAMPLE_COUNT; sampleIndex += 1) {
+    const sample = runCaseSample(testCase, sampleIndex, params);
+    if (sample.status !== "pass" || sample.maxRssMb == null) {
+      return sample;
+    }
+    samples.push(sample.maxRssMb);
+    report = sample;
+  }
+  const maxRssMb = median(samples);
+  const result = { ...report, maxRssMb, rssSamplesMb: samples };
+  if (maxRssMb > result.effectiveLimitMb) {
+    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded effective ceiling ${result.effectiveLimitMb} MB (base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; samples: ${formatRssSamples(samples)} MB)`;
+    return failResult(result, testCase, error);
+  }
+  console.log(
+    `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
+      `(base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; effective ceiling ${result.effectiveLimitMb} MB; samples ${formatRssSamples(samples)} MB)`,
+  );
+  return result;
+}
+function writeReport(options, results) {
+  const failed = results.filter((result) => result.status !== "pass");
+  const report = {
+    generatedAt: new Date().toISOString(),
+    platform: process.platform,
+    repoRoot,
+    status: failed.length === 0 ? "pass" : "fail",
+    results: results.map(({ failureMessage: _failureMessage, ...result }) => result),
+  };
+  const lines = [
+    "# OpenClaw Startup Memory",
+    "",
+    `Generated: ${report.generatedAt}`,
+    "",
+    `Status: ${report.status}`,
+    "",
+    ...results.map((result) => {
+      const samples = result.rssSamplesMb
+        ? `; samples: ${result.rssSamplesMb.map(formatMb).join(", ")}`
+        : "";
+      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} (base limit ${formatMb(result.limitMb)}; RSS tolerance ${formatMb(result.rssToleranceMb)}; effective ceiling ${formatMb(result.effectiveLimitMb)}${samples})`;
+    }),
+    "",
+  ];
+  if (failed.length > 0) {
+    lines.push(
+      "## Failures",
+      "",
+      ...failed.map((result) => `- ${result.label}: ${result.error ?? "unknown failure"}`),
+      "",
+    );
+  }
+  mkdirSync(path.dirname(options.jsonPath), { recursive: true });
+  mkdirSync(path.dirname(options.summaryPath), { recursive: true });
+  writeFileSync(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  writeFileSync(options.summaryPath, `${lines.join("\n")}\n`, "utf8");
+}
+function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "linux" && platform !== "darwin") {
+    console.log(`[startup-memory] Skipping on unsupported platform: ${platform}`);
+    return { skipped: true, results: [] };
+  }
+  const options = parseArgs(argv);
+  tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
+  benchEntryPath = path.join(tmpHome, "bench-entry.mjs");
+  // Run the real launcher in-process so peak RSS is self-reported at exit
+  // without --import/--require flags: the entry declines its dist ESM resolve
+  // fast path when preload hooks may be registered, so an injected hook would
+  // measure a slower non-default resolution configuration instead of what a
+  // plain `node openclaw.mjs ...` invocation pays.
+  const launcherPath = path.join(repoRoot, "openclaw.mjs");
+  writeFileSync(
+    benchEntryPath,
+    [
+      "process.on('exit', () => {",
+      "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
+      `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
+      "});",
+      `const launcherPath = ${JSON.stringify(launcherPath)};`,
+      "// The launcher and entry expect argv[1] to be the launcher path itself.",
+      "process.argv[1] = launcherPath;",
+      `await import(${JSON.stringify(nodeImportSpecifierForPath(launcherPath))});`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const results = [];
+  try {
+    for (const testCase of cases) {
+      results.push(runCase(testCase, params));
+    }
+  } finally {
+    writeReport(options, results);
+    if (tmpHome) {
+      rmSync(tmpHome, { recursive: true, force: true });
+      tmpHome = null;
+      benchEntryPath = null;
+    }
+  }
+  const failure = results.find((result) => result.status !== "pass");
+  if (failure?.failureMessage) {
+    throw new Error(failure.failureMessage);
+  }
+  return { skipped: false, results };
+}
+/**
+ * Test-only access to pure startup memory helper functions.
+ */
+export const testing = {
+  cases,
+  parseArgs,
+  readPositiveIntEnv,
+  readPositiveNumberEnv,
+  repoRoot,
+  resolveDefaultLimitsMb,
+  runStartupMemoryCheck,
+  sampleCount: STARTUP_MEMORY_SAMPLE_COUNT,
+};
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    runStartupMemoryCheck();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

@@ -1,39 +1,25 @@
-import {
-  createResolvedApproverActionAuthAdapter,
-  resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveSlackAccount } from "./accounts.js";
+// Slack plugin module implements approval auth behavior.
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 
-export function getSlackApprovalApprovers(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const account = resolveSlackAccount(params).config;
-  return resolveApprovalApprovers({
-    allowFrom: account.allowFrom,
-    extraAllowFrom: account.dm?.allowFrom,
-    defaultTo: account.defaultTo,
-    normalizeApprover: normalizeSlackApproverId,
-    normalizeDefaultTo: normalizeSlackApproverId,
-  });
-}
-
-export function isSlackApprovalAuthorizedSender(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  senderId?: string | null;
-}): boolean {
-  const senderId = params.senderId ? normalizeSlackApproverId(params.senderId) : undefined;
-  if (!senderId) {
-    return false;
-  }
-  return getSlackApprovalApprovers(params).includes(senderId);
-}
-
-export const slackApprovalAuth = createResolvedApproverActionAuthAdapter({
+const slackApproval = createChannelApprovalAuth({
   channelLabel: "Slack",
-  resolveApprovers: ({ cfg, accountId }) => getSlackApprovalApprovers({ cfg, accountId }),
-  normalizeSenderId: (value) => normalizeSlackApproverId(value),
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveSlackAccount({ cfg, accountId }).config;
+    return {
+      allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId }),
+      defaultTo: account.defaultTo,
+    };
+  },
+  normalizeApprover: normalizeSlackApproverId,
+  normalizeDefaultTo: normalizeSlackApproverId,
+  isWildcardAuthorized: ({ purpose, senderId, inputs, approvers }) =>
+    purpose === "sender" &&
+    Boolean(senderId) &&
+    approvers.length === 0 &&
+    inputs.allowFrom?.some((entry) => String(entry).trim() === "*") === true,
 });
+
+export const getSlackApprovalApprovers = slackApproval.resolveApprovers;
+export const isSlackApprovalAuthorizedSender = slackApproval.isAuthorizedSender;

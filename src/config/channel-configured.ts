@@ -1,47 +1,28 @@
-import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
-import { getBundledChannelContractSurfaceModule } from "../channels/plugins/contract-surfaces.js";
-import { isRecord } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
+// Determines whether a channel is configured from bootstrap and plugin state.
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
+import { hasBundledChannelPackageState } from "../channels/plugins/package-state-probes.js";
+import {
+  hasMeaningfulChannelConfigShallow,
+  resolveChannelConfigRecord,
+} from "./channel-configured-shared.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-type ChannelConfiguredSurface = {
-  hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
-  hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
-};
-
-function resolveChannelConfig(
-  cfg: OpenClawConfig,
-  channelId: string,
-): Record<string, unknown> | null {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  return isRecord(entry) ? entry : null;
-}
-
-function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
-  const entry = resolveChannelConfig(cfg, channelId);
-  return hasMeaningfulChannelConfig(entry);
-}
-
-function getChannelConfiguredSurface(channelId: string): ChannelConfiguredSurface | null {
-  return getBundledChannelContractSurfaceModule<ChannelConfiguredSurface>({
-    pluginId: channelId,
-    preferredBasename: "contract-surfaces.ts",
-  });
-}
-
+/** Resolves whether a channel has enough config, env, or plugin state to be considered setup. */
 export function isChannelConfigured(
   cfg: OpenClawConfig,
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const surface = getChannelConfiguredSurface(channelId);
-  const pluginConfigured = surface?.hasConfiguredState?.({ cfg, env });
-  if (pluginConfigured) {
+  // Treat explicit persisted config as configured before consulting channel-specific env/state
+  // probes; user-authored config should win over inferred setup state.
+  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId))) {
     return true;
   }
-  const pluginPersistedAuthState = surface?.hasPersistedAuthState?.({ cfg, env });
-  if (pluginPersistedAuthState) {
+  // Bundled channels can expose configured state through env vars or persisted credential files.
+  if (hasBundledChannelPackageState({ metadataKey: "configuredState", channelId, cfg, env })) {
     return true;
   }
-  return isGenericChannelConfigured(cfg, channelId);
+  // Bootstrap plugins cover channels that are available before full plugin registry loading.
+  const plugin = getBootstrapChannelPlugin(channelId);
+  return Boolean(plugin?.config?.hasConfiguredState?.({ cfg, env }));
 }

@@ -1,5 +1,5 @@
+// Checks thread-binding config keys stay aligned with schema metadata.
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("thread binding config keys", () => {
@@ -16,15 +16,13 @@ describe("thread binding config keys", () => {
     if (result.ok) {
       return;
     }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "session.threadBindings",
-        message: expect.stringContaining("ttlHours"),
-      }),
+    const threadBindingIssue = result.issues.find(
+      (issue) => issue.path === "session.threadBindings",
     );
+    expect(threadBindingIssue?.message).toContain("ttlHours");
   });
 
-  it("rejects legacy channels.<id>.threadBindings.ttlHours", () => {
+  it("accepts channel-level thread binding ttlHours compatibility", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -35,19 +33,10 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "channels",
-        message: expect.stringContaining("ttlHours"),
-      }),
-    );
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects legacy channels.<id>.accounts.<id>.threadBindings.ttlHours", () => {
+  it("accepts account-level thread binding ttlHours compatibility", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -62,71 +51,6 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "channels",
-        message: expect.stringContaining("ttlHours"),
-      }),
-    );
-  });
-
-  it("migrates session.threadBindings.ttlHours to idleHours", () => {
-    const result = migrateLegacyConfig({
-      session: {
-        threadBindings: {
-          ttlHours: 24,
-        },
-      },
-    });
-
-    expect(result.config?.session?.threadBindings?.idleHours).toBe(24);
-    const normalized = result.config?.session?.threadBindings as
-      | Record<string, unknown>
-      | undefined;
-    expect(normalized?.ttlHours).toBeUndefined();
-    expect(result.changes).toContain(
-      "Moved session.threadBindings.ttlHours → session.threadBindings.idleHours.",
-    );
-  });
-
-  it("migrates channel threadBindings.ttlHours for root and account entries", () => {
-    const result = migrateLegacyConfig({
-      channels: {
-        demo: {
-          threadBindings: {
-            ttlHours: 12,
-          },
-          accounts: {
-            alpha: {
-              threadBindings: {
-                ttlHours: 6,
-              },
-            },
-            beta: {
-              threadBindings: {
-                idleHours: 4,
-                ttlHours: 9,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(result.config).toBeNull();
-
-    expect(result.changes).toContain(
-      "Moved channels.demo.threadBindings.ttlHours → channels.demo.threadBindings.idleHours.",
-    );
-    expect(result.changes).toContain(
-      "Moved channels.demo.accounts.alpha.threadBindings.ttlHours → channels.demo.accounts.alpha.threadBindings.idleHours.",
-    );
-    expect(result.changes).toContain(
-      "Removed channels.demo.accounts.beta.threadBindings.ttlHours (channels.demo.accounts.beta.threadBindings.idleHours already set).",
-    );
+    expect(result.ok).toBe(true);
   });
 });

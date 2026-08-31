@@ -1,9 +1,12 @@
+// Shared CLI execution wrappers and inherited Commander option lookup.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatCliOperatorError, isExpectedCliError } from "./failure-output.js";
+import { isJsonOutputModeActive } from "./json-output-mode.js";
 
 export { formatErrorMessage };
 
-export type ManagerLookupResult<T> = {
+type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
 };
@@ -39,15 +42,25 @@ export async function runCommandWithRuntime(
   try {
     await action();
   } catch (err) {
+    // Keep help imports lazy while completed commands reach the cleanup and output-drain owner.
+    const { ExitError } = await import("../runtime.js");
+    if (
+      err instanceof ExitError ||
+      isJsonOutputModeActive(process.argv) ||
+      isExpectedCliError(err)
+    ) {
+      throw err;
+    }
     if (onError) {
       onError(err);
       return;
     }
-    runtime.error(String(err));
+    runtime.error(formatCliOperatorError(err));
     runtime.exit(1);
   }
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
 export function resolveOptionFromCommand<T>(
   command: Command | undefined,
   key: string,

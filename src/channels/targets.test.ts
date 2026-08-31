@@ -1,3 +1,4 @@
+// Channel target tests cover target parsing, formatting, and selection helpers.
 import { describe, expect, it } from "vitest";
 import { buildMessagingTarget, ensureTargetId, requireTargetKind } from "./targets.js";
 

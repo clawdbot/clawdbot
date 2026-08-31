@@ -1,6 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Gateway setup prompt shared constants.
+// Provides Tailscale copy and Control UI origin updates for CLI setup flows.
+import { isIpv6Address, parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [
   { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -37,12 +41,12 @@ function normalizeTailnetHostForUrl(rawHost: string): string | null {
   }
   const parsed = parseCanonicalIpAddress(trimmed);
   if (parsed && isIpv6Address(parsed)) {
-    return `[${parsed.toString().toLowerCase()}]`;
+    return `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`;
   }
   return trimmed;
 }
 
-export function buildTailnetHttpsOrigin(rawHost: string): string | null {
+function buildTailnetHttpsOrigin(rawHost: string): string | null {
   const normalizedHost = normalizeTailnetHostForUrl(rawHost);
   if (!normalizedHost) {
     return null;
@@ -54,10 +58,10 @@ export function buildTailnetHttpsOrigin(rawHost: string): string | null {
   }
 }
 
-export function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
+function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
   const current = existing ?? [];
-  const normalized = origin.toLowerCase();
-  if (current.some((entry) => entry.toLowerCase() === normalized)) {
+  const normalized = normalizeLowercaseStringOrEmpty(origin);
+  if (current.some((entry) => normalizeLowercaseStringOrEmpty(entry) === normalized)) {
     return current;
   }
   return [...current, origin];
@@ -72,7 +76,9 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
     return params.config;
   }
   const tsOrigin = await getTailnetHostname(undefined, params.tailscaleBin ?? undefined)
-    .then((host) => buildTailnetHttpsOrigin(host))
+    .then((host) =>
+      buildTailnetHttpsOrigin(expectDefined(host, "gateway config prompts.shared host")),
+    )
     .catch(() => null);
   if (!tsOrigin) {
     return params.config;
@@ -80,6 +86,8 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
 
   const existing = params.config.gateway?.controlUi?.allowedOrigins ?? [];
   const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+  // Preserve all unrelated gateway/controlUi config while adding the derived
+  // tailnet origin, because setup writes partial gateway config objects.
   return {
     ...params.config,
     gateway: {

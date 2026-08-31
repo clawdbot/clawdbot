@@ -1,3 +1,4 @@
+// Covers extraction of model-visible text from mixed content blocks.
 import { describe, expect, it } from "vitest";
 import { collectTextContentBlocks } from "./content-blocks.js";
 
@@ -13,7 +14,9 @@ describe("collectTextContentBlocks", () => {
   });
 
   it("ignores invalid entries and non-arrays", () => {
-    expect(collectTextContentBlocks(null)).toEqual([]);
-    expect(collectTextContentBlocks([{ type: "text", text: 1 }, undefined, "x"])).toEqual([]);
+    // Callers pass provider-shaped content from untrusted boundaries; invalid
+    // entries should disappear instead of throwing or stringifying objects.
+    expect(collectTextContentBlocks(null)).toStrictEqual([]);
+    expect(collectTextContentBlocks([{ type: "text", text: 1 }, undefined, "x"])).toStrictEqual([]);
   });
 });

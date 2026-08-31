@@ -1,52 +1,30 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, resolveCliChannelOptions } from "./channel-options.js";
+// Channel option tests cover channel command option parsing and config resolution.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliChannelOptions, resolveCliChannelOptions } from "./channel-options.js";
 
-const readFileSyncMock = vi.hoisted(() => vi.fn());
+const readCliStartupMetadata = vi.hoisted(() => vi.fn());
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
-  return {
-    ...actual,
-    default: {
-      ...base,
-      readFileSync: readFileSyncMock,
-    },
-    readFileSync: readFileSyncMock,
-  };
-});
-
-vi.mock("../channels/ids.js", () => ({
-  CHAT_CHANNEL_ORDER: ["telegram", "discord"],
-}));
+vi.mock("./startup-metadata.js", () => ({ readCliStartupMetadata }));
 
 describe("resolveCliChannelOptions", () => {
-  afterEach(() => {
-    __testing.resetPrecomputedChannelOptionsForTests();
-    vi.clearAllMocks();
+  beforeEach(() => {
+    readCliStartupMetadata.mockReset();
   });
 
-  it("uses precomputed startup metadata when available", async () => {
-    readFileSyncMock.mockReturnValue(
-      JSON.stringify({ channelOptions: ["cached", "telegram", "cached"] }),
-    );
-
-    expect(resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
-  });
-
-  it("falls back to core channel order when metadata is missing", async () => {
-    readFileSyncMock.mockImplementation(() => {
-      throw new Error("ENOENT");
+  it("uses precomputed startup metadata when available", () => {
+    readCliStartupMetadata.mockReturnValue({
+      channelOptions: ["cached", "", false, "quietchat", "cached"],
     });
 
-    expect(resolveCliChannelOptions()).toEqual(["telegram", "discord"]);
+    expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
+    expect(formatCliChannelOptions(["all"])).toBe("all|cached|quietchat");
   });
 
-  it("ignores external catalog env during CLI bootstrap", async () => {
-    process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
-    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "telegram"] }));
+  it("falls back to generic channel text when metadata is missing", () => {
+    readCliStartupMetadata.mockReturnValue(null);
 
-    expect(resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
-    delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
+    expect(resolveCliChannelOptions()).toEqual([]);
+    expect(formatCliChannelOptions()).toBe("channel");
+    expect(formatCliChannelOptions(["all"])).toBe("all");
   });
 });

@@ -1,3 +1,4 @@
+// Node resolve tests cover node identity and address resolution helpers.
 import { describe, expect, it } from "vitest";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "./node-resolve.js";
 

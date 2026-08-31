@@ -1,4 +1,6 @@
+// Covers approval initiating-surface detection.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -10,7 +12,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    getRuntimeConfig: (...args: unknown[]) => loadConfigMock(...args),
   };
 });
 
@@ -33,13 +35,21 @@ vi.mock("../utils/message-channel.js", () => ({
 
 type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
 
-let hasConfiguredExecApprovalDmRoute: ExecApprovalSurfaceModule["hasConfiguredExecApprovalDmRoute"];
 let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
+let resolveApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveApprovalInitiatingSurfaceState"];
+let supportsNativeExecApprovalClient: ExecApprovalSurfaceModule["supportsNativeExecApprovalClient"];
+let describeNativeExecApprovalClientSetup: ExecApprovalSurfaceModule["describeNativeExecApprovalClientSetup"];
+let describeNativePluginApprovalClientSetup: ExecApprovalSurfaceModule["describeNativePluginApprovalClientSetup"];
 
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
   beforeAll(async () => {
-    ({ hasConfiguredExecApprovalDmRoute, resolveExecApprovalInitiatingSurfaceState } =
-      await import("./exec-approval-surface.js"));
+    ({
+      describeNativeExecApprovalClientSetup,
+      describeNativePluginApprovalClientSetup,
+      resolveApprovalInitiatingSurfaceState,
+      resolveExecApprovalInitiatingSurfaceState,
+      supportsNativeExecApprovalClient,
+    } = await import("./exec-approval-surface.js"));
   });
 
   beforeEach(() => {
@@ -63,6 +73,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: undefined,
         channelLabel: "this platform",
+        accountId: undefined,
       },
     },
     {
@@ -71,6 +82,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "tui",
         channelLabel: "terminal UI",
+        accountId: undefined,
       },
     },
     {
@@ -79,6 +91,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "web",
         channelLabel: "Web UI",
+        accountId: undefined,
       },
     },
   ])("treats built-in initiating surface %j", ({ channel, expected }) => {
@@ -90,14 +103,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             meta: { label: "Telegram" },
-            auth: {
+            approvalCapability: {
               getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
               meta: { label: "Discord" },
-              auth: {
+              approvalCapability: {
                 getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
             }
@@ -115,6 +128,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(
       resolveExecApprovalInitiatingSurfaceState({
@@ -126,16 +140,18 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
 
   it("reads approval availability from approvalCapability when auth is omitted", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "disabled" as const }));
     getChannelPluginMock.mockReturnValue({
       meta: { label: "Discord" },
       approvalCapability: {
-        getActionAvailabilityState: () => ({ kind: "disabled" }),
+        getActionAvailabilityState,
       },
     });
 
@@ -149,6 +165,106 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
+    });
+    expect(getActionAvailabilityState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: "main",
+      action: "approve",
+      approvalKind: "exec",
+    });
+  });
+
+  it("prefers exec-initiating-surface state over generic approval availability", () => {
+    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "disabled" as const }));
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Matrix" },
+      approvalCapability: {
+        native: {},
+        getExecInitiatingSurfaceState,
+        getActionAvailabilityState,
+      },
+    });
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "matrix",
+        accountId: "default",
+        cfg: {} as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "default",
+    });
+    expect(getExecInitiatingSurfaceState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: "default",
+      action: "approve",
+    });
+    expect(getActionAvailabilityState).not.toHaveBeenCalled();
+  });
+
+  it("does not treat plugin-only approval availability as exec availability", () => {
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Matrix" },
+      approvalCapability: {
+        native: {},
+        getActionAvailabilityState: ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
+          approvalKind === "plugin" ? { kind: "enabled" as const } : { kind: "disabled" as const },
+      },
+    });
+
+    expect(
+      resolveExecApprovalInitiatingSurfaceState({
+        channel: "matrix",
+        accountId: "default",
+        cfg: {} as never,
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "default",
+    });
+  });
+
+  it("uses generic approval availability for plugin initiating surfaces", () => {
+    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
+    const getActionAvailabilityState = vi.fn(
+      ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) =>
+        approvalKind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
+    );
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "WhatsApp" },
+      approvalCapability: {
+        native: {},
+        getExecInitiatingSurfaceState,
+        getActionAvailabilityState,
+      },
+    });
+
+    expect(
+      resolveApprovalInitiatingSurfaceState({
+        channel: "whatsapp",
+        accountId: "default",
+        cfg: {} as never,
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "whatsapp",
+      channelLabel: "WhatsApp",
+      accountId: "default",
+    });
+    expect(getExecInitiatingSurfaceState).not.toHaveBeenCalled();
+    expect(getActionAvailabilityState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: "default",
+      action: "approve",
+      approvalKind: "plugin",
     });
   });
 
@@ -158,7 +274,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             meta: { label: "Telegram" },
-            auth: {
+            approvalCapability: {
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
           }
@@ -174,6 +290,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(loadConfigMock).toHaveBeenCalledOnce();
 
@@ -181,6 +298,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "unsupported",
       channel: "signal",
       channelLabel: "Signal",
+      accountId: undefined,
     });
   });
 
@@ -189,100 +307,69 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "slack",
       channelLabel: "Slack",
+      accountId: undefined,
     });
   });
-});
 
-describe("hasConfiguredExecApprovalDmRoute", () => {
-  beforeEach(() => {
-    loadConfigMock.mockReset();
-    getChannelPluginMock.mockReset();
-    listChannelPluginsMock.mockReset();
-    isDeliverableMessageChannelMock.mockReset();
-    normalizeMessageChannelMock.mockReset();
-    normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
-      typeof value === "string" ? value.trim().toLowerCase() : undefined,
-    );
-    isDeliverableMessageChannelMock.mockImplementation(
-      (value?: string) => value === "slack" || value === "discord" || value === "telegram",
-    );
-  });
-
-  it.each([
-    {
-      plugins: [
-        {
-          approvals: {
-            delivery: {
-              hasConfiguredDmRoute: () => false,
-            },
-          },
-        },
-        {
-          approvals: {
-            delivery: {
-              hasConfiguredDmRoute: () => true,
-            },
-          },
-        },
-      ],
-      expected: true,
-    },
-    {
-      plugins: [
-        {
-          approvals: {
-            delivery: {
-              hasConfiguredDmRoute: () => false,
-            },
-          },
-        },
-        {
-          approvals: {
-            delivery: {
-              hasConfiguredDmRoute: () => false,
-            },
-          },
-        },
-        {
-          approvals: undefined,
-        },
-      ],
-      expected: false,
-    },
-  ])("reports whether any plugin routes approvals to DM for %j", ({ plugins, expected }) => {
-    listChannelPluginsMock.mockReturnValueOnce(plugins);
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(expected);
-  });
-
-  it("detects DM routes exposed through approvalCapability", () => {
-    listChannelPluginsMock.mockReturnValueOnce([
-      {
-        approvalCapability: {
-          delivery: {
-            hasConfiguredDmRoute: () => true,
-          },
-        },
+  it("treats exec-specific initiating-surface hooks as native exec client support", () => {
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Matrix" },
+      approvalCapability: {
+        native: {},
+        getExecInitiatingSurfaceState: () => ({ kind: "enabled" as const }),
       },
-    ]);
+    });
 
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
+    expect(supportsNativeExecApprovalClient("matrix")).toBe(true);
   });
 
-  it("preserves legacy DM routes when approvalCapability only defines auth", () => {
-    listChannelPluginsMock.mockReturnValueOnce([
-      {
-        approvalCapability: {
-          authorizeActorAction: () => ({ authorized: true }),
-        },
-        approvals: {
-          delivery: {
-            hasConfiguredDmRoute: () => true,
-          },
-        },
-      },
-    ]);
+  it("routes normalized setup parameters to the selected approval hook", () => {
+    const describeExecApprovalSetup = vi.fn(() => "exec setup");
+    const describePluginApprovalSetup = vi.fn(() => "plugin setup");
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "Telegram" },
+      approvalCapability: { describeExecApprovalSetup, describePluginApprovalSetup },
+    });
 
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
+    expect(
+      describeNativeExecApprovalClientSetup({
+        channel: " Telegram ",
+        channelLabel: " Telegram Custom ",
+        accountId: " primary ",
+      }),
+    ).toBe("exec setup");
+    expect(describeExecApprovalSetup).toHaveBeenCalledWith({
+      channel: "telegram",
+      channelLabel: "Telegram Custom",
+      accountId: "primary",
+    });
+
+    expect(describeNativePluginApprovalClientSetup({ channel: " TELEGRAM " })).toBe("plugin setup");
+    expect(describePluginApprovalSetup).toHaveBeenCalledWith({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: undefined,
+    });
+  });
+
+  it.each([undefined, "web", "tui"])("suppresses setup guidance for %s", (channel) => {
+    expect(describeNativeExecApprovalClientSetup({ channel })).toBeNull();
+    expect(describeNativePluginApprovalClientSetup({ channel })).toBeNull();
+    expect(getChannelPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the sibling approval hook", () => {
+    const describeExecApprovalSetup = vi.fn(() => "exec setup");
+    const describePluginApprovalSetup = vi.fn(() => "plugin setup");
+    getChannelPluginMock.mockImplementation((channel: string) => ({
+      meta: { label: channel },
+      approvalCapability:
+        channel === "telegram" ? { describePluginApprovalSetup } : { describeExecApprovalSetup },
+    }));
+
+    expect(describeNativeExecApprovalClientSetup({ channel: "telegram" })).toBeNull();
+    expect(describePluginApprovalSetup).not.toHaveBeenCalled();
+    expect(describeNativePluginApprovalClientSetup({ channel: "matrix" })).toBeNull();
+    expect(describeExecApprovalSetup).not.toHaveBeenCalled();
   });
 });

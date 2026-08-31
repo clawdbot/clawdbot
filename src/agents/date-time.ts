@@ -1,10 +1,24 @@
+/**
+ * Normalizes timestamps and formats user-facing dates/times for agent prompts.
+ */
 import { execFileSync } from "node:child_process";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
-export type TimeFormatPreference = "auto" | "12" | "24";
-export type ResolvedTimeFormat = "12" | "24";
+type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
 
+function buildNormalizedTimestamp(
+  timestampMs: number,
+): { timestampMs: number; timestampUtc: string } | undefined {
+  if (!Number.isSafeInteger(timestampMs)) {
+    return undefined;
+  }
+  const timestampUtc = new Date(timestampMs).toISOString();
+  return { timestampMs, timestampUtc };
+}
+
+/** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
@@ -19,7 +33,8 @@ export function resolveUserTimezone(configured?: string): string {
   return host?.trim() || "UTC";
 }
 
-export function resolveUserTimeFormat(preference?: TimeFormatPreference): ResolvedTimeFormat {
+/** Resolve 12/24-hour display preference, detecting the host for `auto`. */
+export function resolveUserTimeFormat(preference?: "auto" | "12" | "24"): ResolvedTimeFormat {
   if (preference === "12" || preference === "24") {
     return preference;
   }
@@ -30,7 +45,27 @@ export function resolveUserTimeFormat(preference?: TimeFormatPreference): Resolv
   return cachedTimeFormat;
 }
 
-export function normalizeTimestamp(
+/** Format a stable YYYY-MM-DD stamp in the requested timezone. */
+export function formatDateStamp(nowMs: number, timeZone: string): string {
+  const timestampMs = resolveDateTimestampMs(nowMs);
+  const date = new Date(timestampMs);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+/** Normalize Date, second, millisecond, or parseable string timestamps. */
+function normalizeTimestamp(
   raw: unknown,
 ): { timestampMs: number; timestampUtc: string } | undefined {
   if (raw == null) {
@@ -69,9 +104,14 @@ export function normalizeTimestamp(
   if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
     return undefined;
   }
-  return { timestampMs, timestampUtc: new Date(timestampMs).toISOString() };
+  try {
+    return buildNormalizedTimestamp(timestampMs);
+  } catch {
+    return undefined;
+  }
 }
 
+/** Add normalized timestamp fields without overwriting valid existing values. */
 export function withNormalizedTimestamp<T extends Record<string, unknown>>(
   value: T,
   rawTimestamp: unknown,
@@ -108,7 +148,7 @@ function detectSystemTimeFormat(): boolean {
         return false;
       }
     } catch {
-      // Not set, fall through
+      // macOS omits the key for locale-default behavior.
     }
   }
 
@@ -126,7 +166,7 @@ function detectSystemTimeFormat(): boolean {
         return false;
       }
     } catch {
-      // Fall through
+      // Windows detection is best-effort; Intl below is the portable fallback.
     }
   }
 
@@ -155,6 +195,7 @@ function ordinalSuffix(day: number): string {
   }
 }
 
+/** Format the prompt-facing localized time string with weekday and date. */
 export function formatUserTime(
   date: Date,
   timeZone: string,
@@ -181,12 +222,12 @@ export function formatUserTime(
     if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
       return undefined;
     }
-    const dayNum = parseInt(map.day, 10);
+    const dayNum = Number.parseInt(map.day, 10);
     const suffix = ordinalSuffix(dayNum);
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`
       : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
-    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} — ${timePart}`;
+    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} - ${timePart}`;
   } catch {
     return undefined;
   }

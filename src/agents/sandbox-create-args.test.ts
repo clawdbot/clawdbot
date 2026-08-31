@@ -1,13 +1,17 @@
+// Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { describe, expect, it } from "vitest";
-import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
+
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("buildSandboxCreateArgs", () => {
   function createSandboxConfig(
     overrides: Partial<SandboxDockerConfig> = {},
     binds?: string[],
   ): SandboxDockerConfig {
+    // Baseline config keeps each Docker argument case focused on one override.
     return {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -38,6 +42,27 @@ describe("buildSandboxCreateArgs", () => {
     ).toThrow(expectedMessage);
   }
 
+  function valuesForFlag(args: string[], flag: string): string[] {
+    // Docker flags are positional, so collect repeated flag values for assertions.
+    const values: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === flag) {
+        const value = args[i + 1];
+        if (value) {
+          values.push(value);
+        }
+      }
+    }
+    return values;
+  }
+
+  function expectFlagValues(args: string[], flag: string, expectedValues: string[]): void {
+    const values = valuesForFlag(args, flag);
+    for (const value of expectedValues) {
+      expect(values).toContain(value);
+    }
+  }
+
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",
@@ -64,7 +89,7 @@ describe("buildSandboxCreateArgs", () => {
       extraHosts: ["internal.service:10.0.0.5"],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args, env } = buildSandboxCreateArgs({
       name: "openclaw-sbx-test",
       cfg,
       scopeKey: "main",
@@ -72,96 +97,111 @@ describe("buildSandboxCreateArgs", () => {
       labels: { "openclaw.sandboxBrowser": "1" },
     });
 
-    expect(args).toEqual(
-      expect.arrayContaining([
-        "create",
-        "--name",
-        "openclaw-sbx-test",
-        "--label",
-        "openclaw.sandbox=1",
-        "--label",
-        "openclaw.sessionKey=main",
-        "--label",
-        "openclaw.createdAtMs=1700000000000",
-        "--label",
-        "openclaw.sandboxBrowser=1",
-        "--read-only",
-        "--tmpfs",
-        "/tmp",
-        "--network",
-        "none",
-        "--user",
-        "1000:1000",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--security-opt",
-        "seccomp=/tmp/seccomp.json",
-        "--security-opt",
-        "apparmor=openclaw-sandbox",
-        "--dns",
-        "1.1.1.1",
-        "--add-host",
-        "internal.service:10.0.0.5",
-        "--pids-limit",
-        "256",
-        "--memory",
-        "512m",
-        "--memory-swap",
-        "1024",
-        "--cpus",
-        "1.5",
-      ]),
-    );
-    expect(args).toEqual(
-      expect.arrayContaining([
-        "--env",
-        "LANG=C.UTF-8",
-        "--env",
-        `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
-      ]),
-    );
-
-    const ulimitValues: string[] = [];
-    for (let i = 0; i < args.length; i += 1) {
-      if (args[i] === "--ulimit") {
-        const value = args[i + 1];
-        if (value) {
-          ulimitValues.push(value);
-        }
-      }
-    }
-    expect(ulimitValues).toEqual(
-      expect.arrayContaining(["nofile=1024:2048", "nproc=128", "core=0"]),
-    );
+    expect(args[0]).toBe("create");
+    expectFlagValues(args, "--name", ["openclaw-sbx-test"]);
+    expectFlagValues(args, "--label", [
+      "openclaw.sandbox=1",
+      "openclaw.sessionKey=main",
+      "openclaw.createdAtMs=1700000000000",
+      `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
+      "openclaw.sandboxBrowser=1",
+    ]);
+    expect(args).toContain("--read-only");
+    expectFlagValues(args, "--tmpfs", ["/tmp"]);
+    expectFlagValues(args, "--network", ["none"]);
+    expectFlagValues(args, "--user", ["1000:1000"]);
+    expectFlagValues(args, "--cap-drop", ["ALL"]);
+    expectFlagValues(args, "--security-opt", [
+      "no-new-privileges",
+      "seccomp=/tmp/seccomp.json",
+      "apparmor=openclaw-sandbox",
+    ]);
+    expectFlagValues(args, "--dns", ["1.1.1.1"]);
+    expectFlagValues(args, "--add-host", ["internal.service:10.0.0.5"]);
+    expectFlagValues(args, "--pids-limit", ["256"]);
+    expectFlagValues(args, "--memory", ["512m"]);
+    expectFlagValues(args, "--memory-swap", ["1024"]);
+    expectFlagValues(args, "--cpus", ["1.5"]);
+    expect(args).not.toContain("--env");
+    expect(env).toEqual({ LANG: "C.UTF-8", OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE });
+    expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
   });
 
-  it("preserves the OpenClaw exec marker when strict env sanitization is enabled", () => {
+  it("omits non-finite numeric Docker resource flags", () => {
     const cfg = createSandboxConfig({
-      env: {
-        NODE_ENV: "test",
+      pidsLimit: Number.POSITIVE_INFINITY,
+      cpus: Number.NaN,
+      ulimits: {
+        nofile: {
+          soft: Number.NaN,
+          hard: Number.POSITIVE_INFINITY,
+        },
+        fsize: Number.NaN,
+        core: Number.POSITIVE_INFINITY,
+        nproc: {
+          soft: Number.NEGATIVE_INFINITY,
+          hard: 1024,
+        },
       },
     });
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
+      name: "openclaw-sbx-non-finite-limits",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toContain("--pids-limit");
+    expect(args).not.toContain("--cpus");
+    expectFlagValues(args, "--ulimit", ["nproc=1024"]);
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("nofile=NaN:Infinity");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("fsize=NaN");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
+  });
+
+  it("passes explicit configured sandbox env through even when names look sensitive", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        ANTHROPIC_ADMIN_KEY: "dummy-anthropic-admin-key",
+        GEMINI_API_KEY: "dummy-gemini-api-key",
+        GOOGLE_CLIENT_ID: "dummy-google-client-id",
+        GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+        HIMALAYA_CONFIG: "dummy-himalaya-config",
+        HIMALAYA_PASSWORD: "dummy-himalaya-password",
+        OURA_CLIENT_ID: "dummy-oura-client-id",
+        OURA_CLIENT_SECRET: "dummy-oura-client-secret",
+        RESEND_API_KEY: "dummy-resend-api-key",
+      },
+    });
+
+    const { argv: args, env } = buildSandboxCreateArgs({
       name: "openclaw-sbx-marker",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
-      envSanitizationOptions: {
-        strictMode: true,
-      },
     });
 
-    expect(args).toEqual(
-      expect.arrayContaining([
-        "--env",
-        "NODE_ENV=test",
-        "--env",
-        `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
-      ]),
-    );
+    expect(args).not.toContain("--env");
+    expect(env).toEqual({
+      ...cfg.env,
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
+  });
+
+  it("emits Docker GPU passthrough as a separate argument", () => {
+    const cfg = createSandboxConfig({
+      gpus: "device=GPU-123",
+    });
+
+    const { argv: args } = buildSandboxCreateArgs({
+      name: "openclaw-sbx-gpu",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expectFlagValues(args, "--gpus", ["device=GPU-123"]);
   });
 
   it("emits -v flags for safe custom binds", () => {
@@ -176,7 +216,7 @@ describe("buildSandboxCreateArgs", () => {
       binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-binds",
       cfg,
       scopeKey: "main",
@@ -209,6 +249,12 @@ describe("buildSandboxCreateArgs", () => {
       containerName: "openclaw-sbx-dangerous-parent",
       cfg: createSandboxConfig({}, ["/run:/run"]),
       expected: /blocked path/,
+    },
+    {
+      name: "bind source covering Docker socket directory",
+      containerName: "openclaw-sbx-covers-docker-socket-dir",
+      cfg: createSandboxConfig({}, ["/var:/var"]),
+      expected: /covers blocked path/,
     },
     {
       name: "network host mode",
@@ -250,7 +296,7 @@ describe("buildSandboxCreateArgs", () => {
       binds: [],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-no-binds",
       cfg,
       scopeKey: "main",
@@ -285,7 +331,7 @@ describe("buildSandboxCreateArgs", () => {
 
   it("allows bind sources outside runtime allowlist with explicit override", () => {
     const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-outside-roots-override",
       cfg,
       scopeKey: "main",
@@ -293,7 +339,7 @@ describe("buildSandboxCreateArgs", () => {
       bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
       allowSourcesOutsideAllowedRoots: true,
     });
-    expect(args).toEqual(expect.arrayContaining(["-v", "/opt/external:/data:rw"]));
+    expectFlagValues(args, "-v", ["/opt/external:/data:rw"]);
   });
 
   it("blocks reserved /workspace target bind mounts by default", () => {
@@ -303,14 +349,14 @@ describe("buildSandboxCreateArgs", () => {
 
   it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-reserved-target-override",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
       allowReservedContainerTargets: true,
     });
-    expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
+    expectFlagValues(args, "-v", ["/tmp/override:/workspace:rw"]);
   });
 
   it("allows container namespace join with explicit dangerous override", () => {
@@ -318,12 +364,27 @@ describe("buildSandboxCreateArgs", () => {
       network: "container:peer",
       dangerouslyAllowContainerNamespaceJoin: true,
     });
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-container-network-override",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
     });
-    expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
+    expectFlagValues(args, "--network", ["container:peer"]);
+  });
+
+  it("passes one --init flag so Docker reaps orphaned processes", () => {
+    const cfg = createSandboxConfig();
+    const { argv: args } = buildSandboxCreateArgs({
+      name: "openclaw-sbx-init",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args.filter((arg) => arg === "--init")).toHaveLength(1);
+    // Docker create options must follow the subcommand and precede the image.
+    const createIdx = args.indexOf("create");
+    const initIdx = args.indexOf("--init");
+    expect(initIdx).toBeGreaterThan(createIdx);
   });
 });

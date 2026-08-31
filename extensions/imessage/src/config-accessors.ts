@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Imessage helper module supports config accessors behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIMessageAccount } from "./accounts.js";
 
 export function resolveIMessageConfigAllowFrom(params: {
@@ -16,6 +17,6 @@ export function resolveIMessageConfigDefaultTo(params: {
   if (defaultTo == null) {
     return undefined;
   }
-  const normalized = String(defaultTo).trim();
+  const normalized = defaultTo.trim();
   return normalized || undefined;
 }

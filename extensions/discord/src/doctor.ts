@@ -1,11 +1,19 @@
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements doctor behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  type ChannelDoctorAdapter,
-  type ChannelDoctorConfigMutation,
-} from "openclaw/plugin-sdk/channel-contract";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+  asObjectRecord,
+  collectChannelAccountScopes,
+  collectProviderDangerousNameMatchingScopes,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { inspectDiscordAccount } from "./account-inspect.js";
+import { resolveDefaultDiscordAccountId } from "./accounts.js";
+import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
-import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
+import { isDiscordMutableAllowEntry } from "./security-doctor.js";
+import { discordVoiceTranscriptsSourceProvider } from "./voice/transcripts-source.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -15,271 +23,8 @@ type DiscordIdListRef = {
   key: string;
 };
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-}
-
-function isDiscordMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
-
-  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
-  if (/^\d+$/.test(maybeMentionId)) {
-    return false;
-  }
-
-  for (const prefix of ["discord:", "user:", "pk:"]) {
-    if (!text.startsWith(prefix)) {
-      continue;
-    }
-    return text.slice(prefix.length).trim().length === 0;
-  }
-
-  return true;
-}
-
-function normalizeDiscordDmAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  let updated: Record<string, unknown> = params.entry;
-  const rawDm = updated.dm;
-  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
-  let dmChanged = false;
-
-  const allowFromEqual = (a: unknown, b: unknown): boolean => {
-    if (!Array.isArray(a) || !Array.isArray(b)) {
-      return false;
-    }
-    const na = a.map((v) => String(v).trim()).filter(Boolean);
-    const nb = b.map((v) => String(v).trim()).filter(Boolean);
-    if (na.length !== nb.length) {
-      return false;
-    }
-    return na.every((v, i) => v === nb[i]);
-  };
-
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
-  }
-
-  const topAllowFrom = updated.allowFrom;
-  const legacyAllowFrom = dm?.allowFrom;
-  if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-    updated = { ...updated, allowFrom: legacyAllowFrom };
-    changed = true;
-    if (dm) {
-      delete dm.allowFrom;
-      dmChanged = true;
-    }
-    params.changes.push(
-      `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
-    );
-  } else if (
-    topAllowFrom !== undefined &&
-    legacyAllowFrom !== undefined &&
-    allowFromEqual(topAllowFrom, legacyAllowFrom)
-  ) {
-    if (dm) {
-      delete dm.allowFrom;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
-    } else {
-      updated = { ...updated, dm };
-      changed = true;
-    }
-  }
-
-  return { entry: updated, changed };
-}
-
-function normalizeDiscordStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const beforeStreaming = updated.streaming;
-  const resolved = resolveDiscordPreviewStreamMode(updated);
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof beforeStreaming === "boolean" ||
-    (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
-  if (!shouldNormalize) {
-    return { entry: updated, changed: false };
-  }
-
-  let changed = false;
-  if (beforeStreaming !== resolved) {
-    updated = { ...updated, streaming: resolved };
-    changed = true;
-  }
-  if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
-    changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-    );
-  }
-  if (typeof beforeStreaming === "boolean") {
-    params.changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-  } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
-    params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
-    );
-  }
-  if (
-    params.pathPrefix.startsWith("channels.discord") &&
-    resolved === "off" &&
-    hadLegacyStreamMode
-  ) {
-    params.changes.push(
-      `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming="partial" to opt in explicitly.`,
-    );
-  }
-  return { entry: updated, changed };
-}
-
-function normalizeDiscordCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.discord);
-  if (!rawEntry) {
-    return { config: cfg, changes: [] };
-  }
-
-  const changes: string[] = [];
-  let updated = rawEntry;
-  let changed = false;
-
-  const base = normalizeDiscordDmAliases({
-    entry: rawEntry,
-    pathPrefix: "channels.discord",
-    changes,
-  });
-  updated = base.entry;
-  changed = base.changed;
-
-  const streaming = normalizeDiscordStreamingAliases({
-    entry: updated,
-    pathPrefix: "channels.discord",
-    changes,
-  });
-  updated = streaming.entry;
-  changed = changed || streaming.changed;
-
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (rawAccounts) {
-    let accountsChanged = false;
-    const accounts = { ...rawAccounts };
-    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      let accountEntry = account;
-      let accountChanged = false;
-      const dm = normalizeDiscordDmAliases({
-        entry: account,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-      });
-      accountEntry = dm.entry;
-      accountChanged = dm.changed;
-      const accountStreaming = normalizeDiscordStreamingAliases({
-        entry: accountEntry,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-      });
-      accountEntry = accountStreaming.entry;
-      accountChanged = accountChanged || accountStreaming.changed;
-      if (accountChanged) {
-        accounts[accountId] = accountEntry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        discord: updated,
-      } as OpenClawConfig["channels"],
-    },
-    changes,
-  };
-}
-
-function collectDiscordAccountScopes(
-  cfg: OpenClawConfig,
-): Array<{ prefix: string; account: Record<string, unknown> }> {
-  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
-  const discord = asObjectRecord(cfg.channels?.discord);
-  if (!discord) {
-    return scopes;
-  }
-
-  scopes.push({ prefix: "channels.discord", account: discord });
-  const accounts = asObjectRecord(discord.accounts);
-  if (!accounts) {
-    return scopes;
-  }
-  for (const key of Object.keys(accounts)) {
-    const account = asObjectRecord(accounts[key]);
-    if (account) {
-      scopes.push({ prefix: `channels.discord.accounts.${key}`, account });
-    }
-  }
-  return scopes;
+  return value.replace(/\p{Cc}+/gu, " ").trim();
 }
 
 function collectDiscordIdLists(
@@ -355,7 +100,7 @@ export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumeric
     }
   };
 
-  for (const scope of collectDiscordAccountScopes(cfg)) {
+  for (const scope of collectChannelAccountScopes({ cfg, channelId: "discord" })) {
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
       scanList(ref.pathLabel, ref.holder[ref.key]);
     }
@@ -393,14 +138,14 @@ export function collectDiscordNumericIdWarnings(params: {
 
   const lines: string[] = [];
   if (repairableHits.length > 0) {
-    const sample = repairableHits[0]!;
+    const sample = expectDefined(repairableHits.at(0), "non-empty repairable Discord ID hits");
     lines.push(
       `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${sanitizeForLog(sample.path)}=${sanitizeForLog(String(sample.entry))}).`,
       `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
     );
   }
   if (blockedHits.length > 0) {
-    const sample = blockedHits[0]!;
+    const sample = expectDefined(blockedHits.at(0), "non-empty blocked Discord ID hits");
     lines.push(
       `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${sanitizeForLog(sample.path)}).`,
       `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
@@ -447,7 +192,7 @@ export function maybeRepairDiscordNumericIds(
     }
   };
 
-  for (const scope of collectDiscordAccountScopes(next)) {
+  for (const scope of collectChannelAccountScopes({ cfg: next, channelId: "discord" })) {
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
       repairList(ref.pathLabel, ref.holder, ref.key);
     }
@@ -470,6 +215,55 @@ export function maybeRepairDiscordNumericIds(
   };
 }
 
+export function collectDiscordMissingEnvTokenWarnings(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  if (resolveDefaultDiscordAccountId(params.cfg) !== "default") {
+    return [];
+  }
+  const account = inspectDiscordAccount({
+    cfg: params.cfg,
+    accountId: "default",
+    envToken: params.env?.DISCORD_BOT_TOKEN ?? "",
+  });
+  if (!account.enabled || account.tokenStatus !== "missing" || account.tokenSource !== "none") {
+    return [];
+  }
+  return [
+    "- channels.discord: default account has no available bot token, and DISCORD_BOT_TOKEN is absent in this doctor environment. After migration, verify DISCORD_BOT_TOKEN is present in the state-dir .env or configure channels.discord.token / channels.discord.accounts.default.token as a SecretRef.",
+  ];
+}
+
+function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string[] {
+  if (cfg.transcripts?.enabled === false || !Array.isArray(cfg.transcripts?.autoStart)) {
+    return [];
+  }
+  const ownership = discordVoiceTranscriptsSourceProvider.accessControl;
+  if (!ownership) {
+    return [];
+  }
+
+  return cfg.transcripts.autoStart.flatMap((entry, index) => {
+    const providerId = normalizeOptionalString(entry.providerId)?.toLowerCase();
+    if (
+      (providerId !== discordVoiceTranscriptsSourceProvider.id &&
+        !discordVoiceTranscriptsSourceProvider.aliases?.includes(providerId ?? "")) ||
+      normalizeOptionalString(entry.accountId)
+    ) {
+      return [];
+    }
+    const resolution = ownership.resolveAccountId({ cfg, source: entry });
+    if (resolution.ok) {
+      return [];
+    }
+    const path = `transcripts.autoStart[${index}]`;
+    return [
+      `- ${path} cannot select a Discord voice account: ${resolution.error} Set ${path}.accountId to the intended enabled voice account, or set channels.discord.defaultAccount when one account should be the global default.`,
+    ];
+  });
+}
+
 function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
   const addHits = (pathLabel: string, list: unknown) => {
@@ -477,7 +271,7 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
       return;
     }
     for (const entry of list) {
-      const text = String(entry).trim();
+      const text = normalizeOptionalString(String(entry)) ?? "";
       if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
         continue;
       }
@@ -535,17 +329,20 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
 }
 
 export const discordDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOrNested",
+  dmAllowFromMode: "topOnly",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeDiscordCompatibilityConfig(cfg),
-  collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
-    collectDiscordNumericIdWarnings({
+  normalizeCompatibilityConfig: normalizeDiscordCompatibilityConfig,
+  collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
+    ...collectDiscordMissingEnvTokenWarnings({ cfg, env }),
+    ...collectDiscordNumericIdWarnings({
       hits: scanDiscordNumericIdEntries(cfg),
       doctorFixCommand,
     }),
+    ...collectDiscordTranscriptsAutoStartWarnings(cfg),
+  ],
   collectMutableAllowlistWarnings: ({ cfg }) => collectDiscordMutableAllowlistWarnings(cfg),
   repairConfig: ({ cfg, doctorFixCommand }) => maybeRepairDiscordNumericIds(cfg, doctorFixCommand),
 };

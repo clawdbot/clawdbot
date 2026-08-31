@@ -1,12 +1,12 @@
-import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// Discord plugin module implements runtime.presence behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { getGateway } from "../monitor/gateway-registry.js";
-import {
-  type ActionGate,
-  jsonResult,
-  readStringParam,
-  type DiscordActionConfig,
-} from "../runtime-api.js";
 
 const ACTIVITY_TYPE_MAP: Record<string, number> = {
   playing: 0,
@@ -23,6 +23,7 @@ export async function handleDiscordPresenceAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
+  cfg: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   if (action !== "setPresence") {
     throw new Error(`Unknown presence action: ${action}`);
@@ -32,17 +33,15 @@ export async function handleDiscordPresenceAction(
     throw new Error("Discord presence changes are disabled.");
   }
 
-  const accountId = readStringParam(params, "accountId");
+  const accountId = readStringParam(params, "accountId") ?? resolveDefaultDiscordAccountId(cfg);
   const gateway = getGateway(accountId);
   if (!gateway) {
     throw new Error(
-      `Discord gateway not available${accountId ? ` for account "${accountId}"` : ""}. The bot may not be connected.`,
+      `Discord gateway not available for account "${accountId}". The bot may not be connected.`,
     );
   }
   if (!gateway.isConnected) {
-    throw new Error(
-      `Discord gateway is not connected${accountId ? ` for account "${accountId}"` : ""}.`,
-    );
+    throw new Error(`Discord gateway is not connected for account "${accountId}".`);
   }
 
   const statusRaw = readStringParam(params, "status") ?? "online";
@@ -65,7 +64,7 @@ export async function handleDiscordPresenceAction(
           `Valid types: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
       );
     }
-    const typeNum = ACTIVITY_TYPE_MAP[activityTypeRaw.toLowerCase()];
+    const typeNum = ACTIVITY_TYPE_MAP[normalizeLowercaseStringOrEmpty(activityTypeRaw)];
     if (typeNum === undefined) {
       throw new Error(
         `Invalid activityType "${activityTypeRaw}". Must be one of: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
@@ -105,11 +104,12 @@ export async function handleDiscordPresenceAction(
   return jsonResult({
     ok: true,
     status,
-    activities: activities.map((a) => ({
-      type: a.type,
-      name: a.name,
-      ...(a.url ? { url: a.url } : {}),
-      ...(a.state ? { state: a.state } : {}),
-    })),
+    activities: activities.map((a) =>
+      Object.assign(
+        { type: a.type, name: a.name },
+        a.url ? { url: a.url } : {},
+        a.state ? { state: a.state } : {},
+      ),
+    ),
   });
 }

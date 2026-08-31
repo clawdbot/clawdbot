@@ -1,28 +1,10 @@
+// Telegram tests cover bot message context.acp bindings plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./bot-message-context.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot-message-context.runtime.js")>(
-    "./bot-message-context.runtime.js",
-  );
-  return {
-    ...actual,
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      ensureConfiguredBindingRouteReadyMock(...args),
-  };
-});
-vi.mock("./bot-message-context.session.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
-    "./bot-message-context.session.runtime.js",
-  );
-  return {
-    ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
 vi.mock("./conversation-route.js", async () => {
   const actual =
     await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
@@ -34,6 +16,19 @@ vi.mock("./conversation-route.js", async () => {
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+
+const configuredBindingRuntime = {
+  ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
+    ensureConfiguredBindingRouteReadyMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["runtime"]
+>;
+
+const configuredBindingSessionRuntime = {
+  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["sessionRuntime"]
+>;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -69,70 +64,73 @@ function createConfiguredTelegramBinding() {
 function createConfiguredTelegramRoute() {
   const configuredBinding = createConfiguredTelegramBinding();
   return {
-    configuredBinding: {
-      conversation: {
-        channel: "telegram",
-        accountId: "work",
-        conversationId: "-1001234567890:topic:42",
-        parentConversationId: "-1001234567890",
-      },
-      compiledBinding: {
-        channel: "telegram",
-        accountPattern: "work",
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "telegram",
-            accountId: "work",
-            peer: {
-              kind: "group",
-              id: "-1001234567890:topic:42",
-            },
-          },
-        },
-        bindingConversationId: "-1001234567890:topic:42",
-        target: {
+    bindingMode: {
+      kind: "configured",
+      binding: {
+        conversation: {
+          channel: "telegram",
+          accountId: "work",
           conversationId: "-1001234567890:topic:42",
           parentConversationId: "-1001234567890",
         },
-        agentId: "codex",
-        provider: {
-          compileConfiguredBinding: () => ({
-            conversationId: "-1001234567890:topic:42",
-            parentConversationId: "-1001234567890",
-          }),
-          matchInboundConversation: () => ({
-            conversationId: "-1001234567890:topic:42",
-            parentConversationId: "-1001234567890",
-          }),
-        },
-        targetFactory: {
-          driverId: "acp",
-          materialize: () => ({
-            record: configuredBinding.record,
-            statefulTarget: {
-              kind: "stateful",
-              driverId: "acp",
-              sessionKey: configuredBinding.record.targetSessionKey,
-              agentId: configuredBinding.spec.agentId,
+        compiledBinding: {
+          channel: "telegram",
+          accountPattern: "work",
+          binding: {
+            type: "acp",
+            agentId: "codex",
+            match: {
+              channel: "telegram",
+              accountId: "work",
+              peer: {
+                kind: "group",
+                id: "-1001234567890:topic:42",
+              },
             },
-          }),
+          },
+          bindingConversationId: "-1001234567890:topic:42",
+          target: {
+            conversationId: "-1001234567890:topic:42",
+            parentConversationId: "-1001234567890",
+          },
+          agentId: "codex",
+          provider: {
+            compileConfiguredBinding: () => ({
+              conversationId: "-1001234567890:topic:42",
+              parentConversationId: "-1001234567890",
+            }),
+            matchInboundConversation: () => ({
+              conversationId: "-1001234567890:topic:42",
+              parentConversationId: "-1001234567890",
+            }),
+          },
+          targetFactory: {
+            driverId: "acp",
+            materialize: () => ({
+              record: configuredBinding.record,
+              statefulTarget: {
+                kind: "stateful",
+                driverId: "acp",
+                sessionKey: configuredBinding.record.targetSessionKey,
+                agentId: configuredBinding.spec.agentId,
+              },
+            }),
+          },
+        },
+        match: {
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        record: configuredBinding.record,
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: configuredBinding.record.targetSessionKey,
+          agentId: configuredBinding.spec.agentId,
         },
       },
-      match: {
-        conversationId: "-1001234567890:topic:42",
-        parentConversationId: "-1001234567890",
-      },
-      record: configuredBinding.record,
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: configuredBinding.record.targetSessionKey,
-        agentId: configuredBinding.spec.agentId,
-      },
+      sessionKey: configuredBinding.record.targetSessionKey,
     },
-    configuredBindingSessionKey: configuredBinding.record.targetSessionKey,
     route: {
       agentId: "codex",
       accountId: "work",
@@ -162,6 +160,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -169,19 +169,18 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
       },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      updateLastRoute: undefined,
-    });
+    expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips ACP session initialization when topic access is denied", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -201,6 +200,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("defers ACP session initialization for unauthorized control commands", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -229,6 +230,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
 
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,

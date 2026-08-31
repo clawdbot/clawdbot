@@ -1,7 +1,13 @@
-import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
-import type { ChannelSetupWizard } from "./setup-wizard.js";
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
+/**
+ * Channel plugin root type contract.
+ *
+ * Defines the full plugin object shape composed from config, runtime, setup, and adapter surfaces.
+ */
+import type { ChannelMessageAdapterShape } from "../message/types.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
+import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type {
-  ChannelApprovalAdapter,
   ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
@@ -17,12 +23,14 @@ import type {
   ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
+  ChannelSecretsAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
   ChannelAllowlistAdapter,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
+import type { ChannelConfigSchema } from "./types.config.js";
 import type {
   ChannelAgentTool,
   ChannelAgentToolFactory,
@@ -37,47 +45,17 @@ import type {
   ChannelThreadingAdapter,
 } from "./types.core.js";
 
-// Channel docking: implement this contract in src/channels/plugins/<id>.ts.
-export type ChannelConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ChannelConfigRuntimeIssue = {
-  path?: Array<string | number>;
-  message?: string;
-  code?: string;
-} & Record<string, unknown>;
-
-export type ChannelConfigRuntimeParseResult =
-  | {
-      success: true;
-      data: unknown;
-    }
-  | {
-      success: false;
-      issues: ChannelConfigRuntimeIssue[];
-    };
-
-export type ChannelConfigRuntimeSchema = {
-  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
-};
-
-/** JSON-schema-like config description published by a channel plugin. */
-export type ChannelConfigSchema = {
-  schema: Record<string, unknown>;
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  runtime?: ChannelConfigRuntimeSchema;
-};
-
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
 
+type ChannelGatewayMethodDescriptor = {
+  name: string;
+  scope?: OperatorScope;
+  description?: string;
+};
+
+// Omitted generic means "plugin with some account shape"; using unknown makes
+// callback parameters contravariant and rejects concrete plugin implementations.
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -88,10 +66,23 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
       debounceMs?: number;
     };
   };
-  reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
+  reload?: {
+    configPrefixes: string[];
+    noopPrefixes?: string[];
+    /**
+     * Opt into restarting only the changed non-default named account.
+     * Set only when sibling account resolution and lifecycle state are isolated and
+     * account stop fully settles owned work. Shared, default, removed, or unresolved
+     * account changes still restart the whole channel.
+     */
+    accountScopedRestart?: boolean;
+  };
   setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
+  /** Channel-owned typed setup contract. Preferred over the legacy shared input adapter. */
+  setupContract?: ChannelOwnedSetupContract;
+  /** @deprecated Use setupContract for new plugins. */
   setup?: ChannelSetupAdapter;
   pairing?: ChannelPairingAdapter;
   security?: ChannelSecurityAdapter<ResolvedAccount>;
@@ -100,19 +91,22 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   outbound?: ChannelOutboundAdapter;
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
+  gatewayMethodDescriptors?: ChannelGatewayMethodDescriptor[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
+  // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;
   approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
-  approvals?: ChannelApprovalAdapter;
+  secrets?: ChannelSecretsAdapter;
   allowlist?: ChannelAllowlistAdapter;
   doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
+  message?: ChannelMessageAdapterShape;
   messaging?: ChannelMessagingAdapter;
   agentPrompt?: ChannelAgentPromptAdapter;
   directory?: ChannelDirectoryAdapter;

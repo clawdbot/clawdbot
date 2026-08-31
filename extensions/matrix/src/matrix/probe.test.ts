@@ -1,3 +1,4 @@
+// Matrix tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createMatrixClientMock = vi.fn();
@@ -34,23 +35,43 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: undefined,
       accessToken: "tok",
+      persistStorage: false,
       localTimeoutMs: 1234,
     });
   });
 
-  it("trims provided userId before client creation", async () => {
-    await probeMatrix({
+  it("authenticates a configured userId instead of trusting the local client identity", async () => {
+    createMatrixClientMock.mockImplementation(async (params: { userId?: string }) => {
+      return {
+        getUserId: vi.fn(async () => {
+          if (params.userId) {
+            return params.userId;
+          }
+          throw Object.assign(new Error("Invalid access token"), {
+            statusCode: 401,
+          });
+        }),
+      };
+    });
+
+    const result = await probeMatrix({
       homeserver: "https://matrix.example.org",
-      accessToken: "tok",
+      accessToken: "expired-token",
       userId: "  @bot:example.org  ",
       timeoutMs: 500,
     });
 
     expect(createMatrixClientMock).toHaveBeenCalledWith({
       homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
+      userId: undefined,
+      accessToken: "expired-token",
+      persistStorage: false,
       localTimeoutMs: 500,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 401,
+      error: "Invalid access token",
     });
   });
 
@@ -65,8 +86,9 @@ describe("probeMatrix", () => {
 
     expect(createMatrixClientMock).toHaveBeenCalledWith({
       homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
+      userId: undefined,
       accessToken: "tok",
+      persistStorage: false,
       localTimeoutMs: 500,
       accountId: "ops",
     });
@@ -87,11 +109,50 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: undefined,
       accessToken: "tok",
+      persistStorage: false,
       localTimeoutMs: 500,
       dispatcherPolicy: {
         mode: "explicit-proxy",
         proxyUrl: "http://127.0.0.1:7890",
       },
+    });
+  });
+
+  it("passes deviceId through to client creation (#61317)", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      userId: "@bot:example.org",
+      deviceId: "ABCDEF",
+      timeoutMs: 500,
+      accountId: "ops",
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      userId: undefined,
+      accessToken: "tok",
+      deviceId: "ABCDEF",
+      persistStorage: false,
+      localTimeoutMs: 500,
+      accountId: "ops",
+    });
+  });
+
+  it("omits deviceId when not provided", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      timeoutMs: 500,
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      userId: undefined,
+      accessToken: "tok",
+      deviceId: undefined,
+      persistStorage: false,
+      localTimeoutMs: 500,
     });
   });
 

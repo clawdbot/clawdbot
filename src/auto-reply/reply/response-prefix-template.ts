@@ -1,3 +1,6 @@
+// Resolves response-prefix templates for channel and sender scoped replies.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
 /**
  * Template interpolation for response prefix.
  *
@@ -8,9 +11,9 @@
 export type ResponsePrefixContext = {
   /** Short model name (e.g., "gpt-5.4", "claude-opus-4-6") */
   model?: string;
-  /** Full model ID including provider (e.g., "openai-codex/gpt-5.4") */
+  /** Full model ID including provider (e.g., "openai/gpt-5.6-sol") */
   modelFull?: string;
-  /** Provider name (e.g., "openai-codex", "anthropic") */
+  /** Provider name (e.g., "openai", "anthropic") */
   provider?: string;
   /** Current thinking level (e.g., "high", "low", "off") */
   thinkingLevel?: string;
@@ -44,7 +47,7 @@ export function resolveResponsePrefixTemplate(
   }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
-    const normalizedVar = varName.toLowerCase();
+    const normalizedVar = normalizeLowercaseStringOrEmpty(varName);
 
     switch (normalizedVar) {
       case "model":
@@ -75,7 +78,7 @@ export function resolveResponsePrefixTemplate(
  * - Common version suffixes (e.g., "-latest")
  *
  * @example
- * extractShortModelName("openai-codex/gpt-5.4") // "gpt-5.4"
+ * extractShortModelName("openai/gpt-5.6-sol") // "gpt-5.6-sol"
  * extractShortModelName("claude-opus-4-6-20260205") // "claude-opus-4-6"
  * extractShortModelName("gpt-5.4-latest") // "gpt-5.4"
  */
@@ -86,16 +89,4 @@ export function extractShortModelName(fullModel: string): string {
 
   // Strip date suffixes (YYYYMMDD format)
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
-}
-
-/**
- * Check if a template string contains any template variables.
- */
-export function hasTemplateVariables(template: string | undefined): boolean {
-  if (!template) {
-    return false;
-  }
-  // Reset lastIndex since we're using a global regex
-  TEMPLATE_VAR_PATTERN.lastIndex = 0;
-  return TEMPLATE_VAR_PATTERN.test(template);
 }

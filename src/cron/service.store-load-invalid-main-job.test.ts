@@ -1,3 +1,4 @@
+// Cron store load tests cover invalid persisted main job recovery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -36,7 +37,7 @@ describe("CronService store load", () => {
     const { dir, storePath } = await makeStorePath();
     tempDir = dir;
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
 
     const job = {
       id: "job-1",
@@ -58,7 +59,7 @@ describe("CronService store load", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -67,11 +68,11 @@ describe("CronService store load", () => {
     await cron.run("job-1", "due");
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const jobs = await cron.list({ includeDisabled: true });
     expect(jobs[0]?.state.lastStatus).toBe("skipped");
-    expect(jobs[0]?.state.lastError).toMatch(/main job requires/i);
+    expect(jobs[0]?.state.lastError).toMatch(/main cron jobs require payload\.kind/i);
 
     cron.stop();
   });

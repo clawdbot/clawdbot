@@ -1,74 +1,109 @@
+// Zai tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildZaiModelDefinition, ZAI_DEFAULT_COST } from "./model-definitions.js";
+import {
+  buildZaiCatalogModels,
+  buildZaiModelDefinition,
+  ZAI_DEFAULT_COST,
+} from "./model-definitions.js";
+
+type ExpectedZaiModelFields = {
+  id: string;
+  reasoning?: boolean;
+  input?: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: typeof ZAI_DEFAULT_COST;
+};
+
+function expectZaiModelFields(expected: ExpectedZaiModelFields) {
+  const model = buildZaiModelDefinition({ id: expected.id });
+  expect(model.id).toBe(expected.id);
+  if ("reasoning" in expected) {
+    expect(model.reasoning).toBe(expected.reasoning);
+  }
+  if (expected.input) {
+    expect(model.input).toEqual(expected.input);
+  }
+  if (expected.contextWindow !== undefined) {
+    expect(model.contextWindow).toBe(expected.contextWindow);
+  }
+  if (expected.maxTokens !== undefined) {
+    expect(model.maxTokens).toBe(expected.maxTokens);
+  }
+  if (expected.cost) {
+    expect(model.cost).toEqual(expected.cost);
+  }
+}
 
 describe("zai model definitions", () => {
-  it("uses current Pi metadata for the new GLM-5.1 model", () => {
-    expect(buildZaiModelDefinition({ id: "glm-5.1" })).toMatchObject({
+  it("uses GLM-5.3 Coding Plan catalog metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.3",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(buildZaiCatalogModels().find((model) => model.id === "glm-5.3")?.compat).toEqual({
+      codeMode: "preferred",
+    });
+  });
+
+  it("uses official multimodal GLM-5.3 Flash catalog metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.3-flash",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+    });
+    expect(buildZaiCatalogModels().find((model) => model.id === "glm-5.3-flash")?.compat).toEqual({
+      codeMode: "preferred",
+    });
+  });
+
+  it("uses official GLM-5.2 Coding Plan metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.2",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    });
+  });
+
+  it("uses current OpenClaw metadata for the new GLM-5.1 model", () => {
+    expectZaiModelFields({
       id: "glm-5.1",
       reasoning: true,
       input: ["text"],
-      contextWindow: 202800,
-      maxTokens: 131100,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+    });
+  });
+
+  it("uses official GLM-5-Turbo metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5-turbo",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 200_000,
+      maxTokens: 131_072,
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });
 
-  it("uses current Pi metadata for the new GLM-5V Turbo model", () => {
-    expect(buildZaiModelDefinition({ id: "glm-5v-turbo" })).toMatchObject({
+  it("uses official GLM-5V-Turbo metadata", () => {
+    expectZaiModelFields({
       id: "glm-5v-turbo",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 202800,
-      maxTokens: 131100,
-      cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
-    });
-  });
-
-  it("uses current Pi metadata for the GLM-5 model", () => {
-    expect(buildZaiModelDefinition({ id: "glm-5" })).toMatchObject({
-      id: "glm-5",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 202800,
-      maxTokens: 131100,
-      cost: ZAI_DEFAULT_COST,
-    });
-  });
-
-  it("publishes newer GLM 4.5/4.6 family metadata from Pi", () => {
-    expect(buildZaiModelDefinition({ id: "glm-4.6v" })).toMatchObject({
-      id: "glm-4.6v",
-      input: ["text", "image"],
-      contextWindow: 128000,
-      maxTokens: 32768,
-      cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
-    });
-    expect(buildZaiModelDefinition({ id: "glm-4.5-air" })).toMatchObject({
-      id: "glm-4.5-air",
-      input: ["text"],
-      contextWindow: 131072,
-      maxTokens: 98304,
-      cost: { input: 0.2, output: 1.1, cacheRead: 0.03, cacheWrite: 0 },
-    });
-  });
-
-  it("keeps the remaining GLM 4.7/5 pricing and token limits aligned with Pi", () => {
-    expect(buildZaiModelDefinition({ id: "glm-4.7-flash" })).toMatchObject({
-      id: "glm-4.7-flash",
-      cost: { input: 0.07, output: 0.4, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 131072,
-    });
-    expect(buildZaiModelDefinition({ id: "glm-4.7-flashx" })).toMatchObject({
-      id: "glm-4.7-flashx",
-      cost: { input: 0.06, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 128000,
-    });
-    expect(buildZaiModelDefinition({ id: "glm-5-turbo" })).toMatchObject({
-      id: "glm-5-turbo",
-      contextWindow: 202800,
-      maxTokens: 131100,
+      contextWindow: 200_000,
+      maxTokens: 131_072,
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },
     });
   });

@@ -1,0 +1,51 @@
+// Discord tests cover channel actions.contract plugin behavior.
+import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
+import { discordPlugin } from "../api.js";
+
+describe("discord actions contract", () => {
+  installChannelActionsContractSuite({
+    plugin: discordPlugin,
+    cases: [
+      {
+        name: "describes configured Discord actions and canonical outbound poll",
+        cfg: {
+          channels: {
+            discord: {
+              token: "Bot token-main",
+              actions: {
+                polls: true,
+                reactions: true,
+                permissions: false,
+                messages: false,
+                pins: false,
+                threads: false,
+                search: false,
+                stickers: false,
+                memberInfo: false,
+                roleInfo: false,
+                emojiUploads: false,
+                stickerUploads: false,
+                channelInfo: false,
+                channels: false,
+                voiceStatus: false,
+                events: false,
+                roles: false,
+                moderation: false,
+                presence: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
+        expectedCapabilities: ["presentation"],
+      },
+    ],
+  });
+
+  it("declines poll actions so canonical outbound delivery owns them", () => {
+    expect(discordPlugin.actions?.supportsAction?.({ action: "poll" })).toBe(false);
+    expect(discordPlugin.outbound?.sendPoll).toBeTypeOf("function");
+  });
+});

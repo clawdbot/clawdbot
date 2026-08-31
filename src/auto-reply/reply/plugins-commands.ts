@@ -1,24 +1,32 @@
-export type PluginsCommand =
+// Provides plugin command discovery and handler registration helpers.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+
+/** Parsed `/plugins` command variants accepted by auto-reply command handling. */
+type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
-  | { action: "install"; spec: string }
-  | { action: "enable"; name: string }
+  | { action: "install"; acceptCapabilities: boolean; force: boolean; spec: string }
+  | { action: "enable"; acceptCapabilities: boolean; name: string }
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
 
+/** Parses a `/plugin` or `/plugins` command into a closed command action. */
 export function parsePluginsCommand(raw: string): PluginsCommand | null {
   const match = raw.match(/^\/plugins?(?:\s+(.*))?$/i);
   if (!match) {
     return null;
   }
 
-  const tail = match[1]?.trim() ?? "";
+  const tail = normalizeOptionalString(match?.[1]) ?? "";
   if (!tail) {
     return { action: "list" };
   }
 
   const [rawAction, ...rest] = tail.split(/\s+/);
-  const action = rawAction?.trim().toLowerCase();
+  const action = normalizeOptionalLowercaseString(rawAction);
   const name = rest.join(" ").trim();
 
   if (action === "list") {
@@ -35,16 +43,48 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
   }
 
   if (action === "install" || action === "add") {
-    if (!name) {
+    const specParts = [...rest];
+    let force = false;
+    let acceptCapabilities = false;
+    while (specParts.length > 0) {
+      const flag = specParts.at(-1);
+      if (flag === "--force" && !force) {
+        force = true;
+      } else if (flag === "--accept-capabilities" && !acceptCapabilities) {
+        acceptCapabilities = true;
+      } else {
+        break;
+      }
+      specParts.pop();
+    }
+    const hasMisplacedFlag = specParts.some(
+      (part) => part === "--force" || part === "--accept-capabilities",
+    );
+    const spec = specParts.join(" ").trim();
+    if (!spec || hasMisplacedFlag) {
       return {
         action: "error",
-        message: "Usage: /plugins install <path|archive|npm-spec|clawhub:pkg>",
+        message:
+          "Usage: /plugins install <path|archive|npm-spec|npm-pack:path|git:repo|clawhub:pkg> [--force] [--accept-capabilities]",
       };
     }
-    return { action: "install", spec: name };
+    return { action: "install", acceptCapabilities, force, spec };
   }
 
-  if (action === "enable" || action === "disable") {
+  if (action === "enable") {
+    const acceptCapabilities = rest.at(-1) === "--accept-capabilities";
+    const nameParts = acceptCapabilities ? rest.slice(0, -1) : rest;
+    const pluginName = nameParts.join(" ").trim();
+    if (!pluginName || nameParts.includes("--accept-capabilities")) {
+      return {
+        action: "error",
+        message: "Usage: /plugins enable <plugin-id-or-name> [--accept-capabilities]",
+      };
+    }
+    return { action, acceptCapabilities, name: pluginName };
+  }
+
+  if (action === "disable") {
     if (!name) {
       return {
         action: "error",

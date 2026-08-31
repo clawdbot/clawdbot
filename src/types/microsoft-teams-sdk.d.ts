@@ -1,4 +1,6 @@
+/** Minimal ambient types for Microsoft Teams SDK packages used by the Teams plugin. */
 declare module "@microsoft/teams.apps" {
+  /** Teams app auth helper used to fetch bot and Graph tokens. */
   export class App {
     constructor(options: { clientId: string; clientSecret: string; tenantId?: string });
 
@@ -8,6 +10,19 @@ declare module "@microsoft/teams.apps" {
 }
 
 declare module "@microsoft/teams.api" {
+  /** Outbound message activity subset used for durable reply quoting. */
+  export interface IMessageActivityInput extends Record<string, unknown> {
+    type?: "message";
+    text?: string;
+  }
+
+  export class MessageActivityInput implements IMessageActivityInput {
+    constructor(text?: string, value?: Record<string, unknown>);
+    static from(activity: IMessageActivityInput): MessageActivityInput;
+    prependQuote(messageId: string): this;
+  }
+
+  /** Teams API client subset used for conversation activity sends. */
   export class Client {
     constructor(
       serviceUrl: string,
@@ -23,36 +38,4 @@ declare module "@microsoft/teams.api" {
       };
     };
   }
-}
-
-declare module "@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js" {
-  export type JwtValidationOptions = {
-    clientId: string;
-    tenantId?: string;
-    jwksUriOptions: { type: "uri"; uri: string } | { type: "tenantId" };
-    validateIssuer?: { allowedIssuer: string } | { allowedTenantIds?: string[] };
-    validateServiceUrl?: { expectedServiceUrl: string };
-  };
-
-  export class JwtValidator {
-    constructor(options: JwtValidationOptions, logger?: unknown);
-    validateAccessToken(
-      token: string,
-      options?: {
-        validateServiceUrl?: { expectedServiceUrl: string } | undefined;
-      },
-    ): Promise<object | null>;
-  }
-
-  export function createServiceTokenValidator(
-    appId: string,
-    tenantId?: string,
-  ): {
-    validateAccessToken(
-      token: string,
-      options?: {
-        validateServiceUrl?: { expectedServiceUrl: string } | undefined;
-      },
-    ): Promise<unknown>;
-  };
 }

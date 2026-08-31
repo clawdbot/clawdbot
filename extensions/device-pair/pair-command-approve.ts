@@ -1,9 +1,15 @@
+// Device Pair plugin module implements pair command approve behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
 type PendingPairingEntry = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
 type ApprovePairingResult = Awaited<ReturnType<typeof approveDevicePairing>>;
 type ApprovedPairingEntry = Exclude<ApprovePairingResult, null | { status: "forbidden" }>;
+type ForbiddenPairingEntry = Extract<ApprovePairingResult, { status: "forbidden" }>;
 
 function buildMultiplePendingApprovalReply(pending: PendingPairingEntry[]): { text: string } {
   return {
@@ -20,20 +26,25 @@ export function selectPendingApprovalRequest(params: {
   pending: PendingPairingEntry[];
   requested?: string;
 }): { pending?: PendingPairingEntry; reply?: { text: string } } {
-  if (params.pending.length === 0) {
+  const [firstPending, ...remainingPending] = params.pending;
+  if (!firstPending) {
     return { reply: { text: "No pending device pairing requests." } };
   }
 
   if (!params.requested) {
-    return params.pending.length === 1
-      ? { pending: params.pending[0] }
+    return remainingPending.length === 0
+      ? { pending: firstPending }
       : { reply: buildMultiplePendingApprovalReply(params.pending) };
   }
 
-  if (params.requested.toLowerCase() === "latest") {
-    return {
-      pending: [...params.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0],
-    };
+  if (normalizeLowercaseStringOrEmpty(params.requested) === "latest") {
+    let latest = firstPending;
+    for (const pending of remainingPending) {
+      if ((pending.ts ?? 0) > (latest.ts ?? 0)) {
+        latest = pending;
+      }
+    }
+    return { pending: latest };
   }
 
   return {
@@ -43,10 +54,14 @@ export function selectPendingApprovalRequest(params: {
 }
 
 function formatApprovedPairingReply(approved: ApprovedPairingEntry): { text: string } {
-  const label = approved.device.displayName?.trim() || approved.device.deviceId;
-  const platform = approved.device.platform?.trim();
+  const label = normalizeOptionalString(approved.device.displayName) || approved.device.deviceId;
+  const platform = normalizeOptionalString(approved.device.platform);
   const platformLabel = platform ? ` (${platform})` : "";
   return { text: `✅ Paired ${label}${platformLabel}.` };
+}
+
+function formatForbiddenPairingRequirement(approved: ForbiddenPairingEntry): string {
+  return approved.scope ?? approved.role ?? "additional approval";
 }
 
 export async function approvePendingPairingRequest(params: {
@@ -62,7 +77,7 @@ export async function approvePendingPairingRequest(params: {
   }
   if (approved.status === "forbidden") {
     return {
-      text: `⚠️ This command requires ${approved.missingScope} to approve this pairing request.`,
+      text: `⚠️ This command requires ${formatForbiddenPairingRequirement(approved)} to approve this pairing request.`,
     };
   }
   return formatApprovedPairingReply(approved);

@@ -1,6 +1,10 @@
 package ai.openclaw.app.gateway
 
+/**
+ * Decoder for Bonjour DNS-SD service names returned with decimal byte escapes.
+ */
 object BonjourEscapes {
+  /** Decodes Bonjour DNS-SD decimal escapes while preserving ordinary UTF-8. */
   fun decode(input: String): String {
     if (input.isEmpty()) return input
 
@@ -15,6 +19,7 @@ object BonjourEscapes {
           val value =
             ((d0.code - '0'.code) * 100) + ((d1.code - '0'.code) * 10) + (d2.code - '0'.code)
           if (value in 0..255) {
+            // Bonjour escape bytes are decimal octets, not Unicode code points.
             bytes.add(value.toByte())
             i += 4
             continue

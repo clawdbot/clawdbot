@@ -1,6 +1,6 @@
 ---
 name: security-triage
-description: Triage GitHub security advisories for OpenClaw with high-confidence close/keep decisions, exact tag and commit verification, trust-model checks, optional hardening notes, and a final reply ready to post and copy to clipboard.
+description: "Triage OpenClaw security advisories, drafts, and GHSA reports with shipped-tag and trust-model proof."
 ---
 
 # Security Triage
@@ -45,6 +45,17 @@ For each advisory, decide:
 - `keep open`
 - `keep open but narrow`
 
+Default to one advisory at a time when comments/closures are involved:
+
+1. Review exactly one GHSA.
+2. Print the GHSA URL first.
+3. Summarize the decision and evidence for discussion.
+4. Draft one maintainer-ready comment.
+5. Copy only that one comment to the clipboard.
+6. Stop and wait for Peter to post/discuss before moving to the next GHSA.
+
+Do not batch multiple close comments unless Peter explicitly asks for a batch.
+
 Check in this order:
 
 1. Trust model
@@ -60,6 +71,11 @@ Check in this order:
 4. Functional tradeoff
    - If a hardening change would reduce intended user functionality, call that out before proposing it.
    - Prefer fixes that preserve user workflows over deny-by-default regressions unless the boundary demands it.
+5. Hardening follow-up
+   - Even when the GHSA should close, ask whether a narrow hardening change would reduce footguns without changing the documented trust boundary.
+   - Separate hardening from vulnerability status. Phrase it as "not required for GHSA closure, but worth considering".
+   - Bring up hardening only if it is concrete, low-risk, and preserves intended maintainer/operator workflows.
+   - If hardening would require a product/security model change, say that explicitly and do not imply it is a required fix for closure.
 
 ## Response Format
 
@@ -71,14 +87,35 @@ When preparing a maintainer-ready close reply:
    - exact reason for close
    - exact code refs
    - exact shipped tag / release facts
-   - exact fix commit or canonical duplicate GHSA when applicable
+   - fix provenance or canonical duplicate GHSA when applicable
    - optional hardening note only if worthwhile and functionality-preserving
 
 Keep tone firm, specific, non-defensive.
 
+## Public Wording Hygiene
+
+- Keep raw commit hashes, PR titles/numbers, and fix-mechanism summaries out of public advisory text. Use the patched release/version field only.
+- Keep exact commit SHAs, PRs, and implementation notes in internal notes and verification files.
+- For hardening/no-publish outcomes, do not add exploit-heavy details, "Fixed by" text, or a "Fix Commit(s)" section. Thank reporters, preserve credit, state the `SECURITY.md` boundary, and say clearly that the GHSA will close without publication.
+- For published CVE/GHSA text, prefer `### Patched Versions` with the fixed release. Do not explain how the patch works unless Peter explicitly asks for that public detail.
+- Keep GHSA ids out of changelog and release-note wording unless Peter explicitly asks.
+
+## Discussion Mode
+
+When Peter is manually posting GHSA comments, use this flow:
+
+1. Show the URL.
+2. Give a terse verdict (`close`, `keep open`, or `keep open but narrow`).
+3. List the strongest evidence bullets.
+4. State any optional hardening follow-up separately from the close reason.
+5. Copy the proposed comment body with `pbcopy`.
+6. End the reply after the one advisory. Do not continue to the next advisory until Peter says to continue.
+
+If the GitHub API cannot post comments for private advisories, say so once and keep using clipboard/UI paste.
+
 ## Clipboard Step
 
-After drafting the final post body, copy it:
+After drafting the final post body for the current advisory, copy it:
 
 ```bash
 pbcopy <<'EOF'
@@ -86,7 +123,7 @@ pbcopy <<'EOF'
 EOF
 ```
 
-Tell the user that the clipboard now contains the proposed response.
+Tell the user that the clipboard now contains the proposed response for that advisory.
 
 ## Useful Commands
 

@@ -1,12 +1,19 @@
+/**
+ * ACP stateful target driver for configured bindings.
+ *
+ * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
+ */
 import {
-  ensureConfiguredAcpBindingReady,
+  ensureConfiguredAcpBindingReadyCore,
   ensureConfiguredAcpBindingSession,
-  resetAcpSessionInPlace,
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
+import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -22,24 +29,45 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): StatefulBindingTargetDescriptor | null {
-  const meta = readAcpSessionEntry(params)?.acp;
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const meta = readAcpSessionEntry({
+    ...params,
+    sessionKey,
+  })?.acp;
   const metaAgentId = meta?.agent?.trim();
   if (metaAgentId) {
     return {
       kind: "stateful",
       driverId: "acp",
-      sessionKey: params.sessionKey,
+      sessionKey,
       agentId: metaAgentId,
     };
   }
-  const spec = resolveConfiguredAcpBindingSpecBySessionKey(params);
+  const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+    ...params,
+    sessionKey,
+  });
   if (!spec) {
-    return null;
+    if (!isAcpSessionKey(sessionKey)) {
+      return null;
+    }
+    // Bound ACP sessions can intentionally clear their ACP metadata after a
+    // reset. The native /reset path still needs to recognize the ACP session
+    // key as resettable while that metadata is absent.
+    return {
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey,
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+    };
   }
   return {
     kind: "stateful",
     driverId: "acp",
-    sessionKey: params.sessionKey,
+    sessionKey,
     agentId: spec.agentId,
     ...(spec.label ? { label: spec.label } : {}),
   };
@@ -58,7 +86,7 @@ async function ensureAcpTargetReady(params: {
       error: "Configured ACP binding unavailable",
     };
   }
-  return await ensureConfiguredAcpBindingReady({
+  return await ensureConfiguredAcpBindingReadyCore({
     cfg: params.cfg,
     configuredBinding: {
       spec: configuredBinding,
@@ -88,9 +116,38 @@ async function ensureAcpTargetSession(params: {
 async function resetAcpTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  bindingTarget: StatefulBindingTargetDescriptor;
   reason: "new" | "reset";
+  commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  return await resetAcpSessionInPlace(params);
+  if (
+    resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: params.sessionKey }).entry
+      ?.incognito === true
+  ) {
+    return { ok: false, error: "Incognito sessions cannot reset in place." };
+  }
+  const result = await performGatewaySessionReset({
+    key: params.sessionKey,
+    operatorRoleActor: { kind: "system" },
+    reason: params.reason,
+    commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
+    armSessionDiffBaselineCapture: true,
+  });
+  if (result.ok) {
+    if ("incognitoDeleted" in result) {
+      return { ok: true, sessionKey: result.key, storePath: result.storePath };
+    }
+    return {
+      ok: true,
+      sessionKey: result.key,
+      sessionId: result.entry.sessionId,
+      storePath: result.storePath,
+    };
+  }
+  return {
+    ok: false,
+    error: result.error.message,
+  };
 }
 
 export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {

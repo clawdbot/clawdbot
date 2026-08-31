@@ -1,11 +1,10 @@
+// Discord plugin module implements security contract behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 type UnsupportedSecretRefConfigCandidate = {
   path: string;
   value: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 export const unsupportedSecretRefSurfacePatterns = [
   "channels.discord.threadBindings.webhookToken",

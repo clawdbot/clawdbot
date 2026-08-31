@@ -1,5 +1,5 @@
+// Public reconciliation facade for task lookup/status surfaces.
 export {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
-  reconcileTaskRecordForOperatorInspection,
 } from "./task-registry.maintenance.js";

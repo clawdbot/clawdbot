@@ -1,7 +1,15 @@
 {
   "id": "exa",
-  "providerAuthEnvVars": {
-    "exa": ["EXA_API_KEY"]
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "exa",
+        "envVars": ["EXA_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -9,6 +17,10 @@
       "help": "Exa Search API key (fallback: EXA_API_KEY env var).",
       "sensitive": true,
       "placeholder": "exa-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Exa Search Base URL",
+      "help": "Optional Exa Search API base URL override. OpenClaw appends /search when the URL does not already end there."
     }
   },
   "contracts": {
@@ -24,6 +36,9 @@
         "properties": {
           "apiKey": {
             "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
           }
         }
       }

@@ -1,3 +1,5 @@
+// Verifies message-action target parameter mapping and legacy destination
+// rejection across target modes.
 import { describe, expect, it } from "vitest";
 import { applyTargetToParams } from "./channel-target.js";
 

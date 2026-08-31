@@ -41,16 +41,32 @@ public enum LoopbackHost {
     }
 
     public static func isLocalNetworkHost(_ rawHost: String) -> Bool {
-        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let host = self.normalizedHost(rawHost)
         guard !host.isEmpty else { return false }
         if self.isLoopbackHost(host) { return true }
         if host.hasSuffix(".local") { return true }
-        if host.hasSuffix(".ts.net") { return true }
-        if host.hasSuffix(".tailscale.net") { return true }
-        // Allow MagicDNS / LAN hostnames like "peters-mac-studio-1".
-        if !host.contains("."), !host.contains(":") { return true }
-        guard let ipv4 = self.parseIPv4(host) else { return false }
-        return self.isLocalNetworkIPv4(ipv4)
+        if let ipv4 = self.parseIPv4(host) {
+            return self.isLocalNetworkIPv4(ipv4)
+        }
+        guard let ipv6 = IPv6Address(host) else { return false }
+        let bytes = Array(ipv6.rawValue)
+        let isUniqueLocal = (bytes[0] & 0xFE) == 0xFC
+        let isLinkLocal = bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80
+        return isUniqueLocal || isLinkLocal
+    }
+
+    static func normalizedHost(_ rawHost: String) -> String {
+        var host = rawHost
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if host.hasSuffix(".") {
+            host.removeLast()
+        }
+        if let zoneIndex = host.firstIndex(of: "%") {
+            host = String(host[..<zoneIndex])
+        }
+        return host
     }
 
     static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
@@ -73,8 +89,6 @@ public enum LoopbackHost {
         if a == 127 { return true }
         // 169.254.0.0/16 (link-local)
         if a == 169, b == 254 { return true }
-        // Tailscale: 100.64.0.0/10
-        if a == 100, (64...127).contains(Int(b)) { return true }
         return false
     }
 }

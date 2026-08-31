@@ -1,0 +1,94 @@
+name: Setup Android toolchain
+description: Set up the pinned Java and Android SDK toolchain used by OpenClaw builds.
+inputs:
+  cache-mode:
+    description: Cache authority for this job (off, restore, or read-write).
+    required: false
+    default: "off"
+outputs:
+  cache-mode:
+    description: Validated cache authority for downstream save gates.
+    value: ${{ inputs.cache-mode }}
+runs:
+  using: composite
+  steps:
+    - name: Validate cache mode
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *)
+            echo "::error::Invalid cache-mode input: '$CACHE_MODE' (expected off, restore, or read-write)"
+            exit 2
+            ;;
+        esac
+
+    - name: Setup Java
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      with:
+        distribution: temurin
+        # Keep sdkmanager on the stable JDK path for Linux CI runners.
+        java-version: 17
+
+    - name: Setup Gradle cache
+      if: inputs.cache-mode != 'off'
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      with:
+        cache-provider: basic
+        cache-read-only: ${{ inputs.cache-mode != 'read-write' }}
+        add-job-summary: never
+
+    - name: Restore Android SDK cache
+      id: android-sdk-cache
+      if: inputs.cache-mode != 'off'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.android-sdk
+        key: ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
+        restore-keys: |
+          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-
+
+    - name: Setup Android SDK command-line tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        ANDROID_SDK_ROOT="$HOME/.android-sdk"
+        CMDLINE_TOOLS_VERSION="15859902"
+        CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
+        ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+        URL="https://dl.google.com/android/repository/${ARCHIVE}"
+
+        if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
+          mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
+          curl -fsSL --connect-timeout 10 --max-time 300 "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
+          printf '%s  %s\n' "${CMDLINE_TOOLS_SHA256}" "${RUNNER_TEMP}/${ARCHIVE}" | sha256sum --check -
+          rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
+          unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
+          mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
+        fi
+
+        echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
+        echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
+        echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
+        echo "${ANDROID_SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
+
+    - name: Install Android SDK packages
+      shell: bash
+      run: |
+        set -euo pipefail
+        # sdkmanager closes stdin after accepting every license, which gives yes SIGPIPE.
+        # Preserve sdkmanager's status so a real license failure still stops the job.
+        yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]
+        sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+          "platform-tools" \
+          "platforms;android-37.0" \
+          "build-tools;36.0.0"
+
+    - name: Save Android SDK cache
+      if: inputs.cache-mode == 'read-write' && steps.android-sdk-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.android-sdk
+        key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}

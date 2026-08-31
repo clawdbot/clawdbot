@@ -1,6 +1,10 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { discordSetupPlugin } from "./src/channel.setup.js";
+// Discord plugin module implements setup entry behavior.
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { discordSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(discordSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./setup-plugin-api.js",
+    exportName: "discordSetupPlugin",
+  },
+});

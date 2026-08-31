@@ -1,9 +1,0 @@
-mkdocs-material
-mkdocs-redirects
-mkdocs-macros-plugin
-mkdocs-llmstxt
-mkdocs-include-markdown-plugin
-mkdocs-mermaid2-plugin
-sphinx
-furo
-myst-parser

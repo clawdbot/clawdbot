@@ -1,4 +1,7 @@
+// Coordinates managed task-flow creation, updates, ownership, and snapshots.
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getTaskFlowRegistryObservers,
@@ -6,18 +9,23 @@ import {
   resetTaskFlowRegistryRuntimeForTests,
   type TaskFlowRegistryObserverEvent,
 } from "./task-flow-registry.store.js";
-import type {
-  TaskFlowRecord,
-  TaskFlowStatus,
-  TaskFlowSyncMode,
-  JsonValue,
+import {
+  isTerminalTaskFlow,
+  type JsonValue,
+  type TaskFlowRecord,
+  type TaskFlowStatus,
+  type TaskFlowSyncMode,
 } from "./task-flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-flow-registry");
-const flows = new Map<string, TaskFlowRecord>();
-let restoreAttempted = false;
-let restoreFailureMessage: string | null = null;
+let flows = new Map<string, TaskFlowRecord>();
+type TaskFlowRegistryRestoreState =
+  | { status: "uninitialized" }
+  | { status: "restoring" }
+  | { status: "ready" }
+  | { status: "failed"; error: Error; message: string };
+let taskFlowRegistryRestoreState: TaskFlowRegistryRestoreState = { status: "uninitialized" };
 
 type FlowRecordPatch = Omit<
   Partial<
@@ -56,6 +64,29 @@ type FlowRecordPatch = Omit<
   endedAt?: number | null;
 };
 
+type FlowRecordCreateFields = {
+  ownerKey: string;
+  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
+  status?: TaskFlowStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  goal: string;
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+};
+
+type CreateFlowRecordParams = FlowRecordCreateFields & {
+  syncMode?: TaskFlowSyncMode;
+  controllerId?: string | null;
+  revision?: number;
+};
+
 export type TaskFlowUpdateResult =
   | {
       applied: true;
@@ -63,8 +94,19 @@ export type TaskFlowUpdateResult =
     }
   | {
       applied: false;
-      reason: "not_found" | "revision_conflict";
+      reason: "not_found" | "revision_conflict" | "persist_failed";
       current?: TaskFlowRecord;
+    };
+
+type TaskFlowSyncResult =
+  | {
+      ok: true;
+      flow: TaskFlowRecord | null;
+    }
+  | {
+      ok: false;
+      reason: "persist_failed";
+      current: TaskFlowRecord;
     };
 
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
@@ -91,7 +133,7 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
     syncMode === "managed"
-      ? (normalizeText(record.controllerId) ?? "core/legacy-restored")
+      ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
       : undefined;
   return {
     ...record,
@@ -101,9 +143,9 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
       : {}),
     ...(controllerId ? { controllerId } : {}),
-    currentStep: normalizeText(record.currentStep),
-    blockedTaskId: normalizeText(record.blockedTaskId),
-    blockedSummary: normalizeText(record.blockedSummary),
+    currentStep: normalizeOptionalString(record.currentStep),
+    blockedTaskId: normalizeOptionalString(record.blockedTaskId),
+    blockedSummary: normalizeOptionalString(record.blockedSummary),
     ...(record.stateJson !== undefined
       ? { stateJson: cloneStructuredValue(record.stateJson)! }
       : {}),
@@ -134,22 +176,12 @@ function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {
   return notifyPolicy ?? "done_only";
 }
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeText(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | undefined {
   return value === undefined ? undefined : cloneStructuredValue(value);
 }
 
 function assertFlowOwnerKey(ownerKey: string): string {
-  const normalized = normalizeOwnerKey(ownerKey);
+  const normalized = normalizeOptionalString(ownerKey);
   if (!normalized) {
     throw new Error("Flow ownerKey is required.");
   }
@@ -157,15 +189,11 @@ function assertFlowOwnerKey(ownerKey: string): string {
 }
 
 function assertControllerId(controllerId?: string | null): string {
-  const normalized = normalizeText(controllerId);
+  const normalized = normalizeOptionalString(controllerId);
   if (!normalized) {
     throw new Error("Managed flow controllerId is required.");
   }
   return normalized;
-}
-
-function resolveFlowGoal(task: Pick<TaskRecord, "label" | "task">): string {
-  return task.label?.trim() || task.task.trim() || "Background task";
 }
 
 function resolveFlowBlockedSummary(
@@ -174,10 +202,12 @@ function resolveFlowBlockedSummary(
   if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
     return undefined;
   }
-  return task.terminalSummary?.trim() || task.progressSummary?.trim() || undefined;
+  return (
+    normalizeOptionalString(task.terminalSummary) ?? normalizeOptionalString(task.progressSummary)
+  );
 }
 
-export function deriveTaskFlowStatusFromTask(
+function deriveTaskFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): TaskFlowStatus {
   if (task.status === "queued") {
@@ -198,23 +228,63 @@ export function deriveTaskFlowStatusFromTask(
   return "failed";
 }
 
-function ensureFlowRegistryReady() {
-  if (restoreAttempted) {
-    return;
+function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "blocked" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
+function resolveTaskMirroredFlowTiming(
+  task: Pick<TaskRecord, "createdAt" | "lastEventAt" | "endedAt">,
+  isTerminal: boolean,
+): { updatedAt: number; endedAt?: number } {
+  if (!isTerminal) {
+    return { updatedAt: task.lastEventAt ?? task.createdAt };
   }
-  restoreAttempted = true;
+  const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
+  return { updatedAt: endedAt, endedAt };
+}
+
+function restoreTaskFlowRegistryOnce(): void {
+  switch (taskFlowRegistryRestoreState.status) {
+    case "ready":
+      return;
+    case "failed":
+      throw taskFlowRegistryRestoreState.error;
+    case "restoring":
+      throw new Error("Task-flow registry restore is already in progress.");
+    case "uninitialized":
+      break;
+  }
+  taskFlowRegistryRestoreState = { status: "restoring" };
   try {
     const restored = getTaskFlowRegistryStore().loadSnapshot();
-    flows.clear();
+    const restoredFlows = new Map<string, TaskFlowRecord>();
     for (const [flowId, flow] of restored.flows) {
-      flows.set(flowId, normalizeRestoredFlowRecord(flow));
+      restoredFlows.set(flowId, normalizeRestoredFlowRecord(flow));
     }
-    restoreFailureMessage = null;
+    flows = restoredFlows;
+    taskFlowRegistryRestoreState = { status: "ready" };
   } catch (error) {
-    flows.clear();
-    restoreFailureMessage = error instanceof Error ? error.message : String(error);
-    log.warn("Failed to restore task-flow registry", { error });
-    return;
+    flows = new Map();
+    const message = formatErrorMessage(error);
+    const restoreError = new Error(`Task-flow registry restore failed: ${message}`, {
+      cause: error,
+    });
+    taskFlowRegistryRestoreState = {
+      status: "failed",
+      error: restoreError,
+      message,
+    };
+    log.warn("Failed to restore task-flow registry", {
+      error: message,
+      consoleMessage: `Failed to restore task-flow registry: ${message}`,
+    });
+    throw restoreError;
   }
   emitFlowRegistryObserverEvent(() => ({
     kind: "restored",
@@ -222,15 +292,48 @@ function ensureFlowRegistryReady() {
   }));
 }
 
-export function getTaskFlowRegistryRestoreFailure(): string | null {
-  ensureFlowRegistryReady();
-  return restoreFailureMessage;
+export function ensureTaskFlowRegistryReady(): void {
+  restoreTaskFlowRegistryOnce();
 }
 
-function persistFlowRegistry() {
-  getTaskFlowRegistryStore().saveSnapshot({
-    flows: new Map(snapshotFlowRecords(flows).map((flow) => [flow.flowId, flow])),
-  });
+export function getTaskFlowRegistryRestoreFailure(): string | null {
+  try {
+    ensureTaskFlowRegistryReady();
+    return null;
+  } catch {
+    return taskFlowRegistryRestoreState.status === "failed"
+      ? taskFlowRegistryRestoreState.message
+      : "Task-flow registry restore did not complete.";
+  }
+}
+
+export function reloadTaskFlowRegistryFromStore(): void {
+  flows = new Map();
+  taskFlowRegistryRestoreState = { status: "uninitialized" };
+  ensureTaskFlowRegistryReady();
+}
+
+function createFlowSnapshotWith(next?: TaskFlowRecord, deletedFlowId?: string) {
+  const snapshot = new Map(snapshotFlowRecords(flows).map((flow) => [flow.flowId, flow]));
+  if (deletedFlowId) {
+    snapshot.delete(deletedFlowId);
+  }
+  if (next) {
+    snapshot.set(next.flowId, cloneFlowRecord(next));
+  }
+  return snapshot;
+}
+
+function persistFlowRegistry(): boolean {
+  try {
+    getTaskFlowRegistryStore().saveSnapshot({
+      flows: createFlowSnapshotWith(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry snapshot", { error });
+    return false;
+  }
 }
 
 function persistFlowUpsert(flow: TaskFlowRecord) {
@@ -239,7 +342,23 @@ function persistFlowUpsert(flow: TaskFlowRecord) {
     store.upsertFlow(cloneFlowRecord(flow));
     return;
   }
-  persistFlowRegistry();
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(flow),
+  });
+}
+
+function tryPersistFlowUpsert(flow: TaskFlowRecord, operation: string): boolean {
+  try {
+    persistFlowUpsert(flow);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry upsert", {
+      operation,
+      flowId: flow.flowId,
+      error,
+    });
+    return false;
+  }
 }
 
 function persistFlowDelete(flowId: string) {
@@ -248,28 +367,25 @@ function persistFlowDelete(flowId: string) {
     store.deleteFlow(flowId);
     return;
   }
-  persistFlowRegistry();
+  store.saveSnapshot({
+    flows: createFlowSnapshotWith(undefined, flowId),
+  });
 }
 
-function buildFlowRecord(params: {
-  syncMode?: TaskFlowSyncMode;
-  ownerKey: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+function tryPersistFlowDelete(flowId: string): boolean {
+  try {
+    persistFlowDelete(flowId);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task-flow registry delete", {
+      flowId,
+      error,
+    });
+    return false;
+  }
+}
+
+function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
@@ -285,9 +401,9 @@ function buildFlowRecord(params: {
     status: params.status ?? "queued",
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
-    currentStep: normalizeText(params.currentStep),
-    blockedTaskId: normalizeText(params.blockedTaskId),
-    blockedSummary: normalizeText(params.blockedSummary),
+    currentStep: normalizeOptionalString(params.currentStep),
+    blockedTaskId: normalizeOptionalString(params.blockedTaskId),
+    blockedSummary: normalizeOptionalString(params.blockedSummary),
     ...(normalizeJsonBlob(params.stateJson) !== undefined
       ? { stateJson: normalizeJsonBlob(params.stateJson)! }
       : {}),
@@ -303,7 +419,9 @@ function buildFlowRecord(params: {
 
 function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFlowRecord {
   const controllerId =
-    patch.controllerId === undefined ? current.controllerId : normalizeText(patch.controllerId);
+    patch.controllerId === undefined
+      ? current.controllerId
+      : normalizeOptionalString(patch.controllerId);
   if (current.syncMode === "managed") {
     assertControllerId(controllerId);
   }
@@ -314,15 +432,17 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
     ...(patch.goal ? { goal: patch.goal } : {}),
     controllerId,
     currentStep:
-      patch.currentStep === undefined ? current.currentStep : normalizeText(patch.currentStep),
+      patch.currentStep === undefined
+        ? current.currentStep
+        : normalizeOptionalString(patch.currentStep),
     blockedTaskId:
       patch.blockedTaskId === undefined
         ? current.blockedTaskId
-        : normalizeText(patch.blockedTaskId),
+        : normalizeOptionalString(patch.blockedTaskId),
     blockedSummary:
       patch.blockedSummary === undefined
         ? current.blockedSummary
-        : normalizeText(patch.blockedSummary),
+        : normalizeOptionalString(patch.blockedSummary),
     stateJson:
       patch.stateJson === undefined ? current.stateJson : normalizeJsonBlob(patch.stateJson),
     waitJson: patch.waitJson === undefined ? current.waitJson : normalizeJsonBlob(patch.waitJson),
@@ -336,9 +456,11 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
   };
 }
 
-function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskFlowRecord {
+function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskFlowRecord | null {
+  if (!tryPersistFlowUpsert(next, previous ? "update" : "create")) {
+    return null;
+  }
   flows.set(next.flowId, next);
-  persistFlowUpsert(next);
   emitFlowRegistryObserverEvent(() => ({
     kind: "upserted",
     flow: cloneFlowRecord(next),
@@ -347,47 +469,17 @@ function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskF
   return cloneFlowRecord(next);
 }
 
-export function createFlowRecord(params: {
-  syncMode?: TaskFlowSyncMode;
-  ownerKey: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
-  ensureFlowRegistryReady();
+function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord | null {
+  ensureTaskFlowRegistryReady();
   const record = buildFlowRecord(params);
   return writeFlowRecord(record);
 }
 
-export function createManagedTaskFlow(params: {
-  ownerKey: string;
-  controllerId: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+export function createManagedTaskFlow(
+  params: FlowRecordCreateFields & {
+    controllerId: string;
+  },
+): TaskFlowRecord | null {
   return createFlowRecord({
     ...params,
     syncMode: "managed",
@@ -412,30 +504,26 @@ export function createTaskFlowForTask(params: {
     | "progressSummary"
   >;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-}): TaskFlowRecord {
+}): TaskFlowRecord | null {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(params.task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
-  const endedAt = isTerminal
-    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
-    : undefined;
+  const timing = resolveTaskMirroredFlowTiming(
+    params.task,
+    isTerminalTaskFlowStatus(terminalFlowStatus),
+  );
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
     requesterOrigin: params.requesterOrigin,
     status: terminalFlowStatus,
     notifyPolicy: params.task.notifyPolicy,
-    goal: resolveFlowGoal(params.task),
+    goal:
+      normalizeOptionalString(params.task.label) ?? (params.task.task.trim() || "Background task"),
     blockedTaskId:
-      terminalFlowStatus === "blocked" ? params.task.taskId.trim() || undefined : undefined,
+      terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
-    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
-    ...(endedAt !== undefined ? { endedAt } : {}),
+    updatedAt: timing.updatedAt,
+    ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
   });
 }
 
@@ -443,7 +531,7 @@ function updateFlowRecordByIdUnchecked(
   flowId: string,
   patch: FlowRecordPatch,
 ): TaskFlowRecord | null {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   const current = flows.get(flowId);
   if (!current) {
     return null;
@@ -456,7 +544,7 @@ export function updateFlowRecordByIdExpectedRevision(params: {
   expectedRevision: number;
   patch: FlowRecordPatch;
 }): TaskFlowUpdateResult {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   const current = flows.get(params.flowId);
   if (!current) {
     return {
@@ -471,9 +559,17 @@ export function updateFlowRecordByIdExpectedRevision(params: {
       current: cloneFlowRecord(current),
     };
   }
+  const flow = writeFlowRecord(applyFlowPatch(current, params.patch), current);
+  if (!flow) {
+    return {
+      applied: false,
+      reason: "persist_failed",
+      current: cloneFlowRecord(current),
+    };
+  }
   return {
     applied: true,
-    flow: writeFlowRecord(applyFlowPatch(current, params.patch), current),
+    flow,
   };
 }
 
@@ -492,7 +588,8 @@ export function setFlowWaiting(params: {
     expectedRevision: params.expectedRevision,
     patch: {
       status:
-        normalizeText(params.blockedTaskId) || normalizeText(params.blockedSummary)
+        normalizeOptionalString(params.blockedTaskId) ||
+        normalizeOptionalString(params.blockedSummary)
           ? "blocked"
           : "waiting",
       currentStep: params.currentStep,
@@ -598,7 +695,7 @@ export function requestFlowCancel(params: {
   });
 }
 
-export function syncFlowFromTask(
+export function syncFlowFromTaskResult(
   task: Pick<
     TaskRecord,
     | "parentFlowId"
@@ -613,50 +710,61 @@ export function syncFlowFromTask(
     | "terminalSummary"
     | "progressSummary"
   >,
-): TaskFlowRecord | null {
+): TaskFlowSyncResult {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
-    return null;
+    return { ok: true, flow: null };
   }
   const flow = getTaskFlowById(flowId);
   if (!flow) {
-    return null;
+    return { ok: true, flow: null };
   }
   if (flow.syncMode !== "task_mirrored") {
-    return flow;
+    return { ok: true, flow };
   }
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
-  return updateFlowRecordByIdUnchecked(flowId, {
+  const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
+  const timing = resolveTaskMirroredFlowTiming(
+    {
+      createdAt: flow.createdAt,
+      lastEventAt: task.lastEventAt,
+      endedAt: task.endedAt,
+    },
+    isTerminal,
+  );
+  const updated = updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
-    goal: resolveFlowGoal(task),
+    goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
     blockedTaskId: terminalFlowStatus === "blocked" ? task.taskId.trim() || null : null,
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     waitJson: null,
-    updatedAt: task.lastEventAt ?? Date.now(),
+    updatedAt: timing.updatedAt,
     ...(isTerminal
       ? {
-          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
+          endedAt: timing.endedAt ?? timing.updatedAt,
         }
       : { endedAt: null }),
   });
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   const flow = flows.get(flowId);
   return flow ? cloneFlowRecord(flow) : undefined;
 }
 
 export function listTaskFlowsForOwnerKey(ownerKey: string): TaskFlowRecord[] {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   const normalizedOwnerKey = ownerKey.trim();
   if (!normalizedOwnerKey) {
     return [];
@@ -668,8 +776,14 @@ export function listTaskFlowsForOwnerKey(ownerKey: string): TaskFlowRecord[] {
 }
 
 export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord | undefined {
-  const flow = listTaskFlowsForOwnerKey(ownerKey)[0];
-  return flow ? cloneFlowRecord(flow) : undefined;
+  return listTaskFlowsForOwnerKey(ownerKey)[0];
+}
+
+// Owner-key actions must target live work before retained terminal history;
+// otherwise `show` and `cancel` silently act on a completed flow.
+export function findTaskFlowForOwnerLookup(ownerKey: string): TaskFlowRecord | undefined {
+  const ownerFlows = listTaskFlowsForOwnerKey(ownerKey);
+  return ownerFlows.find((flow) => !isTerminalTaskFlow(flow)) ?? ownerFlows[0];
 }
 
 export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | undefined {
@@ -677,24 +791,26 @@ export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | u
   if (!lookup) {
     return undefined;
   }
-  return getTaskFlowById(lookup) ?? findLatestTaskFlowForOwnerKey(lookup);
+  return getTaskFlowById(lookup) ?? findTaskFlowForOwnerLookup(lookup);
 }
 
 export function listTaskFlowRecords(): TaskFlowRecord[] {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   return [...flows.values()]
     .map((flow) => cloneFlowRecord(flow))
     .toSorted((left, right) => right.createdAt - left.createdAt);
 }
 
 export function deleteTaskFlowRecordById(flowId: string): boolean {
-  ensureFlowRegistryReady();
+  ensureTaskFlowRegistryReady();
   const current = flows.get(flowId);
   if (!current) {
     return false;
   }
+  if (!tryPersistFlowDelete(flowId)) {
+    return false;
+  }
   flows.delete(flowId);
-  persistFlowDelete(flowId);
   emitFlowRegistryObserverEvent(() => ({
     kind: "deleted",
     flowId,
@@ -703,13 +819,20 @@ export function deleteTaskFlowRecordById(flowId: string): boolean {
   return true;
 }
 
-export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
-  flows.clear();
-  restoreAttempted = false;
-  restoreFailureMessage = null;
+function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
+  flows = new Map();
+  taskFlowRegistryRestoreState = { status: "uninitialized" };
   resetTaskFlowRegistryRuntimeForTests();
   if (opts?.persist !== false) {
     persistFlowRegistry();
   }
   getTaskFlowRegistryStore().close?.();
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.taskFlowRegistryTestApi")] = {
+    createFlowRecord,
+    resetTaskFlowRegistryForTests,
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

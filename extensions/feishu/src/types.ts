@@ -1,24 +1,19 @@
-import type { BaseProbeResult } from "../runtime-api.js";
-import type {
-  FeishuConfigSchema,
-  FeishuGroupSchema,
-  FeishuAccountConfigSchema,
-  z,
-} from "./config-schema.js";
-import type { MentionTarget } from "./mention.js";
+// Feishu type declarations define plugin contracts.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
+import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
-export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
-export type FeishuConnectionMode = "websocket" | "webhook";
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
   | "mapped-default"
   | "fallback";
-export type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
+type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
 
 export type ResolvedFeishuAccount = {
   accountId: string;
@@ -40,10 +35,14 @@ export type FeishuIdType = "open_id" | "user_id" | "union_id" | "chat_id";
 export type FeishuMessageContext = {
   chatId: string;
   messageId: string;
+  replyTargetMessageId?: string;
+  typingTargetMessageId?: string;
+  suppressReplyTarget?: boolean;
   senderId: string;
   senderOpenId: string;
   senderName?: string;
-  chatType: "p2p" | "group" | "private";
+  senderType: "user" | "bot";
+  chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;
   rootId?: string;
@@ -58,9 +57,14 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
 };
 
-export type FeishuChatType = "p2p" | "group" | "private";
+export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";
+
+export function isFeishuGroupChatType(chatType: FeishuChatType | undefined): boolean {
+  return chatType === "group" || chatType === "topic_group";
+}
 
 export type FeishuMessageInfo = {
   messageId: string;
@@ -72,20 +76,22 @@ export type FeishuMessageInfo = {
   content: string;
   contentType: string;
   createTime?: number;
+  /** Root message ID for replies inside Feishu topics. */
+  rootId?: string;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
   threadId?: string;
 };
 
-export type FeishuProbeResult = BaseProbeResult<string> & {
+export interface FeishuProbeResult extends BaseProbeResult {
   appId?: string;
   botName?: string;
   botOpenId?: string;
-};
+}
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
 export type FeishuToolsConfig = {
@@ -95,6 +101,8 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  /** Bitable/Base operations (default: true). */
+  bitable?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

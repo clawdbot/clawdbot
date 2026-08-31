@@ -1,89 +1,54 @@
-import { resolveBedrockConfigApiKey } from "../plugin-sdk/amazon-bedrock.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
-  normalizeGoogleProviderConfig,
-  shouldNormalizeGoogleProviderConfig,
-} from "../plugin-sdk/google.js";
-import {
-  applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,
   resolveProviderConfigApiKeyWithPlugin,
-  resolveProviderRuntimePlugin,
 } from "../plugins/provider-runtime.js";
+import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
-function resolveProviderPluginLookupKey(providerKey: string, provider?: ProviderConfig): string {
-  const api = typeof provider?.api === "string" ? provider.api.trim() : "";
-  return api || providerKey;
-}
+export type ProviderPolicyManifestRegistry = Pick<PluginManifestRegistry, "plugins">;
 
-export function applyNativeStreamingUsageCompat(
-  providers: Record<string, ProviderConfig>,
-): Record<string, ProviderConfig> {
-  let changed = false;
-  const nextProviders: Record<string, ProviderConfig> = {};
-
-  for (const [providerKey, provider] of Object.entries(providers)) {
-    const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
-    const nextProvider =
-      applyProviderNativeStreamingUsageCompatWithPlugin({
-        provider: runtimeProviderKey,
-        context: {
-          provider: providerKey,
-          providerConfig: provider,
-        },
-      }) ?? provider;
-    nextProviders[providerKey] = nextProvider;
-    changed ||= nextProvider !== provider;
-  }
-
-  return changed ? nextProviders : providers;
-}
-
+/**
+ * Provider-specific config policy adapters.
+ *
+ * These helpers call plugin hooks without triggering runtime plugin loading
+ * from config assembly.
+ */
+/** Normalizes a provider config according to provider-specific runtime policy. */
 export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
+  manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ProviderConfig {
   const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
-  const normalized =
+  return (
     normalizeProviderConfigWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
+      ...(manifestRegistry ? { manifestRegistry } : {}),
       context: {
         provider: providerKey,
         providerConfig: provider,
       },
-    }) ?? undefined;
-  if (normalized && normalized !== provider) {
-    return normalized;
-  }
-  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
-    return normalizeGoogleProviderConfig(providerKey, provider);
-  }
-  return provider;
+    }) ?? provider
+  );
 }
 
+/** Resolves a provider-specific API key env lookup policy when one exists. */
 export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
   provider?: ProviderConfig,
+  manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  if (providerKey.trim() === "amazon-bedrock") {
-    return (env) => {
-      const resolved = resolveBedrockConfigApiKey(env);
-      return resolved?.trim() || undefined;
-    };
-  }
-  const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
-  if (!resolveProviderRuntimePlugin({ provider: runtimeProviderKey })?.resolveConfigApiKey) {
-    return undefined;
-  }
-  return (env) => {
-    const resolved = resolveProviderConfigApiKeyWithPlugin({
+  const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider).trim();
+  return (env) =>
+    resolveProviderConfigApiKeyWithPlugin({
       provider: runtimeProviderKey,
-      env,
+      allowRuntimePluginLoad: false,
+      ...(manifestRegistry ? { manifestRegistry } : {}),
       context: {
         provider: providerKey,
         env,
       },
     });
-    return resolved?.trim() || undefined;
-  };
 }

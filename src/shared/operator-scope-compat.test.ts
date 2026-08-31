@@ -1,16 +1,24 @@
+// Role scope checks preserve operator implications and role-prefix boundaries.
 import { describe, expect, it } from "vitest";
-import { resolveMissingRequestedScope, roleScopesAllow } from "./operator-scope-compat.js";
+import {
+  resolveMissingRequestedScope,
+  resolveScopeOutsideRequestedRoles,
+  roleScopesAllow,
+} from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
-  it("allows empty requested scope lists regardless of granted scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: [],
-        allowedScopes: [],
-      }),
-    ).toBe(true);
-  });
+  it.each([
+    { requestedScopes: [], allowedScopes: [] },
+    { requestedScopes: ["", " \t"], allowedScopes: [] },
+    { requestedScopes: ["", " \t"], allowedScopes: ["operator.admin"] },
+  ])(
+    "ignores empty and blank requests: $requestedScopes with grants $allowedScopes",
+    ({ requestedScopes, allowedScopes }) => {
+      const params = { role: "operator", requestedScopes, allowedScopes };
+      expect(roleScopesAllow(params)).toBe(true);
+      expect(resolveMissingRequestedScope(params)).toBeNull();
+    },
+  );
 
   it("treats operator.read as satisfied by read/write/admin scopes", () => {
     expect(
@@ -51,6 +59,25 @@ describe("roleScopesAllow", () => {
         allowedScopes: ["operator.admin"],
       }),
     ).toBe(true);
+  });
+
+  it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
+    for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
+      expect(
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.talk"],
+          allowedScopes: [allowedScope],
+        }),
+      ).toBe(true);
+    }
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.talk"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
   });
 
   it("treats operator.approvals/operator.pairing as satisfied by operator.admin", () => {
@@ -138,14 +165,28 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("returns the first missing requested scope with operator compatibility", () => {
-    expect(
-      resolveMissingRequestedScope({
-        role: "operator",
-        requestedScopes: ["operator.read", "operator.write", "operator.approvals"],
-        allowedScopes: ["operator.write"],
-      }),
-    ).toBe("operator.approvals");
+  it.each([
+    {
+      role: " operator ",
+      requestedScopes: [
+        "",
+        " operator.read ",
+        "operator.read",
+        " operator.approvals \t",
+        "operator.admin",
+      ],
+      allowedScopes: [" operator.write ", "operator.write", ""],
+      missingScope: " operator.approvals \t",
+    },
+    {
+      role: " node ",
+      requestedScopes: [" \t", " node.exec ", "node.exec", " node.read \t", "operator.read"],
+      allowedScopes: [" node.exec ", "node.exec", ""],
+      missingScope: " node.read \t",
+    },
+  ])("returns the original first missing scope for $role", ({ missingScope, ...params }) => {
+    expect(resolveMissingRequestedScope(params)).toBe(missingScope);
+    expect(roleScopesAllow(params)).toBe(false);
   });
 
   it("returns null when all requested scopes are satisfied", () => {
@@ -157,4 +198,35 @@ describe("roleScopesAllow", () => {
       }),
     ).toBeNull();
   });
+
+  it("returns null when every requested scope belongs to one requested role", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["", " \t", "node.exec", "operator.read"],
+      }),
+    ).toBeNull();
+  });
+
+  it("returns the first scope outside the requested role set", () => {
+    expect(
+      resolveScopeOutsideRequestedRoles({
+        requestedRoles: ["node", "operator"],
+        requestedScopes: ["node.exec", " vault.admin \t", "operator.read"],
+      }),
+    ).toBe(" vault.admin \t");
+  });
+
+  it.each([
+    { requestedScopes: [], outsideScope: null },
+    { requestedScopes: ["", "node.exec"], outsideScope: "" },
+    { requestedScopes: [" \t", "node.exec"], outsideScope: " \t" },
+  ])(
+    "returns the first scope with no requested roles: $requestedScopes",
+    ({ requestedScopes, outsideScope }) => {
+      expect(resolveScopeOutsideRequestedRoles({ requestedRoles: [], requestedScopes })).toBe(
+        outsideScope,
+      );
+    },
+  );
 });

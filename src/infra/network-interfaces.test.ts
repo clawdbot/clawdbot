@@ -1,3 +1,4 @@
+// Covers safe network interface enumeration and address selection.
 import { describe, expect, it } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {

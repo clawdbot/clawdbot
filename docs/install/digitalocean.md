@@ -6,9 +6,12 @@ read_when:
 title: "DigitalOcean"
 ---
 
-# DigitalOcean
+Run a persistent OpenClaw Gateway on a DigitalOcean Droplet (~$6/month for the 1 GB Basic plan).
 
-Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
+DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
+
+- [Hetzner](/install/hetzner) -- more cores/RAM per dollar.
+- [Oracle Cloud](/install/oracle) -- Always Free ARM tier (up to 4 OCPU, 24 GB RAM), but signup can be finicky and it is ARM-only.
 
 ## Prerequisites
 
@@ -41,14 +44,23 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
     apt update && apt upgrade -y
 
-    # Install Node.js 24
+    # Install Node.js 24 LTS
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    # Install OpenClaw; run onboarding later as the non-root owner.
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+
+    # Create the non-root user that will own OpenClaw state and services.
+    adduser openclaw
+    usermod -aG sudo openclaw
+    loginctl enable-linger openclaw
+
+    su - openclaw
     openclaw --version
     ```
+
+    Use the root shell only for system bootstrap. Run OpenClaw commands as the non-root `openclaw` user so state lives under `/home/openclaw/.openclaw/` and the Gateway installs as that user's systemd `--user` service.
 
   </Step>
 
@@ -57,17 +69,17 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
     openclaw onboard --install-daemon
     ```
 
-    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd).
+    The wizard walks you through model auth, channel setup, gateway token generation, and daemon installation (systemd user service).
 
   </Step>
 
   <Step title="Add swap (recommended for 1 GB Droplets)">
     ```bash
-    fallocate -l 2G /swapfile
-    chmod 600 /swapfile
-    mkswap /swapfile
-    swapon /swapfile
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     ```
   </Step>
 
@@ -94,25 +106,46 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
     **Option B: Tailscale Serve**
 
     ```bash
-    curl -fsSL https://tailscale.com/install.sh | sh
-    tailscale up
+    curl -fsSL https://tailscale.com/install.sh | sudo sh
+    sudo tailscale up
     openclaw config set gateway.tailscale.mode serve
     openclaw gateway restart
     ```
 
     Then open `https://<magicdns>/` from any device on your tailnet.
 
-    **Option C: Tailnet bind (no Serve)**
-
-    ```bash
-    openclaw config set gateway.bind tailnet
-    openclaw gateway restart
-    ```
-
-    Then open `http://<tailscale-ip>:18789` (token required).
+    Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints still follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
   </Step>
 </Steps>
+
+## Persistence and backups
+
+OpenClaw state lives under:
+
+- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, shared and per-agent SQLite auth stores, and session data.
+- `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
+
+These survive Droplet reboots. To take a portable snapshot:
+
+```bash
+openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+DigitalOcean snapshots back up the whole Droplet; `openclaw backup create` is
+portable across hosts. Restore verifies and extracts into a fresh staging
+directory; activation is a separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
+
+## 1 GB RAM tips
+
+The $6 Droplet only has 1 GB RAM. To keep things smooth:
+
+- Make sure the swap step above is in `/etc/fstab` so it survives reboots.
+- Prefer API-based models (Claude, GPT) over local ones -- local LLM inference does not fit in 1 GB.
+- Set `agents.defaults.model.primary` to a smaller model if you hit OOMs on large prompts.
+- Monitor with `free -h` and `htop`.
 
 ## Troubleshooting
 
@@ -120,10 +153,17 @@ Run a persistent OpenClaw Gateway on a DigitalOcean Droplet.
 
 **Port already in use** -- Run `lsof -i :18789` to find the process, then stop it.
 
-**Out of memory** -- Verify swap is active with `free -h`. If still hitting OOM, use API-based models (Claude, GPT) rather than local models, or upgrade to a 2 GB Droplet.
+**Out of memory** -- Verify swap is active with `free -h`. If still hitting OOM, switch to API-based models (Claude, GPT) rather than local models, or upgrade to a 2 GB Droplet.
 
 ## Next steps
 
 - [Channels](/channels) -- connect Telegram, WhatsApp, Discord, and more
 - [Gateway configuration](/gateway/configuration) -- all config options
 - [Updating](/install/updating) -- keep OpenClaw up to date
+
+## Related
+
+- [Install overview](/install)
+- [Fly.io](/install/fly)
+- [Hetzner](/install/hetzner)
+- [VPS hosting](/vps)

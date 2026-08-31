@@ -1,4 +1,5 @@
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+// Feishu API module exposes the plugin public contract.
+export type { RuntimeEnv } from "../runtime-api.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

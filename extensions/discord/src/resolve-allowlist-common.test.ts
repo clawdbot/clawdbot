@@ -1,8 +1,8 @@
+// Discord tests cover resolve allowlist common plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildDiscordUnresolvedResults,
   filterDiscordGuilds,
-  findDiscordGuildByName,
   resolveDiscordAllowlistToken,
 } from "./resolve-allowlist-common.js";
 
@@ -13,7 +13,11 @@ describe("resolve-allowlist-common", () => {
   ];
 
   it("resolves and filters guilds by id or name", () => {
-    expect(findDiscordGuildByName(guilds, "Main Guild")?.id).toBe("1");
+    const [mainGuild] = filterDiscordGuilds(guilds, { guildName: "Main Guild" });
+    if (!mainGuild) {
+      throw new Error("expected Main Guild lookup result");
+    }
+    expect(mainGuild.id).toBe("1");
     expect(filterDiscordGuilds(guilds, { guildId: "2" })).toEqual([guilds[1]]);
     expect(filterDiscordGuilds(guilds, { guildName: "main-guild" })).toEqual([guilds[0]]);
   });

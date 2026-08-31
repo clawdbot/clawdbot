@@ -1,40 +1,47 @@
+// Verifies requester and owner access checks for task records.
 import { afterEach, describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { captureEnv } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   findLatestTaskForRelatedSessionKeyForOwner,
   findTaskByRunIdForOwner,
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "./task-registry.js";
+import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
+  const task = createTaskRecordOrNull(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
-  if (ORIGINAL_STATE_DIR == null) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
+  ORIGINAL_ENV.restore();
 });
 
 async function withTaskRegistryTempDir<T>(run: () => Promise<T> | T): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-owner-access-" }, async (root) => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryForTests({ persist: false });
-    try {
-      return await run();
-    } finally {
+  return await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-task-owner-access-",
+    },
+    async () => {
       resetTaskRegistryForTests({ persist: false });
-      if (previousStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      try {
+        return await run();
+      } finally {
+        resetTaskRegistryForTests({ persist: false });
       }
-    }
-  });
+    },
+  );
 }
 
 describe("task owner access", () => {
@@ -115,6 +122,34 @@ describe("task owner access", () => {
           callerOwnerKey: "agent:main:mixedcase",
         }),
       ).toBeUndefined();
+    });
+  });
+
+  it("rejects an agentless caller for a bare owner key", async () => {
+    await withTaskRegistryTempDir(() => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "global",
+        scopeKind: "session",
+        requesterAgentId: "ops",
+        runId: "bare-owner-run",
+        task: "Agent-owned global task",
+        status: "queued",
+      });
+
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+        }),
+      ).toBeUndefined();
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "global",
+          callerAgentId: "ops",
+        })?.taskId,
+      ).toBe(task.taskId);
     });
   });
 

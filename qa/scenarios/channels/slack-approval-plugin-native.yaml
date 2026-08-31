@@ -1,0 +1,21 @@
+title: Slack native plugin approval prompt resolves with exec approvals enabled
+scenario:
+  id: slack-approval-plugin-native
+  surface: channels
+  coverage:
+    primary:
+      - slack.native-approvals
+    secondary:
+      - channels.channel-native-approval-prompts
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaApprovalPluginNativeScenario }

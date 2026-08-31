@@ -1,211 +1,45 @@
-import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it } from "vitest";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
-import type { CliDeps } from "../cli/deps.js";
-import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
-import { createWhatsAppTestPlugin } from "../infra/outbound/targets.test-helpers.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
+// Direct delivery tests keep the active runtime config through isolated cron orchestration.
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStore,
-} from "./isolated-agent.test-harness.js";
-import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 
-type ChannelCase = {
-  name: string;
-  channel: "slack" | "discord" | "whatsapp" | "imessage";
-  to: string;
-  sendKey: keyof Pick<
-    CliDeps,
-    "sendMessageSlack" | "sendMessageDiscord" | "sendMessageWhatsApp" | "sendMessageIMessage"
-  >;
-  expectedTo: string;
-};
+describe("resolveCronAgentConfig", () => {
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
 
-const CASES: ChannelCase[] = [
-  {
-    name: "Slack",
-    channel: "slack",
-    to: "channel:C12345",
-    sendKey: "sendMessageSlack",
-    expectedTo: "channel:C12345",
-  },
-  {
-    name: "Discord",
-    channel: "discord",
-    to: "channel:789",
-    sendKey: "sendMessageDiscord",
-    expectedTo: "channel:789",
-  },
-  {
-    name: "WhatsApp",
-    channel: "whatsapp",
-    to: "+15551234567",
-    sendKey: "sendMessageWhatsApp",
-    expectedTo: "+15551234567",
-  },
-  {
-    name: "iMessage",
-    channel: "imessage",
-    to: "friend@example.com",
-    sendKey: "sendMessageIMessage",
-    expectedTo: "friend@example.com",
-  },
-];
-
-async function runExplicitAnnounceTurn(params: {
-  home: string;
-  storePath: string;
-  deps: CliDeps;
-  channel: ChannelCase["channel"];
-  to: string;
-}) {
-  return await runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home, params.storePath),
-    deps: params.deps,
-    job: {
-      ...makeJob({ kind: "agentTurn", message: "do it" }),
-      delivery: {
-        mode: "announce",
-        channel: params.channel,
-        to: params.to,
+  it("keeps the active runtime snapshot after agent-default derivation", () => {
+    const sourceCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              token: { provider: "default", source: "env", id: "DISCORD_BOT_TOKEN" },
+            },
+          },
+        },
       },
-    },
-    message: "do it",
-    sessionKey: "cron:job-1",
-    lane: "cron",
-  });
-}
-
-type CoreChannel = ChannelCase["channel"];
-type TestSendFn = (
-  to: string,
-  text: string,
-  options?: Record<string, unknown>,
-) => Promise<{ messageId?: string } & Record<string, unknown>>;
-
-function withRequiredMessageId(channel: CoreChannel, result: Awaited<ReturnType<TestSendFn>>) {
-  return {
-    channel,
-    ...result,
-    messageId:
-      typeof result.messageId === "string" && result.messageId.trim()
-        ? result.messageId
-        : `${channel}-test-message`,
-  };
-}
-
-function resolveCoreChannelSender(
-  channel: CoreChannel,
-  deps: ChannelOutboundContext["deps"],
-): TestSendFn {
-  const sender = resolveOutboundSendDep<TestSendFn>(deps, channel);
-  if (!sender) {
-    throw new Error(`missing ${channel} sender`);
-  }
-  return sender;
-}
-
-function createCliDelegatingOutbound(params: {
-  channel: CoreChannel;
-  deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
-  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
-}): ChannelOutboundAdapter {
-  return {
-    deliveryMode: params.deliveryMode ?? "direct",
-    ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
-    sendText: async ({ cfg, to, text, accountId, deps }) =>
-      withRequiredMessageId(
-        params.channel,
-        await resolveCoreChannelSender(params.channel, deps)(to, text, {
-          cfg,
-          accountId: accountId ?? undefined,
-        }),
-      ),
-  };
-}
-
-const whatsappResolveTarget = createWhatsAppTestPlugin().outbound?.resolveTarget;
-
-describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
-  beforeEach(() => {
-    setupIsolatedAgentTurnMocks();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          plugin: createOutboundTestPlugin({
-            id: "slack",
-            outbound: createCliDelegatingOutbound({ channel: "slack" }),
-          }),
-          source: "test",
+    } satisfies OpenClawConfig;
+    const runtimeCfg = {
+      channels: {
+        discord: {
+          accounts: { default: { token: "resolved-discord-token" } },
         },
-        {
-          pluginId: "discord",
-          plugin: createOutboundTestPlugin({
-            id: "discord",
-            outbound: createCliDelegatingOutbound({ channel: "discord" }),
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createOutboundTestPlugin({
-            id: "whatsapp",
-            outbound: createCliDelegatingOutbound({
-              channel: "whatsapp",
-              deliveryMode: "gateway",
-              resolveTarget: whatsappResolveTarget,
-            }),
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "imessage",
-          plugin: createOutboundTestPlugin({
-            id: "imessage",
-            outbound: createCliDelegatingOutbound({ channel: "imessage" }),
-          }),
-          source: "test",
-        },
-      ]),
-    );
-  });
+      },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
 
-  for (const testCase of CASES) {
-    it(`routes ${testCase.name} text-only announce delivery through the outbound adapter`, async () => {
-      await withTempCronHome(async (home) => {
-        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-        const deps = createCliDeps();
-        mockAgentPayloads([{ text: "hello from cron" }]);
-
-        const res = await runExplicitAnnounceTurn({
-          home,
-          storePath,
-          deps,
-          channel: testCase.channel,
-          to: testCase.to,
-        });
-
-        expect(res.status).toBe("ok");
-        expect(res.delivered).toBe(true);
-        expect(res.deliveryAttempted).toBe(true);
-        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-
-        const sendFn = deps[testCase.sendKey];
-        expect(sendFn).toHaveBeenCalledTimes(1);
-        expect(sendFn).toHaveBeenCalledWith(
-          testCase.expectedTo,
-          "hello from cron",
-          expect.any(Object),
-        );
-      });
+    const { agentDefaults, cfgWithAgentDefaults, runtimeConfig } = resolveCronAgentConfig({
+      config: sourceCfg,
+      agentConfigOverride: { model: "openai/gpt-5.5" },
     });
-  }
+
+    expect(runtimeConfig).toBe(runtimeCfg);
+    expect(agentDefaults.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(cfgWithAgentDefaults.channels).toBe(runtimeCfg.channels);
+  });
 });

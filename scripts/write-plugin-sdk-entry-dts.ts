@@ -1,108 +1,79 @@
+// CI artifacts use the same SDK declaration partitions as full/package builds.
 import fs from "node:fs";
 import path from "node:path";
-import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import configs from "../tsdown.config.ts";
+import { publishStagedDeclarations } from "./lib/declaration-stage.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "./lib/tsdown-config-groups.mts";
+import { prepareTsdownBuildExecution } from "./tsdown-build.mts";
 
-const RUNTIME_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
-  "webhook-path": [
-    "/** Normalize webhook paths into the canonical registry form used by route lookup. */",
-    "export function normalizeWebhookPath(raw) {",
-    "  const trimmed = raw.trim();",
-    "  if (!trimmed) {",
-    '    return "/";',
-    "  }",
-    '  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;',
-    '  if (withSlash.length > 1 && withSlash.endsWith("/")) {',
-    "    return withSlash.slice(0, -1);",
-    "  }",
-    "  return withSlash;",
-    "}",
-    "",
-    "/** Resolve the effective webhook path from explicit path, URL, or default fallback. */",
-    "export function resolveWebhookPath(params) {",
-    "  const trimmedPath = params.webhookPath?.trim();",
-    "  if (trimmedPath) {",
-    "    return normalizeWebhookPath(trimmedPath);",
-    "  }",
-    "  if (params.webhookUrl?.trim()) {",
-    "    try {",
-    "      const parsed = new URL(params.webhookUrl);",
-    '      return normalizeWebhookPath(parsed.pathname || "/");',
-    "    } catch {",
-    "      return null;",
-    "    }",
-    "  }",
-    "  return params.defaultPath ?? null;",
-    "}",
-    "",
-  ].join("\n"),
-};
-
-const TYPE_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
-};
-
-const GENERATED_FACADE_TYPE_MAP_SOURCE = path.join(
-  process.cwd(),
-  "dist/plugin-sdk/src/generated/plugin-sdk-facade-type-map.generated.d.ts",
-);
-const GENERATED_FACADE_TYPE_MAP_DIST_PREFIX = "../../../extensions/";
-
-function rewriteFacadeTypeMapSpecifier(specifier: string): string {
-  if (!specifier.startsWith("@openclaw/")) {
-    return specifier;
-  }
-  return `${GENERATED_FACADE_TYPE_MAP_DIST_PREFIX}${specifier.slice("@openclaw/".length)}`;
+const root = process.cwd();
+let staging: string | undefined;
+const failures: unknown[] = [];
+try {
+  await withDistArtifactOwnership(root, async () => {
+    staging = fs.mkdtempSync(path.join(root, ".artifacts/plugin-sdk-staging-"));
+    const required: string[] = [];
+    for (const name of TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
+      const config = configs.find((candidate: { name?: string }) => candidate.name === name);
+      if (
+        !config?.dts ||
+        typeof config.dts !== "object" ||
+        !Array.isArray(config.dts.entry) ||
+        !config.entry ||
+        typeof config.entry !== "object" ||
+        Array.isArray(config.entry)
+      ) {
+        throw new Error(`Missing canonical declaration group ${name}`);
+      }
+      for (const source of config.dts.entry) {
+        const selected = Object.entries(config.entry).find(([, input]) => input === source);
+        if (!selected) {
+          throw new Error(`Missing canonical SDK entry for ${source}`);
+        }
+        required.push(`${selected[0]}.d.ts`);
+      }
+    }
+    if (!required.length) {
+      throw new Error("Canonical SDK declaration selection is empty");
+    }
+    const args = [
+      "--config",
+      "tsdown.config.ts",
+      ...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
+      "--out-dir",
+      staging,
+    ];
+    const plan = prepareTsdownBuildExecution(
+      { args },
+      {
+        // The staging directory is fresh. In particular, do not prune live runtime
+        // symlinks or source outputs, and never clean between declaration groups.
+        cleanup() {},
+        reportShortfall(shortfall) {
+          console.error(shortfall.message);
+        },
+      },
+    );
+    if (!plan) {
+      throw new Error("Insufficient memory for SDK declaration build");
+    }
+    await publishStagedDeclarations(plan, staging, path.join(root, "dist"), required);
+  });
+} catch (error) {
+  failures.push(error);
 }
-
-function rewriteGeneratedFacadeTypeMapDts(): void {
-  if (!fs.existsSync(GENERATED_FACADE_TYPE_MAP_SOURCE)) {
-    return;
+try {
+  if (staging) {
+    fs.rmSync(staging, { recursive: true, force: true });
   }
-  const source = fs.readFileSync(GENERATED_FACADE_TYPE_MAP_SOURCE, "utf8");
-  const rewritten = source.replace(/@openclaw\/([a-z0-9-]+\/[^")\s]+)/g, (_match, suffix: string) =>
-    rewriteFacadeTypeMapSpecifier(`@openclaw/${suffix}`),
-  );
-  if (rewritten !== source) {
-    fs.writeFileSync(GENERATED_FACADE_TYPE_MAP_SOURCE, rewritten, "utf8");
-  }
+} catch (error) {
+  failures.push(error);
 }
-
-// `tsc` emits declarations under `dist/plugin-sdk/src/plugin-sdk/*` because the source lives
-// at `src/plugin-sdk/*` and `rootDir` is `.` (repo root, to support cross-src/extensions refs).
-//
-// Our package export map points subpath `types` at `dist/plugin-sdk/<entry>.d.ts`, so we
-// generate stable entry d.ts files that re-export the real declarations.
-for (const entry of pluginSdkEntrypoints) {
-  const typeOut = path.join(process.cwd(), `dist/plugin-sdk/${entry}.d.ts`);
-  fs.mkdirSync(path.dirname(typeOut), { recursive: true });
-  fs.writeFileSync(
-    typeOut,
-    TYPE_SHIMS[entry] ?? `export * from "./src/plugin-sdk/${entry}.js";\n`,
-    "utf8",
-  );
-
-  const runtimeShim = RUNTIME_SHIMS[entry];
-  if (!runtimeShim) {
-    continue;
-  }
-  const runtimeOut = path.join(process.cwd(), `dist/plugin-sdk/${entry}.js`);
-  fs.mkdirSync(path.dirname(runtimeOut), { recursive: true });
-  fs.writeFileSync(runtimeOut, runtimeShim, "utf8");
+// The private entry observes this after module evaluation. Keep unjoined build
+// metadata even if removing the private staging tree also failed.
+if (failures.length) {
+  throw failures.length === 1
+    ? failures[0]
+    : new AggregateError(failures, "SDK build and staging cleanup failed");
 }
-
-rewriteGeneratedFacadeTypeMapDts();

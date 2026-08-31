@@ -1,38 +1,41 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+// Feishu plugin module implements send behavior.
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
-import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
+import { requestFeishuApi } from "./comment-shared.js";
+import { parseInteractiveCardContent } from "./interactive-message-content.js";
+import {
+  assertFeishuPostWithinEnvelope,
+  buildFeishuPostMessageContent,
+  chunkFeishuMarkdownByEnvelope,
+  materializeFeishuPostMarkdownSoftBreaks,
+  type FeishuMarkdownChunkOptions,
+} from "./markdown.js";
+import type { MentionTarget } from "./mention-target.types.js";
+import { buildMentionedCardContent } from "./mention.js";
+import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
-import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  resolveFeishuReceiptKind,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
-const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
-const FEISHU_CARD_TEMPLATES = new Set([
-  "blue",
-  "green",
-  "red",
-  "orange",
-  "purple",
-  "indigo",
-  "wathet",
-  "turquoise",
-  "yellow",
-  "grey",
-  "carmine",
-  "violet",
-  "lime",
-]);
+export { resolveFeishuCardTemplate };
 
+const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
   }
-  const msg = response.msg?.toLowerCase() ?? "";
+  const msg = normalizeLowercaseStringOrEmpty(response.msg);
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
@@ -53,6 +56,11 @@ function isWithdrawnReplyError(err: unknown): boolean {
     WITHDRAWN_REPLY_ERROR_CODES.has(response.data.code)
   ) {
     return true;
+  }
+  // Wrapped error shape from createFeishuApiError: err.cause holds the original error.
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && cause !== err) {
+    return isWithdrawnReplyError(cause);
   }
   return false;
 }
@@ -82,6 +90,7 @@ type FeishuMessageGetItem = {
   message_id?: string;
   chat_id?: string;
   chat_type?: FeishuChatType;
+  root_id?: string;
   thread_id?: string;
   msg_type?: string;
   body?: { content?: string };
@@ -108,23 +117,34 @@ async function sendFallbackDirect(
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: params.receiveIdType },
+        data: {
+          receive_id: params.receiveId,
+          content: params.content,
+          msg_type: params.msgType,
+        },
+      }),
+    errorPrefix,
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
+  return toFeishuSendResult(
+    response,
+    params.receiveId,
+    resolveFeishuReceiptKind(params.msgType),
+    errorPrefix,
+  );
 }
 
-async function sendReplyOrFallbackDirect(
+export async function sendReplyOrFallbackDirect(
   client: FeishuCreateMessageClient,
   params: {
     replyToMessageId?: string;
     replyInThread?: boolean;
+    allowTopLevelReplyFallback?: boolean;
     content: string;
     msgType: string;
     directParams: {
@@ -141,79 +161,58 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
 
-  const threadReplyFallbackError = params.replyInThread
-    ? new Error(
-        "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
-      )
-    : null;
+  const replyTargetFallbackError =
+    params.replyInThread && params.allowTopLevelReplyFallback !== true
+      ? new Error(
+          "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+        )
+      : null;
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
-      data: {
-        content: params.content,
-        msg_type: params.msgType,
-        ...(params.replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: params.replyToMessageId! },
+          data: {
+            content: params.content,
+            msg_type: params.msgType,
+            ...(params.replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      params.replyErrorPrefix,
+      { includeNestedErrorLogId: true },
+    );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
       throw err;
     }
-    if (threadReplyFallbackError) {
-      throw threadReplyFallbackError;
+    if (replyTargetFallbackError) {
+      throw replyTargetFallbackError;
     }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   if (shouldFallbackFromReplyTarget(response)) {
-    if (threadReplyFallbackError) {
-      throw threadReplyFallbackError;
+    if (replyTargetFallbackError) {
+      throw replyTargetFallbackError;
     }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
-  return toFeishuSendResult(response, params.directParams.receiveId);
+  return toFeishuSendResult(
+    response,
+    params.directParams.receiveId,
+    resolveFeishuReceiptKind(params.msgType),
+    params.replyErrorPrefix,
+    params.replyToMessageId,
+  );
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
-  if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
-  }
-
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
-  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
-  const elements = Array.isArray(candidate.elements)
-    ? candidate.elements
-    : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
-      : null;
-  if (!elements) {
-    return "[Interactive Card]";
-  }
-
-  const texts: string[] = [];
-  for (const element of elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
-    }
-  }
-  return texts.join("\n").trim() || "[Interactive Card]";
-}
-
-function parseFeishuMessageContent(rawContent: string, msgType: string): string {
+function parseFeishuMessageContent(
+  rawContent: string,
+  msgType: string,
+  messageId?: string,
+): string {
   if (!rawContent) {
     return "";
   }
@@ -222,6 +221,8 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   try {
     parsed = JSON.parse(rawContent);
   } catch {
+    const safeId = messageId ? ` (id: ${messageId})` : "";
+    logVerbose(`feishu message content parse failed for ${msgType} message${safeId}`);
     return rawContent;
   }
 
@@ -265,15 +266,19 @@ function parseFeishuMessageItem(
     messageId: item.message_id ?? fallbackMessageId ?? "",
     chatId: item.chat_id ?? "",
     chatType:
-      item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+      item.chat_type === "group" ||
+      item.chat_type === "topic_group" ||
+      item.chat_type === "private" ||
+      item.chat_type === "p2p"
         ? item.chat_type
         : undefined,
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType),
+    content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
     contentType: msgType,
-    createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+    createTime: parseStrictNonNegativeInteger(item.create_time),
+    ...(item.root_id ? { rootId: item.root_id } : {}),
     threadId: item.thread_id || undefined,
   };
 }
@@ -297,6 +302,7 @@ export async function getMessageFeishu(params: {
 
   try {
     const response = (await client.im.message.get({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: messageId },
     })) as FeishuGetMessageResponse;
 
@@ -321,7 +327,7 @@ export async function getMessageFeishu(params: {
   }
 }
 
-export type FeishuThreadMessageInfo = {
+type FeishuThreadMessageInfo = {
   messageId: string;
   senderId?: string;
   senderType?: string;
@@ -352,54 +358,83 @@ export async function listFeishuThreadMessages(params: {
 
   const client = createFeishuClient(account);
 
-  const response = (await client.im.message.list({
-    params: {
-      container_id_type: "thread",
-      container_id: threadId,
-      // Fetch newest messages first so long threads keep the most recent turns.
-      // Results are reversed below to restore chronological order.
-      sort_type: "ByCreateTimeDesc",
-      page_size: Math.min(limit + 1, 50),
-    },
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<
-        {
-          message_id?: string;
-          root_id?: string;
-          parent_id?: string;
-        } & FeishuMessageGetItem
-      >;
-    };
-  };
-
-  if (response.code !== 0) {
-    throw new Error(
-      `Feishu thread list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
-    );
-  }
-
-  const items = response.data?.items ?? [];
   const results: FeishuThreadMessageInfo[] = [];
+  const seenMessageIds = new Set<string>();
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
 
-  for (const item of items) {
-    if (currentMessageId && item.message_id === currentMessageId) continue;
-    if (rootMessageId && item.message_id === rootMessageId) continue;
+  while (results.length < limit) {
+    const response = (await client.im.message.list({
+      params: {
+        container_id_type: "thread",
+        container_id: threadId,
+        // Feishu pages newest-first; reverse only after all accepted pages are gathered.
+        sort_type: "ByCreateTimeDesc",
+        page_size: Math.min(limit + 1, 50),
+        ...(pageToken ? { page_token: pageToken } : {}),
+        card_msg_content_type: "user_card_content",
+      },
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<
+          {
+            message_id?: string;
+            root_id?: string;
+            parent_id?: string;
+          } & FeishuMessageGetItem
+        >;
+        has_more?: boolean;
+        page_token?: string;
+      };
+    };
 
-    const parsed = parseFeishuMessageItem(item);
+    if (response.code !== 0) {
+      throw new Error(
+        `Feishu thread list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
+      );
+    }
 
-    results.push({
-      messageId: parsed.messageId,
-      senderId: parsed.senderId,
-      senderType: parsed.senderType,
-      content: parsed.content,
-      contentType: parsed.contentType,
-      createTime: parsed.createTime,
-    });
+    for (const item of response.data?.items ?? []) {
+      if (
+        (currentMessageId && item.message_id === currentMessageId) ||
+        (rootMessageId && item.message_id === rootMessageId) ||
+        (item.message_id && seenMessageIds.has(item.message_id))
+      ) {
+        continue;
+      }
 
-    if (results.length >= limit) break;
+      const parsed = parseFeishuMessageItem(item);
+      if (parsed.messageId) {
+        seenMessageIds.add(parsed.messageId);
+      }
+      results.push({
+        messageId: parsed.messageId,
+        senderId: parsed.senderId,
+        senderType: parsed.senderType,
+        content: parsed.content,
+        contentType: parsed.contentType,
+        createTime: parsed.createTime,
+      });
+
+      if (results.length >= limit) {
+        break;
+      }
+    }
+
+    if (results.length >= limit || response.data?.has_more !== true) {
+      break;
+    }
+
+    const nextPageToken = response.data.page_token?.trim();
+    if (!nextPageToken || seenPageTokens.has(nextPageToken)) {
+      throw new Error(
+        `Feishu thread history pagination returned a ${nextPageToken ? "repeated" : "missing"} page token`,
+      );
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
   }
 
   // Restore chronological order (oldest first) since we fetched newest-first.
@@ -407,64 +442,54 @@ export async function listFeishuThreadMessages(params: {
   return results;
 }
 
-export type SendFeishuMessageParams = {
+type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
+  /** The outbound adapter already projected and envelope-chunked this post text. @internal */
+  preparedPostText?: true;
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   /** Mention target users */
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
   accountId?: string;
 };
 
-export function buildFeishuPostMessagePayload(params: { messageText: string }): {
-  content: string;
-  msgType: string;
-} {
-  const { messageText } = params;
-  return {
-    content: JSON.stringify({
-      zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: messageText,
-            },
-          ],
-        ],
-      },
-    }),
-    msgType: "post",
-  };
-}
-
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = resolveMarkdownTableMode({
+  const {
     cfg,
-    channel: "feishu",
-  });
-
-  // Build message content (with @mention support)
-  let rawText = text ?? "";
-  if (mentions && mentions.length > 0) {
-    rawText = buildMentionedMessage(mentions, rawText);
+    to,
+    text,
+    preparedPostText,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    mentions,
+    accountId,
+  } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  let messageText = text;
+  if (!preparedPostText) {
+    const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+    messageText = materializeFeishuPostMarkdownSoftBreaks(
+      convertMarkdownTables(text ?? "", tableMode),
+    );
   }
-  const messageText = convertMarkdownTables(rawText, tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const content = buildFeishuPostMessageContent({ messageText, mentions });
+  const msgType = "post";
+  assertFeishuPostWithinEnvelope(content, "Feishu post");
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     content,
     msgType,
     directParams,
@@ -473,18 +498,20 @@ export async function sendMessageFeishu(
   });
 }
 
-export type SendFeishuCardParams = {
+type SendFeishuCardParams = {
   cfg: ClawdbotConfig;
   to: string;
   card: Record<string, unknown>;
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 };
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
-  const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
+    params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
@@ -492,6 +519,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     content,
     msgType: "interactive",
     directParams,
@@ -540,10 +568,13 @@ export async function editMessageFeishu(params: {
     channel: "feishu",
   });
   const messageText = convertMarkdownTables(text!, tableMode);
-  const payload = buildFeishuPostMessagePayload({ messageText });
-  const response = await client.im.message.patch({
+  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);
+  const content = buildFeishuPostMessageContent({ messageText: normalizedText });
+  assertFeishuPostWithinEnvelope(content, "Feishu message edit");
+  // Feishu's PATCH endpoint only edits cards; rich-post edits require the typed PUT endpoint.
+  const response = await client.im.message.update({
     path: { message_id: messageId },
-    data: { content: payload.content },
+    data: { msg_type: "post", content },
   });
 
   if (response.code !== 0) {
@@ -551,53 +582,6 @@ export async function editMessageFeishu(params: {
   }
 
   return { messageId, contentType: "post" };
-}
-
-export async function updateCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  card: Record<string, unknown>;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
-
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
-  }
-}
-
-/**
- * Build a Feishu interactive card with markdown content.
- * Cards render markdown properly (code blocks, tables, links, etc.)
- * Uses schema 2.0 format for proper markdown rendering.
- */
-export function buildMarkdownCard(text: string): Record<string, unknown> {
-  return {
-    schema: "2.0",
-    config: {
-      width_mode: "fill",
-    },
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: text,
-        },
-      ],
-    },
-  };
 }
 
 /** Header configuration for structured Feishu cards. */
@@ -608,26 +592,21 @@ export type CardHeaderConfig = {
   template?: string;
 };
 
-export function resolveFeishuCardTemplate(template?: string): string | undefined {
-  const normalized = template?.trim().toLowerCase();
-  if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
-
 /**
  * Build a Feishu interactive card with optional header and note footer.
- * When header/note are omitted, behaves identically to buildMarkdownCard.
  */
-export function buildStructuredCard(
+function buildStructuredCard(
   text: string,
   options?: {
     header?: CardHeaderConfig;
     note?: string;
+    mentions?: MentionTarget[];
   },
 ): Record<string, unknown> {
-  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  const content = options?.mentions?.length
+    ? buildMentionedCardContent(options.mentions, text)
+    : text;
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content }];
   if (options?.note) {
     elements.push({ tag: "hr" });
     elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
@@ -646,6 +625,31 @@ export function buildStructuredCard(
   return card;
 }
 
+export function chunkFeishuCardMarkdown(
+  params: FeishuMarkdownChunkOptions & {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): string[] {
+  return chunkFeishuMarkdownByEnvelope({
+    ...params,
+    contentBytes: (text, isFirst) =>
+      Buffer.byteLength(
+        JSON.stringify(
+          buildStructuredCard(text, {
+            header: params.header,
+            note: params.note,
+            mentions: [
+              ...(params.chunkMentions ?? []),
+              ...(isFirst ? (params.firstChunkMentions ?? []) : []),
+            ],
+          }),
+        ),
+        "utf8",
+      ),
+  });
+}
+
 /**
  * Send a message as a structured card with optional header and note.
  */
@@ -656,41 +660,32 @@ export async function sendStructuredCardFeishu(params: {
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   mentions?: MentionTarget[];
   accountId?: string;
   header?: CardHeaderConfig;
   note?: string;
 }): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId, header, note } =
-    params;
-  let cardText = text;
-  if (mentions && mentions.length > 0) {
-    cardText = buildMentionedCardContent(mentions, text);
-  }
-  const card = buildStructuredCard(cardText, { header, note });
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
-}
-
-/**
- * Send a message as a markdown card (interactive message).
- * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
- */
-export async function sendMarkdownCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  to: string;
-  text: string;
-  replyToMessageId?: string;
-  /** When true, reply creates a Feishu topic thread instead of an inline reply */
-  replyInThread?: boolean;
-  /** Mention target users */
-  mentions?: MentionTarget[];
-  accountId?: string;
-}): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
-  let cardText = text;
-  if (mentions && mentions.length > 0) {
-    cardText = buildMentionedCardContent(mentions, text);
-  }
-  const card = buildMarkdownCard(cardText);
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+  const {
+    cfg,
+    to,
+    text,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    mentions,
+    accountId,
+    header,
+    note,
+  } = params;
+  const card = buildStructuredCard(text, { header, note, mentions });
+  return sendCardFeishu({
+    cfg,
+    to,
+    card,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  });
 }

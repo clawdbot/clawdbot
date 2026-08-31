@@ -1,8 +1,9 @@
+// ACPX tests cover mcp command line plugin behavior.
 import { describe, expect, it } from "vitest";
 
 type SplitCommandLine = (
   value: string,
-  platform?: NodeJS.Platform | string,
+  platform?: string,
 ) => {
   command: string;
   args: string[];

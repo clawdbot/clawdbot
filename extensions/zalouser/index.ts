@@ -1,17 +1,34 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { zalouserPlugin } from "./src/channel.js";
-import { setZalouserRuntime } from "./src/runtime.js";
-import { createZalouserTool } from "./src/tool.js";
+// Zalouser plugin entrypoint registers its OpenClaw integration.
+import {
+  type AnyAgentTool,
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { zalouserPlugin } from "./src/channel.js";
-export { setZalouserRuntime } from "./src/runtime.js";
+function createZalouserTool(context?: unknown): AnyAgentTool {
+  const createTool = loadBundledEntryExportSync<(context?: unknown) => AnyAgentTool>(
+    import.meta.url,
+    {
+      specifier: "./api.js",
+      exportName: "createZalouserTool",
+    },
+  );
+  return createTool(context);
+}
 
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "zalouser",
   name: "Zalo Personal",
   description: "Zalo personal account messaging via native zca-js integration",
-  plugin: zalouserPlugin,
-  setRuntime: setZalouserRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "zalouserPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setZalouserRuntime",
+  },
   registerFull(api) {
     api.registerTool((ctx) => createZalouserTool(ctx), { name: "zalouser" });
   },

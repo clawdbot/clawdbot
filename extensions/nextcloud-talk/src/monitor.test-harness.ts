@@ -1,9 +1,11 @@
-import { type AddressInfo } from "node:net";
+// Nextcloud Talk plugin module implements monitor harness behavior.
+import type { AddressInfo } from "node:net";
 import { afterEach } from "vitest";
-import { createNextcloudTalkWebhookServer } from "./monitor.js";
+import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
-export type WebhookHarness = {
+type WebhookHarness = {
   webhookUrl: string;
   stop: () => Promise<void>;
 };
@@ -19,8 +21,13 @@ afterEach(async () => {
   }
 });
 
-export type StartWebhookServerParams = Omit<
-  NextcloudTalkWebhookServerOptions,
+type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
+  onWebhook?: NextcloudTalkWebhookServerOptions["onWebhook"];
+  onMessage?: (rawBody: string) => void | Promise<void>;
+};
+
+type StartWebhookServerParams = Omit<
+  TestWebhookServerOptions,
   "port" | "host" | "path" | "secret"
 > & {
   path: string;
@@ -29,13 +36,32 @@ export type StartWebhookServerParams = Omit<
   port?: number;
 };
 
+async function acceptLegacyTestWebhook(
+  rawBody: string,
+  onMessage?: StartWebhookServerParams["onMessage"],
+): Promise<"accepted" | "ignored"> {
+  if (!inspectNextcloudTalkWebhookEnvelope(rawBody)) {
+    return "ignored";
+  }
+  await onMessage?.(rawBody);
+  return "accepted";
+}
+
+function createNextcloudTalkWebhookServer(options: TestWebhookServerOptions) {
+  const { onMessage, onWebhook, ...serverOptions } = options;
+  return createRawNextcloudTalkWebhookServer({
+    ...serverOptions,
+    onWebhook: onWebhook ?? (async (rawBody) => await acceptLegacyTestWebhook(rawBody, onMessage)),
+  });
+}
+
 export async function startWebhookServer(
   params: StartWebhookServerParams,
 ): Promise<WebhookHarness> {
   const host = params.host ?? "127.0.0.1";
   const port = params.port ?? 0;
   const secret = params.secret ?? "nextcloud-secret";
-  const { server, start } = createNextcloudTalkWebhookServer({
+  const { server, start, stop } = createNextcloudTalkWebhookServer({
     ...params,
     port,
     host,
@@ -49,10 +75,7 @@ export async function startWebhookServer(
 
   const harness: WebhookHarness = {
     webhookUrl: `http://${host}:${address.port}${params.path}`,
-    stop: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
+    stop,
   };
   cleanupFns.push(harness.stop);
   return harness;

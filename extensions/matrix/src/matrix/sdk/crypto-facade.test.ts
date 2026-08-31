@@ -1,3 +1,4 @@
+// Matrix tests cover crypto facade plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixCryptoFacade } from "./crypto-facade.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -38,54 +39,64 @@ function createFacadeHarness(params?: {
   client?: Partial<MatrixCryptoFacadeDeps["client"]>;
   verificationManager?: Partial<MatrixVerificationManager>;
   recoveryKeySummary?: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>;
-  getRoomStateEvent?: MatrixCryptoFacadeDeps["getRoomStateEvent"];
+  isRoomEncrypted?: MatrixCryptoFacadeDeps["isRoomEncrypted"];
   downloadContent?: MatrixCryptoFacadeDeps["downloadContent"];
 }) {
-  const getRoomStateEvent: MatrixCryptoFacadeDeps["getRoomStateEvent"] =
-    params?.getRoomStateEvent ?? (async () => ({}));
+  const isRoomEncrypted: MatrixCryptoFacadeDeps["isRoomEncrypted"] =
+    params?.isRoomEncrypted ?? (async () => false);
   const downloadContent: MatrixCryptoFacadeDeps["downloadContent"] =
     params?.downloadContent ?? (async () => Buffer.alloc(0));
   const facade = createMatrixCryptoFacade({
     client: {
-      getRoom: params?.client?.getRoom ?? (() => null),
       getCrypto: params?.client?.getCrypto ?? (() => undefined),
+      getUserId: params?.client?.getUserId ?? (() => "@bot:example.org"),
     },
     verificationManager: createVerificationManagerMock(params?.verificationManager),
     recoveryKeyStore: createRecoveryKeyStoreMock(params?.recoveryKeySummary ?? null),
-    getRoomStateEvent,
+    isRoomEncrypted,
     downloadContent,
   });
-  return { facade, getRoomStateEvent, downloadContent };
+  return { facade, isRoomEncrypted, downloadContent };
 }
 
 describe("createMatrixCryptoFacade", () => {
-  it("detects encrypted rooms from cached room state", async () => {
+  it("delegates encrypted-room classification to the canonical client owner", async () => {
+    const isRoomEncrypted = vi.fn(async () => true);
     const { facade } = createFacadeHarness({
-      client: {
-        getRoom: () => ({
-          hasEncryptionStateEvent: () => true,
-        }),
-      },
+      isRoomEncrypted,
+    });
+
+    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
+    expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("preserves authoritative plaintext-room classification", async () => {
+    const isRoomEncrypted = vi.fn(async () => false);
+    const { facade } = createFacadeHarness({
+      isRoomEncrypted,
+    });
+
+    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(false);
+    expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("never downgrades an existing malformed encryption event to plaintext", async () => {
+    const { facade } = createFacadeHarness({
+      isRoomEncrypted: async () => true,
     });
 
     await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
   });
 
-  it("falls back to server room state when room cache has no encryption event", async () => {
-    const getRoomStateEvent = vi.fn(async () => ({
-      algorithm: "m.megolm.v1.aes-sha2",
-    }));
+  it("propagates authoritative room-state failures without permitting plaintext", async () => {
+    const error = new Error("Matrix room state authorization failed");
     const { facade } = createFacadeHarness({
-      client: {
-        getRoom: () => ({
-          hasEncryptionStateEvent: () => false,
-        }),
+      isRoomEncrypted: async () => {
+        throw error;
       },
-      getRoomStateEvent,
     });
 
-    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
-    expect(getRoomStateEvent).toHaveBeenCalledWith("!room:example.org", "m.room.encryption", "");
+    await expect(facade.isRoomEncrypted("!room:example.org")).rejects.toBe(error);
   });
 
   it("forwards verification requests and uses client crypto API", async () => {
@@ -108,7 +119,6 @@ describe("createMatrixCryptoFacade", () => {
     }));
     const { facade } = createFacadeHarness({
       client: {
-        getRoom: () => null,
         getCrypto: () => crypto,
       },
       verificationManager: {
@@ -127,7 +137,7 @@ describe("createMatrixCryptoFacade", () => {
       deviceId: "DEVICE",
     });
     expect(result.id).toBe("verification-1");
-    await expect(facade.getRecoveryKey()).resolves.toMatchObject({ keyId: "KEY" });
+    await expect(facade.getRecoveryKey()).resolves.toEqual({ keyId: "KEY" });
   });
 
   it("rehydrates in-progress DM verification requests from the raw crypto layer", async () => {
@@ -174,7 +184,6 @@ describe("createMatrixCryptoFacade", () => {
     };
     const { facade } = createFacadeHarness({
       client: {
-        getRoom: () => null,
         getCrypto: () => crypto,
       },
       verificationManager: {
@@ -193,5 +202,67 @@ describe("createMatrixCryptoFacade", () => {
     );
     expect(trackVerificationRequest).toHaveBeenCalledWith(request);
     expect(summary?.transactionId).toBe("txn-dm-in-progress");
+  });
+
+  it("rehydrates in-progress to-device verification requests before listing", async () => {
+    const request = {
+      transactionId: "txn-self-in-progress",
+      otherUserId: "@bot:example.org",
+      initiatedByMe: true,
+      isSelfVerification: true,
+      phase: 2,
+      pending: true,
+      accepting: false,
+      declining: false,
+      methods: ["m.sas.v1"],
+      accept: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      startVerification: vi.fn(),
+      scanQRCode: vi.fn(),
+      generateQRCode: vi.fn(),
+      on: vi.fn(),
+      verifier: undefined,
+    };
+    const tracked = {
+      id: "verification-1",
+      transactionId: "txn-self-in-progress",
+      otherUserId: "@bot:example.org",
+      isSelfVerification: true,
+      initiatedByMe: true,
+      phase: 2,
+      phaseName: "ready",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: false,
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const trackVerificationRequest = vi.fn(() => tracked);
+    const listVerifications = vi.fn(() => [tracked]);
+    const crypto = {
+      getVerificationRequestsToDeviceInProgress: vi.fn(() => [request]),
+      requestOwnUserVerification: vi.fn(async () => null),
+    };
+    const { facade } = createFacadeHarness({
+      client: {
+        getCrypto: () => crypto,
+        getUserId: () => "@bot:example.org",
+      },
+      verificationManager: {
+        listVerifications,
+        trackVerificationRequest,
+      },
+    });
+
+    const summaries = await facade.listVerifications();
+
+    expect(crypto.getVerificationRequestsToDeviceInProgress).toHaveBeenCalledWith(
+      "@bot:example.org",
+    );
+    expect(trackVerificationRequest).toHaveBeenCalledWith(request);
+    expect(summaries).toEqual([tracked]);
   });
 });

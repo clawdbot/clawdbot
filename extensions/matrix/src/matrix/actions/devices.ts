@@ -1,13 +1,14 @@
+// Matrix plugin module implements devices behavior.
 import { summarizeMatrixDeviceHealth } from "../device-health.js";
-import { withStartedActionClient } from "./client.js";
+import { withResolvedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
 
 export async function listMatrixOwnDevices(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(opts, async (client) => await client.listOwnDevices());
+  return await withResolvedActionClient(opts, async (client) => await client.listOwnDevices());
 }
 
 export async function pruneMatrixStaleGatewayDevices(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const devices = await client.listOwnDevices();
     const health = summarizeMatrixDeviceHealth(devices);
     const staleGatewayDeviceIds = health.staleOpenClawDevices.map((device) => device.deviceId);
@@ -25,10 +26,4 @@ export async function pruneMatrixStaleGatewayDevices(opts: MatrixActionClientOpt
       ...deleted,
     };
   });
-}
-
-export async function getMatrixDeviceHealth(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(opts, async (client) =>
-    summarizeMatrixDeviceHealth(await client.listOwnDevices()),
-  );
 }

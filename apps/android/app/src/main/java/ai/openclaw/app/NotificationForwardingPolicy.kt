@@ -3,18 +3,32 @@ package ai.openclaw.app
 import java.time.Instant
 import java.time.ZoneId
 
-enum class NotificationPackageFilterMode(val rawValue: String) {
+private val nativeChannelNotificationPackages =
+  setOf(
+    "com.discord",
+    "com.whatsapp",
+    "com.whatsapp.w4b",
+    "org.telegram.messenger",
+    "org.telegram.messenger.web",
+    "org.thunderdog.challegram",
+    "org.thoughtcrime.securesms",
+  )
+
+/** Package-filter mode used before notification events are forwarded to the gateway. */
+enum class NotificationPackageFilterMode(
+  val rawValue: String,
+) {
   Allowlist("allowlist"),
   Blocklist("blocklist"),
   ;
 
   companion object {
-    fun fromRawValue(raw: String?): NotificationPackageFilterMode {
-      return entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
-    }
+    /** Parses persisted filter mode text, defaulting to blocklist for safer forwarding. */
+    fun fromRawValue(raw: String?): NotificationPackageFilterMode = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
   }
 }
 
+/** Runtime policy used before forwarding notification events to a node session. */
 internal data class NotificationForwardingPolicy(
   val enabled: Boolean,
   val mode: NotificationPackageFilterMode,
@@ -24,11 +38,22 @@ internal data class NotificationForwardingPolicy(
   val quietEnd: String,
   val maxEventsPerMinute: Int,
   val sessionKey: String?,
+  val selfPackageName: String = "",
 )
 
+/** Applies the operator-configured package allow/block list after trimming input. */
 internal fun NotificationForwardingPolicy.allowsPackage(packageName: String): Boolean {
   val normalized = packageName.trim()
   if (normalized.isEmpty()) {
+    return false
+  }
+  val self = selfPackageName.trim()
+  if (self.isNotEmpty() && normalized == self) {
+    return false
+  }
+  // Native channel sessions own these messages. Forwarding their notifications creates an
+  // unbound duplicate that can be answered from the wrong conversation.
+  if (normalized in nativeChannelNotificationPackages) {
     return false
   }
   return when (mode) {
@@ -37,6 +62,7 @@ internal fun NotificationForwardingPolicy.allowsPackage(packageName: String): Bo
   }
 }
 
+/** Returns true for both same-day and overnight quiet-hour windows. */
 internal fun NotificationForwardingPolicy.isWithinQuietHours(
   nowEpochMs: Long,
   zoneId: ZoneId = ZoneId.systemDefault(),
@@ -50,7 +76,8 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
     return true
   }
   val now =
-    Instant.ofEpochMilli(nowEpochMs)
+    Instant
+      .ofEpochMilli(nowEpochMs)
       .atZone(zoneId)
       .toLocalTime()
   val nowMinutes = now.hour * 60 + now.minute
@@ -63,12 +90,14 @@ internal fun NotificationForwardingPolicy.isWithinQuietHours(
 
 private val localHourMinuteRegex = Regex("""^([01]\d|2[0-3]):([0-5]\d)$""")
 
+/** Normalizes persisted or user-entered local times to strict HH:mm form. */
 internal fun normalizeLocalHourMinute(raw: String): String? {
   val trimmed = raw.trim()
   val match = localHourMinuteRegex.matchEntire(trimmed) ?: return null
   return "${match.groupValues[1]}:${match.groupValues[2]}"
 }
 
+/** Converts strict local HH:mm text to minutes since midnight for window checks. */
 internal fun parseLocalHourMinute(raw: String): Int? {
   val normalized = normalizeLocalHourMinute(raw) ?: return null
   val parts = normalized.split(':')
@@ -77,15 +106,22 @@ internal fun parseLocalHourMinute(raw: String): Int? {
   return hour * 60 + minute
 }
 
+/** Fixed-window limiter that bounds notification bursts per wall-clock minute. */
 internal class NotificationBurstLimiter {
   private val lock = Any()
   private var windowStartMs: Long = -1L
   private var eventsInWindow: Int = 0
 
-  fun allow(nowEpochMs: Long, maxEventsPerMinute: Int): Boolean {
+  /** Returns true when the current minute bucket still has forwarding capacity. */
+  fun allow(
+    nowEpochMs: Long,
+    maxEventsPerMinute: Int,
+  ): Boolean {
     if (maxEventsPerMinute <= 0) {
       return false
     }
+    // Align all callers to the same minute bucket so concurrent notifications
+    // share the quota even when they arrive with slightly different timestamps.
     val currentWindow = nowEpochMs - (nowEpochMs % 60_000L)
     synchronized(lock) {
       if (currentWindow != windowStartMs) {

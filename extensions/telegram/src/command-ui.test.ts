@@ -1,3 +1,4 @@
+// Telegram tests cover command ui plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 

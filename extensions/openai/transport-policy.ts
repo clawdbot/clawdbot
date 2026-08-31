@@ -1,23 +1,14 @@
+// Openai plugin module implements transport policy behavior.
 import type {
   ProviderResolveTransportTurnStateContext,
-  ProviderResolveWebSocketSessionPolicyContext,
   ProviderTransportTurnState,
-  ProviderWebSocketSessionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isOpenAIApiBaseUrl } from "./shared.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
-
-function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
-}
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -25,7 +16,7 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
     return false;
   }
   try {
-    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
   } catch {
     return false;
   }
@@ -42,26 +33,19 @@ function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean
     return false;
   }
   if (normalizedProvider === "openai") {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
   }
   if (AZURE_PROVIDER_IDS.has(normalizedProvider)) {
     return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
   }
-  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
-  }
   return false;
 }
 
-function resolveSessionHeaders(params: {
-  provider: string;
-  baseUrl?: string;
-  sessionId?: string;
-}): Record<string, string> | undefined {
-  if (!params.sessionId || !usesKnownNativeOpenAIRoute(params.provider, params.baseUrl)) {
+function resolveSessionHeaders(sessionIdValue?: string): Record<string, string> | undefined {
+  if (!sessionIdValue) {
     return undefined;
   }
-  const sessionId = normalizeIdentityValue(params.sessionId);
+  const sessionId = normalizeIdentityValue(sessionIdValue);
   if (!sessionId) {
     return undefined;
   }
@@ -74,13 +58,14 @@ function resolveSessionHeaders(params: {
 export function resolveOpenAITransportTurnState(
   ctx: ProviderResolveTransportTurnStateContext,
 ): ProviderTransportTurnState | undefined {
-  const sessionHeaders = resolveSessionHeaders({
-    provider: ctx.provider,
-    baseUrl: ctx.model?.baseUrl,
-    sessionId: ctx.sessionId,
-  });
-  if (!sessionHeaders) {
+  if (!usesKnownNativeOpenAIRoute(ctx.provider, ctx.model?.baseUrl)) {
     return undefined;
+  }
+  const sessionHeaders = resolveSessionHeaders(ctx.sessionId);
+  if (!sessionHeaders) {
+    return ctx.transport === "websocket"
+      ? { websocket: { degradeCooldownMs: DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS } }
+      : undefined;
   }
 
   const turnId = normalizeIdentityValue(ctx.turnId);
@@ -98,21 +83,13 @@ export function resolveOpenAITransportTurnState(
       openclaw_turn_attempt: attempt,
       openclaw_transport: ctx.transport,
     },
-  };
-}
-
-export function resolveOpenAIWebSocketSessionPolicy(
-  ctx: ProviderResolveWebSocketSessionPolicyContext,
-): ProviderWebSocketSessionPolicy | undefined {
-  if (!usesKnownNativeOpenAIRoute(ctx.provider, ctx.model?.baseUrl)) {
-    return undefined;
-  }
-  return {
-    headers: resolveSessionHeaders({
-      provider: ctx.provider,
-      baseUrl: ctx.model?.baseUrl,
-      sessionId: ctx.sessionId,
-    }),
-    degradeCooldownMs: DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS,
+    ...(ctx.transport === "websocket"
+      ? {
+          websocket: {
+            headers: sessionHeaders,
+            degradeCooldownMs: DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS,
+          },
+        }
+      : {}),
   };
 }

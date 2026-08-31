@@ -1,37 +1,31 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { discordPlugin } from "./src/channel.js";
-import { setDiscordRuntime } from "./src/runtime.js";
+// Discord plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { registerDiscordActivities } from "./activities-api.js";
+import { registerDiscordSubagentHooks } from "./subagent-hooks-api.js";
+import { registerDiscordTranscriptSourceProvider } from "./transcripts-source-api.js";
 
-export { discordPlugin } from "./src/channel.js";
-export { setDiscordRuntime } from "./src/runtime.js";
-
-type DiscordSubagentHooksModule = typeof import("./src/subagent-hooks.js");
-
-let discordSubagentHooksPromise: Promise<DiscordSubagentHooksModule> | null = null;
-
-function loadDiscordSubagentHooksModule() {
-  discordSubagentHooksPromise ??= import("./src/subagent-hooks.js");
-  return discordSubagentHooksPromise;
-}
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "discord",
   name: "Discord",
   description: "Discord channel plugin",
-  plugin: discordPlugin,
-  setRuntime: setDiscordRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "discordPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-setter-api.js",
+    exportName: "setDiscordRuntime",
+  },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectDiscordReadOnlyAccount",
+  },
   registerFull(api) {
-    api.on("subagent_spawning", async (event) => {
-      const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();
-      return await handleDiscordSubagentSpawning(api, event);
-    });
-    api.on("subagent_ended", async (event) => {
-      const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
-      handleDiscordSubagentEnded(event);
-    });
-    api.on("subagent_delivery_target", async (event) => {
-      const { handleDiscordSubagentDeliveryTarget } = await loadDiscordSubagentHooksModule();
-      return handleDiscordSubagentDeliveryTarget(event);
-    });
+    registerDiscordActivities(api);
+    registerDiscordSubagentHooks(api);
+  },
+  registerCapabilities(api) {
+    registerDiscordTranscriptSourceProvider(api);
   },
 });

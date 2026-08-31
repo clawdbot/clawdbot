@@ -1,4 +1,7 @@
+// Normalizes error objects for codes, names, messages, and redacted logs.
+import { formatErrorMessage as formatSharedErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText } from "../logging/redact.js";
+export { hasErrnoCode, isErrno, isMissingPathError } from "./errno.js";
 
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
@@ -20,6 +23,14 @@ export function readErrorName(err: unknown): string {
   }
   const name = (err as { name?: unknown }).name;
   return typeof name === "string" ? name : "";
+}
+
+export function readErrorCause(error: unknown): unknown {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits direct optional cause access without coercion.
+  return (error as { cause?: unknown }).cause;
 }
 
 export function collectErrorGraphCandidates(
@@ -51,55 +62,15 @@ export function collectErrorGraphCandidates(
   return candidates;
 }
 
-/**
- * Type guard for NodeJS.ErrnoException (any error with a `code` property).
- */
-export function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
-}
-
-/**
- * Check if an error has a specific errno code.
- */
-export function hasErrnoCode(err: unknown, code: string): boolean {
-  return isErrno(err) && err.code === code;
-}
-
 export function formatErrorMessage(err: unknown): string {
-  let formatted: string;
-  if (err instanceof Error) {
-    formatted = err.message || err.name || "Error";
-    // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
-    let cause: unknown = err.cause;
-    const seen = new Set<unknown>([err]);
-    while (cause && !seen.has(cause)) {
-      seen.add(cause);
-      if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
-        cause = cause.cause;
-      } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
-        break;
-      } else {
-        break;
-      }
-    }
-  } else if (typeof err === "string") {
-    formatted = err;
-  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    formatted = String(err);
-  } else {
-    try {
-      formatted = JSON.stringify(err);
-    } catch {
-      formatted = Object.prototype.toString.call(err);
-    }
-  }
-  // Security: best-effort token redaction before returning/logging.
-  return redactSensitiveText(formatted);
+  return formatSharedErrorMessage(err, { redact: redactSensitiveText });
 }
+
+export function formatErrorMessageWithCode(err: unknown): string {
+  return formatSharedErrorMessage(err, { includeCode: true, redact: redactSensitiveText });
+}
+
+export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {

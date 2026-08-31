@@ -1,7 +1,8 @@
+// Text-mode status runtime barrel.
+// Kept separate from command orchestration so JSON/fast status does not import table/theme helpers.
+
 export { formatCliCommand } from "../cli/command-format.js";
-export { resolveGatewayPort } from "../config/config.js";
 export { info } from "../globals.js";
-export { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 export { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 export { formatGitInstallLabel } from "../infra/update-check.js";
 export {
@@ -12,21 +13,35 @@ export {
 export {
   formatPluginCompatibilityNotice,
   summarizePluginCompatibility,
-} from "../plugins/status.js";
-export { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-export { theme } from "../terminal/theme.js";
-export { formatHealthChannelLines } from "./health.js";
+} from "../plugins/status-compatibility.js";
+export { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+export { theme } from "../../packages/terminal-core/src/theme.js";
+export { formatHealthChannelLines } from "./health-format.js";
 export { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
-export { formatGatewayAuthUsed } from "./status-all/format.js";
+export {
+  buildStatusChannelsTableRows,
+  statusChannelsTableColumns,
+} from "./status-all/channels-table.js";
+export {
+  buildStatusGatewaySurfaceValues,
+  buildStatusOverviewSurfaceRows,
+  buildStatusOverviewRows,
+  buildStatusUpdateSurface,
+  buildGatewayStatusSummaryParts,
+  formatStatusDashboardValue,
+  formatGatewayAuthUsed,
+  formatGatewaySelfSummary,
+  resolveStatusUpdateChannelInfo,
+  formatStatusServiceValue,
+  formatStatusTailscaleValue,
+  resolveStatusDashboardUrl,
+} from "./status-all/format.js";
 export {
   formatDuration,
   formatKTokens,
   formatPromptCacheCompact,
+  formatStatusConfigDiagnosticEntries,
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";
-export {
-  formatUpdateAvailableHint,
-  formatUpdateOneLiner,
-  resolveUpdateAvailability,
-} from "./status.update.js";
+export { formatUpdateAvailableHint } from "./status.update.js";

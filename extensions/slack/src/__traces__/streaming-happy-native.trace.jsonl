@@ -1,0 +1,10 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Deploy status:"}}
+{"seq":4,"at":300,"dir":"in","kind":"tool-progress","data":{"name":"deploy_checks","phase":"start"}}
+{"seq":5,"at":300,"dir":"out","kind":"users.info","data":{"payload":{"user":"U0TRACE"},"result":{"team_id":"T0TRACE"},"target":"U0TRACE"}}
+{"seq":6,"at":600,"dir":"in","kind":"final","data":{"text":"Deploy status: build is green. Canary rollout reached 50 percent with the error budget intact, latency holding steady at the p95 target, and no alerts firing across the fleet. Rolling out to production now and watching the dashboards for the next fifteen minutes before closing out the change."}}
+{"seq":7,"at":600,"dir":"out","kind":"chat.startStream","data":{"payload":{"channel":"C0TRACE","chunks":[{"text":"Using tool: deploy_checks (start)\nDeploy status: build is green. Canary rollout reached 50 percent with the error budget intact, latency holding steady at the p95 target, and no alerts firing across the fleet. Rolling out to production now and watching the dashboards for the next fifteen minutes before closing out the change.","type":"markdown_text"}],"recipient_team_id":"T0TRACE","recipient_user_id":"U0TRACE","thread_ts":"ts#1"},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
+{"seq":8,"at":600,"dir":"in","kind":"idle"}
+{"seq":9,"at":600,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":10,"at":600,"dir":"out","kind":"chat.stopStream","data":{"payload":{"channel":"C0TRACE","chunks":[],"ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
