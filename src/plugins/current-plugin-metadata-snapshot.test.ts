@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
@@ -14,9 +14,10 @@ import {
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
-import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import * as installedPluginIndexPolicy from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import * as pluginControlPlaneContext from "./plugin-control-plane-context.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
@@ -28,7 +29,7 @@ import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js"
 
 function createSnapshot(
   params: {
-    config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    config?: Parameters<typeof installedPluginIndexPolicy.resolveInstalledPluginIndexPolicyHash>[0];
     pluginIds?: readonly string[];
     normalizationAlias?: string;
     registrySource?: PluginMetadataSnapshot["registrySource"];
@@ -63,14 +64,14 @@ function createSnapshot(
     hostContractVersion: "test",
     compatRegistryVersion: "test",
     migrationVersion: 1,
-    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    policyHash: installedPluginIndexPolicy.resolveInstalledPluginIndexPolicyHash(params.config),
     generatedAtMs: 1,
     installRecords: {},
     plugins: [],
     diagnostics: [],
   };
   return {
-    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    policyHash: installedPluginIndexPolicy.resolveInstalledPluginIndexPolicyHash(params.config),
     ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
     ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -179,9 +180,16 @@ describe("current plugin metadata snapshot", () => {
     const pluginRegistry = createEmptyPluginRegistry();
     setCurrentPluginMetadataSnapshot(undefined);
 
-    await withPluginRuntimeGenerationScope(
-      { config, metadataSnapshot, pluginRegistry },
-      async () => {
+    const controlPlaneFingerprint = vi.spyOn(
+      pluginControlPlaneContext,
+      "resolvePluginControlPlaneFingerprint",
+    );
+    const policyHash = vi.spyOn(
+      installedPluginIndexPolicy,
+      "resolveInstalledPluginIndexPolicyHash",
+    );
+    try {
+      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
         await Promise.resolve();
         expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir })).toBe(
           metadataSnapshot,
@@ -197,14 +205,19 @@ describe("current plugin metadata snapshot", () => {
         ).toBe(metadataSnapshot);
         expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(true);
         expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
-      },
-    );
+      });
 
-    expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
-    expect(
-      getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir }),
-    ).toBeUndefined();
-    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+      expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
+      expect(
+        getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir }),
+      ).toBeUndefined();
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+      expect(controlPlaneFingerprint).not.toHaveBeenCalled();
+      expect(policyHash).not.toHaveBeenCalled();
+    } finally {
+      controlPlaneFingerprint.mockRestore();
+      policyHash.mockRestore();
+    }
   });
 
   it("isolates a registry-less nested generation and restores the outer generation on rejection", async () => {
@@ -235,7 +248,6 @@ describe("current plugin metadata snapshot", () => {
     try {
       await withPluginRuntimeGenerationScope(
         {
-          config: outerConfig,
           metadataSnapshot: outerSnapshot,
           pluginRegistry: outerRegistry,
         },
@@ -243,7 +255,6 @@ describe("current plugin metadata snapshot", () => {
           await expect(
             withPluginRuntimeGenerationScope(
               {
-                config: innerConfig,
                 metadataSnapshot: innerSnapshot,
               },
               async () => {
@@ -445,7 +456,7 @@ describe("current plugin metadata snapshot", () => {
     const workspaceDir = "/workspace";
     const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
 
-    withPluginRuntimeGenerationScope({ config: runtimeConfig, metadataSnapshot: snapshot }, () => {
+    withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
       expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
         snapshot,
       );
