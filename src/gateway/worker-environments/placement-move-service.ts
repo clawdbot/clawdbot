@@ -319,10 +319,20 @@ export function createWorkerPlacementMoveService(options: {
     }
   };
 
-  const recoverAll = async (): Promise<Set<string>> => {
+  const recoverAll = async (environmentId?: string): Promise<Set<string>> => {
     const protectedSessions = new Set<string>();
     for (const intent of options.placements.listPlacementMoves()) {
-      const state = options.placements.get(intent.sessionId)?.state;
+      const placement = options.placements.get(intent.sessionId);
+      // Source cleanup can leave a local placement; destination activation keeps the
+      // move intent until completion. Either owner must be able to finish that move.
+      if (
+        environmentId !== undefined &&
+        intent.source.environmentId !== environmentId &&
+        placement?.environmentId !== environmentId
+      ) {
+        continue;
+      }
+      const state = placement?.state;
       if (
         (intent.abandonSource && state !== "local") ||
         state === "draining" ||

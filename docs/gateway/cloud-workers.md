@@ -443,6 +443,8 @@ unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
+Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves. Regular background sweeps still reconcile all environments. Recovery continues to wait for earlier placement operations to finish.
+
 If a turn reports `Cloud worker finished, but its workspace result could not be reconciled`, inspect the cause after the colon. A failed node manifest capture includes its bounded, redacted stderr, or its termination status when stderr is empty. Node cleanup preserves manifests needed between upload and verification, including when other workers finish simultaneously; increasing transfer timeouts does not repair a missing manifest.
 
 ## What survives a dead machine
