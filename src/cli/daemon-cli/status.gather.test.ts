@@ -41,10 +41,9 @@ const callGatewayStatusProbe = vi.fn<
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
-const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
-  enabled: true,
-  required: true,
-  fingerprintSha256: "sha256:11:22:33:44",
+const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
+  ok: true as const,
+  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
@@ -320,7 +319,7 @@ vi.mock("../../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
+  inspectGatewayTlsCertificate: (cfg: unknown) => inspectGatewayTlsCertificate(cfg),
 }));
 
 vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
@@ -444,7 +443,7 @@ describe("gatherDaemonStatus", () => {
       version: params.target,
       nodeEngine: null,
     }));
-    loadGatewayTlsRuntime.mockClear();
+    inspectGatewayTlsCertificate.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortUsage.mockReset();
     inspectPortUsage.mockImplementation(async (port: number) => ({
@@ -530,7 +529,7 @@ describe("gatherDaemonStatus", () => {
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
     const status = await gatherStatus();
 
-    expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(inspectGatewayTlsCertificate).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -770,7 +769,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ rpc: { url: rawUrl } });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -1549,7 +1548,7 @@ describe("gatherDaemonStatus", () => {
   it("skips TLS runtime loading when probe is disabled", async () => {
     const status = await gatherStatus({ probe: false });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
   });

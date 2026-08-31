@@ -100,10 +100,10 @@ export async function gatewayStatusCommand(
     }
   }
 
-  const localTlsRuntime =
+  const localCertificate =
     cfg.gateway?.tls?.enabled === true
-      ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-          loadGatewayTlsRuntime(cfg.gateway?.tls),
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(cfg.gateway?.tls),
         )
       : undefined;
 
@@ -125,8 +125,8 @@ export async function gatewayStatusCommand(
         sshTarget,
         sshIdentity,
         loadSshTunnelModule,
-        localTlsFingerprint: localTlsRuntime?.enabled
-          ? localTlsRuntime.fingerprintSha256
+        localTlsFingerprint: localCertificate?.ok
+          ? localCertificate.value.fingerprintSha256
           : undefined,
       }),
   );
@@ -137,10 +137,7 @@ export async function gatewayStatusCommand(
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
     discoveryCount: probePass.discovery.length,
-    localTlsLoadError:
-      localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
-        ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
-        : null,
+    localTlsLoadError: localCertificate && !localCertificate.ok ? localCertificate.error : null,
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 

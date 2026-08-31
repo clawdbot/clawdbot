@@ -227,13 +227,18 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_main() {
-  local root source git_dir
+  local root source git_dir refspec=refs/heads/main
+  local options=(--no-tags --refmap=)
+  if [ -n "${1:-}" ]; then
+    refspec="+$refspec:$1"
+    options+=(--no-write-fetch-head)
+  fi
   root=$(repo_root) || return 1
   source=$(git -C "$root" remote get-url origin) || return 1
   git_dir=$(git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
-  git -C "$root" --git-dir="$git_dir" fetch --no-tags --refmap= "$source" \
-    +refs/heads/main:refs/remotes/origin/main
+  # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
+  git -C "$root" --git-dir="$git_dir" fetch "${options[@]}" "$source" "$refspec"
 }
 
 refresh_main_snapshot() {
@@ -285,10 +290,10 @@ enter_worktree() {
     fi
     # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
     # Initialize fully before the next network wait so interruption is retryable.
-    # This shared main ref is only a seed, never the operation's snapshot.
+    # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
     PR_MAIN_SHA=""
-    fetch_canonical_main || return 1
-    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" refs/remotes/origin/main || return 1
+    fetch_canonical_main "refs/heads/temp/pr-$pr" || return 1
+    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" "refs/heads/temp/pr-$pr" || return 1
     resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
     resolved_dir="$resolved_parent/pr-$pr"
     initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1

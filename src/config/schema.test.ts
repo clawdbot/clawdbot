@@ -802,11 +802,30 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
+  it("keeps merged plugin schema fragments independent of manifest metadata", () => {
+    const value = { type: "string" };
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "independent-schema",
+          configSchema: { type: "object", properties: { value } },
+        },
+      ],
+    });
+    value.type = "number";
+    expect(
+      lookupConfigSchema(result, "plugins.entries.independent-schema.config.value")?.schema.type,
+    ).toBe("string");
+  });
+
   it("derives tags for security, network, storage, tools, and performance paths", () => {
     const tagged = applyDerivedTags({
       "gateway.auth.token": {},
       "proxy.tls.caFile": {},
       "tools.web.fetch.timeoutSeconds": {},
+      "SESSION.SHARING.peer": {
+        tags: [" Custom ", "AUTH", "security", "custom", "unknown"],
+      },
     });
     expect(tagged["gateway.auth.token"]?.tags).toEqual(
       expect.arrayContaining(["security", "auth"]),
@@ -817,6 +836,15 @@ describe("config schema", () => {
     expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
       expect.arrayContaining(["tools", "performance"]),
     );
+    expect(tagged["SESSION.SHARING.peer"]?.tags).toEqual([
+      "security",
+      "auth",
+      "access",
+      "privacy",
+      "storage",
+      "custom",
+      "unknown",
+    ]);
   });
 
   it("only derives the advanced tag from an explicit advanced hint", () => {

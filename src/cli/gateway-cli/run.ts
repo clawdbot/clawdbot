@@ -585,12 +585,10 @@ function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
       return await probeGatewayHealthz(params);
     }
     if (!tlsFingerprint) {
-      const gatewayTls = await import("../../infra/tls/gateway.js")
-        .then(({ loadGatewayTlsRuntime }) =>
-          loadGatewayTlsRuntime({ ...tlsConfig, autoGenerate: false }),
-        )
+      const certificate = await import("../../infra/tls/gateway.js")
+        .then(({ inspectGatewayTlsCertificate }) => inspectGatewayTlsCertificate(tlsConfig))
         .catch(() => undefined);
-      tlsFingerprint = gatewayTls?.fingerprintSha256;
+      tlsFingerprint = certificate?.ok ? certificate.value.fingerprintSha256 : undefined;
     }
     if (!tlsFingerprint) {
       return false;

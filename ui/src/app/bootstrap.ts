@@ -48,6 +48,7 @@ import type {
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
+import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -634,6 +635,7 @@ export function bootstrapApplication(
           gateway.start();
           return () => gateway.stop();
         },
+        () => startGatewayPageActivation(gateway, document, window),
         () => sessionPathBuilderReady,
       ];
       // Resolve first-run setup before routing: the default Chat route owns the

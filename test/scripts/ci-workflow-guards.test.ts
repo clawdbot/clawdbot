@@ -292,6 +292,7 @@ function runCiManifestFixture(options: {
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
   runNode?: boolean;
+  historicalReader?: boolean;
   runnerBackend?: "blacksmith" | "github" | "hybrid";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
   targetHostedRunnerProfileContract?: boolean;
@@ -463,6 +464,17 @@ function runCiManifestFixture(options: {
       ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
+    const gitOwner = ".github/actions/git-owner";
+    const trustedGitOwner = path.join(root, ".ci-harness", gitOwner);
+    mkdirSync(trustedGitOwner, { recursive: true });
+    for (const name of ["test-prerequisites.mjs", "test-prerequisites.json"]) {
+      writeFileSync(path.join(trustedGitOwner, name), readFileSync(path.join(gitOwner, name)));
+    }
+    if (options.historicalReader) {
+      const reader = path.join(root, "src/audit/message-delivery-progress-store.test.ts");
+      mkdirSync(path.dirname(reader), { recursive: true });
+      writeFileSync(reader, "export {};\n");
+    }
     writeFileSync(outputPath, "", "utf8");
     const manifestStep = readCiWorkflow().jobs.preflight.steps.find(
       (step: { name?: string }) => step.name === "Build CI manifest",
@@ -6507,17 +6519,17 @@ server.listen(0, "127.0.0.1", () => {
       [
         ".github/workflows/ci-check-testbox.yml",
         "1",
-        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "${{ steps.testbox-base.outputs.sha || 'HEAD' }}",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
-        "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "${{ steps.testbox-base.outputs.sha || 'refs/remotes/origin/main' }}",
       ],
     ] as const;
 
@@ -6550,7 +6562,7 @@ server.listen(0, "127.0.0.1", () => {
       expect(ensureBaseStep?.if, workflowPath).toBe("github.event_name == 'pull_request'");
       expect(ensureBaseStep?.uses, workflowPath).toBe("./.github/actions/ensure-base-commit");
       expect(ensureBaseStep?.with, workflowPath).toEqual({
-        "base-sha": "${{ github.event.pull_request.base.sha }}",
+        "base-sha": "${{ steps.testbox-base.outputs.sha }}",
         "fetch-ref": "${{ github.event.pull_request.base.ref }}",
       });
       expect(JSON.stringify(job.steps), workflowPath).not.toContain(
@@ -7454,7 +7466,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(specifier, diagnostic).toMatch(/^\.\.?\//u);
         const importedFile = path.relative(
           repoRoot,
-          path.resolve(workflow ? repoRoot : path.dirname(file), specifier),
+          path.resolve(
+            workflow ? repoRoot : path.dirname(file),
+            // CI materializes trusted actions under the harness checkout prefix.
+            workflow ? specifier.replace(/^\.\/\.ci-harness\//u, "./") : specifier,
+          ),
         );
         expect(importedFile, diagnostic).not.toMatch(/^(?:\.\.(?:[\\/]|$)|[\\/])/u);
         expect(importedFile.split(path.sep), diagnostic).not.toContain("node_modules");
@@ -8011,6 +8027,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(rows).toHaveLength(1);
       expect(rows[0].check_name).toBe("bundled-node-plan");
       expect(rows[0].includePatterns).toEqual(forwardsChangedPaths ? changedPaths : undefined);
+    },
+  );
+
+  it.each([false, true])(
+    "projects immutable reader history only when the selected target has the reader (present=%s)",
+    (historicalReader) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: ["src/audit/message-delivery-progress-store.test.ts"],
+        eventName: "pull_request",
+        historicalReader,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "reader matrix"),
+      ).include;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].git_commits).toEqual(
+        historicalReader ? ["5dc4cf602bc5e263e83cd16a12bb1e100544f4c3"] : [],
+      );
     },
   );
 
