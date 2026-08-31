@@ -1260,6 +1260,9 @@
   height: 18px;
   fill: currentColor;
   stroke: none;
+  /* The asymmetric pincer silhouette sits optically high inside its viewBox.
+     Keep layout centering intact and lower only the painted icon. */
+  translate: 0 1px;
   animation: chatWorkingClawFlex var(--claw-cycle) ease-out infinite;
   will-change: transform;
 }
