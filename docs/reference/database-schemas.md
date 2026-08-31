@@ -28,9 +28,19 @@ Each database records its schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
 
+When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
+
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+
+Agent schema 19 records collected input consumption in the nullable
+`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
+first-use ensure add it when needed; the schema version stays 19. The supported
+beta upgrade runs Doctor from the upcoming release. Intermediate builds that
+already validate the optional pending-input table may reject the added column
+despite sharing version 19. Consumed source receipts remain until their session
+window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
 The placement-move table uses this same-version rule for its nullable bare
 `abandon_source INTEGER` column. The feature lazily ensures the column on first
@@ -45,12 +55,57 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+Transcript context eligibility uses a bare nullable
+`session_transcript_active_events.context_eligible INTEGER` column without
+changing agent schema 18. Database open installs the column and a non-unique
+partial index of unclassified rows. `1` includes an entry in bounded context
+acquisition, `0` excludes display-only activity, and `NULL` means the projection
+still needs reconciliation. Bootstrap control markers remain eligible; history
+counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
+
+Older same-version writers can append or rebuild without supplying eligibility.
+The existing transcript reconciler detects their `NULL` rows even when its
+sequence watermark is current, then rebuilds from raw events before publishing
+readiness. Readers return a retryable projection-unavailable result while this
+work is pending; they do not parse every payload or guess eligibility. Initial
+index creation scans projection metadata once, and startup awaits reconciliation
+with off-thread parsing and bounded write chunks. Total rebuild cost remains
+proportional to history. Rewrites invalidate or rebuild the projection in their
+own transaction, and transcript deletion removes its eligibility rows. Downgrade
+leaves the additive column and index intact; re-upgrade reconciles unknown rows.
+
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
 column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
+Web Push subscription ownership uses the same rule for nullable bare
+`web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
+`preferences_json TEXT` columns. Web Push lazily ensures all three columns on
+first use. Existing rows remain unbound and test-only until the browser
+reconnects; older readers ignore the columns and continue reading or updating
+the endpoint and key fields safely.
+
+Approval-notification cleanup uses the same-version additive
+`web_push_approval_deliveries` table. It records the approval/subscription
+identifiers plus the request-time device/profile binding for notifications that
+may have reached a browser. A terminal or restarted Gateway sends only when the
+current subscription still has that binding. The table is lazily created on
+first use, rows cascade away with their approval or subscription, and older
+readers ignore it safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
+
+Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy
+per-agent `session_goal_operations` table without changing the schema version.
+Goal start/resume commits the Goal transition, input turn, run lifecycle, and
+operation receipt in one transaction. Management operations commit the Goal
+transition and receipt together. Older readers ignore the added table.
+Receipts survive Goal clear and session reset/deletion until their 24-hour
+validity expires; later Goal writes prune expired rows. They retain the
+original result and a keyed request fingerprint, not a second raw request.
+There is no backfill or configuration switch. Downgrading preserves the table
+but disables the new structured controls; upgrading can read retained receipts.
 
 ## Review checkpoint for material changes
 
@@ -110,25 +165,68 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 | 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
+| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
+| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
 
+### Creator namespace migration
+
+Agent schema **19** and shared-state schema **14** add a source discriminator to human creator actors in the existing session and cron JSON records. No table, sidecar, or separate identity ledger is added. The session node remains the immutable creator owner; mutable owner assignments and explicit sharing grants are unchanged.
+
+Historical human creators stamped directly by `operator` or `run` creation become `profile`; channel creation becomes `channel`. Origin-losing cron, inherited spawn or Talk, legacy `createdBy`, and missing-source history remain `unknown`. The migration preserves IDs, attribution, creation times, content, and existing sandbox restrictions. A UUID, profile lookup, participant, current route, or required sandbox never supplies missing creator authority. Recovery from incomplete physical projections also produces unknown human attribution.
+
+Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Canonical data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
+
+Older builds refuse the new versions. For rollback, stop all writers and restore the verified pre-upgrade backups with their matching older build. Do not decrement either schema marker: an older writer cannot maintain the creator-source contract. Unknown historical provenance is irrecoverable from the stored ID alone. Administrators retain sharing management access; assigning responsibility does not restore an implicit creator grant.
+
+Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use canonical-session isolation, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
+
+### Participant identity migration
+
+Agent schema 18 rebuilds `session_participants` with the unique key `(session_key, identity_namespace, actor_id)`. The raw actor ID remains separate from its namespace. This replaces the old `(session_key, actor_type, actor_id)` key; it is not a same-version additive change. Both schema markers advance together. No companion table or per-input ledger is added.
+
+Before upgrading existing data, take a verified, WAL-aware backup and stop the Gateway and other agent-database writers. Run `openclaw doctor --fix` with the new build. The migration uses the existing maintenance lease to reject active writers and fence new claims. Ordinary runtime opens refuse the old participant schema rather than migrating it behind active readers. Earlier structural and media migrations run in their historical order before participant convergence. Explicit Doctor repair exits nonzero if an existing configured, default-layout, or registered database still fails runtime schema readiness, including when a live writer or an unknown table dependency blocks this migration. Readiness uses the same target discovery as migration without registering, pruning, or creating stores. Archive migration warnings remain advisory when required database schemas are ready.
+
+Membership and recorded contribution aggregates survive. Historical profile timestamps are unknown because earlier source promotion could contaminate them even when a contribution count was present. Supported agent and channel-only observation times remain; an unresolved historical channel domain stays unresolved. Migration does not invent missing channel rows or inspect transcripts to reconstruct identities. New observations do not turn an unknown first input time into a claimed first-ever time.
+
+The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
+
+Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
+
 ## State schema history
 
-| Version | Change                                                                                                                                                                                                                                           | First release       |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| 1       | Initial shared state database                                                                                                                                                                                                                    | `v2026.5.30-beta.1` |
-| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                 | `v2026.7.2-beta.1`  |
-| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                         | `v2026.7.2-beta.2`  |
-| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                          | Unreleased          |
-| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))              | `v2026.7.2-beta.4`  |
-| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473)) | `v2026.7.2-beta.5`  |
-| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
-| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
-| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
-| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
-| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                       | Unreleased          |
-| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                          | Unreleased          |
+| Version | Change                                                                                                                                                                                                                                                                                                                          | First release       |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| 1       | Initial shared state database                                                                                                                                                                                                                                                                                                   | `v2026.5.30-beta.1` |
+| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                                                                                                | `v2026.7.2-beta.1`  |
+| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                                                                        | `v2026.7.2-beta.2`  |
+| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                                                                                                         | Unreleased          |
+| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))                                                                                             | `v2026.7.2-beta.4`  |
+| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473))                                                                                | `v2026.7.2-beta.5`  |
+| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                                                                                                     | Unreleased          |
+| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                                                                                               | Unreleased          |
+| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                                                                                                    | Unreleased          |
+| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                                                                                                    | Unreleased          |
+| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | Unreleased          |
+| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | Unreleased          |
+| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
+| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
+| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+
+### State schema 15
+
+Schema 15 removes `target_agent_id` and `target_session_id` from `current_conversation_bindings`. The target index uses the complete `target_session_key` and remains non-unique: several conversations may point at the same destination. This lets plugin-owned targets persist without inventing an OpenClaw agent owner. Channel/account isolation, plugin approvals, binding identifiers, target keys, JSON metadata, expiry, and detach behavior are unchanged.
+
+Startup and `openclaw doctor --fix` run the migration in the existing exclusive write transaction. They remove only the two projections and replace the target index, preserving all other row values. A dependent trigger, index, or failed schema check rolls the transaction back; migration does not discard an unknown dependency to force the upgrade. Column removal rewrites the binding table, so upgrade cost scales with its size.
+
+Stop older writers and create a verified, WAL-aware backup before upgrading. Builds supporting shared-state schema 14 or earlier refuse the migrated database. To return to an older build, restore that pre-upgrade backup into a separate state directory; do not lower the version markers or reconstruct an agent projection. See [downgrade limitations](#downgrades-are-unsupported) for the general recovery contract.
+
+### State schema 13
+
+Schema 13 makes `cron_jobs.job_json`, `cron_jobs.state_json`, and `subagent_runs.payload_json` the canonical records. Physical columns remain only where production queries, ordering, or runtime-only updates require them. Cron jobs shrink from 75 columns to 15, and subagent runs shrink from 59 columns to six. Migration preserves failure-destination fields explicitly configured as undefined by encoding them as JSON `null`; it also normalizes legacy run-status aliases into `state_json` before removing the redundant projections.
+
+The shared-state `auth_profile_stores` and `auth_profile_state` singletons move into `config_machine_state` under `authProfiles.store` and `authProfiles.state`; per-agent auth tables remain unchanged. Because these rows contain credentials, secret-redacted Git backups omit the `authProfiles.` machine-state prefix.
 
 ### State schema 11
 
@@ -170,9 +268,16 @@ A newer OpenClaw build wrote your databases, and the running build is older. The
 
 Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
 
-A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
+When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+Config reads also save health fingerprints to this database. If that write fails,
+`Config health-state write failed` reports the first failure for that database
+in the current process. Repeated identical failures are suppressed while writes
+continue to be attempted. A different error, or a failure after a successful
+health-state write, is reported again. Suppressing duplicates does not resolve
+the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 
@@ -185,9 +290,487 @@ Manual schema downgrades are for agents and operators who accept the risk. [Crea
 The general procedure is:
 
 1. Read the target release's schema and migrations.
-2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
+2. In one transaction, restore the target release's exact table, column, index, and trigger definitions; remove newer objects and recreate objects retired by subsequent upgrades.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 13 to 12
+
+Schema 13 removed 60 cron-job projection columns, 53 subagent-run projection columns, and five unused indexes. A schema 12 build still expects the exact original column definitions, ordering, and indexes. Adding the removed required columns with defaults produces a different schema that older builds reject, so rebuild both tables instead. Reproject every v12 cron field from canonical `job_json` and `state_json`; abort before rebuilding when either record is malformed.
+
+Disable foreign-key enforcement before starting the transaction. The cron-runtime authority table references `cron_jobs` with `ON DELETE CASCADE`, so dropping the original table while enforcement is active would silently delete its authority rows. Re-enable enforcement after the rebuild commits, and verify that `PRAGMA foreign_key_check;` returns no rows before starting the older build.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
+
+```sql
+PRAGMA foreign_keys = OFF;
+BEGIN;
+
+CREATE TEMP TABLE openclaw_v13_cron_downgrade_preflight (
+  valid INTEGER NOT NULL CHECK (valid = 1)
+) STRICT;
+INSERT INTO openclaw_v13_cron_downgrade_preflight (valid)
+SELECT json_valid(job_json)
+       AND json_type(job_json) = 'object'
+       AND json_valid(state_json)
+       AND json_type(state_json) = 'object'
+  FROM cron_jobs;
+DROP TABLE openclaw_v13_cron_downgrade_preflight;
+
+CREATE TABLE cron_jobs_migration_v12 (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
+  name TEXT NOT NULL,
+  description TEXT,
+  enabled INTEGER NOT NULL,
+  delete_after_run INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  agent_id TEXT,
+  session_key TEXT,
+  schedule_kind TEXT NOT NULL,
+  schedule_expr TEXT,
+  schedule_tz TEXT,
+  every_ms INTEGER,
+  anchor_ms INTEGER,
+  at TEXT,
+  stagger_ms INTEGER,
+  session_target TEXT NOT NULL,
+  wake_mode TEXT NOT NULL,
+  trigger_script TEXT,
+  trigger_once INTEGER,
+  payload_kind TEXT NOT NULL,
+  payload_message TEXT,
+  payload_model TEXT,
+  payload_fallbacks_json TEXT,
+  payload_thinking TEXT,
+  payload_timeout_seconds INTEGER,
+  payload_allow_unsafe_external_content INTEGER,
+  payload_external_content_source_json TEXT,
+  payload_light_context INTEGER,
+  payload_tools_allow_json TEXT,
+  payload_tools_allow_is_default INTEGER,
+  delivery_mode TEXT,
+  delivery_channel TEXT,
+  delivery_to TEXT,
+  delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
+  delivery_account_id TEXT,
+  delivery_best_effort INTEGER,
+  delivery_completion_mode TEXT,
+  delivery_completion_to TEXT,
+  failure_delivery_mode TEXT,
+  failure_delivery_channel TEXT,
+  failure_delivery_to TEXT,
+  failure_delivery_account_id TEXT,
+  failure_alert_disabled INTEGER,
+  failure_alert_after INTEGER,
+  failure_alert_channel TEXT,
+  failure_alert_to TEXT,
+  failure_alert_cooldown_ms INTEGER,
+  failure_alert_include_skipped INTEGER,
+  failure_alert_mode TEXT,
+  failure_alert_account_id TEXT,
+  next_run_at_ms INTEGER,
+  running_at_ms INTEGER,
+  last_run_at_ms INTEGER,
+  last_run_status TEXT,
+  last_error TEXT,
+  last_duration_ms INTEGER,
+  consecutive_errors INTEGER,
+  consecutive_skipped INTEGER,
+  schedule_error_count INTEGER,
+  last_delivery_status TEXT,
+  last_delivery_error TEXT,
+  last_delivered INTEGER,
+  last_failure_alert_at_ms INTEGER,
+  job_json TEXT NOT NULL,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  runtime_updated_at_ms INTEGER,
+  schedule_identity TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id)
+) STRICT;
+
+INSERT INTO cron_jobs_migration_v12 (
+  store_key, job_id, declaration_key, display_name, owner_agent_id,
+  owner_session_key, name, description, enabled, delete_after_run, created_at_ms,
+  agent_id, session_key, schedule_kind, schedule_expr, schedule_tz, every_ms,
+  anchor_ms, at, stagger_ms, session_target, wake_mode, trigger_script, trigger_once,
+  payload_kind, payload_message, payload_model, payload_fallbacks_json,
+  payload_thinking, payload_timeout_seconds, payload_allow_unsafe_external_content,
+  payload_external_content_source_json, payload_light_context, payload_tools_allow_json,
+  payload_tools_allow_is_default, delivery_mode, delivery_channel, delivery_to,
+  delivery_thread_id, delivery_thread_id_type, delivery_account_id, delivery_best_effort,
+  delivery_completion_mode, delivery_completion_to, failure_delivery_mode,
+  failure_delivery_channel, failure_delivery_to, failure_delivery_account_id,
+  failure_alert_disabled, failure_alert_after, failure_alert_channel, failure_alert_to,
+  failure_alert_cooldown_ms, failure_alert_include_skipped, failure_alert_mode,
+  failure_alert_account_id, next_run_at_ms, running_at_ms, last_run_at_ms,
+  last_run_status, last_error, last_duration_ms, consecutive_errors,
+  consecutive_skipped, schedule_error_count, last_delivery_status, last_delivery_error,
+  last_delivered, last_failure_alert_at_ms, job_json, state_json, runtime_updated_at_ms,
+  schedule_identity, sort_order, updated_at
+)
+SELECT
+  store_key,
+  job_id,
+  json_extract(job_json, '$.declarationKey'),
+  json_extract(job_json, '$.displayName'),
+  json_extract(job_json, '$.owner.agentId'),
+  json_extract(job_json, '$.owner.sessionKey'),
+  json_extract(job_json, '$.name'),
+  json_extract(job_json, '$.description'),
+  json_extract(job_json, '$.enabled'),
+  json_extract(job_json, '$.deleteAfterRun'),
+  json_extract(job_json, '$.createdAtMs'),
+  json_extract(job_json, '$.agentId'),
+  json_extract(job_json, '$.sessionKey'),
+  json_extract(job_json, '$.schedule.kind'),
+  CASE json_extract(job_json, '$.schedule.kind')
+    WHEN 'cron' THEN json_extract(job_json, '$.schedule.expr')
+    WHEN 'on-exit' THEN json_extract(job_json, '$.schedule.command')
+  END,
+  CASE json_extract(job_json, '$.schedule.kind')
+    WHEN 'cron' THEN json_extract(job_json, '$.schedule.tz')
+    WHEN 'on-exit' THEN json_extract(job_json, '$.schedule.cwd')
+  END,
+  json_extract(job_json, '$.schedule.everyMs'),
+  json_extract(job_json, '$.schedule.anchorMs'),
+  json_extract(job_json, '$.schedule.at'),
+  json_extract(job_json, '$.schedule.staggerMs'),
+  json_extract(job_json, '$.sessionTarget'),
+  json_extract(job_json, '$.wakeMode'),
+  json_extract(job_json, '$.trigger.script'),
+  json_extract(job_json, '$.trigger.once'),
+  json_extract(job_json, '$.payload.kind'),
+  CASE json_extract(job_json, '$.payload.kind')
+    WHEN 'systemEvent' THEN json_extract(job_json, '$.payload.text')
+    WHEN 'agentTurn' THEN json_extract(job_json, '$.payload.message')
+    WHEN 'command' THEN json_remove(
+      json_extract(job_json, '$.payload'),
+      '$.kind', '$.timeoutSeconds', '$.toolsAllow', '$.toolsAllowIsDefault'
+    )
+    WHEN 'script' THEN json_remove(
+      json_extract(job_json, '$.payload'),
+      '$.kind', '$.timeoutSeconds', '$.toolsAllow', '$.toolsAllowIsDefault'
+    )
+  END,
+  json_extract(job_json, '$.payload.model'),
+  CASE WHEN json_type(job_json, '$.payload.fallbacks') = 'array'
+    THEN json_extract(job_json, '$.payload.fallbacks')
+  END,
+  json_extract(job_json, '$.payload.thinking'),
+  json_extract(job_json, '$.payload.timeoutSeconds'),
+  json_extract(job_json, '$.payload.allowUnsafeExternalContent'),
+  CASE WHEN json_type(job_json, '$.payload.externalContentSource') IS NOT NULL
+    THEN json_quote(json_extract(job_json, '$.payload.externalContentSource'))
+  END,
+  json_extract(job_json, '$.payload.lightContext'),
+  CASE WHEN json_type(job_json, '$.payload.toolsAllow') = 'array'
+    THEN json_extract(job_json, '$.payload.toolsAllow')
+  END,
+  CASE WHEN json_type(job_json, '$.payload.toolsAllow') = 'array'
+    THEN json_extract(job_json, '$.payload.toolsAllowIsDefault')
+  END,
+  json_extract(job_json, '$.delivery.mode'),
+  json_extract(job_json, '$.delivery.channel'),
+  json_extract(job_json, '$.delivery.to'),
+  CASE WHEN json_type(job_json, '$.delivery.threadId') IN ('integer', 'real', 'text')
+    THEN CAST(json_extract(job_json, '$.delivery.threadId') AS TEXT)
+  END,
+  CASE json_type(job_json, '$.delivery.threadId')
+    WHEN 'integer' THEN 'number'
+    WHEN 'real' THEN 'number'
+    WHEN 'text' THEN 'string'
+  END,
+  json_extract(job_json, '$.delivery.accountId'),
+  json_extract(job_json, '$.delivery.bestEffort'),
+  json_extract(job_json, '$.delivery.completionDestination.mode'),
+  json_extract(job_json, '$.delivery.completionDestination.to'),
+  CASE json_type(job_json, '$.delivery.failureDestination.mode')
+    WHEN 'null' THEN ''
+    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.mode')
+  END,
+  CASE json_type(job_json, '$.delivery.failureDestination.channel')
+    WHEN 'null' THEN ''
+    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.channel')
+  END,
+  CASE json_type(job_json, '$.delivery.failureDestination.to')
+    WHEN 'null' THEN ''
+    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.to')
+  END,
+  CASE json_type(job_json, '$.delivery.failureDestination.accountId')
+    WHEN 'null' THEN ''
+    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.accountId')
+  END,
+  CASE json_type(job_json, '$.failureAlert')
+    WHEN 'false' THEN 1
+    WHEN 'object' THEN 0
+  END,
+  json_extract(job_json, '$.failureAlert.after'),
+  json_extract(job_json, '$.failureAlert.channel'),
+  json_extract(job_json, '$.failureAlert.to'),
+  json_extract(job_json, '$.failureAlert.cooldownMs'),
+  json_extract(job_json, '$.failureAlert.includeSkipped'),
+  json_extract(job_json, '$.failureAlert.mode'),
+  json_extract(job_json, '$.failureAlert.accountId'),
+  json_extract(state_json, '$.nextRunAtMs'),
+  json_extract(state_json, '$.runningAtMs'),
+  json_extract(state_json, '$.lastRunAtMs'),
+  COALESCE(
+    json_extract(state_json, '$.lastRunStatus'),
+    json_extract(state_json, '$.lastStatus')
+  ),
+  json_extract(state_json, '$.lastError'),
+  json_extract(state_json, '$.lastDurationMs'),
+  json_extract(state_json, '$.consecutiveErrors'),
+  json_extract(state_json, '$.consecutiveSkipped'),
+  json_extract(state_json, '$.scheduleErrorCount'),
+  json_extract(state_json, '$.lastDeliveryStatus'),
+  json_extract(state_json, '$.lastDeliveryError'),
+  json_extract(state_json, '$.lastDelivered'),
+  json_extract(state_json, '$.lastFailureAlertAtMs'),
+  job_json,
+  state_json,
+  runtime_updated_at_ms,
+  schedule_identity,
+  sort_order,
+  updated_at
+FROM cron_jobs;
+
+DROP TABLE cron_jobs;
+ALTER TABLE cron_jobs_migration_v12 RENAME TO cron_jobs;
+
+CREATE INDEX idx_cron_jobs_store_updated
+  ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
+CREATE INDEX idx_cron_jobs_store_order
+  ON cron_jobs(store_key, sort_order ASC, updated_at ASC, job_id);
+CREATE INDEX idx_cron_jobs_enabled_next_run
+  ON cron_jobs(store_key, enabled, next_run_at_ms, job_id)
+  WHERE next_run_at_ms IS NOT NULL;
+CREATE INDEX idx_cron_jobs_agent_session
+  ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
+  WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
+
+CREATE TABLE subagent_runs_migration_v12 (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  child_session_key TEXT NOT NULL,
+  controller_session_key TEXT,
+  requester_session_key TEXT NOT NULL,
+  requester_display_key TEXT NOT NULL,
+  requester_origin_json TEXT,
+  task TEXT NOT NULL,
+  task_name TEXT,
+  cleanup TEXT NOT NULL,
+  label TEXT,
+  model TEXT,
+  agent_dir TEXT,
+  workspace_dir TEXT,
+  run_timeout_seconds INTEGER,
+  spawn_mode TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  session_started_at INTEGER,
+  accumulated_runtime_ms INTEGER,
+  ended_at INTEGER,
+  outcome_json TEXT,
+  archive_at_ms INTEGER,
+  cleanup_completed_at INTEGER,
+  cleanup_handled INTEGER,
+  suppress_announce_reason TEXT,
+  expects_completion_message INTEGER,
+  announce_retry_count INTEGER,
+  last_announce_retry_at INTEGER,
+  last_announce_delivery_error TEXT,
+  ended_reason TEXT,
+  pause_reason TEXT,
+  wake_on_descendant_settle INTEGER,
+  requester_settle_wake_status TEXT,
+  requester_settle_wake_attempt_count INTEGER,
+  requester_settle_wake_replay_count INTEGER,
+  requester_settle_wake_next_attempt_at INTEGER,
+  requester_settle_wake_batch_run_ids_json TEXT,
+  requester_settle_wake_last_error TEXT,
+  requester_settle_wake_retire_after INTEGER,
+  frozen_result_text TEXT,
+  frozen_result_captured_at INTEGER,
+  fallback_frozen_result_text TEXT,
+  fallback_frozen_result_captured_at INTEGER,
+  ended_hook_emitted_at INTEGER,
+  pending_final_delivery INTEGER,
+  pending_final_delivery_created_at INTEGER,
+  pending_final_delivery_last_attempt_at INTEGER,
+  pending_final_delivery_attempt_count INTEGER,
+  pending_final_delivery_last_error TEXT,
+  pending_final_delivery_payload_json TEXT,
+  completion_announced_at INTEGER,
+  swarm_group_id TEXT,
+  swarm_collector INTEGER,
+  swarm_output_schema_json TEXT,
+  swarm_completion_status TEXT,
+  swarm_structured_json TEXT,
+  swarm_schema_error TEXT,
+  swarm_usage_json TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+) STRICT;
+
+INSERT INTO subagent_runs_migration_v12 (
+  run_id, child_session_key, controller_session_key, requester_session_key,
+  requester_display_key, task, cleanup, created_at, payload_json
+)
+SELECT run_id, child_session_key, controller_session_key, requester_session_key,
+  '', '', '', created_at, payload_json
+FROM subagent_runs;
+
+DROP TABLE subagent_runs;
+ALTER TABLE subagent_runs_migration_v12 RENAME TO subagent_runs;
+
+CREATE INDEX idx_subagent_runs_child_session_key
+  ON subagent_runs(child_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_requester_session_key
+  ON subagent_runs(requester_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_controller_session_key
+  ON subagent_runs(controller_session_key, created_at DESC, run_id);
+CREATE INDEX idx_subagent_runs_archive_at
+  ON subagent_runs(archive_at_ms, cleanup_handled, run_id);
+CREATE INDEX idx_subagent_runs_ended_cleanup
+  ON subagent_runs(ended_at, cleanup_handled, run_id);
+
+CREATE TABLE workspace_attestations (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  attested_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO workspace_attestations (workspace_key, attested_at_ms, updated_at_ms)
+SELECT workspace_key, attested_at_ms, attestation_updated_at_ms
+FROM workspace_setup_state
+WHERE attested_at_ms IS NOT NULL;
+
+CREATE INDEX idx_workspace_attestations_attested
+  ON workspace_attestations(attested_at_ms DESC, workspace_key);
+
+-- Data note: v12 requires version/updated_at NOT NULL in the setup table, so
+-- merged attestation-only rows (NULL version) survive the downgrade only as
+-- workspace_attestations rows, which also own the generated hashes in v12.
+DELETE FROM workspace_generated_bootstrap_hashes
+WHERE workspace_key NOT IN (SELECT workspace_key FROM workspace_attestations);
+DELETE FROM workspace_setup_state WHERE version IS NULL;
+
+CREATE TABLE workspace_setup_state_migration_v12 (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  workspace_path TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  bootstrap_seeded_at TEXT,
+  setup_completed_at TEXT,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO workspace_setup_state_migration_v12 (
+  workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+)
+SELECT workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+FROM workspace_setup_state;
+
+DROP TABLE workspace_setup_state;
+ALTER TABLE workspace_setup_state_migration_v12 RENAME TO workspace_setup_state;
+
+CREATE INDEX idx_workspace_setup_state_path
+  ON workspace_setup_state(workspace_path);
+
+CREATE TABLE workspace_generated_bootstrap_hashes_migration_v12 (
+  workspace_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  PRIMARY KEY (workspace_key, filename),
+  FOREIGN KEY (workspace_key) REFERENCES workspace_attestations(workspace_key) ON DELETE CASCADE
+) STRICT;
+
+INSERT INTO workspace_generated_bootstrap_hashes_migration_v12 (workspace_key, filename, sha256)
+SELECT workspace_key, filename, sha256 FROM workspace_generated_bootstrap_hashes;
+
+DROP TABLE workspace_generated_bootstrap_hashes;
+ALTER TABLE workspace_generated_bootstrap_hashes_migration_v12
+  RENAME TO workspace_generated_bootstrap_hashes;
+
+-- v12 carried installed_plugin_index; repopulate it from the folded KV row.
+CREATE TABLE IF NOT EXISTS installed_plugin_index (
+  index_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  host_contract_version TEXT NOT NULL,
+  compat_registry_version TEXT NOT NULL,
+  migration_version INTEGER NOT NULL,
+  policy_hash TEXT NOT NULL,
+  generated_at_ms INTEGER NOT NULL,
+  workspace_dir TEXT,
+  refresh_reason TEXT,
+  install_records_json TEXT NOT NULL,
+  plugins_json TEXT NOT NULL,
+  diagnostics_json TEXT NOT NULL,
+  warning TEXT,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
+  ON installed_plugin_index(generated_at_ms DESC, index_key);
+INSERT INTO installed_plugin_index (
+  index_key, version, host_contract_version, compat_registry_version,
+  migration_version, policy_hash, generated_at_ms, workspace_dir, refresh_reason,
+  install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
+)
+SELECT 'installed-plugin-index',
+       json_extract(value_json, '$.index.version'),
+       json_extract(value_json, '$.index.hostContractVersion'),
+       json_extract(value_json, '$.index.compatRegistryVersion'),
+       json_extract(value_json, '$.index.migrationVersion'),
+       json_extract(value_json, '$.index.policyHash'),
+       json_extract(value_json, '$.index.generatedAtMs'),
+       json_extract(value_json, '$.index.workspaceDir'),
+       json_extract(value_json, '$.index.refreshReason'),
+       json_extract(value_json, '$.index.installRecords'),
+       json_extract(value_json, '$.index.plugins'),
+       json_extract(value_json, '$.index.diagnostics'),
+       json_extract(value_json, '$.index.warning'),
+       json_extract(value_json, '$.revision')
+  FROM config_machine_state
+ WHERE state_key = 'plugins.installedIndex';
+DELETE FROM config_machine_state WHERE state_key = 'plugins.installedIndex';
+
+-- v12 carried the shared auth singleton tables; repopulate the 'shared' rows
+-- from the folded KV cells (value_json is the payload verbatim).
+CREATE TABLE IF NOT EXISTS auth_profile_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
+SELECT 'shared', value_json, updated_at_ms
+  FROM config_machine_state
+ WHERE state_key = 'authProfiles.store';
+CREATE TABLE IF NOT EXISTS auth_profile_state (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO auth_profile_state (store_key, state_json, updated_at)
+SELECT 'shared', value_json, updated_at_ms
+  FROM config_machine_state
+ WHERE state_key = 'authProfiles.state';
+DELETE FROM config_machine_state
+ WHERE state_key IN ('authProfiles.store', 'authProfiles.state');
+
+PRAGMA user_version = 12;
+UPDATE schema_meta SET schema_version = 12 WHERE meta_key = 'primary';
+COMMIT;
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_key_check;
+```
+
+The recreated cron columns are recovered from canonical JSON, including schedule and payload variants, explicit failure-destination clears, boolean `false`, numeric thread IDs, and runtime state. Canonical JSON bytes remain unchanged. Subagent-run state remains in `payload_json`; its retired projections are not runtime scheduling inputs. A botched downgrade means restore from the verified backup.
 
 ### Example: state schema 12 to 11
 

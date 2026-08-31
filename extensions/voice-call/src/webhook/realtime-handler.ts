@@ -14,10 +14,12 @@ import {
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceCloseReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
   type RealtimeVoiceSessionHarness,
@@ -312,7 +314,7 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
+type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -843,6 +845,8 @@ export class RealtimeCallHandler {
         : undefined;
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
     const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
+    let provisionalCloseReason: RealtimeVoiceCloseReason | undefined;
+    let sessionClosed = false;
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -852,6 +856,7 @@ export class RealtimeCallHandler {
       cfg: this.coreConfig,
       agentId,
       providerConfig,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions,
       tools: this.config.tools,
@@ -883,6 +888,7 @@ export class RealtimeCallHandler {
       onTranscript: (role, text, isFinal) => {
         const owner = nativeConsultOwner.current;
         if (
+          provisionalCloseReason ||
           !this.getUserTranscriptState(callId, userTranscriptOwner) ||
           (owner && !this.isActiveBridgeOwner(callId, owner))
         ) {
@@ -1064,56 +1070,65 @@ export class RealtimeCallHandler {
         });
       },
       onClose: (reason) => {
-        const owner = nativeConsultOwner.current;
-        const ownsCallState = owner ? this.isActiveBridgeOwner(callId, owner) : false;
-        if (owner) {
-          this.clearActiveBridgeMappings(callId, callSid, owner);
-          this.cancelConsultSession(callId, owner);
-        }
-        if (ownsCallState) {
-          this.clearUserTranscriptState(callId, userTranscriptOwner);
-        }
         harness.finishOutputAudio(reason);
         harness.emit({
           type: "session.closed",
           payload: { reason },
           final: true,
         });
-        if (reason !== "error") {
+        const owner = nativeConsultOwner.current;
+        if (!owner) {
+          // Settle terminal creation before adopting a bridge or retiring its predecessor.
+          provisionalCloseReason ??= reason;
+          return;
+        }
+        const ownsCallState = this.isActiveBridgeOwner(callId, owner);
+        this.clearActiveBridgeMappings(callId, callSid, owner);
+        this.cancelConsultSession(callId, owner);
+        if (ownsCallState) {
+          this.clearUserTranscriptState(callId, userTranscriptOwner);
+        }
+        // Carrier teardown already owns its outcome; a provider-ended call still needs hangup.
+        if (reason === "completed" && (!ownsCallState || sessionClosed)) {
           return;
         }
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
         if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Bridge disconnected");
+          ws.close(reason === "error" ? 1011 : 1000, "Bridge disconnected");
         }
-        // A provisional replacement may fail before its bridge owner is assigned.
-        // The active predecessor still owns call termination until creation succeeds.
-        if (
-          (owner && !ownsCallState) ||
-          (!owner && hadPredecessorOnAdmission && this.activeBridgesByCallId.has(callId))
-        ) {
-          return;
+        if (ownsCallState) {
+          void emitCallEnd(reason);
         }
-        void emitCallEnd("error");
       },
     };
-    let session: ActiveRealtimeVoiceBridge;
+    let candidate: ActiveRealtimeVoiceBridge | undefined;
     try {
-      session = harness.createBridge(bridgeParams);
+      candidate = harness.createBridge(bridgeParams);
     } catch (error) {
+      console.error("[voice-call] Failed to create realtime bridge:", error);
+    }
+    if (!candidate || provisionalCloseReason) {
       this.rollbackUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
+      try {
+        candidate?.close();
+      } catch (error) {
+        console.warn(
+          `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
+        );
+      }
       harness.close();
       audioPacer.close();
+      const reason = provisionalCloseReason ?? "error";
       // A failed provisional replacement must not terminate its active predecessor.
       if (!hadPredecessorOnAdmission || !this.activeBridgesByCallId.has(callId)) {
-        void emitCallEnd("error");
+        void emitCallEnd(reason);
       }
       if (ws.readyState === WebSocket.OPEN) {
-        ws.close(1011, "Failed to create realtime bridge");
+        ws.close(reason === "error" ? 1011 : 1000, "Failed to create realtime bridge");
       }
-      console.error("[voice-call] Failed to create realtime bridge:", error);
       return null;
     }
+    const session = candidate;
     this.commitUserTranscriptOwnerAdoption(callId, userTranscriptAdoption);
     nativeConsultOwner.current = session;
     providerHandlesInputAudioBargeIn =
@@ -1142,7 +1157,6 @@ export class RealtimeCallHandler {
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
-    let sessionClosed = false;
     session.close = () => {
       if (sessionClosed) {
         return;

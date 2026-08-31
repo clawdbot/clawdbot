@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
@@ -28,6 +29,38 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it.each(["direct", "subscription"] as const)(
+    "shares confirmed archive visibility after %s reconciliation",
+    async (path) => {
+      const key = "agent:main:archive-from-agent";
+      const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
+      const request = vi.fn(async () => sessionsResult([row], 1));
+      const { emitEvent, gateway } = createGatewayHarness({
+        request,
+      } as unknown as GatewayBrowserClient);
+      const sessions = createSessionCapability(gateway);
+      const reconcile = (archived: boolean, updatedAt: number) => {
+        const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
+        if (path === "direct") {
+          sessions.reconcileChanged(payload);
+        } else {
+          emitEvent({ type: "event", event: "sessions.changed", payload });
+        }
+      };
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        reconcile(true, 2);
+        expect(sessions.archiveVisibility(key)).toBe("archived");
+        await sessions.refresh({ agentId: "main", force: true });
+        expect(sessions.archiveVisibility(key)).toBe("archived");
+        reconcile(false, 3);
+        expect(sessions.archiveVisibility(key)).toBeUndefined();
+      } finally {
+        sessions.dispose();
+      }
+    },
+  );
+
   it.each(["direct", "subscription"] as const)(
     "ignores stale archive state after a newer unarchive via %s reconciliation",
     async (path) => {
@@ -368,11 +401,15 @@ describe("createSessionCapability", () => {
       sessions.delete(key, { expectedSessionId: "session-before-replacement" }),
     ).resolves.toEqual({ deleted: false });
     expect(sessions.state.deletedSessions).toEqual([]);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key,
-      deleteTranscript: true,
-      expectedSessionId: "session-before-replacement",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key,
+        deleteTranscript: true,
+        expectedSessionId: "session-before-replacement",
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     sessions.dispose();
   });
 
@@ -418,11 +455,15 @@ describe("createSessionCapability", () => {
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);
     expect(deletedSnapshots.some((keys) => keys.includes(keptKey))).toBe(false);
     expect(request).toHaveBeenCalledTimes(4);
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: deletedKey,
-      deleteTranscript: true,
-      archivedOnly: true,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.delete",
+      {
+        key: deletedKey,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+      { timeoutMs: 10 * 60_000 },
+    );
     unsubscribe();
     sessions.dispose();
   });
@@ -871,7 +912,7 @@ describe("createSessionCapability", () => {
     await sessions.refresh({ force: true });
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
-      expect.objectContaining({ configuredAgentsOnly: true, limit: 50 }),
+      expect.objectContaining({ configuredAgentsOnly: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
     );
     const publishedKeys: string[][] = [];
     sessions.subscribe((next) => {
@@ -897,7 +938,10 @@ describe("createSessionCapability", () => {
         throw new Error(`Unexpected request: ${method}`);
       }
       listCalls += 1;
-      const result = sessionsResult([{ key: visibleKey, kind: "direct", updatedAt: 1 }], 1);
+      const result = sessionsResult(
+        [{ key: visibleKey, sessionId: "deleted-generation", kind: "direct", updatedAt: 1 }],
+        1,
+      );
       return listCalls === 1 ? result : await refreshed.promise;
     });
     const client = { request } as unknown as GatewayBrowserClient;
@@ -913,7 +957,7 @@ describe("createSessionCapability", () => {
     emitEvent({
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: visibleKey, reason: "delete" },
+      payload: { sessionKey: visibleKey, sessionId: "deleted-generation", reason: "delete" },
     });
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));

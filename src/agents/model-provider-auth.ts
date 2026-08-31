@@ -3,12 +3,11 @@
  * keeps per-agent auth snapshots process-current so model listing can avoid
  * repeated env/profile/plugin discovery on hot paths.
  */
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -483,18 +482,6 @@ export async function buildCurrentProviderAuthStateSnapshot(
   return serializeProviderAuthStates(states);
 }
 
-function resolveProviderAuthWarmWorkerUrl(currentModuleUrl: string): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const distMarker = `${path.sep}dist${path.sep}`;
-  const distIndex = currentPath.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length - 1);
-    return pathToFileURL(path.join(distRoot, "agents", "model-provider-auth.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./model-provider-auth.worker${extension}`, currentModuleUrl);
-}
-
 function isProviderAuthWarmSnapshot(value: unknown): value is ProviderAuthWarmSnapshot {
   if (
     !value ||
@@ -607,7 +594,15 @@ function runProviderAuthWarmWorker(params: {
   isCancelled: () => boolean;
   workerUrl?: URL;
 }): Promise<ProviderAuthWarmSnapshot> {
-  const worker = new Worker(params.workerUrl ?? resolveProviderAuthWarmWorkerUrl(import.meta.url), {
+  const workerUrl =
+    params.workerUrl ??
+    resolveRuntimeWorkerUrl({
+      currentModuleUrl: import.meta.url,
+      sourceWorkerName: "model-provider-auth.worker",
+      distWorkerPath: "agents/model-provider-auth.worker.js",
+    });
+  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
+  const worker = new Worker(workerUrl, {
     workerData: {
       cfg: params.cfg,
       ...(params.runtimeAuthStores?.length ? { runtimeAuthStores: params.runtimeAuthStores } : {}),
@@ -616,6 +611,7 @@ function runProviderAuthWarmWorker(params: {
         : {}),
       ...(params.omitFalseProviderAuth ? { omitFalseProviderAuth: true } : {}),
     },
+    execArgv: sourceWorkerExecArgv,
   });
   worker.unref?.();
   const handle = {

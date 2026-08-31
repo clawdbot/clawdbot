@@ -14,7 +14,7 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
@@ -589,7 +589,7 @@ class AgentsPage
       return;
     }
     if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
         this.chatModelCatalogAgentId = agentId;
@@ -615,8 +615,8 @@ class AgentsPage
     // Chat metadata carries the selected agent's already-prepared startup models
     // without initiating the live discovery reserved for explicit picker use.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
     void metadataRequest
       .then((result) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
@@ -927,7 +927,7 @@ class AgentsPage
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>

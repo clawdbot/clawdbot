@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import {
@@ -31,10 +31,6 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
-
-const loadInternalAgentTurnFacade = createLazyRuntimeModule(
-  () => import("./agent-turn/internal-facade.runtime.js"),
-);
 
 type OperatorToolGatewayAuthority = {
   authenticatedUserProfile: NonNullable<
@@ -70,6 +66,7 @@ type DispatchGatewayMethodInProcessOptions = {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   nodeInvokeStream?: GatewayNodeInvokeStream;
+  nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
@@ -84,9 +81,11 @@ type DispatchGatewayMethodInProcessOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
   resolveGatewayContext?: GatewayContextResolver;
+  sessionMutationCommitGuard?: () => void;
 };
 
 type ResolvedInProcessGatewayDispatch = {
+  assertContextCurrent: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   context: GatewayRequestContext;
   delegatedToolPolicyHandoffId?: string;
@@ -130,7 +129,9 @@ function resolveInProcessGatewayDispatch(
             ? undefined
             : (explicitSystemActor ?? { kind: "system" })))
     : (scopedRoleActor ?? explicitSystemActor);
-  const context = getInProcessGatewayRequestContext(options?.resolveGatewayContext);
+  // The router installs a nested scope; retain the admitted resolver for later commit checks.
+  const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
@@ -146,6 +147,18 @@ function resolveInProcessGatewayDispatch(
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
+      : undefined;
+  const pluginRecord = pluginRuntimeOwnerId
+    ? getActivePluginRegistry()?.plugins.find((entry) => entry.id === pluginRuntimeOwnerId)
+    : undefined;
+  const nodeInvokeApprovalSessionKey =
+    method === "node.invoke" &&
+    scope?.pluginId?.trim() === pluginRuntimeOwnerId &&
+    (scope?.pluginOrigin === "bundled" ||
+      scope?.pluginTrustedOfficialInstall === true ||
+      pluginRecord?.origin === "bundled" ||
+      pluginRecord?.trustedOfficialInstall === true)
+      ? options?.nodeInvokeApprovalSessionKey
       : undefined;
   if (
     options?.nodeInvokeStream &&
@@ -180,6 +193,7 @@ function resolveInProcessGatewayDispatch(
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
     internalDeliverySuppressText: options?.internalDeliverySuppressText,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+    ...(nodeInvokeApprovalSessionKey ? { nodeInvokeApprovalSessionKey } : {}),
     ...(options?.pluginSubagentRequester
       ? { pluginSubagentRequester: options.pluginSubagentRequester }
       : {}),
@@ -243,6 +257,13 @@ function resolveInProcessGatewayDispatch(
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
   }
   return {
+    assertContextCurrent: () => {
+      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+        throw new Error(
+          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+        );
+      }
+    },
     client:
       options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
     context,
@@ -275,23 +296,24 @@ export async function dispatchGatewayMethodInProcessRaw(
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  return await withInProcessGatewayDispatch(
-    method,
-    options,
-    async (resolved) =>
-      await dispatchGatewayRequestInProcessRaw(method, params, {
-        client: resolved.client,
-        context: resolved.context,
-        expectFinal: options?.expectFinal,
-        isWebchatConnect: resolved.isWebchatConnect,
-        methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
-        onAccepted: options?.onAccepted,
-        onSignalAbort: options?.onSignalAbort,
-        requestIdPrefix: "plugin-subagent",
-        timeoutMs: options?.timeoutMs,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      }),
-  );
+  return await withInProcessGatewayDispatch(method, options, async (resolved) => {
+    return await dispatchGatewayRequestInProcessRaw(method, params, {
+      client: resolved.client,
+      context: resolved.context,
+      expectFinal: options?.expectFinal,
+      isWebchatConnect: resolved.isWebchatConnect,
+      methodRegistry: resolved.context.getGatewayMethodRegistry?.(),
+      onAccepted: options?.onAccepted,
+      onSignalAbort: options?.onSignalAbort,
+      requestIdPrefix: "plugin-subagent",
+      sessionMutationCommitGuard: () => {
+        resolved.assertContextCurrent();
+        options?.sessionMutationCommitGuard?.();
+      },
+      timeoutMs: options?.timeoutMs,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  });
 }
 
 /** Live request context for trusted built-in tools that need direct runtime state. */
@@ -302,7 +324,7 @@ export function getInProcessGatewayRequestContext(
     return resolveGatewayContext();
   }
   const scope = getPluginRuntimeGatewayRequestScope();
-  return scope?.resolveGatewayContext?.() ?? scope?.context;
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }
 
 export async function dispatchGatewayMethodInProcess<T>(
@@ -312,26 +334,15 @@ export async function dispatchGatewayMethodInProcess<T>(
 ): Promise<T> {
   if (method === "agent" || method === "agent.wait") {
     return await withInProcessGatewayDispatch(method, options, async (resolved) => {
-      const { createInternalAgentTurnFacade } = await loadInternalAgentTurnFacade();
-      const assertContextCurrent = () => {
-        if (
-          getInProcessGatewayRequestContext(options?.resolveGatewayContext) !== resolved.context
-        ) {
-          throw new Error(
-            `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-          );
-        }
-      };
-      const facade = createInternalAgentTurnFacade({
-        assertContextCurrent,
+      const createAgentTurnFacade = resolved.context.createAgentTurnFacade;
+      if (!createAgentTurnFacade) {
+        throw new Error(`Gateway instance agent turn facade unavailable for ${method}`);
+      }
+      // Plugins may load through another source/bundle graph. Only the captured host can
+      // create turns against its published runtime; a local import creates a second owner.
+      const facade = await createAgentTurnFacade({
+        assertContextCurrent: resolved.assertContextCurrent,
         client: resolved.client,
-        getContext: () => {
-          assertContextCurrent();
-          return resolved.context;
-        },
-        ...(resolved.context.getGatewayMethodRegistry
-          ? { getMethodRegistry: resolved.context.getGatewayMethodRegistry }
-          : {}),
         isWebchatConnect: resolved.isWebchatConnect,
       });
       return method === "agent"

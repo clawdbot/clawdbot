@@ -459,11 +459,7 @@ impl DesktopState {
         let cli = match self.resolve_cli() {
             Ok(cli) => cli,
             Err(CliError::Missing) => {
-                app.state::<gateway_ws::GatewayClient>()
-                    .clear_configuration(app);
-                let snapshot = GatewaySnapshot::missing_cli();
-                self.update_tray(&snapshot);
-                return Ok(snapshot);
+                return self.show_missing_cli(app, explicit_local, None);
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -485,7 +481,7 @@ impl DesktopState {
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
-            self.start_watchdog(app.clone());
+            self.start_watchdog(app.clone(), cli);
         }
         Ok(ready.snapshot)
     }
@@ -547,7 +543,7 @@ impl DesktopState {
             })?;
         self.update_tray(&ready.snapshot);
         if navigated {
-            self.start_watchdog(app.clone());
+            self.start_watchdog(app.clone(), cli);
         }
         Ok(ready.snapshot)
     }
@@ -581,7 +577,7 @@ impl DesktopState {
         let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
         self.update_tray(&ready.snapshot);
         if navigated {
-            self.start_watchdog(app.clone());
+            self.start_watchdog(app.clone(), cli);
         }
         Ok(ready.snapshot)
     }
@@ -746,7 +742,14 @@ impl DesktopState {
     }
 
     pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
-        if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
+        if let Some(cli) = self
+            .inner
+            .cli
+            .lock()
+            .expect("CLI mutex poisoned")
+            .clone()
+            .filter(OpenClawCli::is_available)
+        {
             return Ok(cli);
         }
         let cli = OpenClawCli::discover()?;
@@ -774,6 +777,35 @@ impl DesktopState {
             .as_ref()
         {
             tray.update(snapshot);
+        }
+    }
+
+    fn show_missing_cli(
+        &self,
+        app: &AppHandle,
+        force: bool,
+        expected_generation: Option<u64>,
+    ) -> Result<GatewaySnapshot, String> {
+        let snapshot = GatewaySnapshot::missing_cli();
+        let navigation = self.show_local(app, "missingCli", force, expected_generation);
+        if !local_recovery_owns_gateway(&navigation) {
+            return Ok(snapshot);
+        }
+        app.state::<gateway_ws::GatewayClient>()
+            .clear_configuration(app);
+        self.update_tray(&snapshot);
+        navigation.map(|_| snapshot)
+    }
+
+    fn show_cli_recovery_error(&self, app: &AppHandle, generation: u64, error: CliError) {
+        let mut snapshot = GatewaySnapshot::missing_cli();
+        snapshot.status = "CLI unavailable".to_string();
+        snapshot.detail = Some(error.to_string());
+        let navigation = self.show_local(app, "error", false, Some(generation));
+        if local_recovery_owns_gateway(&navigation) {
+            app.state::<gateway_ws::GatewayClient>()
+                .clear_configuration(app);
+            self.update_tray(&snapshot);
         }
     }
 
@@ -902,7 +934,7 @@ impl DesktopState {
             .is_ok_and(|navigation| navigation.watchdog_is_current(generation))
     }
 
-    fn start_watchdog(&self, app: AppHandle) {
+    fn start_watchdog(&self, app: AppHandle, mut cli: OpenClawCli) {
         let generation = {
             let Ok(mut navigation) = self.inner.navigation.lock() else {
                 return;
@@ -919,9 +951,6 @@ impl DesktopState {
                 return;
             }
             let Ok(_operation) = state.inner.operation.try_lock() else {
-                continue;
-            };
-            let Ok(cli) = state.resolve_cli() else {
                 continue;
             };
             let snapshot = match gateway::status(&cli) {
@@ -958,6 +987,19 @@ impl DesktopState {
                     return;
                 }
                 if let Ok(_operation) = state.inner.operation.try_lock() {
+                    if !cli.is_available() {
+                        match state.resolve_cli() {
+                            Ok(discovered) => cli = discovered,
+                            Err(error) => {
+                                if matches!(error, CliError::Missing) {
+                                    let _ = state.show_missing_cli(&app, false, Some(generation));
+                                } else {
+                                    state.show_cli_recovery_error(&app, generation, error);
+                                }
+                                return;
+                            }
+                        }
+                    }
                     let snapshot = match gateway::status(&cli) {
                         Ok(snapshot) => snapshot,
                         Err(error) => GatewaySnapshot::reconnecting(error),
@@ -1011,9 +1053,16 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
     }
 }
 
+fn local_recovery_owns_gateway(navigation: &Result<bool, String>) -> bool {
+    !matches!(navigation, Ok(false))
+}
+
 #[cfg(test)]
 mod navigation_tests {
-    use super::{is_active_onboarding_url, is_release_version, NavigationState, Url};
+    use super::{
+        is_active_onboarding_url, is_release_version, local_recovery_owns_gateway, NavigationState,
+        Url,
+    };
 
     #[test]
     fn only_active_onboarding_preserves_the_dashboard_during_reconnect() {
@@ -1095,6 +1144,15 @@ mod navigation_tests {
 
         assert!(!navigation.permit_local(false, None));
         assert!(navigation.remote_dashboard);
+    }
+
+    #[test]
+    fn local_recovery_clears_retained_gateway_unless_remote_navigation_won() {
+        assert!(local_recovery_owns_gateway(&Ok(true)));
+        assert!(local_recovery_owns_gateway(&Err(
+            "local navigation failed".to_string()
+        )));
+        assert!(!local_recovery_owns_gateway(&Ok(false)));
     }
 
     #[test]

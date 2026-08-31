@@ -5,10 +5,12 @@
  */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
-import { DmPolicySchema, MentionPatternsPolicySchema } from "../../config/zod-schema.core.js";
-import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
+import { DmPolicySchema } from "../../config/zod-schema.core.js";
+import {
+  parseJsonSchemaIssuePath,
+  validateJsonSchemaValue,
+} from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
-import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import type {
   ChannelConfigRuntimeIssue,
   ChannelConfigRuntimeParseResult,
@@ -57,12 +59,6 @@ export function buildGroupEntrySchema<
   ) as Omit<typeof ChannelGroupEntrySchema.shape, TOmit[number]>;
   return z.object({ ...baseShape, ...(extraShape ?? ({} as T)) }).strict();
 }
-
-/** Shared mention-policy schemas. IRC retains its shipped string-array form. */
-export const ChannelMentionPatternsSchemas = {
-  canonical: MentionPatternsPolicySchema,
-  stringArray: z.array(z.string()),
-} as const;
 
 /** Build the common nested DM config block used by channel account schemas. */
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
@@ -198,15 +194,6 @@ function safeParseRuntimeSchema(
   };
 }
 
-function toIssuePath(path: string): Array<string | number> {
-  if (!path || path === "<root>") {
-    return [];
-  }
-  return path.split(".").map((segment) => {
-    return parseConfigPathArrayIndex(segment) ?? segment;
-  });
-}
-
 function safeParseJsonSchema(
   schema: JsonSchemaObject,
   cacheKey: string,
@@ -224,7 +211,7 @@ function safeParseJsonSchema(
   return {
     success: false,
     issues: result.errors.map((issue) => ({
-      path: toIssuePath(issue.path),
+      path: parseJsonSchemaIssuePath(issue.path),
       message: issue.message,
     })),
   };

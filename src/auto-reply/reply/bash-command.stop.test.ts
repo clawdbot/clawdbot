@@ -1,6 +1,7 @@
 // Tests bash stop command handling and active-process cancellation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { MsgContext } from "../templating.js";
 
 const {
@@ -186,41 +187,66 @@ describe("handleBashChatCommand stop", () => {
     await handleBashChatCommand(buildParams("/bash help"));
   });
 
-  it("uses the canonical target session for elevated sandbox explanation", async () => {
-    const sandboxRuntime = await import("../../agents/sandbox.js");
-    const resolveSandboxRuntimeStatusSpy = vi
-      .spyOn(sandboxRuntime, "resolveSandboxRuntimeStatus")
-      .mockReturnValue({
-        agentId: "target",
-        sessionKey: "agent:target:telegram:direct:target-session",
-        classificationAgentId: "target",
-        classificationSessionKey: "agent:target:telegram:direct:target-session",
-        mainSessionKey: "agent:target:main",
-        mode: "non-main",
-        sandboxRequired: false,
-        sandboxed: true,
-        toolPolicy: {
-          allow: [],
-          deny: ["bash"],
-          sources: {
-            allow: { source: "default", key: "agents.defaults.tools.sandbox.tools.allow" },
-            deny: { source: "default", key: "agents.defaults.tools.sandbox.tools.deny" },
-          },
-        },
-      });
-
-    const params = buildElevatedDeniedParams("/bash pwd");
-    const result = await handleBashChatCommand(params);
-
-    expect(resolveSandboxRuntimeStatusSpy).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      sessionKey: "agent:target:telegram:direct:target-session",
+  it("passes the global session's prepared owner to exec", async () => {
+    createExecToolMock.mockReturnValue({
+      execute: vi.fn().mockResolvedValue({
+        content: [],
+        details: { status: "completed", exitCode: 0, aggregated: "done" },
+      }),
     });
-    expect(result.text).toContain(
-      "openclaw sandbox explain --session agent:target:telegram:direct:target-session",
-    );
-    expect(result.text).not.toContain(
-      "openclaw sandbox explain --session agent:main:telegram:slash-session",
+    const params = buildParams("/bash echo done");
+    const result = await handleBashChatCommand({
+      ...params,
+      agentId: "target",
+      sessionKey: "global",
+      ctx: {
+        ...params.ctx,
+        RuntimePolicySessionKey: "agent:main:telegram:direct:policy-session",
+      },
+    });
+
+    expect(result.text).toContain("Exit: 0");
+    expect(createExecToolMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "target", sessionKey: "global" }),
     );
   });
+
+  it.each([
+    {
+      sessionKey: "agent:target:telegram:direct:target-session",
+      policySessionKey: undefined,
+      runtime: "sandboxed",
+    },
+    { sessionKey: "global", policySessionKey: undefined, runtime: "sandboxed" },
+    {
+      sessionKey: "global",
+      policySessionKey: "agent:main:telegram:direct:policy-session",
+      runtime: "direct",
+    },
+  ])(
+    "explains elevated denial for $sessionKey with policy $policySessionKey",
+    async ({ sessionKey, policySessionKey, runtime }) => {
+      await withStateDirEnv("bash-denied-owner-", async () => {
+        const params = buildElevatedDeniedParams("/bash pwd");
+        params.sessionKey = sessionKey;
+        params.ctx.RuntimePolicySessionKey = policySessionKey;
+        params.cfg = {
+          commands: { bash: true },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              target: { sandbox: { mode: "all" } },
+              main: { sandbox: { mode: "off" } },
+            },
+          },
+        };
+        const result = await handleBashChatCommand(params);
+
+        expect(result.text).toContain(`elevated is not available right now (runtime=${runtime})`);
+        expect(result.text).toContain(`openclaw sandbox explain --session ${sessionKey}`);
+        expect(result.text).not.toContain("agent:main:telegram:slash-session");
+        expect(createExecToolMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

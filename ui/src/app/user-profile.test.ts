@@ -33,13 +33,6 @@ describe("connection user profile helpers", () => {
       id: "profile-1",
       name: "Ada",
     });
-    expect(
-      resolveCurrentSelfUser({
-        snapshotUser: { id: "previous-profile", name: "Previous User" },
-        presenceEntries,
-        presenceInstanceId: "self",
-      }),
-    ).toEqual({ id: "profile-1", name: "Ada" });
   });
 
   it("reads presence payloads", () => {

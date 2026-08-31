@@ -401,8 +401,12 @@ describe("devices inventory rendering", () => {
     expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
       "Worker 2026.8.9",
     );
-    expect(installed?.querySelector(".settings-row__desc")?.textContent).toContain(
-      "Worker slots 1/2",
+    expect(installed?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
+    );
+    expect(installed?.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(installed?.querySelector(".settings-row__desc")?.textContent).not.toContain(
+      "Worker slots",
     );
     expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
     expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
@@ -553,6 +557,7 @@ describe("devices inventory rendering", () => {
           platform: "Windows 11",
           connected: false,
           paired: true,
+          workerSlots: { total: 8, available: 0 },
         },
       ],
     });
@@ -560,9 +565,34 @@ describe("devices inventory rendering", () => {
     const row = getSettingsRow(section, "Mixed-role Windows");
 
     expect(section.textContent).toContain("1 of 1 connected");
+    expect(row.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "Slot utilization unavailable",
+    );
+    expect(row.querySelectorAll(".capacity-meter-pips__pip--filled")).toHaveLength(0);
     expect(
       Array.from(row.querySelectorAll(".settings-status"), (status) => status.textContent?.trim()),
     ).toEqual(["offline", "manual wake required"]);
+  });
+
+  it.each([
+    { caps: ["codex.exec-server"], commands: [] },
+    { caps: [], commands: ["codex.exec-server.stdio.v1"] },
+  ])("preserves the slot-less exec affordance through node inventory: %j", ({ caps, commands }) => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "exec",
+          displayName: "Exec host",
+          connected: true,
+          paired: true,
+          caps,
+          commands,
+        },
+      ],
+    });
+    const row = getSettingsRow(getInventorySection(container), "Exec host");
+    expect(row.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Codex exec");
+    expect(row.querySelector(".capacity-meter-pips, .session-context-meter")).toBeNull();
   });
 
   it("shows token rows with rotate and revoke inside entry details", () => {

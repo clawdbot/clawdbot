@@ -7,6 +7,8 @@ export type CronRunExecSource = {
   agentId: string;
   jobId: string;
   jobConfigRevision: string;
+  /** Display name for operator surfaces (approval cards); not identity. */
+  jobName: string;
 };
 
 // Bounded by live cron-run concurrency; the cap only guards a leaked

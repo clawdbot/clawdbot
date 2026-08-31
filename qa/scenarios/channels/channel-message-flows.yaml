@@ -39,7 +39,7 @@ scenario:
       conversationId: "-1001234567890"
       senderId: "100001"
       finalMarker: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890
-      prompt: "Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+      prompt: "@openclaw Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
 
 flow:
   steps:

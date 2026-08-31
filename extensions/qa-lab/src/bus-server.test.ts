@@ -1,6 +1,7 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
@@ -523,18 +524,18 @@ describe("qa-bus server", () => {
 });
 
 describe("handleQaBusRequest", () => {
-  it.each(["/v1/inbound/message", "/v1/outbound/message"] as const)(
-    "returns a controlled error when the %s body exceeds the media limit",
-    async (pathname) => {
-      const req = {
+  it.each([
+    { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
+    { pathname: "/v1/reset", limit: 1024 * 1024 },
+  ])(
+    "returns a controlled error when the $pathname body exceeds its limit",
+    async ({ pathname, limit }) => {
+      const req = Object.assign(createMockIncomingRequest([]), {
         method: "POST",
         url: pathname,
-        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
-        destroyed: false,
-        destroy() {
-          this.destroyed = true;
-        },
-      };
+        headers: { "content-length": String(limit + 1) },
+      });
       const res = {
         statusCode: 0,
         body: "",
@@ -547,7 +548,7 @@ describe("handleQaBusRequest", () => {
       };
 
       const handled = await handleQaBusRequest({
-        req: req as never,
+        req,
         res: res as never,
         state: createQaBusState(),
       });
@@ -558,36 +559,4 @@ describe("handleQaBusRequest", () => {
       expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
     },
   );
-
-  it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
-    const req = {
-      method: "POST",
-      url: "/v1/reset",
-      headers: { "content-length": String(1024 * 1024 + 1) },
-      destroyed: false,
-      destroy() {
-        this.destroyed = true;
-      },
-    };
-    const res = {
-      statusCode: 0,
-      body: "",
-      writeHead(statusCode: number) {
-        this.statusCode = statusCode;
-      },
-      end(payload: string) {
-        this.body = payload;
-      },
-    };
-
-    const handled = await handleQaBusRequest({
-      req: req as never,
-      res: res as never,
-      state: createQaBusState(),
-    });
-
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(413);
-    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
-  });
 });

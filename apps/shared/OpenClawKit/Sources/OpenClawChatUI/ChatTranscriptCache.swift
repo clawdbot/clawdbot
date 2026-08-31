@@ -85,6 +85,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     OpenClawChatCommandOutbox
 {
     public static let maxCachedSessions = 50
+    public static let maxCachedSessionOwners = 50
     public static let maxCachedTranscripts = 50
     public static let maxCachedMessagesPerSession = 200
     public static let maxQueuedCommands = 50
@@ -137,17 +138,23 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     // MARK: - Gateway cache
 
     public func loadSessions() async -> [OpenClawChatSessionEntry] {
+        await self.loadSessions(agentID: nil)
+    }
+
+    public func loadSessions(agentID: String?) async -> [OpenClawChatSessionEntry] {
         guard !self.isRetired else { return [] }
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
         let gatewayID = self.gatewayID
         do {
             return try await self.databases.cacheQueue.write { db in
+                try OpenClawClientDatabases.ensureAgentSessionCacheSchema(db)
                 let rows = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT payload_json FROM cached_sessions
-                    WHERE gateway_id = ? ORDER BY position
+                    SELECT payload_json FROM cached_agent_sessions
+                    WHERE gateway_id = ? AND agent_id = ? ORDER BY position
                     """,
-                    arguments: [gatewayID])
+                    arguments: [gatewayID, normalizedAgentID])
                 do {
                     return try rows.map { row in
                         let payload: String = row["payload_json"]
@@ -156,11 +163,20 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
                 } catch {
                     cacheLogger.error(
                         "gateway session cache decode failed: \(error.localizedDescription, privacy: .public)")
-                    // Decode and cleanup share one transaction so a newer
-                    // snapshot can never land between the failed read and delete.
+                    // Decode and cleanup share one agent partition transaction;
+                    // corruption in one roster must not erase another agent.
                     try db.execute(
-                        sql: "DELETE FROM cached_sessions WHERE gateway_id = ?",
-                        arguments: [gatewayID])
+                        sql: """
+                        DELETE FROM cached_agent_sessions
+                        WHERE gateway_id = ? AND agent_id = ?
+                        """,
+                        arguments: [gatewayID, normalizedAgentID])
+                    try db.execute(
+                        sql: """
+                        DELETE FROM cached_session_rosters
+                        WHERE gateway_id = ? AND agent_id = ?
+                        """,
+                        arguments: [gatewayID, normalizedAgentID])
                     return []
                 }
             }
@@ -214,29 +230,79 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     }
 
     public func storeSessions(_ sessions: [OpenClawChatSessionEntry]) async {
+        await self.storeSessions(sessions, agentID: nil)
+    }
+
+    public func storeSessions(_ sessions: [OpenClawChatSessionEntry], agentID: String?) async {
         guard !self.isRetired else { return }
-        let bounded = Self.boundedSessions(sessions)
+        let normalizedAgentID = Self.normalizedAgentID(agentID)
+        guard let owned = Self.sessionsOwnedBy(sessions, agentID: normalizedAgentID) else {
+            cacheLogger.error("gateway session cache rejected a mixed-agent snapshot")
+            return
+        }
+        let bounded = Self.boundedSessions(owned)
         let gatewayID = self.gatewayID
         do {
             let encoded = try bounded.map(Self.encodeJSON)
             try await self.databases.cacheQueue.write { db in
+                try OpenClawClientDatabases.ensureAgentSessionCacheSchema(db)
+                // The legacy gateway-wide rows cannot represent agent ownership.
+                // Keep them empty so a downgraded client cannot paint a mixed roster.
                 try db.execute(
                     sql: "DELETE FROM cached_sessions WHERE gateway_id = ?",
                     arguments: [gatewayID])
+                try db.execute(
+                    sql: """
+                    INSERT INTO cached_session_rosters(gateway_id, agent_id, last_used_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(gateway_id, agent_id)
+                    DO UPDATE SET last_used_at = excluded.last_used_at
+                    """,
+                    arguments: [gatewayID, normalizedAgentID, Date().timeIntervalSince1970])
+                try db.execute(
+                    sql: """
+                    DELETE FROM cached_agent_sessions
+                    WHERE gateway_id = ? AND agent_id = ?
+                    """,
+                    arguments: [gatewayID, normalizedAgentID])
                 for (position, pair) in zip(bounded, encoded).enumerated() {
                     try db.execute(
                         sql: """
-                        INSERT INTO cached_sessions(
-                            gateway_id, session_key, position, updated_at, payload_json
-                        ) VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO cached_agent_sessions(
+                            gateway_id, agent_id, session_key, position, updated_at, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         arguments: [
                             gatewayID,
+                            normalizedAgentID,
                             pair.0.key,
                             position,
                             pair.0.updatedAt ?? 0,
                             pair.1,
                         ])
+                }
+                let staleOwners = try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT agent_id FROM cached_session_rosters
+                    WHERE gateway_id = ?
+                    ORDER BY last_used_at DESC, agent_id
+                    LIMIT -1 OFFSET ?
+                    """,
+                    arguments: [gatewayID, Self.maxCachedSessionOwners])
+                for staleOwner in staleOwners {
+                    try db.execute(
+                        sql: """
+                        DELETE FROM cached_agent_sessions
+                        WHERE gateway_id = ? AND agent_id = ?
+                        """,
+                        arguments: [gatewayID, staleOwner])
+                    try db.execute(
+                        sql: """
+                        DELETE FROM cached_session_rosters
+                        WHERE gateway_id = ? AND agent_id = ?
+                        """,
+                        arguments: [gatewayID, staleOwner])
                 }
             }
         } catch {
@@ -1487,6 +1553,26 @@ extension OpenClawChatSQLiteTranscriptCache {
             sessions
                 .sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
                 .prefix(self.maxCachedSessions))
+    }
+
+    private nonisolated static func sessionsOwnedBy(
+        _ sessions: [OpenClawChatSessionEntry],
+        agentID: String) -> [OpenClawChatSessionEntry]?
+    {
+        guard !agentID.isEmpty else { return sessions }
+        var owned: [OpenClawChatSessionEntry] = []
+        owned.reserveCapacity(sessions.count)
+        for var session in sessions {
+            let rowAgentID = self.normalizedAgentID(session.agentId)
+            let keyAgentID = self.normalizedAgentID(OpenClawChatSessionKey.agentID(from: session.key))
+            guard rowAgentID.isEmpty || rowAgentID == agentID,
+                  keyAgentID.isEmpty || keyAgentID == agentID
+            else { return nil }
+            // The request owner is authoritative for bare and global keys.
+            session.agentId = agentID
+            owned.append(session)
+        }
+        return owned
     }
 
     private static func attachmentByteCount(_ attachments: [OpenClawChatOutboxAttachment]) -> Int? {

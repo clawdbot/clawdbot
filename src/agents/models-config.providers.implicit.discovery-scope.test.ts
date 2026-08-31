@@ -1,12 +1,15 @@
-// Exercises startup provider discovery scoping without loading real plugin manifests.
-import { mkdtemp, writeFile } from "node:fs/promises";
+// Exercises startup provider discovery scoping with disposable home and state boundaries.
 import os from "node:os";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { MODELS_CONFIG_IMPLICIT_ENV_VARS } from "./models-config.e2e-harness.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderStaticCatalog: vi.fn(),
@@ -124,8 +127,22 @@ function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): un
 }
 
 describe("resolveImplicitProviders startup discovery scope", () => {
-  beforeEach(() => {
+  let state: OpenClawTestState;
+  let ambientHome: MockInstance<typeof os.homedir>;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    state = await createOpenClawTestState({
+      label: "provider-discovery-scope",
+      env: Object.fromEntries(
+        [...MODELS_CONFIG_IMPLICIT_ENV_VARS, "CODEX_API_KEY", "CODEX_HOME", "GOOGLE_CLOUD_API_KEY"]
+          .filter((key) => key !== "VITEST" && key !== "NODE_ENV")
+          .map((key) => [key, undefined]),
+      ),
+    });
+    // Missing explicit home fields must never reach the operator's OS home.
+    // The sentinel keeps a failing isolation regression inside this disposable fixture.
+    ambientHome = vi.spyOn(os, "homedir").mockReturnValue(state.path("ambient-home-sentinel"));
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("openai")]);
     mocks.runProviderCatalog.mockResolvedValue({
       providers: {
@@ -151,6 +168,44 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
   });
 
+  afterEach(async () => {
+    try {
+      expect(ambientHome).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await state.cleanup();
+      } finally {
+        ambientHome.mockRestore();
+      }
+    }
+  });
+
+  it("keeps catalog auth scoped when an ambient credential is present", async () => {
+    mocks.runProviderCatalog.mockImplementationOnce(
+      async ({
+        resolveProviderAuth,
+      }: Parameters<typeof import("../plugins/provider-discovery.js").runProviderCatalog>[0]) => {
+        expect(resolveProviderAuth("openai")).toMatchObject({
+          discoveryApiKey: "scoped-catalog-test-key",
+          mode: "api_key",
+          source: "env",
+        });
+        return null;
+      },
+    );
+
+    await withEnvAsync({ OPENAI_API_KEY: "ambient-catalog-test-key" }, async () => {
+      await resolveImplicitProviders({
+        agentDir: state.agentDir(),
+        config: {},
+        env: { ...state.env, OPENAI_API_KEY: "scoped-catalog-test-key" },
+        providerDiscoveryProviderIds: ["openai"],
+      });
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledOnce();
+  });
+
   it("loads configured provider entrypoints but runs static hooks only for unresolved refs", async () => {
     const openai = createStaticOnlyProvider("openai");
     const anthropic = createStaticOnlyProvider("anthropic");
@@ -162,7 +217,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     const prepared = await prepareImplicitProviderStaticCatalog({
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       providerDiscoveryProviderIds: ["openai", "anthropic"],
       staticCatalogProviderIds: ["anthropic"],
     });
@@ -179,7 +234,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     await prepareImplicitProviderStaticCatalog({
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
         manifestRegistry: { plugins: [], diagnostics: [] },
@@ -196,9 +251,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
   it("passes startup provider scopes as plugin owner filters", async () => {
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -224,9 +279,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
   it("treats an explicit empty provider scope as no discovery", async () => {
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryProviderIds: [],
     });
@@ -254,9 +309,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     );
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -301,9 +356,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -337,9 +392,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -408,9 +463,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     },
   ])("$name", async ({ env, expected, owners, providerIds }) => {
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: { VITEST: "1", ...env },
+      env: { ...state.env, VITEST: "1", ...env },
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -430,9 +485,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     const outcomes: Array<{ provider: string; status: string }> = [];
 
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryProviderIds: ["openai"],
       providerDiscoveryTimeoutMs: 1,
@@ -450,9 +505,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     await expect(
       resolveImplicitProviders({
-        agentDir: "/tmp/openclaw-agent",
+        agentDir: state.agentDir(),
         config: {},
-        env: {} as NodeJS.ProcessEnv,
+        env: state.env,
         explicitProviders: {},
         providerDiscoveryProviderIds: ["openai"],
         providerDiscoveryTimeoutMs: 1_000,
@@ -465,9 +520,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
   it("can keep startup discovery on provider discovery entries only", async () => {
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
     });
@@ -481,9 +536,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
   it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
     });
@@ -498,9 +553,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     ]);
 
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
     });
@@ -513,9 +568,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
     const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -583,9 +638,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -613,9 +668,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     ]);
 
     await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryProviderIds: ["openai"],
     });
@@ -625,9 +680,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("fills missing static catalog apiKey from Google Vertex ADC auth evidence", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-"));
-    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
-    await writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }));
+    const credentialsPath = await state.writeJson("application_default_credentials.json", {
+      type: "authorized_user",
+    });
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
       createStaticOnlyProvider("google"),
     ]);
@@ -648,9 +703,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
       async () =>
         await resolveImplicitProviders({
-          agentDir: "/tmp/openclaw-agent",
+          agentDir: state.agentDir(),
           config: {},
           env: {
+            ...state.env,
             OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
             GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
@@ -681,9 +737,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {},
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {},
       providerDiscoveryProviderIds: ["minimax"],
     });
@@ -692,6 +748,40 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     // Static catalogs are the startup fallback when scoped runtime discovery is empty.
     expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
     expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
+  });
+
+  it("inherits discovered input for a configured model whose source row omitted it", async () => {
+    const explicitProvider = {
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      apiKey: "AWS_PROFILE",
+      models: [createTextModel("vision-model", "Vision Model")],
+    };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProvider("amazon-bedrock"),
+    ]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      provider: {
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        models: [
+          { ...createTextModel("vision-model", "Vision Model"), input: ["text", "image"] },
+          createTextModel("discovered-only", "Discovered Only"),
+        ],
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
+      env: { AWS_PROFILE: "default" } as NodeJS.ProcessEnv,
+      explicitProviders: { "amazon-bedrock": explicitProvider },
+      sourceModelFields: new Map([
+        ["amazon-bedrock/vision-model", { inputOmitted: true, cost: undefined }],
+      ]),
+    });
+
+    expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
+      { id: "vision-model", input: ["text", "image"] },
+    ]);
   });
 
   it("keeps explicit provider models manual without provider wildcard visibility", async () => {
@@ -710,7 +800,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {
         agents: {
           defaults: {
@@ -725,7 +815,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
           },
         },
       },
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {
         vllm: explicitProvider,
       },
@@ -750,7 +840,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     });
 
     const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
+      agentDir: state.agentDir(),
       config: {
         agents: {
           defaults: {
@@ -765,7 +855,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
           },
         },
       },
-      env: {} as NodeJS.ProcessEnv,
+      env: state.env,
       explicitProviders: {
         vllm: explicitProvider,
       },

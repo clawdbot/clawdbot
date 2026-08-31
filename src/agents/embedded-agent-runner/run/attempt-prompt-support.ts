@@ -38,6 +38,54 @@ type PromptBuildToolPolicyBaseline = {
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
 
+/** Retains the prompt hook's cap while replacing the host-owned tool generation. */
+export function createPromptBuildToolPolicy<
+  TEffectiveTool extends NamedTool,
+  TUncompactedTool extends NamedTool,
+  TTool extends NamedTool,
+>(
+  params: Omit<
+    Parameters<typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>>[0],
+    "baseline" | "toolsAllow"
+  > & {
+    onApplied?: (
+      surface: ReturnType<
+        typeof applyPromptBuildToolsAllow<TEffectiveTool, TUncompactedTool, TTool>
+      >,
+    ) => void;
+  },
+) {
+  const captureBaseline = (): PromptBuildToolPolicyBaseline => ({
+    activeToolNames: params.session.getActiveToolNames(),
+    catalogEntries: [...(params.catalogRef?.current?.entries ?? [])],
+  });
+  let baseline = captureBaseline();
+  let toolsAllow: string[] | undefined;
+  const current = {
+    activeToolNames: [...baseline.activeToolNames],
+    coreReadAuthorized: params.coreReadAuthorized,
+    effectiveTools: params.effectiveTools,
+    uncompactedEffectiveTools: params.uncompactedEffectiveTools,
+    tools: params.tools,
+  };
+  const apply = (nextToolsAllow: string[] | undefined) => {
+    toolsAllow = nextToolsAllow;
+    Object.assign(current, applyPromptBuildToolsAllow({ ...params, baseline, toolsAllow }));
+    params.onApplied?.(current);
+    return current;
+  };
+  return {
+    current,
+    apply,
+    refresh: () => {
+      // A late hook must filter this generation, never restore retained callable
+      // entries from the catalog that the permission owner has just revoked.
+      baseline = captureBaseline();
+      return apply(toolsAllow);
+    },
+  };
+}
+
 export function applyResolvedToolPromptFinalizer(params: {
   prompt: string;
   activeToolNames: readonly string[];

@@ -48,6 +48,7 @@ vi.mock("./harness/runtime-plugin-load-plan.js", () => ({
   resolveAgentRuntimePluginSelections: hoisted.resolveAgentRuntimePluginSelections,
 }));
 
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -126,6 +127,35 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.not.objectContaining({ onlyPluginIds: expect.anything() }),
     );
+  });
+
+  it.each([true, false])("reuses only an imported selected owner (imported=%s)", (imported) => {
+    const base = createEmptyPluginRegistry();
+    base.plugins.push(
+      createPluginRecord({ id: "memory-core" }),
+      createPluginRecord({ id: "codex", format: "openclaw", imported }),
+    );
+    const selected = loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshot({
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        workspaceDir: "/tmp/gateway-workspace",
+      }),
+      basePluginIds: ["memory-core"],
+      reusableRegistry: base,
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+    });
+    expect(selected === base).toBe(imported);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(imported ? 0 : 1);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    if (!imported) {
+      expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activate: false,
+          onlyPluginIds: ["codex", "memory-core"],
+        }),
+      );
+    }
   });
 
   it("bounds unscoped agent loads to active runtime plugins and selected owners", async () => {
@@ -275,7 +305,6 @@ describe("agent runtime plugin registries", () => {
 
     const inbound = createPreparedInboundRegistryLoader()(
       {
-        agentDir: "/tmp/agent",
         allowGatewaySubagentBinding: true,
         config,
         workspaceDir,
@@ -286,6 +315,21 @@ describe("agent runtime plugin registries", () => {
 
     expect(inbound).not.toBe(activeRegistry);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse a batch registry across metadata generations with identical config", () => {
+    const input = { config: {}, workspaceDir: "/tmp/workspace" };
+    const firstMetadata = createMetadataSnapshot(input.workspaceDir);
+    const replacementMetadata = createMetadataSnapshot(input.workspaceDir);
+    hoisted.loadPluginRegistryHandle.mockImplementation(() => createEmptyPluginRegistry());
+    const load = createPreparedInboundRegistryLoader();
+
+    const first = load(input, firstMetadata as never);
+    expect(load(input, firstMetadata as never)).toBe(first);
+    const replacement = load(input, replacementMetadata as never);
+    expect(replacement).not.toBe(first);
+    expect(load(input, replacementMetadata as never)).toBe(replacement);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
   it("keeps direct no-current loads on the requested workspace", () => {

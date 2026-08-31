@@ -53,6 +53,11 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],
     enforceFinalTag: false,
+    thinkingCatalog: [
+      { provider: "openai", id: "gpt-4.1-mini", input: ["text"] },
+      { provider: "minimax", id: "MiniMax-M2.7", input: ["text"] },
+      { provider: "anthropic", id: "claude-sonnet-4-6", input: ["text"] },
+    ],
     thinkLevel: "medium",
     verboseLevel: "off",
     reasoningLevel: "none",
@@ -143,7 +148,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("builds embedded run base params with auth profile and run metadata", () => {
+  it("builds embedded run base params with auth profile and run metadata", async () => {
     const run = makeRun({
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
@@ -170,7 +175,7 @@ describe("agent-runner-utils", () => {
       authProfileIdSource: "user",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -206,10 +211,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
-  it("threads prompt cache affinity through embedded execution params", () => {
+  it("threads prompt cache affinity through embedded execution params", async () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: { Provider: "webchat" },
       hasRepliedRef: undefined,
@@ -223,10 +228,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
-  it("uses the queued conversation policy snapshot", () => {
+  it("uses the queued conversation policy snapshot", async () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",
@@ -241,10 +246,10 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
-  it("uses session chat type over stale queued metadata for embedded execution params", () => {
+  it("uses session chat type over stale queued metadata for embedded execution params", async () => {
     const run = makeRun({ chatType: "direct" });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: { Provider: "discord", ChatType: "Channel" },
       hasRepliedRef: undefined,
@@ -257,7 +262,7 @@ describe("agent-runner-utils", () => {
     expect("chatType" in resolved.runBaseParams).toBe(false);
   });
 
-  it("passes through recovered auto fallback provenance for embedded run params", () => {
+  it("passes through recovered auto fallback provenance for embedded run params", async () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({
       hasSessionModelOverride: true,
@@ -268,7 +273,7 @@ describe("agent-runner-utils", () => {
       primaryProvider: "openai",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -287,14 +292,14 @@ describe("agent-runner-utils", () => {
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("disables embedded model fallbacks for a model-locked run", () => {
+  it("disables embedded model fallbacks for a model-locked run", async () => {
     const run = makeRun({ modelSelectionLocked: true });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -307,14 +312,14 @@ describe("agent-runner-utils", () => {
     expect(resolved.modelSelectionLocked).toBe(true);
   });
 
-  it("does not force final-tag enforcement for minimax providers", () => {
+  it("does not force final-tag enforcement for minimax providers", async () => {
     const run = makeRun({ enforceFinalTag: false });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "minimax",
       primaryProvider: "minimax",
     });
 
-    const resolved = buildEmbeddedRunBaseParams({
+    const resolved = await buildEmbeddedRunBaseParams({
       run,
       provider: "minimax",
       model: "MiniMax-M2.7",
@@ -330,14 +335,14 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("builds embedded contexts and scopes auth profile by provider", () => {
+  it("builds embedded contexts and scopes auth profile by provider", async () => {
     const run = makeRun({
       authProfileId: "profile-openai",
       authProfileIdSource: "auto",
       chatType: "direct",
     });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "OpenAI",
@@ -380,15 +385,20 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("prefers OriginatingChannel over Provider for messageProvider", () => {
-    const run = makeRun({ agentAccountId: "work", chatType: "group" });
+  it("prefers OriginatingChannel over Provider for messageProvider", async () => {
+    const run = makeRun({
+      agentAccountId: "work",
+      chatType: "group",
+      conversationRoutePeerId: "queued-peer",
+    });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "heartbeat",
         OriginatingChannel: "Telegram",
         OriginatingTo: "268300329",
+        ConversationRoutePeerId: "later-peer",
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -399,10 +409,11 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("group");
+    expect(resolved.embeddedContext.conversationRoutePeerId).toBe("queued-peer");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("hydrates the queued route before resolving channel threading policy", () => {
+  it("hydrates the queued route before resolving channel threading policy", async () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
         buildToolContext: ({
@@ -427,7 +438,7 @@ describe("agent-runner-utils", () => {
     });
     const run = makeRun({ agentAccountId: "work", chatType: "direct" });
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "cron-event",
@@ -459,7 +470,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.replyToMode).toBe("off");
   });
 
-  it("carries a prepared direct-message reply mode into generic message tools", () => {
+  it("carries a prepared direct-message reply mode into generic message tools", async () => {
     const run = makeRun();
     const replyRoute = {
       originatingChannel: "reef",
@@ -470,7 +481,7 @@ describe("agent-runner-utils", () => {
       "originatingChannel" | "originatingTo" | "originatingReplyToMode"
     >;
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       replyRoute,
       sessionCtx: {
@@ -492,10 +503,10 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("carries inbound audio context into embedded message tools", () => {
+  it("carries inbound audio context into embedded message tools", async () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunExecutionParams({
+    const resolved = await buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",

@@ -1,4 +1,5 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
+import { Headers as UndiciHeaders } from "undici";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -300,39 +301,49 @@ describe("debug proxy runtime", () => {
     expect(events[0]?.dataText).not.toContain(secret);
   });
 
-  it("redacts registered values from HTTP payloads and metadata", async () => {
-    const secret = 'http-"capture\\secret\nline';
-    const contentTypeSecret = "http-content-type-secret";
-    registerSecretValueForRedaction(secret);
-    registerSecretValueForRedaction(contentTypeSecret);
+  it.each([
+    ["record", undefined],
+    ["global Headers", Headers],
+    ["Undici Headers", UndiciHeaders],
+  ] as const)(
+    "redacts registered values from HTTP payloads and metadata with %s",
+    async (_name, HeadersConstructor) => {
+      const secret = 'http-"capture\\secret\nline';
+      const contentTypeSecret = "http-content-type-secret";
+      registerSecretValueForRedaction(secret);
+      registerSecretValueForRedaction(contentTypeSecret);
+      const requestHeaders = { "content-type": `application/json; token=${contentTypeSecret}` };
 
-    captureHttpExchange(
-      {
-        url: "https://api.example.test/v1/messages",
-        method: "POST",
-        requestHeaders: { "content-type": `application/json; token=${contentTypeSecret}` },
-        requestBody: JSON.stringify({ credential: secret }),
-        response: new Response(JSON.stringify({ echoedCredential: secret }), {
-          status: 200,
-          headers: { "content-type": `application/json; token=${contentTypeSecret}` },
-        }),
-        meta: { credential: secret },
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
+      captureHttpExchange(
+        {
+          url: "https://api.example.test/v1/messages",
+          method: "POST",
+          requestHeaders: HeadersConstructor
+            ? new HeadersConstructor(requestHeaders)
+            : requestHeaders,
+          requestBody: JSON.stringify({ credential: secret }),
+          response: new Response(JSON.stringify({ echoedCredential: secret }), {
+            status: 200,
+            headers: { "content-type": `application/json; token=${contentTypeSecret}` },
+          }),
+          meta: { credential: secret },
+        },
+        settings,
+        deps,
+      );
+      await waitForResponseSettled();
 
-    const request = events.find((event) => event.kind === "request");
-    const response = events.find((event) => event.kind === "response");
-    expect(request?.dataText).toContain('"credential":"[REDACTED]"');
-    expect(request?.metaJson).toContain('"credential":"[REDACTED]"');
-    expect(request?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(response?.dataText).toContain('"echoedCredential":"[REDACTED]"');
-    expect(response?.metaJson).toContain('"credential":"[REDACTED]"');
-    expect(response?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(JSON.stringify(events)).not.toContain(secret);
-  });
+      const request = events.find((event) => event.kind === "request");
+      const response = events.find((event) => event.kind === "response");
+      expect(request?.dataText).toContain('"credential":"[REDACTED]"');
+      expect(request?.metaJson).toContain('"credential":"[REDACTED]"');
+      expect(request?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(response?.dataText).toContain('"echoedCredential":"[REDACTED]"');
+      expect(response?.metaJson).toContain('"credential":"[REDACTED]"');
+      expect(response?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(JSON.stringify(events)).not.toContain(secret);
+    },
+  );
 
   it("redacts registered values from failed global-fetch capture events", async () => {
     const secret = "capture-failure/secret";
@@ -651,34 +662,45 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
-  it("records metadata-only for non-cloneable Response-like objects", async () => {
-    initializeDebugProxyCapture("test", settings, deps);
-    // Some seams hand capture a Response-like object that cannot be cloned. It
-    // must still be observable (status/headers) via the shared metadata path,
-    // tagged bodyCapture: "unavailable" (distinct from the "too-large" cap path).
-    const secret = "metadata-only-content-type-secret";
-    registerSecretValueForRedaction(secret);
-    const headers = new Headers({ "content-type": `application/json; token=${secret}` });
-    captureHttpExchange(
-      {
-        url: "https://api.openai.com/v1/uncloneable",
-        method: "GET",
-        response: { status: 503, headers } as unknown as Response,
-      },
-      settings,
-      deps,
-    );
-    await waitForResponseSettled();
-    finalizeDebugProxyCapture(settings, deps);
+  it.each([
+    ["global", Headers],
+    ["Undici", UndiciHeaders],
+  ] as const)(
+    "records metadata-only for non-cloneable Response-like objects with %s Headers",
+    async (_name, HeadersConstructor) => {
+      initializeDebugProxyCapture("test", settings, deps);
+      // Some seams hand capture a Response-like object that cannot be cloned. It
+      // must still be observable (status/headers) via the shared metadata path,
+      // tagged bodyCapture: "unavailable" (distinct from the "too-large" cap path).
+      const secret = "metadata-only-content-type-secret";
+      registerSecretValueForRedaction(secret);
+      const headers = new HeadersConstructor({
+        "content-type": `application/json; token=${secret}`,
+      });
+      captureHttpExchange(
+        {
+          url: "https://api.openai.com/v1/uncloneable",
+          method: "GET",
+          response: { status: 503, headers } as unknown as Response,
+        },
+        settings,
+        deps,
+      );
+      await waitForResponseSettled();
+      finalizeDebugProxyCapture(settings, deps);
 
-    const response = events.find((event) => event.kind === "response");
-    expect(response).toBeDefined();
-    expect(response?.status).toBe(503);
-    expect(response?.contentType).toBe("application/json; token=[REDACTED]");
-    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
-    expect(response).not.toHaveProperty("dataText");
-    expect(events.some((event) => event.kind === "error")).toBe(false);
-  });
+      const response = events.find((event) => event.kind === "response");
+      expect(response).toBeDefined();
+      expect(response?.status).toBe(503);
+      expect(response?.contentType).toBe("application/json; token=[REDACTED]");
+      expect(JSON.parse(String(response?.headersJson))).toStrictEqual({
+        "content-type": "application/json; token=[REDACTED]",
+      });
+      expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
+      expect(response).not.toHaveProperty("dataText");
+      expect(events.some((event) => event.kind === "error")).toBe(false);
+    },
+  );
 
   it("records Response-like status metadata when the Headers API is absent", async () => {
     initializeDebugProxyCapture("test", settings, deps);

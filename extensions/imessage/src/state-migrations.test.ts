@@ -2,15 +2,20 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "../doctor-contract-api.js";
-import { resolveIMessageCatchupCursorKey } from "./monitor/catchup.js";
+import { resolveIMessageCatchupCursorKey } from "./state-contract.js";
 import { detectIMessageLegacyStateMigrations } from "./state-migrations.js";
 
 describe("detectIMessageLegacyStateMigrations", () => {
@@ -24,8 +29,56 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    resetPluginStateStoreForTests();
     stateWorkspace.cleanup();
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/routing");
+    vi.resetModules();
   });
+
+  it.each(["runtime", "routing"])(
+    "detects absent and unconfigured legacy state without loading %s",
+    async (boundary) => {
+      vi.resetModules();
+      if (boundary === "runtime") {
+        vi.doMock("./runtime.js", () => {
+          throw new Error("doctor detection must not materialize channel runtime");
+        });
+      } else {
+        vi.doMock("openclaw/plugin-sdk/routing", () => {
+          throw new Error("account lookup must not materialize message routing");
+        });
+      }
+      const { detectIMessageLegacyStateMigrations: detect } = await import("./state-migrations.js");
+      const params = { cfg: {}, env: {}, stateDir: stateWorkspace.dir };
+      expect(await detect(params)).toEqual([]);
+      expect(fs.readdirSync(stateWorkspace.dir)).toEqual([]);
+      const imsgDir = path.join(stateWorkspace.dir, "imessage");
+      fs.mkdirSync(imsgDir);
+      fs.writeFileSync(
+        path.join(imsgDir, "reply-cache.jsonl"),
+        JSON.stringify({
+          accountId: "default",
+          messageId: "legacy",
+          shortId: "7",
+          timestamp: Date.now(),
+        }),
+      );
+      const plans = await detect(params);
+      expect(plans.map((plan) => plan.label)).toEqual([
+        "iMessage reply short-id counter",
+        "iMessage reply short-id cache",
+      ]);
+      const counter = plans[0];
+      if (counter?.kind !== "plugin-state-import") {
+        throw new Error("expected counter import");
+      }
+      expect(await counter.readEntries()).toEqual([
+        { key: "short-id-counter", value: { counter: 7 } },
+      ]);
+    },
+  );
 
   function legacyCatchupFilename(accountId: string): string {
     return `${accountId}__${createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 12)}.json`;
@@ -191,6 +244,46 @@ describe("detectIMessageLegacyStateMigrations", () => {
         incomingValue: { counter: 1 },
       }),
     ).toBe(false);
+
+    const migration = stateMigrations[0];
+    if (!migration) {
+      throw new Error("expected iMessage migration");
+    }
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const input = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "credentials"),
+      context: {
+        openPluginStateKeyedStore: <T>(
+          options: Parameters<typeof createPluginStateKeyedStoreForTests>[1],
+        ) => createPluginStateKeyedStoreForTests<T>("imessage", { ...options, env }),
+      },
+    };
+    const migrated = await migration.migrateLegacyState(input);
+    expect(migrated.warnings).toEqual([]);
+    expect(migrated.changes.length).toBeGreaterThan(0);
+    for (const plan of plans) {
+      if (plan.kind !== "plugin-state-import") {
+        throw new Error("expected plugin-state import");
+      }
+      const entries = await createPluginStateKeyedStoreForTests("imessage", {
+        namespace: plan.namespace,
+        maxEntries: plan.maxEntries,
+        env,
+      }).entries();
+      expect(entries).toHaveLength(1);
+      if (plan.label === "iMessage reply short-id counter") {
+        expect(entries[0]?.value).toEqual({ counter: 1 });
+      }
+      if (plan.cleanupSource === "rename") {
+        expect(fs.existsSync(plan.sourcePath)).toBe(false);
+        expect(fs.existsSync(`${plan.sourcePath}.migrated`)).toBe(true);
+      }
+    }
+    expect(await migration.detectLegacyState(input)).toBeNull();
+    expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
   });
 
   it("leaves unreadable reply-cache sidecars for a later migration attempt", async () => {

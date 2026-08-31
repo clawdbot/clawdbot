@@ -3,6 +3,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import "../styles/sidebar-issues.css";
@@ -63,6 +64,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const visibleDismissals = visibleEntries.flatMap((entry) =>
     entry.dismissal ? [entry.dismissal] : [],
   );
+  const hasVisibleDismissals = visibleDismissals.length > 0;
   const tabCounts = sidebarInboxTabCounts(params.entries);
   const custodianItems = params.entries.filter(
     (entry) => entry.type === "attention" && entry.action.kind === "askCustodian",
@@ -121,6 +123,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         id="sidebar-issues-panel"
         class="sidebar-issues-panel"
         role="dialog"
+        aria-modal=${isMobileNavLayout() ? "true" : nothing}
         aria-labelledby="sidebar-issues-panel-heading"
         style=${panelStyle}
         @keydown=${params.onKeydown}
@@ -134,19 +137,20 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             ${t("attention.issues")}
           </h2>
           <div class="sidebar-issues-panel__header-actions">
-            ${visibleDismissals.length > 0
-              ? html`<button
-                  type="button"
-                  class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
-                  @click=${() => {
-                    for (const dismissal of visibleDismissals) {
-                      params.onDismiss(dismissal);
-                    }
-                  }}
-                >
-                  ${t("attention.dismissShown")}
-                </button>`
-              : nothing}
+            <button
+              type="button"
+              class="btn btn--xs btn--ghost sidebar-issues-panel__dismiss-shown"
+              style=${hasVisibleDismissals ? nothing : "visibility:hidden"}
+              ?disabled=${!hasVisibleDismissals}
+              aria-hidden=${hasVisibleDismissals ? nothing : "true"}
+              @click=${() => {
+                for (const dismissal of visibleDismissals) {
+                  params.onDismiss(dismissal);
+                }
+              }}
+            >
+              ${t("attention.dismissShown")}
+            </button>
             ${renderSidebarAskOpenClawButton({
               count: custodianItems.length,
               severity: custodianSeverity,

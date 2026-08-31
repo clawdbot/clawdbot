@@ -25,6 +25,10 @@ loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
 host-local `ask: "always"` in the execution host approvals document keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
+An unconfigured node uses the same `full` / `off` baseline as the Gateway.
+Node execution still checks the target policy before dispatch: caller
+`allowlist` / `off` denies an unmatched command, and target `ask: "always"`
+requires approval even when the caller requests `full` / `off`.
 </Note>
 
 ## Where it applies
@@ -77,6 +81,12 @@ pending approval message. Matrix seeds reaction shortcuts (`✅` allow once,
 message as a fallback.
 </Tip>
 
+For native chat approval surfaces, a node exec waits for the decision within
+the originating tool call and returns the command output there. Closing or
+cancelling that turn invalidates its pending authority; a late approval cannot
+restart it. A typed `SYSTEM_RUN_DENIED` result means the node rejected execution,
+not that the command may have run.
+
 ## Settings and storage
 
 Approvals live in the shared SQLite state database on the execution host. When
@@ -106,6 +116,14 @@ directory. After upgrading from a file-backed release, stop the Gateway and run
 `exec-approvals.json`. Doctor also imports legacy
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
+
+Legacy allowlist entries may contain `null` for `lastUsedAt` or
+`lastUsedCommand`. Doctor treats those two usage fields as absent during
+import, including when the config still needs repair. This does not relax
+canonical policy validation: other malformed fields or conflicting legacy
+policies remain preserved for operator recovery, and exec approvals stay
+blocked until the legacy file is resolved. After repair, verify with
+`openclaw approvals get` using the same state directory.
 
 Example schema:
 
@@ -178,7 +196,7 @@ Default is `full` for gateway/node hosts; a `sandbox` host defaults to
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
   Configured ask policy for host exec. Controls the baseline approval
-  prompt behavior from `tools.exec.ask` and host approvals defaults.
+  prompt behavior from `tools.exec.mode` and host approvals defaults.
   Default is `off`. The per-call `ask` tool parameter (see
   [Exec tool](/tools/exec#parameters)) can only harden that baseline, and
   channel-origin model calls ignore it when the effective host ask is `off`.
@@ -252,7 +270,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off, ordinary path aliases and inline scripts do not require approval binding; restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
@@ -337,9 +355,9 @@ EOF
 
 </Note>
 
-### Session-only shortcut
+### Session and turn shortcuts
 
-- `/exec security=full ask=off` changes only the current session.
+- `/exec security=full ask=off <task>` requests that policy for the current message only. Include the task in the same message; a standalone directive does not affect the next message. Session permission modes and host policy can still restrict the request.
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
   when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
@@ -427,31 +445,74 @@ Each allowlist entry supports:
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
 
-## Cron standing grants
+## Standing grants for automations
 
-Approvals raised by gateway-host cron runs are delivered only to connected
-approval surfaces (Control UI, TUI, macOS app) — never to chat channels, which
-would repeat a card on every occurrence. While a reviewer surface is
-connected, the scheduled run waits for the decision like an interactive run;
-cron jobs are single-flight, so at most one card per job is pending at a
-time. With no approval surface connected, the request is denied immediately
-and the run's error explains the policy fix, exactly as before. Node-host
-cron execs keep the fully headless policy (no cards) until node execution
-gains its own standing-grant path.
+Approvals raised by gateway-host automation (cron) runs are delivered only to
+connected exec approval clients: the Control UI, the macOS/iOS/Android apps,
+and API clients that declare the `approvals` or `exec-approvals` capability.
+The TUI does not render exec approval cards, and chat channels never receive
+automation approvals, which would repeat a card on every occurrence. While a reviewer
+surface is connected, the scheduled run waits for the decision like an
+interactive run; automations are single-flight, so at most one card per job
+is pending at a time. With no approval surface connected, the request is
+denied immediately and the run's error explains the policy fix. Node-host
+automation execs keep the fully headless policy (no cards) until node
+execution gains its own standing-grant path.
 
-When an approval originates from a cron job's isolated run, resolving it with
-**allow always** does not write a JSON allowlist entry. Instead the Gateway
-mints a scoped standing grant bound to that exact agent, cron job, job
-configuration, and operation (command text, working directory, and requested
-environment). Later occurrences of the same job execute that exact operation
-without prompting while the grant is valid.
+When an approval originates from an automation's isolated run, resolving it
+with **Always allow** does not write a JSON allowlist entry. Instead the
+Gateway mints a scoped standing grant bound to that exact agent, automation,
+job configuration, and operation (command text, working directory, and
+requested environment). Later occurrences of the same job execute that exact
+operation without prompting while the grant is valid. The approval card says
+so up front: automation approvals carry a scope line describing exactly what
+Always allow will mint.
 
-A grant expires 30 days after the approval and fails closed back to a normal
-prompt whenever anything changed: the job was edited or deleted, the command,
-working directory, or environment differs, the grant expired or was revoked,
-or the original approval record is gone. Mutable file operands and commands
+### What a grant covers, and when it stops
+
+A grant fails closed back to a normal prompt whenever anything changed: the
+job was edited or deleted (any configuration change invalidates it), the
+command, working directory, or environment differs by even one byte, the
+grant was revoked or expired, or the original approval record is gone. The
+check runs immediately before the process spawns, so a revocation or job
+edit that lands mid-flight still wins. Mutable file operands and commands
 that require explicit review (heredocs, strict inline eval, audit
-suppression) keep prompting per occurrence. Non-cron approvals are unchanged.
+suppression) keep prompting per occurrence. Non-automation approvals are
+unchanged.
+
+### Grant lifetime
+
+By default a grant lives **until revoked** — the same meaning Always allow
+has everywhere else in the product. Terms freeze at mint time and never
+change retroactively:
+
+- `tools.exec.grantExpiryDays` (unset by default) sets the default lifetime,
+  in days, for **future** grants. Existing grants keep the terms they were
+  minted with; use revocation to retire them early. This is the fleet-policy
+  knob for managed deployments that require periodic re-approval.
+- A resolving surface may override the default per grant with the
+  `grantExpiresInDays` field on `approval.resolve` /
+  `exec.approval.resolve`, or `openclaw approvals resolve <id> allow-always
+--expires-in-days <n>`. The override wins over the config default.
+- Expired grants fall back to prompting and are pruned opportunistically.
+
+### Listing and revoking
+
+Every standing grant is visible and revocable:
+
+- **Control UI**: Settings → Approvals shows the standing-grant ledger —
+  automation, exact command, use count, and state (until revoked, expires in
+  N days, expired, revoked) — with a Revoke action per active row.
+- **CLI**: `openclaw approvals grants list` renders the same ledger;
+  `openclaw approvals grants revoke <grant-id>` revokes one grant. Revocation
+  is idempotent and takes effect at the next occurrence's spawn boundary —
+  that occurrence prompts again.
+- Deleting or editing the automation, or reversing the minting approval,
+  also invalidates the grant without touching the grants surface.
+
+The minting `operator_approvals` row remains the sole authorization owner: a
+grant is derivative correlation, revalidated against the live approval row,
+automation row, and revocation state on every use.
 
 ## Auto-allow skill CLIs
 
@@ -557,7 +618,7 @@ id=...)` / `Exec denied (gateway id=...)`).
 - **`ask`** keeps you in the loop while still allowing fast approvals.
 - Per-agent allowlists prevent one agent's approvals from leaking into others.
 - Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
-- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design. To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
+- `/exec security=full <task>` is a current-turn request by an authorized operator, subject to effective session and host policy. To hard-block exec, deny the `exec` tool via tool policy. See [session overrides](/tools/exec#session-overrides-%2Fexec) for the full-access session exception to host approval floors.
 
 ## Related
 

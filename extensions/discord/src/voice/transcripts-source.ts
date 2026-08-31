@@ -236,6 +236,12 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
         transcripts: {
           sessionId: request.session.sessionId,
           onUtterance: request.onUtterance,
+          onStop: () =>
+            request.onStatus?.({
+              sessionId: request.session.sessionId,
+              active: false,
+              source: request.session.source,
+            }),
         },
       },
     );

@@ -59,7 +59,10 @@ export function resolveSlackBlocksText(blocks: unknown[] | undefined): SlackBloc
     hasRichText ||= blockType === "rich_text";
     hasNativeData ||=
       blockType === "data_visualization" || blockType === "data_table" || blockType === "table";
-    const text = renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" });
+    const text = renderSlackBlockFallbackText(block, {
+      nativeDataFormat: "plain",
+      nativeReferenceFormat: "plain",
+    });
     if (text) {
       parts.push(text);
     }

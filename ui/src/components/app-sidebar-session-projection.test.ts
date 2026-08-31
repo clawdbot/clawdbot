@@ -44,7 +44,7 @@ function projectionInput(
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
-    hideEmptyOwnerFilteredGroup: () => false,
+    hideEmptyGroups: false,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",
@@ -110,6 +110,33 @@ describe("SidebarSessionProjection sticky membership", () => {
     );
   });
 
+  it.each([10, 30])(
+    "bounds implicit retention while preserving the current %i-row page and active session",
+    (limit) => {
+      const projection = new SidebarSessionProjection();
+      const quietRows = Array.from({ length: 4 * limit }, (_, index) =>
+        sessionRow(`quiet-${index}`),
+      );
+      const active = sessionRow("current", { active: true });
+      const options: Partial<ProjectionInput> = {
+        sortMode: "updated",
+        ...(limit === 10 ? {} : { visibleSessionLimits: new Map([["ungrouped", limit]]) }),
+      };
+
+      for (let start = 0; start < quietRows.length; start += limit) {
+        const sorted = [...quietRows.slice(start), ...quietRows.slice(0, start), active];
+        const { visibleRows } = projection.project(projectionInput(sorted, options));
+        const visibleKeys = new Set(visibleRows.map((row) => row.key));
+
+        expect(visibleKeys.has(active.key)).toBe(true);
+        for (const row of sorted.slice(0, limit - 1)) {
+          expect(visibleKeys.has(row.key)).toBe(true);
+        }
+        expect(visibleRows.length).toBeLessThanOrEqual(2 * limit);
+      }
+    },
+  );
+
   it.each([
     // Grouping can re-emit the same section id (e.g. ungrouped) with a
     // different row population; sticky keys must not survive the switch.
@@ -131,6 +158,23 @@ describe("SidebarSessionProjection sticky membership", () => {
       );
     },
   );
+
+  it("keeps the flat list headerless beside catalog sections when grouping is none", () => {
+    const projection = new SidebarSessionProjection();
+    const flat = projection.project(
+      projectionInput([sessionRow("a")], { grouping: "none", catalogIds: ["claude"] }),
+    );
+    expect(flat.sections.map((section) => [section.id, section.renderHeader])).toEqual([
+      ["ungrouped", false],
+      ["work", true],
+      ["catalog:claude", true],
+    ]);
+
+    const grouped = projection.project(
+      projectionInput([sessionRow("a")], { catalogIds: ["claude"] }),
+    );
+    expect(grouped.sections.find((section) => section.id === "ungrouped")?.renderHeader).toBe(true);
+  });
 
   it("clears a section's sticky rows when its user collapses and reopens it", () => {
     const projection = new SidebarSessionProjection();

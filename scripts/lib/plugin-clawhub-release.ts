@@ -82,6 +82,10 @@ const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
 const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
   ".github/actions/setup-node-env",
+  "scripts/lib/bounded-command.mjs",
+  "scripts/lib/bounded-command.mts",
+  "scripts/lib/managed-child-process.mts",
+  "scripts/lib/tsx-cli-shim.mjs",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",

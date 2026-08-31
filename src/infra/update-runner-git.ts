@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -20,6 +21,7 @@ import {
 } from "./update-runner-doctor.js";
 import {
   findBlockingGitFailure,
+  gitCleanCheckArgs,
   resolveBuildEnv,
   resolveInstallEnv,
   shouldInstallWithoutScriptsOnWindows,
@@ -38,6 +40,17 @@ import type {
   UpdateRunnerOptions,
   UpdateStepResult,
 } from "./update-runner-types.js";
+
+async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(path.join(gitRoot, "dist", "build-info.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const buildId = isRecord(parsed) ? parsed.buildId : undefined;
+    return typeof buildId === "string" && buildId.trim() ? buildId.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
@@ -257,13 +270,10 @@ export async function updateGitCheckout(params: {
     return buildError(reason);
   };
 
-  const statusCheck = await runStep(
-    step(
-      "clean check",
-      ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-      gitRoot,
-    ),
-  );
+  const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
+  if (statusCheck.exitCode !== 0) {
+    return buildError("clean-check-failed");
+  }
   if (statusCheck.stdoutTail?.trim()) {
     return buildError("dirty", "skipped");
   }
@@ -391,7 +401,7 @@ export async function updateGitCheckout(params: {
   }
 
   const manager = await resolveUpdateBuildManager(
-    (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
+    runCommand,
     gitRoot,
     timeoutMs,
     defaultCommandEnv,
@@ -401,7 +411,13 @@ export async function updateGitCheckout(params: {
     return await rollbackError(manager.reason);
   }
   try {
-    const installEnv = resolveInstallEnv(manager.manager, manager.env);
+    const installEnv = await resolveInstallEnv(
+      manager.manager,
+      manager.env ?? defaultCommandEnv,
+      gitRoot,
+      runCommand,
+      timeoutMs,
+    );
     let installStep = await runStep(
       step(
         "deps install",
@@ -430,7 +446,7 @@ export async function updateGitCheckout(params: {
         managerScriptArgs(manager.manager, "build"),
         gitRoot,
         resolveBuildEnv(
-          manager.env,
+          manager.env ?? defaultCommandEnv,
           channel === "dev" ? path.join(gitRoot, ".artifacts", "build-all-cache") : undefined,
         ),
       ),
@@ -439,11 +455,7 @@ export async function updateGitCheckout(params: {
       return await rollbackError("build-failed");
     }
     const buildCleanCheck = await runStep(
-      step(
-        "build clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
-        gitRoot,
-      ),
+      step("build clean check", gitCleanCheckArgs(gitRoot), gitRoot),
     );
     if (buildCleanCheck.exitCode !== 0) {
       return await rollbackError("build-failed");
@@ -547,6 +559,7 @@ export async function updateGitCheckout(params: {
     }
 
     const failedStep = findBlockingGitFailure(steps);
+    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
@@ -569,6 +582,7 @@ export async function updateGitCheckout(params: {
       after: {
         sha: afterShaStep.stdoutTail?.trim() ?? null,
         version: await readPackageVersion(gitRoot),
+        ...(afterBuildId ? { buildId: afterBuildId } : {}),
         ...(!failedStep && devTarget?.mode === "tracked"
           ? { upstreamRef: devTarget.upstreamRef }
           : {}),

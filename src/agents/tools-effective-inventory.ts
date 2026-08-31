@@ -257,6 +257,9 @@ export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
     agentDir,
     config: params.cfg,
     workspaceDir,
+    // The selected provider owner must join the generation before dynamic hooks resolve.
+    loadRuntimePlugins: true,
+    runtimePluginSelections: [{ provider, modelId, agentId }],
   });
   try {
     const stores = lease.snapshot.createStores();
