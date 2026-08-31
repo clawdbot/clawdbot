@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import type { ModelFallbackAvailability } from "./agent-scope.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -12,6 +13,7 @@ import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types
 import { FailoverError } from "./failover-error.js";
 import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
@@ -308,8 +310,12 @@ async function runEmbeddedEntryFallback(params: {
   workspaceDir: string;
   sessionKey: string;
   runId: string;
+  config?: OpenClawConfig;
+  fallbacksOverride?: string[];
+  modelFallbackAvailability?: ModelFallbackAvailability;
+  onFallbackStep?: (step: ModelFallbackStepFields) => void;
 }) {
-  const cfg = makeConfig();
+  const cfg = params.config ?? makeConfig();
   const sessionId = `session:${params.runId}`;
   const preparedRunAdmission = createModelRoutingTestAdmission({
     cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
@@ -324,6 +330,7 @@ async function runEmbeddedEntryFallback(params: {
         model: "mock-1",
         agentDir: params.agentDir,
         manifestPlugins: [],
+        fallbacksOverride: params.fallbacksOverride,
       },
       identity: {
         runId: params.runId,
@@ -344,6 +351,7 @@ async function runEmbeddedEntryFallback(params: {
       },
       behavior: { kind: "maintenance" },
       sessionOverride: { kind: "preserve" },
+      onFallbackStep: params.onFallbackStep,
       runCandidate: (provider, model, options) => {
         observedModelRoutingProvenance.push(options.modelRoutingProvenance);
         return runEmbeddedAgentWithPreparedAdmission({
@@ -353,6 +361,9 @@ async function runEmbeddedEntryFallback(params: {
           workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           config: cfg,
+          ...(params.modelFallbackAvailability
+            ? { modelFallbackAvailability: params.modelFallbackAvailability }
+            : {}),
           prompt: "hello",
           provider,
           model,
@@ -513,6 +524,80 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+      // Same rate-limit rotation-cap scenario as #58572, but the session pins
+      // the model (empty effective ladder + disabled availability). Pre-fix the
+      // run derived fallbackConfigured from config defaults, so the rotation
+      // cap escalated to fallback_model over the empty ladder and threw the
+      // escalation error ("temporarily rate-limited") before spending the
+      // same-model retry budget.
+      mockPrimaryErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const fallbackSteps: ModelFallbackStepFields[] = [];
+      const run = runEmbeddedEntryFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:user-model-override-rate-limit",
+        runId: "run:user-model-override-rate-limit",
+        fallbacksOverride: [],
+        // Prepared by the session model selection path for
+        // hasSessionModelOverride=true and modelOverrideSource="user".
+        modelFallbackAvailability: { kind: "disabled_by_model_override" },
+        onFallbackStep: (step) => fallbackSteps.push(step),
+      });
+
+      await expect(run).rejects.toMatchObject({
+        name: "FailoverError",
+        message: expect.stringContaining("API rate limit reached"),
+        reason: "rate_limit",
+        provider: "openai",
+        model: "mock-1",
+        suspend: true,
+      });
+      // Pre-fix the bogus escalation fired after two primary attempts; the
+      // truthful no-fallback path spends every rotation and same-model retry.
+      expect(runEmbeddedAttemptMock.mock.calls.length).toBeGreaterThan(2);
+      expect(
+        runEmbeddedAttemptMock.mock.calls.every(
+          ([params]) => (params as EmbeddedAttemptParams).provider === "openai",
+        ),
+      ).toBe(true);
+      // The exhausted-chain observation records no switch to another model.
+      expect(fallbackSteps.map((step) => step.fallbackStepFinalOutcome)).toEqual([
+        "chain_exhausted",
+      ]);
+      expect(fallbackSteps[0]?.fallbackStepToModel).toBeUndefined();
+    });
+  });
+
+  it("keeps fallback enabled for an auto-selected model route", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedEntryFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:auto-model-route-retry-limit",
+        runId: "run:auto-model-route-retry-limit",
+        fallbacksOverride: ["groq/mock-2"],
+        // Prepared by the session model selection path for
+        // hasSessionModelOverride=true and modelOverrideSource="auto".
+        modelFallbackAvailability: { kind: "active", models: ["groq/mock-2"] },
+      });
+
+      expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
+      expect(result.result.meta.error).toBeUndefined();
+      expect(
+        runEmbeddedAttemptMock.mock.calls.map(
+          ([params]) => (params as EmbeddedAttemptParams).provider,
+        ),
+      ).toContain("groq");
+    });
+  });
+
   it("carries failed outer candidates into the winning execution trace", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
