@@ -111,11 +111,17 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
   };
+  // Refused invocations must not create diagnostic artifacts or start an agent.
+  const prepared = await withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(opts));
+  if (!prepared) {
+    return;
+  }
+  recoveryState.triageTarget.root = prepared.discoveredRoot;
   await withUpdateFailureTriage(opts, recoveryState.triageTarget, async () => {
     await withUpdateInProgressEnv(invocationCwd, async () => {
       let failure: { error: unknown } | undefined;
       try {
-        await updateCommandInternal(opts, recoveryState, invocationCwd);
+        await updateCommandInternal(opts, recoveryState, invocationCwd, prepared);
       } catch (error) {
         failure = { error };
       }
@@ -154,11 +160,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   });
 }
 
-async function updateCommandInternal(
-  opts: UpdateCommandOptions,
-  recoveryState: UpdateCommandRecoveryState,
-  invocationCwd: string | undefined,
-): Promise<void> {
+async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const startedAt = Date.now();
   suppressDeprecations();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
@@ -197,7 +199,6 @@ async function updateCommandInternal(
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const discoveredRoot = await resolveUpdateRoot();
-  recoveryState.triageTarget.root = discoveredRoot;
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
     throw new Error(
@@ -212,6 +213,36 @@ async function updateCommandInternal(
       throw err;
     }
   }
+  return {
+    startedAt,
+    postCoreUpdateResume,
+    postCoreUpdateChannel,
+    timeoutMs,
+    shouldRestart,
+    requestedChannel,
+    devTarget,
+    controlPlaneUpdateSentinelMeta,
+    discoveredRoot,
+  };
+}
+
+async function updateCommandInternal(
+  opts: UpdateCommandOptions,
+  recoveryState: UpdateCommandRecoveryState,
+  invocationCwd: string | undefined,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+): Promise<void> {
+  const {
+    startedAt,
+    postCoreUpdateResume,
+    postCoreUpdateChannel,
+    timeoutMs,
+    shouldRestart,
+    requestedChannel,
+    controlPlaneUpdateSentinelMeta,
+    discoveredRoot,
+  } = prepared;
+  let { devTarget } = prepared;
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
   let root = discoveredRoot;

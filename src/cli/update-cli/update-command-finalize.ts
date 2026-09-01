@@ -44,7 +44,7 @@ import {
 } from "./update-command-plugins.js";
 import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
-import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
@@ -110,19 +110,7 @@ type UpdateFinalizeResult = {
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   const invocationCwd = tryResolveInvocationCwd();
-  const target: UpdateTriageTarget = { env: resolveServiceRefreshEnv(process.env, invocationCwd) };
-  await withUpdateFailureTriage(opts, target, () =>
-    withUpdateInProgressEnv(invocationCwd, () => updateFinalizeCommandInternal(opts, target)),
-  );
-}
-
-async function updateFinalizeCommandInternal(
-  opts: UpdateFinalizeOptions,
-  target: UpdateTriageTarget,
-): Promise<void> {
   suppressDeprecations();
-  const finalizationStartedAt = performance.now();
-  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   if (timeoutMs === null) {
     return;
@@ -139,10 +127,30 @@ async function updateFinalizeCommandInternal(
   assertConfigWriteAllowedInCurrentMode();
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
+    recoverOrphanedSidecars: false,
   });
 
   const root = await resolveUpdateRoot();
-  target.root = root;
+  const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
+  await withUpdateFailureTriage(opts, target, () =>
+    withUpdateInProgressEnv(invocationCwd, () =>
+      updateFinalizeCommandInternal(opts, root, timeoutMs, requestedChannel),
+    ),
+  );
+}
+
+async function updateFinalizeCommandInternal(
+  opts: UpdateFinalizeOptions,
+  root: string,
+  timeoutMs: number | undefined,
+  requestedChannel: UpdateChannel | null,
+): Promise<void> {
+  const finalizationStartedAt = performance.now();
+  const phaseTimings: UpdateFinalizePhaseTiming[] = [];
+  // Refused invocations cannot write diagnostics or recover state sidecars.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   let configSnapshot = await runTimedFinalizePhase({
     finalizationStartedAt,
     phaseTimings,

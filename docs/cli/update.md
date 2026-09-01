@@ -44,7 +44,9 @@ recovery and cleanup finish. Interactive updates open the existing agent picker;
 `--yes`, `--json`, and non-interactive invocations only collect diagnostics and
 print handoff commands. With `--json`, triage output goes to stderr so stdout
 retains the original update result. A failed diagnostic collection never hides
-the update failure. Dry runs do not collect diagnostics. See
+the update failure. Dry runs and commands refused during argument validation,
+supervisor ownership, handoff identity, or immutable-config checks do not collect
+diagnostics or start an agent. See
 [Update troubleshooting](/install/update-troubleshooting).
 
 ## Options
