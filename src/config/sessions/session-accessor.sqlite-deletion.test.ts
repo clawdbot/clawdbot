@@ -6,6 +6,7 @@ import type {
   AgentHarness,
   AgentHarnessSessionDeletionParams,
 } from "../../agents/harness/types.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -37,6 +38,11 @@ import {
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
+import {
+  runSqliteSessionDeletionTransaction,
+  withSqliteSessionDeletions,
+} from "./session-accessor.sqlite-deletion.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -147,6 +153,47 @@ describe("session deletion and native owner state", () => {
     });
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+
+  it("does not materialize surviving prompts when deleting a node with no windows", async () => {
+    const reclaimedKey = "agent:main:reclaimed-node";
+    const survivorKey = "agent:main:untouched-node";
+    const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
+    await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
+    await replaceSessionEntry(
+      { sessionKey: survivorKey, storePath },
+      {
+        sessionId: "untouched-session",
+        updatedAt: entry.updatedAt,
+        skillsSnapshot: { prompt: "saved skill prompt", skills: [] },
+      },
+    );
+    const scope = {
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    };
+    const database = openOpenClawAgentDatabase(scope);
+    database.db.prepare("DELETE FROM session_windows WHERE session_key = ?").run(reclaimedKey);
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    try {
+      await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
+        runSqliteSessionDeletionTransaction((current) => {
+          deleteSessionEntryRows(current, reclaimedKey);
+        }, scope);
+      });
+      const rows = queries.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.rows : [],
+      );
+      expect(rows).not.toContainEqual(
+        expect.objectContaining({ session_key: survivorKey, entry_json: expect.any(String) }),
+      );
+    } finally {
+      queries.mockRestore();
+    }
+    expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: survivorKey, storePath })?.skillsSnapshot?.prompt).toBe(
+      "saved skill prompt",
+    );
+  });
 
   it("patches a case-distinct Matrix room without preparing its admitted sibling for deletion", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";

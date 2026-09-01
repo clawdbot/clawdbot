@@ -24,11 +24,7 @@ import type {
   SessionConnectionScope,
   SessionMessageSubscription,
 } from "./session-capability.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-} from "./session-key.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import {
   requestSessionBranchSwitch,
   requestSessionBranches,
@@ -145,10 +141,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       throw new Error("Session message subscription requires an active Gateway connection");
     }
     const normalizedKey = key.trim();
-    const agentId =
-      isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
-        ? normalizeAgentId(options.agentId)
-        : null;
+    const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
       keysEquivalent: areUiSessionKeysEquivalent,
     })

@@ -7,7 +7,11 @@ import {
   isRetryableHeartbeatSkipReason,
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
-import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import {
+  type CronActiveJobMarker,
+  isCronActiveJobMarkerCurrent,
+  markCronJobWaitingForHeartbeat,
+} from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -204,35 +208,52 @@ export async function executeJobCore(
   if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
     // Monitors and migrated tasks share the wake bus, keeping coalescing,
     // quiet hours, cooldown, flood, and busy guards in the heartbeat runner.
-    requestCronHeartbeat(
-      state,
-      heartbeatTask
-        ? {
-            source: "interval",
-            intent: "task",
-            reason: `heartbeat-task:${heartbeatTask.id}`,
-            agentId: heartbeatTask.agentId,
-            tasks: [
-              {
-                jobId: heartbeatTask.id,
-                name: heartbeatTask.name,
-                prompt: heartbeatTask.payload.text,
-              },
-            ],
-          }
-        : {
-            source: "interval",
-            intent: "scheduled",
-            reason: "interval",
-            agentId: effectiveJob.agentId,
-            scheduledEveryMs:
-              effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
-          },
+    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
+      options?.activeJobMarker,
+      options?.owningCronLaneTaskMarker,
     );
-    const result = {
-      status: "ok" as const,
-      summary: heartbeatTask ? "heartbeat task wake requested" : "heartbeat wake requested",
-    };
+    let heartbeatResult: HeartbeatRunResult;
+    try {
+      heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(
+        heartbeatTask
+          ? {
+              source: "interval",
+              intent: "task",
+              reason: `heartbeat-task:${heartbeatTask.id}`,
+              agentId: heartbeatTask.agentId,
+              tasks: [
+                {
+                  jobId: heartbeatTask.id,
+                  name: heartbeatTask.name,
+                  prompt: heartbeatTask.payload.text,
+                },
+              ],
+            }
+          : {
+              source: "interval",
+              intent: "scheduled",
+              reason: "interval",
+              agentId: effectiveJob.agentId,
+              scheduledEveryMs:
+                effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
+            },
+        abortSignal ? { abortSignal } : {},
+      ) ?? { status: "failed", reason: "heartbeat wake settlement unavailable" });
+    } finally {
+      releaseHeartbeatWait();
+    }
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const result =
+      heartbeatResult.status === "ran"
+        ? {
+            status: "ok" as const,
+            summary: heartbeatTask ? "heartbeat task completed" : "heartbeat completed",
+          }
+        : heartbeatResult.status === "failed"
+          ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
+          : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {

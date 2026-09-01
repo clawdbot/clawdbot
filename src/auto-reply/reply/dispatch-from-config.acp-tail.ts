@@ -1,5 +1,8 @@
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import {
+  admittedSessionSettingsRestrictRuntime,
+  createReplyDispatchEvent,
+} from "./dispatch-from-config.events.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
@@ -13,6 +16,9 @@ export async function handleAcpDispatchTailAfterReset(
   // Route that tail through ACP now (same turn) instead of embedded dispatch.
   state.ctx.AcpDispatchTailAfterReset = false;
   const hookRunner = state.hookRunner;
+  if (admittedSessionSettingsRestrictRuntime(state.params.replyOptions?.admittedSessionSettings)) {
+    return undefined;
+  }
   if (!hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
     return undefined;
   }

@@ -162,20 +162,21 @@ export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRe
 
 export function listRegistryWorktreesForMigration(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => {
-        if (!tableExists(db, "worktrees")) {
-          return [];
-        }
-        const query = kyselyFor(db)
-          .selectFrom("worktrees")
-          .selectAll()
-          .orderBy("created_at", "desc")
-          .orderBy("id", "asc");
-        return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
-      },
-      { env },
-    ) ?? []
+    readRegistry(env, (db) => {
+      const query = kyselyFor(db)
+        .selectFrom("worktrees")
+        .selectAll()
+        .orderBy("created_at", "desc")
+        .orderBy("id", "asc");
+      return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
+    }) ?? []
+  );
+}
+
+function readRegistry<T>(env: NodeJS.ProcessEnv, read: (db: DatabaseSync) => T): T | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => (tableExists(db, "worktrees") ? read(db) : undefined),
+    { env },
   );
 }
 
@@ -205,13 +206,16 @@ export function getRegistryWorktreeProvisionedPaths(
 }
 
 export function hasLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): boolean {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select("id")
-    .where("provisioned_paths_json", "is", null)
-    .limit(1);
-  return executeSqliteQuerySync(db, query).rows.length > 0;
+  return (
+    readRegistry(env, (db) => {
+      const query = kyselyFor(db)
+        .selectFrom("worktrees")
+        .select("id")
+        .where("provisioned_paths_json", "is", null)
+        .limit(1);
+      return executeSqliteQuerySync(db, query).rows.length > 0;
+    }) ?? false
+  );
 }
 
 export function discardLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): number {
@@ -357,21 +361,6 @@ export function findLiveRegistryWorktreeByOwner(
     .where("owner_kind", "=", ownerKind)
     .where("owner_id", "=", ownerId)
     .where("removed_at", "is", null)
-    .orderBy("created_at", "desc")
-    .limit(1);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
-}
-
-export function findRegistryWorktreeByPath(
-  env: NodeJS.ProcessEnv,
-  worktreePath: string,
-): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .selectAll()
-    .where("path", "=", worktreePath)
     .orderBy("created_at", "desc")
     .limit(1);
   const row = executeSqliteQuerySync(db, query).rows[0];

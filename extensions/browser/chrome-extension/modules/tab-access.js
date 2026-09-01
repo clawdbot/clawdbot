@@ -2,13 +2,9 @@ import { ACCESS_MODE_ALL, ACCESS_MODE_SELECTED, OPENCLAW_TAB_GROUP_TITLE } from 
 import { addTabToOpenClawGroup } from "./relay-tab-groups.js";
 import { TAB_SCOPED_COMMANDS } from "./tab-access-command-scope.js";
 import { createTabDocumentProvenance } from "./tab-document-provenance.js";
-import { effectiveTabUrl, tabEligibility } from "./tab-eligibility.js";
+import { effectiveTabUrl, isValidTabId, tabEligibility } from "./tab-eligibility.js";
 
 const DENIED_TAB_IDS_KEY = "deniedTabIdsV1";
-
-function isValidTabId(value) {
-  return Number.isSafeInteger(value) && value >= 0;
-}
 
 function initialBlankDocument(tab) {
   return tab.url === "about:blank" || (!tab.url && tab.pendingUrl === "about:blank");
@@ -640,10 +636,7 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
         if (listRevision !== discoveryRevision) {
           break;
         }
-        if (tabIsRevoking(tab.id)) {
-          continue;
-        }
-        if (!eligibilityForTab(tab).eligible) {
+        if (tabIsRevoking(tab.id) || !eligibilityForTab(tab).eligible) {
           continue;
         }
         if (mode === ACCESS_MODE_ALL) {
@@ -740,6 +733,9 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     initialize,
     get mode() {
       return mode;
+    },
+    get discoveryRevision() {
+      return discoveryRevision;
     },
     setMode,
     setEnabled,

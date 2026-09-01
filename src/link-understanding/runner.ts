@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 // Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
+import { createAbortError, isAbortError } from "../infra/abort-signal.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
@@ -71,12 +72,14 @@ function buildLinkCliArgs(params: {
 async function fetchLinkContent(params: {
   timeoutMs: number;
   url: string;
+  signal?: AbortSignal;
 }): Promise<{ content: string; finalUrl: string } | null> {
   const { response, finalUrl, release } = await fetchWithSsrFGuard({
     url: params.url,
     timeoutMs: params.timeoutMs,
     mode: GUARDED_FETCH_MODE.STRICT,
     auditContext: "link-understanding",
+    signal: params.signal,
     init: {
       headers: {
         Accept: "text/*,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -108,6 +111,7 @@ async function runCliEntry(params: {
   ctx: MsgContext;
   url: string;
   config?: LinkToolsConfig;
+  signal?: AbortSignal;
 }): Promise<string | null> {
   if ((params.entry.type ?? "cli") !== "cli") {
     return null;
@@ -140,11 +144,17 @@ async function runCliEntry(params: {
   const result = await runCommandWithTimeout(argv, {
     timeoutMs,
     input: params.content,
+    signal: params.signal,
+    // Processor wrappers and their children share the reply's cancellation lifetime.
+    killProcessTree: true,
     env: {
       OPENCLAW_LINK_FINAL_URL: params.finalUrl,
       OPENCLAW_LINK_URL: params.url,
     },
   });
+  if (params.signal?.aborted) {
+    throw createAbortError("Link understanding command aborted", { cause: params.signal.reason });
+  }
   if (result.code !== 0) {
     throw new Error(`Link understanding command exited with code ${result.code ?? "unknown"}`);
   }
@@ -159,9 +169,13 @@ async function runLinkEntries(params: {
   ctx: MsgContext;
   url: string;
   config?: LinkToolsConfig;
+  signal?: AbortSignal;
 }): Promise<string | null> {
   let lastError: unknown;
   for (const entry of params.entries) {
+    if (params.signal?.aborted) {
+      break;
+    }
     try {
       const output = await runCliEntry({
         content: params.content,
@@ -170,11 +184,15 @@ async function runLinkEntries(params: {
         ctx: params.ctx,
         url: params.url,
         config: params.config,
+        signal: params.signal,
       });
       if (output) {
         return output;
       }
     } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
       lastError = err;
       if (shouldLogVerbose()) {
         logVerbose(`Link understanding failed for ${params.url}: ${String(err)}`);
@@ -195,6 +213,7 @@ export async function runLinkUnderstanding(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   message?: string;
+  signal?: AbortSignal;
 }): Promise<LinkUnderstandingResult> {
   const config = params.cfg.tools?.links;
   if (!config || config.enabled === false) {
@@ -223,10 +242,19 @@ export async function runLinkUnderstanding(params: {
   const outputs: string[] = [];
   const timeoutMs = resolveFetchTimeoutMsFromConfig({ config, entries });
   for (const url of links) {
+    if (params.signal?.aborted) {
+      break;
+    }
     let fetched: Awaited<ReturnType<typeof fetchLinkContent>>;
     try {
-      fetched = await fetchLinkContent({ url, timeoutMs });
+      fetched = await fetchLinkContent({ url, timeoutMs, signal: params.signal });
     } catch (err) {
+      if (params.signal?.aborted) {
+        throw createAbortError("Link understanding fetch aborted", { cause: params.signal.reason });
+      }
+      if (isAbortError(err)) {
+        throw err;
+      }
       if (shouldLogVerbose()) {
         logVerbose(`Link understanding fetch blocked or failed for ${url}: ${String(err)}`);
       }
@@ -243,7 +271,11 @@ export async function runLinkUnderstanding(params: {
         ctx: params.ctx,
         url,
         config,
+        signal: params.signal,
       })) ?? fetched.content;
+    if (params.signal?.aborted) {
+      break;
+    }
     if (output) {
       outputs.push(output);
     }

@@ -310,6 +310,7 @@ fun ShellScreen(
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
+              onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
             )
           Tab.Voice ->
             VoiceShellScreen(

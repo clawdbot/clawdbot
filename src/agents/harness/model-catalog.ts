@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -13,20 +14,6 @@ import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
-
-function dedupeByKey(
-  entries: readonly ModelCatalogEntry[],
-  keyOf: (entry: ModelCatalogEntry) => string,
-): ModelCatalogEntry[] {
-  const merged = new Map<string, ModelCatalogEntry>();
-  for (const entry of entries) {
-    const key = keyOf(entry);
-    if (!merged.has(key)) {
-      merged.set(key, entry);
-    }
-  }
-  return [...merged.values()];
-}
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {

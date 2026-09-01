@@ -224,15 +224,19 @@ async function updateCommandInternal(
     defaultRuntime.log(theme.muted("Checking for updates..."));
   }
   const installKind = await resolveUpdateInstallKind(root);
-
-  if (requestedChannel === "extended-stable" && installKind === "git") {
-    await reportPreMutationUpdateFailure({
+  let updateInstallKind = installKind;
+  const refuseUpdate = (reason: string, message?: string) =>
+    reportPreMutationUpdateFailure({
       root,
-      installKind,
-      reason: "unsupported_git_channel",
+      installKind: updateInstallKind,
+      reason,
+      message,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
+
+  if (requestedChannel === "extended-stable" && installKind === "git") {
+    await refuseUpdate("unsupported_git_channel");
     return;
   }
 
@@ -252,8 +256,10 @@ async function updateCommandInternal(
 
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-    defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
-    defaultRuntime.exit(1);
+    await refuseUpdate(
+      "invalid-config",
+      ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
+    );
     return;
   }
 
@@ -267,13 +273,7 @@ async function updateCommandInternal(
           installKind,
         }).channel);
   if (channel === "extended-stable" && installKind === "git") {
-    await reportPreMutationUpdateFailure({
-      root,
-      installKind,
-      reason: "unsupported_git_channel",
-      opts,
-      controlPlaneUpdateSentinelMeta,
-    });
+    await refuseUpdate("unsupported_git_channel");
     return;
   }
   // An effective dev channel (stored or explicit) selects the git flow — the
@@ -286,7 +286,7 @@ async function updateCommandInternal(
     (requestedChannel === "dev" || (channel === "dev" && explicitTag === null));
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
-  const updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
+  updateInstallKind = switchToGit ? "git" : switchToPackage ? "package" : installKind;
   if (channel === "dev" && requestedChannel !== "dev") {
     const resolvedDevTarget = readDevUpdateTargetOrExit();
     if (!resolvedDevTarget.ok) {
@@ -297,18 +297,12 @@ async function updateCommandInternal(
 
   const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
   if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
-    await reportPreMutationUpdateFailure({
-      root,
-      installKind: updateInstallKind,
-      reason: unsupportedMainTag
-        ? "unsupported-package-target"
-        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-      message: unsupportedMainTag
+    await refuseUpdate(
+      unsupportedMainTag ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      unsupportedMainTag
         ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
         : undefined,
-      opts,
-      controlPlaneUpdateSentinelMeta,
-    });
+    );
     return;
   }
   let tag = explicitTag ?? channelToNpmTag(channel);
@@ -393,20 +387,13 @@ async function updateCommandInternal(
       });
       const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
       if (npmLifecycleGate.error) {
-        await reportPreMutationUpdateFailure({
-          root,
-          installKind: updateInstallKind,
-          reason: "npm lifecycle policy preflight",
-          message: npmLifecycleGate.error,
-          opts,
-          controlPlaneUpdateSentinelMeta,
-        });
+        await refuseUpdate("npm lifecycle policy preflight", npmLifecycleGate.error);
         return;
       }
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
-    currentVersion = switchToPackage ? null : await readPackageVersion(root);
+    currentVersion = await readPackageVersion(root);
     if (channel === "extended-stable") {
       const extendedStable = await resolveExtendedStablePackage({
         installKind: updateInstallKind,
@@ -414,13 +401,7 @@ async function updateCommandInternal(
         packageName: installedPackageName,
       });
       if (extendedStable.status === "failed") {
-        await reportPreMutationUpdateFailure({
-          root,
-          installKind: updateInstallKind,
-          reason: extendedStable.reason,
-          opts,
-          controlPlaneUpdateSentinelMeta,
-        });
+        await refuseUpdate(extendedStable.reason);
         return;
       }
       targetVersion = extendedStable.version;
@@ -484,10 +465,10 @@ async function updateCommandInternal(
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
-        defaultRuntime.error(
+        await refuseUpdate(
+          "target-metadata-preflight",
           `Update refused: could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
         );
-        defaultRuntime.exit(1);
         return;
       }
       packageTargetSchemaVersions = targetMetadata.schemaVersions;
@@ -510,8 +491,10 @@ async function updateCommandInternal(
 
   const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
   if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
-    defaultRuntime.error(formatSchemaRefusalLines(packageSchemaPreflight).join("\n"));
-    defaultRuntime.exit(1);
+    await refuseUpdate(
+      "database-schema-preflight",
+      formatSchemaRefusalLines(packageSchemaPreflight).join("\n"),
+    );
     return;
   }
 
@@ -589,8 +572,7 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      defaultRuntime.error(runtimePreflight.error);
-      defaultRuntime.exit(1);
+      await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
       return;
     }
     const runtimeSelection = runtimePreflight.value;
@@ -643,7 +625,6 @@ async function updateCommandInternal(
     stop,
     channel,
     tag,
-    showProgress,
     opts,
     shouldRestart,
     devTarget,

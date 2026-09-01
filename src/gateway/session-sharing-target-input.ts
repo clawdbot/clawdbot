@@ -11,6 +11,7 @@ import {
 } from "./session-groups.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { resolveUnifiedTalkSessionTarget } from "./talk-session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
@@ -273,6 +274,47 @@ function resolveApprovalSessionTarget(
         ...(agentId ? { agentId } : {}),
       }
     : undefined;
+}
+
+/** Realtime creates authorize their effective default; transcription stays sessionless. */
+export function resolveTalkSessionTargetInput(
+  method: string,
+  params: unknown,
+  connId?: string,
+):
+  | { kind: "request"; sessionKey?: string }
+  | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
+  | undefined {
+  if (method === "talk.session.steer") {
+    const sessionId = readSessionSharingStringParam(params, "sessionId");
+    const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
+    return retained ? { kind: "relay", ...retained } : undefined;
+  }
+  // Only these handlers consume the prepared target; legacy tool calls route through chat.send.
+  if (
+    method !== "talk.client.create" &&
+    method !== "talk.session.create" &&
+    method !== "talk.client.transcript" &&
+    method !== "talk.client.close" &&
+    method !== "talk.client.steer"
+  ) {
+    return undefined;
+  }
+  const sessionKey = readSessionSharingStringParam(params, "sessionKey");
+  if (sessionKey) {
+    return { kind: "request", sessionKey };
+  }
+  if (method === "talk.client.create") {
+    return { kind: "request" };
+  }
+  if (
+    method === "talk.session.create" &&
+    (readSessionSharingStringParam(params, "mode") ?? "realtime") === "realtime" &&
+    readSessionSharingStringParam(params, "transport") !== "managed-room"
+  ) {
+    return { kind: "request" };
+  }
+  return undefined;
 }
 
 export function resolveSessionMutationTargets(params: {

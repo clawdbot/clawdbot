@@ -5,13 +5,17 @@ import { sortUniqueStrings } from "../../packages/normalization-core/src/string-
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
+import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ProviderDiscoveryModule =
@@ -54,22 +58,47 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
-function loadProviderDiscoveryModule(params: {
-  pluginId: string;
-  modulePath: string;
-  rootDir: string;
-}): ProviderDiscoveryModule {
+function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDiscoveryModule {
+  const registry = getPluginRuntimeGenerationRegistry();
+  const loadContext = getPluginRuntimeLoadContext(registry);
+  // Lightweight entries share the prepared registry's artifact policy, but must
+  // not alias its runtime entry or turn standalone source discovery into a build load.
+  const { source, rootDir } = registry
+    ? resolvePluginRuntimeArtifact({
+        pluginId: manifest.id,
+        entryKind: "provider-discovery",
+        source: manifest.providerDiscoverySource!,
+        rootDir: manifest.rootDir,
+        origin: manifest.origin,
+        packageManifest: manifest.packageManifest,
+        preferBuiltPluginArtifacts: loadContext?.preferBuiltPluginArtifacts === true,
+        registry,
+      })
+    : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };
+  const modulePath = registry
+    ? preparePluginModule({
+        modulePath: source,
+        boundaryRoot: rootDir,
+        boundaryLabel: "plugin root",
+        surfaceLabel: `plugin provider discovery ${manifest.id}`,
+        rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+          origin: manifest.origin,
+          rootDir: manifest.rootDir,
+          env: loadContext?.env,
+        }),
+      }).modulePath
+    : source;
   const moduleLoader = getCachedPluginModuleLoader({
-    modulePath: params.modulePath,
-    rootDir: params.rootDir,
+    modulePath,
+    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
     preferBuiltDist: true,
   });
   return withProfile(
-    { pluginId: params.pluginId, source: params.modulePath },
+    { pluginId: manifest.id, source: modulePath },
     "provider-discovery-entry",
-    () => moduleLoader(params.modulePath) as ProviderDiscoveryModule,
+    () => moduleLoader(modulePath) as ProviderDiscoveryModule,
   );
 }
 
@@ -278,11 +307,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      const moduleExport = loadProviderDiscoveryModule({
-        pluginId: manifest.id,
-        modulePath: manifest.providerDiscoverySource!,
-        rootDir: manifest.rootDir,
-      });
+      const moduleExport = loadProviderDiscoveryModule(manifest);
       providers.push(
         ...normalizeDiscoveryModule(moduleExport).map((provider) =>
           Object.assign({}, provider, { pluginId: manifest.id }),

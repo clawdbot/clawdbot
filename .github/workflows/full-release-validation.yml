@@ -176,7 +176,8 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: ubuntu-24.04
+    # Hosted admission delays compound along this serial release path.
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -185,6 +186,9 @@ jobs:
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
       target_version: ${{ steps.release_inputs.outputs.target_version }}
+      coverage_policy: ${{ steps.release_inputs.outputs.coverage_policy }}
+      ci_release_scope: ${{ steps.release_inputs.outputs.ci_release_scope }}
+      skip_package_telegram_e2e: ${{ steps.release_inputs.outputs.skip_package_telegram_e2e }}
       plugin_candidate_required: ${{ steps.candidate_request.outputs.plugin_required }}
       release_candidate_artifact_required: ${{ steps.candidate_request.outputs.release_artifact_required }}
       candidate_request_json: ${{ steps.candidate_request.outputs.request_json }}
@@ -195,6 +199,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          sparse-checkout: |
+            scripts/release-tooling-identity.mjs
+            scripts/github/resolve-openclaw-ref.sh
+            scripts/github/validate-release-suite-filters.sh
+            scripts/full-release-candidate-contract.mjs
+            scripts/full-release-validation-policy.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/canonical-json.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -331,6 +345,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
@@ -434,6 +449,23 @@ jobs:
             fi
           fi
 
+          # Qualification scope is a resolved fact, shared by dispatch and evidence.
+          coverage_policy=""
+          ci_release_scope=full
+          if [[ "$RELEASE_PROFILE" == "beta" && "${RUN_RELEASE_SOAK:-false}" == "false" && "$RERUN_GROUP" == "all" ]]; then
+            SKIP_PACKAGE_TELEGRAM_E2E=true
+            if [[ "$target_version" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*-beta\.[1-9][0-9]*$ &&
+                  ( "$identity_kind" == "release branch" || "$identity_kind" == "release tag" ) ]]; then
+              coverage_policy=npm-beta-v1
+              ci_release_scope=npm-beta
+            fi
+          fi
+          {
+            printf 'coverage_policy=%s\n' "$coverage_policy"
+            printf 'ci_release_scope=%s\n' "$ci_release_scope"
+            printf 'skip_package_telegram_e2e=%s\n' "$SKIP_PACKAGE_TELEGRAM_E2E"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Summarize target
         env:
           TARGET_REF: ${{ inputs.ref }}
@@ -447,7 +479,9 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           FAIL_FAST: ${{ inputs.fail_fast }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.release_inputs.outputs.skip_package_telegram_e2e }}
+          COVERAGE_POLICY: ${{ steps.release_inputs.outputs.coverage_policy }}
+          CI_RELEASE_SCOPE: ${{ steps.release_inputs.outputs.ci_release_scope }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -464,6 +498,10 @@ jobs:
             echo "- Tooling SHA: \`${TOOLING_SHA}\`"
             echo "- Frozen tuple: \`${TARGET_SHA} / ${TOOLING_SHA} / ${RERUN_GROUP}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- CI release scope: \`${CI_RELEASE_SCOPE}\`"
+            if [[ "$COVERAGE_POLICY" == "npm-beta-v1" ]]; then
+              echo "- Native apps, product performance, and Telegram confidence: not run; deferred to postpublish confidence (\`${COVERAGE_POLICY}\`)"
+            fi
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
             if [[ -n "$TELEGRAM_WAIVER" ]]; then
@@ -482,7 +520,9 @@ jobs:
             else
               echo "- Normal CI: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "performance" ]]; then
+            if [[ "$COVERAGE_POLICY" == "npm-beta-v1" ]]; then
+              echo "- Product performance: not run; deferred to postpublish confidence"
+            elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "performance" ]]; then
               echo "- Product performance: \`OpenClaw Performance\` with \`target_ref=${TARGET_SHA}\`"
             else
               echo "- Product performance: skipped by rerun group"
@@ -537,7 +577,7 @@ jobs:
     name: Check for reusable validation evidence
     needs: [resolve_target]
     if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}
@@ -554,6 +594,27 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          sparse-checkout: |
+            scripts/github/find-reusable-release-validation.sh
+            scripts/release-ci-summary.mjs
+            scripts/full-release-validation-policy.mjs
+            scripts/full-release-candidate-contract.mjs
+            scripts/release-preflight.mjs
+            scripts/release-preflight.mts
+            scripts/windows-cmd-helpers.mjs
+            scripts/lib/canonical-json.mjs
+            scripts/lib/record-shared.mjs
+            scripts/lib/upgrade-survivor-policy.mjs
+            scripts/lib/plain-gh.mjs
+            scripts/lib/tsx-cli-shim.mjs
+            scripts/lib/local-check-runtime.mts
+            scripts/lib/failed-trailer.mts
+            scripts/lib/error-format.mts
+            scripts/lib/managed-child-process.mts
+            scripts/lib/windows-taskkill.mjs
+            scripts/lib/release-version.mjs
+            .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -563,9 +624,21 @@ jobs:
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
+          sparse-checkout: |
+            package.json
+            apps/macos/Sources/OpenClaw/Resources/Info.plist
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Find reusable validation evidence
         id: find
@@ -573,6 +646,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+          COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
           WORKFLOW_REF: ${{ github.ref_name }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
@@ -587,7 +661,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
@@ -609,6 +683,7 @@ jobs:
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
             --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
+            --arg coveragePolicy "$COVERAGE_POLICY" \
             --arg telegramWaiver "$TELEGRAM_WAIVER" \
             --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
@@ -628,7 +703,7 @@ jobs:
               skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-            } + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)')"
+            } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy, targetVersion: $targetVersion} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)')"
           trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
           trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
           trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
@@ -725,6 +800,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_KIND: ci
+          CI_RELEASE_SCOPE: ${{ needs.resolve_target.outputs.ci_release_scope }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
@@ -906,13 +982,17 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY"
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
               dispatch_run_name="CI ${dispatch_id}"
-              args=(-f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id")
-              if [[ "$TARGET_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
-                args+=(-f historical_target_tag="$TARGET_REF")
-              elif [[ "$TARGET_CONTEXT_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
-                args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")
-              elif [[ "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
-                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
+              ci_release_scope="${CI_RELEASE_SCOPE:-full}"
+              include_android=true
+              if [[ "$ci_release_scope" == "npm-beta" ]]; then include_android=false; fi
+              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")
+              context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
+              context_ref="${context_ref#refs/heads/}"
+              context_ref="${context_ref#refs/tags/}"
+              if [[ "$context_ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+                args+=(-f historical_target_tag="$context_ref")
+              elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+                args+=(-f target_context_ref="$context_ref")
               fi
               dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"
               ;;
@@ -1161,7 +1241,7 @@ jobs:
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ""
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
         run: *full_release_child_dispatch
 
@@ -1200,14 +1280,14 @@ jobs:
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_target.outputs.release_candidate_artifact_required == 'true' && needs.candidate_acquisition.outputs.candidate_artifact_json || '' }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
         run: *full_release_child_dispatch
 
   npm_telegram:
     name: Run package Telegram E2E
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.telegram_waiver == '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.telegram_waiver == '' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1232,7 +1312,7 @@ jobs:
   performance:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 15
     outputs:
@@ -1317,6 +1397,7 @@ jobs:
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+          COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_run_id }}
@@ -1394,6 +1475,7 @@ jobs:
               --arg releasePackageSpec "$RELEASE_PACKAGE_SPEC" \
               --arg packageAcceptancePackageSpec "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" \
               --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
+              --arg coveragePolicy "$COVERAGE_POLICY" \
               --arg telegramWaiver "$TELEGRAM_WAIVER" \
               --arg targetVersion "$TARGET_VERSION" \
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
@@ -1489,7 +1571,7 @@ jobs:
                   npmTelegram: {result: $npmTelegramResult, runId: $npmTelegramRunId, runAttempt: $npmTelegramRunAttempt, url: $npmTelegramUrl},
                   productPerformance: {result: $performanceResult, runId: $performanceRunId, runAttempt: $performanceRunAttempt, url: $performanceUrl}
                 }
-              }'
+              } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)'
             )"
           fi
           node scripts/full-release-validation-state.mjs plan
@@ -1848,7 +1930,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
-          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
           TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
@@ -1956,7 +2038,7 @@ jobs:
                     skipPackageTelegramE2e: $skipPackageTelegramE2e,
                     allowUnreleasedChangelog: $allowUnreleasedChangelog,
                     pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
-                  } + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)),
+                  } + (if $plan.coveragePolicy then {coveragePolicy: $plan.coveragePolicy, targetVersion: $plan.targetVersion} else {} end) + (if $telegramWaiver == "" then {} else {telegramWaiver: $telegramWaiver, targetVersion: $targetVersion} end)),
                   controls: {
                     stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),
                     performanceBlocking: ($releaseProfile != "beta"),

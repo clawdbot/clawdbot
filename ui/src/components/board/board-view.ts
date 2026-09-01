@@ -16,7 +16,6 @@ import {
   resize,
   type BoardGridDirection,
   type BoardGridItem,
-  type BoardGridRect,
 } from "../../lib/board/grid.ts";
 import type { BoardOp, BoardSnapshot, BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type {
@@ -41,7 +40,6 @@ type BoardPointerGesture = {
   originH: number;
   pointerId: number;
   items: BoardGridItem[];
-  rects: BoardGridRect[];
 };
 
 function orderedTabs(snapshot: BoardSnapshot): BoardTab[] {
@@ -339,7 +337,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       ),
       pointerId: event.pointerId,
       items,
-      rects: layout(items),
     };
     this.previewItems = items;
     this.gestureName = widget.name;
@@ -387,14 +384,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         1,
         (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
       );
+      // Resolve both the visible target and reorder against the current preview;
+      // a card moving under the pointer must not undo the drop on pointerup.
+      const items = this.previewItems ?? gesture.items;
       const targetName = pointerElement?.closest<
         HTMLElementTagNameMap["openclaw-board-widget-cell"]
       >("openclaw-board-widget-cell")?.widget?.name;
-      const targetCell = gesture.rects.find((rect) => rect.name === targetName) ?? {
+      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
       };
-      this.previewItems = previewDrag(gesture.items, gesture.name, targetCell).items;
+      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
       return;
     }
 
@@ -652,12 +652,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       : (rects[0]?.name ?? "");
     const widgetByName = new Map(widgets.map((widget) => [widget.name, widget]));
     return html`
-      <div
-        class="board-grid"
-        style="container-type: inline-size"
-        role="list"
-        aria-label=${t("board.gridLabel")}
-      >
+      <div class="board-grid" role="list" aria-label=${t("board.gridLabel")}>
         ${repeat(
           stableRects,
           (rect) => `${sessionKey}\u0000${rect.name}`,

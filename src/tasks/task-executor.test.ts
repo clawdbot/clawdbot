@@ -229,6 +229,7 @@ function expectCancelledAcpChildTask(
   expect(hoisted.cancelSessionMock).toHaveBeenCalledWith({
     cfg: {} as never,
     sessionKey: "agent:codex:acp:child",
+    agentId: "codex",
     reason: "task-cancel",
     expectedRunId: child.runId,
   });

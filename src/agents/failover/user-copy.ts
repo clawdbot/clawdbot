@@ -425,7 +425,6 @@ export function resolveProviderRequestFailureCopy(params: {
     code,
     userMessage,
     technicalMessage: params.technicalMessage,
-    ...(params.facet === "provider-internal-503" ? { allowTransientHttpRetry: true as const } : {}),
   };
 }
 

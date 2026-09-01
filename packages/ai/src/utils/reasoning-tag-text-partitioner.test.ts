@@ -1,5 +1,6 @@
 // Reasoning tag partitioner tests cover splitting reasoning and visible text segments.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as reasoningTagParser from "../../../markdown-core/src/reasoning-tag-parser.js";
 import {
   createReasoningTagTextPartitioner,
   type ReasoningTagTextDelta,
@@ -215,16 +216,35 @@ describe("createReasoningTagTextPartitioner", () => {
 
   it("recovers a byte-streamed 110KB malformed quoted tag without reparsing prefixes", () => {
     const input = `<think data-x="${"x".repeat(110_000)}<think>hidden</think>After`;
-    const startedAt = Date.now();
-    const result = collectVisibleMode(
-      input,
-      Array.from({ length: input.length }, (_value, index) => index + 1),
-    );
+    let parsedCharacters = 0;
+    const parserSpies = (
+      ["parseReasoningTagAt", "scanReasoningTags", "parseMarkdownOwnership"] as const
+    ).map((name) => {
+      const original = reasoningTagParser[name];
+      return vi
+        .spyOn(reasoningTagParser, name)
+        .mockImplementation((text: string, ...args: unknown[]) => {
+          // Bound reparsed input independently of runner speed, and fail before quadratic work.
+          parsedCharacters += text.length;
+          expect(parsedCharacters).toBeLessThanOrEqual(input.length * 4);
+          return Reflect.apply(original, undefined, [text, ...args]);
+        });
+    });
 
-    expect(result.text).not.toContain("hidden");
-    expect(result.text.endsWith("After")).toBe(true);
-    expect(result.thinking).toBe("hidden");
-    expect(Date.now() - startedAt).toBeLessThan(30_000);
+    try {
+      const result = collectVisibleMode(
+        input,
+        Array.from({ length: input.length }, (_value, index) => index + 1),
+      );
+
+      expect(result.text).not.toContain("hidden");
+      expect(result.text.endsWith("After")).toBe(true);
+      expect(result.thinking).toBe("hidden");
+    } finally {
+      for (const spy of parserSpies) {
+        spy.mockRestore();
+      }
+    }
   });
 
   it("keeps newline-heavy malformed-tag recovery linear", () => {

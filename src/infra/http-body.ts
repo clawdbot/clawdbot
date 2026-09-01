@@ -230,10 +230,7 @@ async function readResponsePrefixFromReader(
   }
 
   return {
-    buffer: Buffer.concat(
-      chunks.map((chunk) => Buffer.from(chunk)),
-      total,
-    ),
+    buffer: Buffer.concat(chunks, total),
     size,
     truncated,
   };

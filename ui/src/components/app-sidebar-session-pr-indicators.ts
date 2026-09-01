@@ -113,13 +113,13 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     );
   }
 
-  private applySnapshots(): void {
+  private applySnapshots(rows?: readonly SidebarRecentSession[]): void {
     const store = this.store;
     if (!store) {
       return;
     }
     let changed = false;
-    for (const session of this.eligibleRows()) {
+    for (const session of rows ?? this.eligibleRows()) {
       if (!session.worktreeId) {
         continue;
       }
@@ -206,6 +206,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       this,
       eligibleRows.map((session) => this.scopedKey(session.key)),
     );
-    this.applySnapshots();
+    this.applySnapshots(eligibleRows);
   }
 }

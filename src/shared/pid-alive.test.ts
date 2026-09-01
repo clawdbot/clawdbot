@@ -243,24 +243,52 @@ describe("process start times", () => {
     });
   });
 
-  it("reuses a successful Windows identity for the running process", () => {
-    readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
+  it.each(["darwin", "linux", "win32"] as const)(
+    "retries failed self probes and keeps foreign %s identities fresh",
+    async (platform) => {
+      const identity = platform === "linux" ? 0 : 1_752_000_000;
+      const foreignPid = process.pid + 1;
+      const probe = vi
+        .fn<(pid: number) => number | null>()
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce(identity)
+        .mockReturnValueOnce(111)
+        .mockReturnValueOnce(222);
+      readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
+      vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
+        const value = probe(Number(args?.[3]));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return new Date(value * 1000).toUTCString();
+      });
+      const originalReadFileSync = fsSync.readFileSync;
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+        const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
+        if (!pid) {
+          return originalReadFileSync(filePath as never, encoding as never) as never;
+        }
+        const value = probe(Number(pid));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
+      });
 
-    return withMockedPlatform("win32", async () => {
-      expect(getFileLockProcessStartTime(process.pid)).toBe(1_752_000_000_123);
-      expect(getFileLockProcessStartTime(process.pid)).toBe(1_752_000_000_123);
-      expect(readWindowsProcessStartTimeSyncMock).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("re-reads foreign Windows identities so PID reuse stays observable", () => {
-    readWindowsProcessStartTimeSyncMock.mockReturnValueOnce(111).mockReturnValueOnce(222);
-
-    return withMockedPlatform("win32", async () => {
-      expect(getFileLockProcessStartTime(42)).toBe(111);
-      expect(getFileLockProcessStartTime(42)).toBe(222);
-    });
-  });
+      await withMockedPlatform(platform, async () => {
+        // Each simulated platform needs a fresh module's process-lifetime state.
+        vi.resetModules();
+        const { getFileLockProcessStartTime: readIdentity } = await import("./pid-alive.js");
+        expect(readIdentity(process.pid)).toBeNull();
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(foreignPid)).toBe(111);
+        expect(readIdentity(foreignPid)).toBe(222);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(probe).toHaveBeenCalledTimes(4);
+      });
+    },
+  );
 
   it("fails closed when the Windows identity reader finds nothing", () => {
     readWindowsProcessStartTimeSyncMock.mockReturnValue(null);

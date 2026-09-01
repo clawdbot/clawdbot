@@ -1,6 +1,7 @@
 // Managed Child Process tests cover managed child process script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import childProcess, { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -588,6 +589,83 @@ setInterval(() => {}, 1_000);
       ),
     ).toBe("dead");
   });
+
+  it.each<{
+    snapshot: "empty" | "live" | "failed" | "zombie";
+    afterSnapshot: string | null;
+    expected: ReturnType<typeof inspectManagedProcessGroup>;
+    policy?: Parameters<typeof inspectManagedProcessGroup>[1]["errorPolicy"];
+    platform?: NodeJS.Platform;
+    running?: boolean;
+  }>([
+    { snapshot: "empty", afterSnapshot: "ESRCH", expected: "dead" },
+    { snapshot: "live", afterSnapshot: "ESRCH", expected: "dead" },
+    { snapshot: "failed", afterSnapshot: "ESRCH", expected: "dead" },
+    { snapshot: "empty", afterSnapshot: null, expected: "live" },
+    { snapshot: "live", afterSnapshot: null, expected: "live" },
+    { snapshot: "failed", afterSnapshot: null, expected: "live" },
+    { snapshot: "zombie", afterSnapshot: null, expected: "dead" },
+    { snapshot: "empty", afterSnapshot: "EPERM", expected: "live" },
+    {
+      snapshot: "empty",
+      afterSnapshot: "EPERM",
+      policy: "indeterminate",
+      expected: "indeterminate",
+    },
+    { snapshot: "empty", afterSnapshot: "EPERM", policy: "verify-leader", expected: "dead" },
+    {
+      snapshot: "empty",
+      afterSnapshot: "EIO",
+      policy: "indeterminate",
+      expected: "indeterminate",
+    },
+    { snapshot: "empty", afterSnapshot: "EIO", expected: "dead" },
+    { snapshot: "zombie", afterSnapshot: null, platform: "darwin", expected: "live" },
+    { snapshot: "zombie", afterSnapshot: null, running: true, expected: "live" },
+  ])(
+    "checks current group state after $snapshot snapshot ($afterSnapshot, $policy, $platform, $running)",
+    ({
+      snapshot,
+      afterSnapshot,
+      expected,
+      policy = "alive-on-eperm",
+      platform = "linux",
+      running,
+    }) => {
+      let inspected = false;
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        if (inspected && afterSnapshot) {
+          throw Object.assign(new Error("group lookup failed"), { code: afterSnapshot });
+        }
+        return true;
+      });
+      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation(() => {
+        inspected = true;
+        return {
+          pid: 12346,
+          output: [],
+          signal: null,
+          status: snapshot === "empty" ? 1 : 0,
+          stdout: snapshot === "zombie" ? "12345 Z\n" : snapshot === "live" ? "12345 S\n" : "",
+          stderr: "",
+          ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
+        };
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(
+          inspectManagedProcessGroup(
+            { pid: 12345, exitCode: running ? null : 0, signalCode: null },
+            { errorPolicy: policy, platform },
+          ),
+        ).toBe(expected);
+      } finally {
+        ps.mockRestore();
+        kill.mockRestore();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   it("bounds process-group waiting when the group remains live", async () => {
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);

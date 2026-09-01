@@ -183,6 +183,9 @@ describe("fresh producer results through persistence and model guards", () => {
       });
       try {
         const tools = runtime.compactTools([]).tools;
+        if (runtime.toolSearchCatalogRef?.current) {
+          runtime.toolSearchCatalogRef.current.counterScope = "result-budget";
+        }
         const first = message(
           await tools[0]!.execute("first", {
             code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,

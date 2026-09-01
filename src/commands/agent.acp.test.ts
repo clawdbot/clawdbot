@@ -11,6 +11,7 @@ import * as embeddedModule from "../agents/embedded-agent.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as configIoModule from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -213,9 +214,14 @@ function resolveReadySession(
   sessionKey: string,
   agent = "codex",
 ): ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]> {
+  const owner = parseAgentSessionKey(sessionKey);
+  if (!owner) {
+    throw new Error("Expected an owner-qualified ACP fixture key");
+  }
   return {
     kind: "ready",
     sessionKey,
+    agentId: owner.agentId,
     meta: {
       backend: "acpx",
       agent,
@@ -509,6 +515,7 @@ describe("agentCommand ACP runtime routing", () => {
           return {
             kind: "stale",
             sessionKey,
+            agentId: "codex",
             error: new AcpRuntimeError(
               "ACP_SESSION_INIT_FAILED",
               `ACP metadata is missing for session ${sessionKey}.`,

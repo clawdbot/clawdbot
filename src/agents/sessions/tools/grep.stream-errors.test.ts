@@ -51,12 +51,12 @@ function grepRow(
   lineNumber: number,
   lines: { text: string } | { bytes: string } = { text: "foo\n" },
   type: "match" | "context" = "match",
-  filePath = "/tmp/match.txt",
+  filePath: string | { text: string } | { bytes: string } = "/tmp/match.txt",
 ): string {
   return `${JSON.stringify({
     type,
     data: {
-      path: { text: filePath },
+      path: typeof filePath === "string" ? { text: filePath } : filePath,
       line_number: lineNumber,
       lines,
     },
@@ -71,6 +71,58 @@ function textContent(
 }
 
 describe("grep tool streaming", () => {
+  it.each([1, 3])("keeps colliding byte-path context separate at match limit %s", async (limit) => {
+    const cwd = tempDirs.make("openclaw-grep-byte-path-");
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+    const tool = createGrepToolDefinition(cwd);
+    const execution = tool.execute(
+      "byte-path",
+      { pattern: "needle", context: 1, limit },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const paths = [
+      ...[0x80, 0x81].map((byte) => ({
+        bytes: Buffer.concat([
+          Buffer.from(path.join(cwd, "report-")),
+          Buffer.from([byte]),
+          Buffer.from(".txt"),
+        ]).toString("base64"),
+      })),
+      { text: path.join(cwd, "report-�.txt") },
+    ];
+    for (const [index, filePath] of paths.entries()) {
+      child.stdout.write(
+        grepRow(1, { text: `before ${index}\n` }, "context", filePath) +
+          grepRow(2, { text: `needle ${index}\n` }, "match", filePath) +
+          grepRow(3, { text: `after ${index}\n` }, "context", filePath),
+      );
+    }
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0);
+    const result = await execution;
+    const rows = paths
+      .slice(0, limit)
+      .flatMap((_, index) => [
+        `report-�.txt-1- before ${index}`,
+        `report-�.txt:2: needle ${index}`,
+        `report-�.txt-3- after ${index}`,
+      ]);
+    expect(textContent(result)).toBe(
+      rows.join("\n") +
+        (limit === 1
+          ? "\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"
+          : ""),
+    );
+    expect(result.details).toEqual(limit === 1 ? { matchLimitReached: 1 } : undefined);
+    expect(child.killed).toBe(limit === 1);
+  });
+
   it.each(["..notes/sub/sample.txt", ...(path.sep === "/" ? ["literal\\name.txt"] : [])])(
     "preserves readable result path %s",
     async (relativePath) => {

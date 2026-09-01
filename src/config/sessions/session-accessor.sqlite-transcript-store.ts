@@ -64,7 +64,7 @@ type TranscriptAppendCursor = {
   insertIdentity?: ReturnType<typeof createTranscriptIdentityInserter>;
 };
 
-function createTranscriptEventInserter(database: OpenClawAgentDatabase, sessionId: string) {
+export function createTranscriptEventInserter(database: OpenClawAgentDatabase, sessionId: string) {
   return prepareSqliteQuerySync<{ seq: number; eventJson: string; createdAt: number }>(
     database.db,
     (parameter) =>
@@ -269,8 +269,6 @@ export function appendTranscriptEventsInTransaction(
 }
 
 function appendTranscriptEventRowInTransaction(
-  database: OpenClawAgentDatabase,
-  scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   seq: number,
   state: {
@@ -278,6 +276,7 @@ function appendTranscriptEventRowInTransaction(
     seenMessageIdempotencyKeys: Set<string>;
     insertEvent: ReturnType<typeof createTranscriptEventInserter>;
     insertIdentity: ReturnType<typeof createTranscriptIdentityInserter>;
+    appendToIndex: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
   },
   createdAtOverride?: number,
 ): boolean {
@@ -288,8 +287,7 @@ function appendTranscriptEventRowInTransaction(
     return false;
   }
   state.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
-  const appendToIndex = createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
-  appendToIndex({
+  state.appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -385,12 +383,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
     seenMessageIdempotencyKeys: new Set<string>(),
     insertEvent: createTranscriptEventInserter(database, resolved.sessionId),
     insertIdentity: createTranscriptIdentityInserter(database, resolved.sessionId, false),
+    // The reset/dirty transition above owns the initial projection state for this whole batch.
+    appendToIndex: createTranscriptIndexAppenderInTransaction(database.db, resolved.sessionId),
   };
   for (const [eventIndex, event] of events.entries()) {
     if (
       appendTranscriptEventRowInTransaction(
-        database,
-        resolved,
         event,
         seq,
         state,

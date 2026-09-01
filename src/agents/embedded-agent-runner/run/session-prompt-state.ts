@@ -204,7 +204,9 @@ export function createEmbeddedRunSessionPromptState(input: {
       abortSignal?: AbortSignal,
     ) => {
       const sessionId = target?.sessionId ?? activeSessionId;
-      if (settleOwnedTranscriptProjection && target && sessionId) {
+      // A caller's manager owns the transcript even when metadata has a durable target.
+      // Waiting on that borrowed identity can block an unrelated in-memory retry.
+      if (settleOwnedTranscriptProjection && !params.sessionManager && target && sessionId) {
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");

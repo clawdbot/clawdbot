@@ -15,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggle,
@@ -370,7 +371,7 @@ export function renderAgentTools(params: {
   const runtimeAvailability = !params.runtimeSessionMatchesSelectedAgent
     ? renderSettingsEmpty(t("agentTools.switchAgent"))
     : params.toolsEffectiveLoading && !params.toolsEffectiveResult && !params.toolsEffectiveError
-      ? renderSettingsEmpty(t("agentTools.loadingAvailable"))
+      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingAvailable"), rows: 2 })
       : params.toolsEffectiveError
         ? renderSettingsEmpty(t("agentTools.availableError"))
         : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
@@ -420,9 +421,6 @@ export function renderAgentTools(params: {
       : nothing}
     ${hasGlobalAllow
       ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
-      : nothing}
-    ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-      ? html`<div class="callout info">${t("agentTools.loadingCatalog")}</div>`
       : nothing}
     ${params.toolsCatalogError
       ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
@@ -519,7 +517,15 @@ export function renderAgentTools(params: {
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
-        <div class="agents-panel-body agent-tools-grid">
+        ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingCatalog") })
+          : nothing}
+        <div
+          class="agents-panel-body agent-tools-grid"
+          ?hidden=${params.toolsCatalogLoading &&
+          !params.toolsCatalogResult &&
+          !params.toolsCatalogError}
+        >
           ${toolSections.map((section) => {
             const sortedTools = sortSectionTools(section.tools);
             const enabledSectionCount = section.tools.filter(

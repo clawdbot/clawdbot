@@ -127,6 +127,7 @@ openclaw-board-view {
 }
 
 .board-grid {
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   grid-auto-rows: 56px;
@@ -136,8 +137,8 @@ openclaw-board-view {
 }
 
 @container (max-width: 560px) {
-  /* Persisted desktop cells can share a row and keep stable DOM identity, so
-     narrow boards replace both axes while following current logical order. */
+  /* Keep desktop sizes canonical; only placement changes on narrow boards.
+     CSS order preserves the keyed frame nodes when persisted order changes. */
   .board-widget {
     grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
     order: var(--board-widget-order);

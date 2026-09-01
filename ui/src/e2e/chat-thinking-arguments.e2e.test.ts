@@ -1,7 +1,7 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -136,9 +136,11 @@ suite.define(() => {
           thinkingLevel: "ultra",
         });
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-thinking-arguments", artifactRoot)
+          : undefined;
         if (artifactDir) {
-          await fs.mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             path: path.join(artifactDir, `think-arguments-${viewport.name}.png`),
             fullPage: true,

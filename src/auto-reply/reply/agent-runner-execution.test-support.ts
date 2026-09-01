@@ -190,7 +190,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });

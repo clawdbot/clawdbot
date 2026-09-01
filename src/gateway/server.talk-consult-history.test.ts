@@ -245,6 +245,69 @@ async function historyMessages() {
   return result.messages as unknown[];
 }
 
+async function consult(question: string, callId: string) {
+  return await rpc("talk.client.toolCall", {
+    sessionKey,
+    voiceSessionId,
+    callId,
+    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+    args: { question },
+  });
+}
+
+async function startHeldConsult() {
+  const ack = await consult("Keep this task running until released.", "held-task");
+  await modelStarted.promise;
+  const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
+  const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
+  expect(abortSignal.aborted).toBe(false);
+  return { ack, run, abortSignal };
+}
+
+describe("Browser Talk literal consult commands", () => {
+  it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
+    const ack = await consult(question, "literal-command");
+    expect(ack).toMatchObject({ runId: expect.any(String), idempotencyKey: ack.runId });
+    await Promise.race([
+      modelStarted.promise,
+      getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
+    ]);
+    expect({
+      acknowledgedRun: ack.runId,
+      modelPrompts: runEmbeddedAgent.mock.calls.map(([run]) => run.prompt),
+    }).toMatchObject({
+      acknowledgedRun: ack.runId,
+      modelPrompts: [expect.stringContaining(question)],
+    });
+  });
+
+  it("does not turn a generated stop question into cancellation of the active consult", async () => {
+    const first = await startHeldConsult();
+    const ack = await consult("/stop", "literal-stop-during-task");
+    expect(ack.runId).not.toBe(first.ack.runId);
+    expect
+      .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
+      .toBe(false);
+    releaseModel.resolve();
+    await waitForDispatchEnd();
+    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
+      expect.arrayContaining([expect.stringContaining("/stop")]),
+    );
+  });
+
+  it("preserves an actual human stop command", async () => {
+    const first = await startHeldConsult();
+    const stopped = await rpc("chat.send", {
+      sessionKey,
+      message: "/stop",
+      idempotencyKey: "human-stop",
+    });
+    expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
+    expect(first.abortSignal.aborted).toBe(true);
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+});
+
 describe("Browser Talk consult input custody", () => {
   it.each([
     {

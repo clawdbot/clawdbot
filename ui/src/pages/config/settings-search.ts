@@ -38,10 +38,10 @@ function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettings
 
 // Curated pages render only a subset of their section's schema; search must
 // promise exactly what the destination page can edit, or the result is a
-// dead-end (e.g. update.checkOnStart matched search but was editable nowhere).
+// dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
   memory: memoryVisibleSchemaKeys,
-  updates: () => ["channel", "auto"],
+  updates: () => ["channel", "checkOnStart", "auto"],
 };
 
 function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {

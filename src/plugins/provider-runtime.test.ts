@@ -1790,7 +1790,7 @@ describe("provider-runtime", () => {
         config,
         manifestRegistry: { plugins: [], diagnostics: [] },
       });
-      withPluginRuntimeGenerationScope({ config, metadataSnapshot }, () => {
+      withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
         expect(
           classifyProviderFailoverSignalWithPlugin({
             provider,

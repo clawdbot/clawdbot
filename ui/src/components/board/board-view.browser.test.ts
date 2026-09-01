@@ -90,73 +90,51 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
   });
 
-  it("stacks persisted desktop spans across a narrow board", async () => {
-    const view = await mount();
-    view.style.width = "354px";
-    const grid = view.querySelector<HTMLElement>(".board-grid");
-    const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
-    const gridBounds = grid!.getBoundingClientRect();
-    const [first, second] = cells.map((cell) => cell.getBoundingClientRect());
+  it.each([354, 560])(
+    "stacks a %ipx board without changing stored sizes or frame identity",
+    async (width) => {
+      const view = await mount();
+      view.style.width = `${width}px`;
+      const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+      const frames = cells.map((cell) => cell.querySelector("iframe"));
+      const snapshot = structuredClone(source);
+      snapshot.widgets[0]!.position = 1;
+      snapshot.widgets[0]!.sizeH = 0;
+      snapshot.widgets[1]!.position = 0;
+      snapshot.widgets[1]!.heightMode = "fixed";
+      view.snapshot = snapshot;
+      await view.updateComplete;
+      await Promise.all(cells.map((cell) => cell.updateComplete));
+      const grid = view.querySelector<HTMLElement>(".board-grid")!.getBoundingClientRect();
+      const [first, second] = cells.map((cell) =>
+        cell.querySelector("section")!.getBoundingClientRect(),
+      );
+      expect(first!.width).toBeCloseTo(grid.width, 0);
+      expect(second!.width).toBeCloseTo(grid.width, 0);
+      expect(first!.top).toBeGreaterThanOrEqual(second!.bottom + BOARD_GRID_GAP - 1);
+      expect(first!.height).toBeGreaterThanOrEqual(BOARD_GRID_ROW_HEIGHT);
+      expect(second!.height).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
+      expect(view.snapshot).toEqual(snapshot);
+      expect([...view.querySelectorAll("openclaw-board-widget-cell")]).toEqual(cells);
+      expect(cells.map((cell) => cell.querySelector("iframe"))).toEqual(frames);
+      view.style.width = "1200px";
+      expect(cells[0]!.querySelector("section")!.getBoundingClientRect().width).toBeLessThan(600);
+    },
+  );
 
-    expect(Math.round(first?.width ?? 0)).toBe(Math.round(gridBounds.width));
-    expect(Math.round(second?.width ?? 0)).toBe(Math.round(gridBounds.width));
-    expect(second?.top).toBeGreaterThanOrEqual((first?.bottom ?? 0) + BOARD_GRID_GAP - 1);
-  });
-
-  it("keeps a zero-height persisted widget visible when stacking", async () => {
-    const view = await mount();
-    view.style.width = "354px";
-    const snapshot = structuredClone(source);
-    snapshot.widgets[0]!.sizeH = 0;
-    view.snapshot = snapshot;
-    await view.updateComplete;
-    const grid = view.querySelector<HTMLElement>(".board-grid");
-    const first = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const gridBounds = grid!.getBoundingClientRect();
-    const firstBounds = first!.getBoundingClientRect();
-
-    expect(Math.round(firstBounds.width)).toBe(Math.round(gridBounds.width));
-    expect(firstBounds.height).toBeGreaterThanOrEqual(BOARD_GRID_ROW_HEIGHT);
-  });
-
-  it("stacks persisted logical order without replacing keyed cells", async () => {
-    const view = await mount();
-    view.style.width = "354px";
-    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
-    const firstCell = cells.find((cell) => cell.widget?.name === "first")!;
-    const secondCell = cells.find((cell) => cell.widget?.name === "second")!;
-    const snapshot = structuredClone(source);
-    snapshot.widgets[0]!.position = 1;
-    snapshot.widgets[1]!.position = 0;
-    view.snapshot = snapshot;
-    await view.updateComplete;
-    await Promise.all(cells.map((cell) => cell.updateComplete));
-
-    expect(view.querySelectorAll("openclaw-board-widget-cell")[0]).toBe(firstCell);
-    const firstBounds = firstCell
-      .querySelector<HTMLElement>('[data-test-id="board-widget"]')!
-      .getBoundingClientRect();
-    const secondBounds = secondCell
-      .querySelector<HTMLElement>('[data-test-id="board-widget"]')!
-      .getBoundingClientRect();
-    expect(firstBounds.top).toBeGreaterThanOrEqual(secondBounds.bottom + BOARD_GRID_GAP - 1);
-  });
-
-  it("maps narrow pointer drops from the visible card target", async () => {
+  it("moves a narrow card onto the visible target's logical position", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
     view.style.width = "354px";
-    const widgets = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
-    const firstBounds = widgets[0]!.getBoundingClientRect();
-    const secondHandle = widgets[1]!.querySelector<HTMLElement>(".board-widget__drag-handle")!;
-    const secondBounds = secondHandle.getBoundingClientRect();
-    const targetX = firstBounds.right - 4;
-    const targetY = firstBounds.top + firstBounds.height / 2;
-
-    pointer(secondHandle, "pointerdown", 37, secondBounds.left, secondBounds.top);
-    pointer(window, "pointermove", 37, targetX, targetY);
-    pointer(window, "pointerup", 37, targetX, targetY);
-
+    const cards = [...view.querySelectorAll<HTMLElement>(".board-widget")];
+    const target = cards[0]!.getBoundingClientRect();
+    pointer(cards[1]!.querySelector(".board-widget__drag-handle")!, "pointerdown", 81);
+    pointer(window, "pointermove", 81, target.right - 3, target.top + target.height / 2);
+    await view.updateComplete;
+    await Promise.all(
+      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
+    );
+    pointer(window, "pointerup", 81, target.right - 3, target.top + target.height / 2);
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
     );
@@ -487,9 +465,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(applyOps).not.toHaveBeenCalled();
   });
 
-  it("offers an append drop zone after the final widget", async () => {
+  it.each([354, 700])("offers an append drop zone on a %ipx board", async (width) => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
+    view.style.width = `${width}px`;
     view.snapshot = {
       ...structuredClone(source),
       widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 12 })),

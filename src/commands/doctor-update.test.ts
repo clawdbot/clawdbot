@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import type { UpdateRunResult } from "../infra/update-runner.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
@@ -246,10 +247,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     mode: "git";
     root: string;
     after?: { version: string; buildId?: string };
-    recovery?: {
-      serviceRestartSafe: false;
-      reason: "source-rollback-failed" | "rollback-checkout-dirty";
-    };
+    recovery?: UpdateRunResult["recovery"];
   }) {
     mocks.runGatewayUpdate.mockImplementation(
       async ({
@@ -741,24 +739,35 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     );
   });
 
-  it("recovers the previously stopped service when the update returns an error", async () => {
-    mockGitCheckout();
-    mockManagedService({
-      verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
-    });
-    mockUpdateResult({ status: "error", mode: "git", root: "/repo/link" });
+  it.each([true, undefined])(
+    "recovers the previously stopped service only with verified recovery (%s)",
+    async (safe) => {
+      mockGitCheckout();
+      mockManagedService({
+        verdict: { kind: "owned", refreshDefinition: true, fingerprint: "opaque" },
+      });
+      mockUpdateResult({
+        status: "error",
+        mode: "git",
+        root: "/repo/link",
+        recovery: safe ? { serviceRestartSafe: true } : undefined,
+      });
 
-    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
-      updated: true,
-      handled: false,
-    });
+      await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+        updated: true,
+        handled: false,
+      });
 
-    expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).toHaveBeenCalledWith({
-      root: "/repo/link",
-      preManagedServiceStop: expect.objectContaining({ stopped: true }),
-      jsonMode: false,
-    });
-  });
+      if (safe) {
+        expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).toHaveBeenCalledWith({
+          preManagedServiceStop: expect.objectContaining({ stopped: true }),
+          jsonMode: false,
+        });
+      } else {
+        expect(mocks.maybeRestartServiceAfterFailedMutableUpdate).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     {

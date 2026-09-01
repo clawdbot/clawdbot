@@ -1,9 +1,20 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import {
@@ -14,6 +25,13 @@ import {
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
+
+// Each case owns its checkout and process trees. Overlap their real deadline
+// and drain waits while keeping subprocess pressure bounded within one worker.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
@@ -52,7 +70,7 @@ const linuxCases =
         { scenario: "non-executable-find", attempts: 0, code: null, checkout: false, deletions: 0 },
       ];
 
-it.each([
+it.concurrent.each([
   ...platformCases.map((entry) => Object.assign(entry, { linux: false, deletions: 0 })),
   ...linuxCases.map((entry) => Object.assign(entry, { linux: true })),
 ])(
@@ -207,6 +225,229 @@ it.each([
             "b".repeat(40),
           ]);
         }
+      },
+    );
+  },
+  55_000,
+);
+
+it.concurrent.each([
+  ...[
+    ...(process.platform === "win32" ? [] : [{ kind: "linux-node", retained: false }]),
+    { kind: "platform", retained: false },
+    { kind: "platform", retained: true },
+  ].map((entry) =>
+    Object.assign(entry, {
+      event: "push",
+      workflow: "same",
+      target: "selected",
+      code: 0,
+      fetches: 1,
+    }),
+  ),
+  ...(process.platform === "win32"
+    ? []
+    : [
+        { event: "push", workflow: "same", target: "selected", code: 0, fetches: 2 },
+        { event: "pull_request", workflow: "same", target: "selected", code: 0, fetches: 2 },
+        { event: "pull_request", workflow: "previous", target: "selected", code: 0, fetches: 2 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "selected",
+          code: 0,
+          fetches: 2,
+        },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "missing-branch",
+          code: 0,
+          fetches: 3,
+        },
+        { event: "pull_request", workflow: "missing", target: "selected", code: 0, fetches: 2 },
+        { event: "push", workflow: "missing-action", target: "selected", code: 1, fetches: 2 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "moved-event",
+          code: 0,
+          fetches: 3,
+        },
+        { event: "push", workflow: "same", target: "missing-sha", code: 128, fetches: 1 },
+        {
+          event: "workflow_dispatch",
+          workflow: "previous",
+          target: "missing-sha",
+          code: 1,
+          fetches: 2,
+        },
+      ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
+])(
+  "materializes $kind harness actions ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
+  async ({ kind, retained, event, workflow, target, code, fetches }) => {
+    const linux = kind !== "platform";
+    const preflight = kind === "preflight";
+    const posix = process.platform !== "win32";
+    const action = ".github/actions/setup-node-env/action.yml";
+    const executable = ".github/actions/tool/line\nbreak.sh";
+    const link = ".github/actions/tool/link";
+    const files = {
+      [action]: "name: trusted $Format:%H$\n",
+      ".github/actions/tool/with space.txt": "literal action bytes\n",
+      ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
+    };
+    const candidateFiles = {
+      "candidate-only.txt": "candidate stays intact\n",
+      "extensions/browser/icon.png": "complete binary path\0\xff",
+      "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
+    };
+    let revision = "";
+    let workflowRevision = "";
+    let candidateAction = files[action];
+    await withCiCheckoutFixture(
+      `${linux ? "linux:" : ""}configured`,
+      (root) => {
+        const source = path.join(root, "source");
+        mkdirSync(source);
+        const git = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"], {
+          encoding: "utf8",
+        })
+          .trim()
+          .split(/\r?\n/u)[0];
+        const gitConfig = path.join(root, "gitconfig");
+        writeFileSync(gitConfig, "");
+        const gitEnv = {
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: gitConfig,
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_AUTHOR_NAME: "Checkout fixture",
+          GIT_AUTHOR_EMAIL: "checkout@example.invalid",
+          GIT_COMMITTER_NAME: "Checkout fixture",
+          GIT_COMMITTER_EMAIL: "checkout@example.invalid",
+        };
+        const run = (...args: string[]) =>
+          execFileSync(expectDefined(git, "real Git executable"), ["-C", source, ...args], {
+            env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
+            encoding: "utf8",
+          }).trim();
+        run("init");
+        for (const [name, contents] of Object.entries({ ...files, ...candidateFiles })) {
+          mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
+          writeFileSync(path.join(source, name), contents);
+        }
+        // Archive export would omit or rewrite these trusted action bytes.
+        writeFileSync(path.join(source, ".gitattributes"), "* -text export-ignore export-subst\n");
+        if (posix) {
+          chmodSync(path.join(source, executable), 0o755);
+          symlinkSync("line\nbreak.sh", path.join(source, link));
+        }
+        if (workflow === "missing-action") {
+          rmSync(path.join(source, action));
+        }
+        run("add", "--all");
+        run("commit", "--no-gpg-sign", "-m", "fixture revision");
+        revision = run("rev-parse", "HEAD");
+        workflowRevision = revision;
+        if (workflow === "previous") {
+          candidateAction = "name: candidate action must not replace the trusted workflow\n";
+          writeFileSync(path.join(source, action), candidateAction);
+          run("add", action);
+          run("commit", "--no-gpg-sign", "-m", "selected candidate");
+          revision = run("rev-parse", "HEAD");
+        } else if (workflow === "missing") {
+          workflowRevision = "f".repeat(40);
+        }
+        if (target === "moved-event") {
+          run("branch", "event", workflowRevision);
+        }
+        if (retained) {
+          const staleAction = path.join(root, "workspace", ".ci-harness", action);
+          mkdirSync(path.dirname(staleAction), { recursive: true });
+          writeFileSync(staleAction, "name: stale platform action\n");
+        }
+        writeFileSync(
+          path.join(root, "fixture-options.json"),
+          JSON.stringify({
+            localGit: { git, remote: source },
+            fetchResults: [0, 0],
+            cooperativeTrees: true,
+            env: {
+              ...gitEnv,
+              CHECKOUT_KIND: kind,
+              CHECKOUT_SHA: revision,
+              CHECKOUT_REF:
+                target === "missing-branch"
+                  ? "refs/heads/missing"
+                  : target === "missing-sha"
+                    ? "f".repeat(40)
+                    : revision,
+              CHECKOUT_FALLBACK_REF: revision,
+              CHECKOUT_EVENT_REF: target === "moved-event" ? "refs/heads/event" : "",
+              GITHUB_EVENT_NAME: event,
+              GITHUB_REPOSITORY: "fixture/checkout",
+              CHECKOUT_TOKEN: "fixture-read-only-token",
+              WORKFLOW_SHA: workflowRevision,
+            },
+          }),
+        );
+        writeFileSync(
+          path.join(root, "checkout.sh"),
+          renderGitTestClock(
+            readCiCheckoutStep(
+              preflight ? "preflight" : linux ? "checks-fast-core" : "checks-windows",
+            ).run,
+            {
+              realClock: true,
+            },
+          ),
+        );
+      },
+      (report, result, stderr, root) => {
+        expect(result, `${stderr}\n${report.output}`).toEqual({ code: 0, signal: null });
+        expect(report.error, report.output).toBeUndefined();
+        expectCiCheckoutCleanup(report);
+        expect(report.code, report.output).toBe(code);
+        expect(report.commands.filter(({ args }) => args[0] === "fetch")).toHaveLength(fetches);
+        const workspace = path.join(root, "workspace");
+        const harness = path.join(workspace, ".ci-harness");
+        if (target === "missing-sha") {
+          expect(existsSync(path.join(root, "candidate-index"))).toBe(false);
+          expect(existsSync(harness)).toBe(false);
+          return;
+        }
+        expect(readFileSync(path.join(workspace, ".git/index"))).toEqual(
+          readFileSync(path.join(root, "candidate-index")),
+        );
+        expect(readFileSync(path.join(workspace, ".git/HEAD"), "utf8").trim()).toBe(revision);
+        expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
+          "AUTHORIZATION",
+        );
+        for (const [name, contents] of Object.entries(candidateFiles)) {
+          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+          expect(existsSync(path.join(harness, name))).toBe(false);
+        }
+        if (workflow === "missing-action") {
+          expect(existsSync(path.join(workspace, action))).toBe(false);
+          expect(existsSync(path.join(harness, action))).toBe(false);
+          return;
+        }
+        expect(readFileSync(path.join(workspace, action), "utf8")).toBe(candidateAction);
+        if (preflight && workflow !== "same") {
+          // A different workflow revision stays with the pinned Actions checkout.
+          expect(existsSync(harness)).toBe(false);
+          return;
+        }
+        expect(existsSync(path.join(harness, ".git"))).toBe(false);
+        for (const [name, contents] of Object.entries(files)) {
+          expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        }
+        if (posix) {
+          expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);
+          expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
+        }
+        writeFileSync(path.join(workspace, action), "later candidate edit\n");
+        expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
       },
     );
   },
@@ -528,7 +769,7 @@ it.skipIf(process.platform === "win32")(
   55_000,
 );
 
-it("does not revive an observed-dead fixture instance when its PID is reused", () => {
+it("does not revive a terminated fixture instance when its PID is reused", () => {
   const result = spawnSync(
     process.platform === "win32" ? "python" : "python3",
     [
@@ -536,7 +777,7 @@ it("does not revive an observed-dead fixture instance when its PID is reused", (
       "-S",
       "-c",
       String.raw`
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, runpy, subprocess, sys, tempfile
 
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
@@ -569,17 +810,28 @@ cp.spawnSync = (command, args, options) => {
 };
 require("node:module").syncBuiltinESMExports();
 ''')
-    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"]) as child:
-        child.wait(timeout=10)
+    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
+                          stdin=subprocess.PIPE) as child:
         retired = dict(pid=child.pid, role="grandchild", attempt=1, instance="retired")
         current = dict(pid=os.getpid(), role="grandchild", attempt=2, instance="current")
+        if os.name == "nt":
+            read_processes = runpy.run_path(sys.argv[3])["read_processes"]
+            identities = read_processes([child.pid, os.getpid()])
+            assert all(identity["alive"] for identity in identities)
+            retired["creationTime"], current["creationTime"] = (
+                identity["creationTime"] for identity in identities)
+        child.communicate(timeout=10)
         (records / "retired.json").write_text(json.dumps(retired))
         (records / "current.json").write_text(json.dumps(current))
+        (records / "sentinel.json").write_text(json.dumps(
+            dict(current, role="sentinel", attempt=0, instance="sentinel")))
 
         def observe():
             subprocess.run([sys.argv[1], "--require", str(guard), sys.argv[2], "git", str(root), "early-leader-exit",
                             "-C", str(workspace), "checkout"], cwd=workspace, check=True)
-            return json.loads((root / "events.jsonl").read_text().splitlines()[-1])["alive"]
+            observed = json.loads((root / "events.jsonl").read_text().splitlines()[-1])
+            assert observed["sentinelAlive"], "unrelated live sentinel was lost"
+            return observed["alive"]
 
         assert observe() == [current], "first boundary must observe real child termination"
         # Fault-inject PID reuse only after actual death was observed. The fresh
@@ -587,10 +839,17 @@ require("node:module").syncBuiltinESMExports();
         retired["pid"] = current["pid"]
         (records / "retired.json").write_text(json.dumps(retired))
         assert observe() == [current], "a retired instance was revived by a reused PID"
+        if os.name == "nt":
+            # No death receipt exists for this instance: birth identity must
+            # reject reuse even when no census observed the PID between lives.
+            (records / "unobserved.json").write_text(json.dumps(
+                dict(retired, instance="unobserved")))
+            assert observe() == [current], "an unobserved retired birth was revived by PID reuse"
 print("fixture lifetime contract passed")
 `,
       process.execPath,
       ciCheckoutFixture,
+      fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );

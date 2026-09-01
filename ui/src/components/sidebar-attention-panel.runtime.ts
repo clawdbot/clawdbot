@@ -18,7 +18,6 @@ import {
 } from "./sidebar-attention-entries.ts";
 import {
   renderSidebarApprovalItem,
-  renderSidebarAskOpenClawButton,
   renderSidebarIssueItem,
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
@@ -66,14 +65,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   );
   const hasVisibleDismissals = visibleDismissals.length > 0;
   const tabCounts = sidebarInboxTabCounts(params.entries);
-  const custodianItems = params.entries.filter(
-    (entry) => entry.type === "attention" && entry.action.kind === "askCustodian",
-  );
-  const custodianSeverity = custodianItems.some((item) => item.severity === "error")
-    ? "error"
-    : custodianItems.length
-      ? "warning"
-      : null;
   const renderEntry = (entry: SidebarInboxEntry) => {
     const dismissal = entry.dismissal;
     const onDismiss = dismissal ? () => params.onDismiss(dismissal) : undefined;
@@ -151,11 +142,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             >
               ${t("attention.dismissShown")}
             </button>
-            ${renderSidebarAskOpenClawButton({
-              count: custodianItems.length,
-              severity: custodianSeverity,
-              snapshot: params.context.gateway.snapshot,
-            })}
             <button
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"

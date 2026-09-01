@@ -43,7 +43,7 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
-    initialUserMessage: ApplicationContext["initialUserMessage"];
+    chatSubmissions: ApplicationContext["chatSubmissions"];
     password: string;
     onboarding: boolean;
     assistantName: string;

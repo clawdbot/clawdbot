@@ -125,7 +125,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
         });
         scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
       }
-    }).catch((error: unknown) => {
+    }, "tasks:mutation").catch((error: unknown) => {
       taskRegistryLog.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,

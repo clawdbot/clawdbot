@@ -75,6 +75,36 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it("isolates guest globals, bridge failures, and cancellations across warm executions", async () => {
+    const config = resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
+    } as never);
+    const execute = (source: string) =>
+      runCodeModeWorker({ kind: "exec", source, config, catalog: [] }, 10_000);
+
+    expect(
+      await execute(
+        "globalThis.previousRun = true; setTimeout(() => {}, 1); setTimeout(() => {}, 2);",
+      ),
+    ).toMatchObject({ status: "failed", code: "invalid_input" });
+    const cancelled = await execute(
+      'const timer = setTimeout(() => {}, 1); clearTimeout(timer); await yield_control("pause");',
+    );
+    expect(cancelled).toMatchObject({
+      status: "waiting",
+      canceledRequestIds: ["bridge:sleep:1"],
+    });
+    expect(await execute('await yield_control("next session");')).toMatchObject({
+      status: "waiting",
+      canceledRequestIds: [],
+      pendingRequests: [{ id: "bridge:yield:1", method: "yield" }],
+    });
+    expect(await execute("return typeof globalThis.previousRun;")).toMatchObject({
+      status: "completed",
+      value: { kind: "complete", json: '"undefined"' },
+    });
+  });
+
   it.each(["exec", "resume"] as const)(
     "terminates a real CPU-active %s worker when its catalog closes",
     async (phase) => {
@@ -149,8 +179,10 @@ describe("Code Mode worker lifecycle", () => {
       await executing.promise;
       clearToolSearchCatalog(h.ctx);
       expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
-      expect(terminate).toHaveBeenCalledOnce();
-      const worker = terminate.mock.contexts[0];
+      // Changing the runtime entry also retires idle warm workers. The active
+      // CPU worker is the last termination, and must stop before abort settles.
+      expect(terminate).toHaveBeenCalled();
+      const worker = terminate.mock.contexts.at(-1);
       if (!(worker instanceof Worker)) {
         throw new Error("Expected a terminated real worker");
       }
@@ -279,12 +311,15 @@ describe("Code Mode worker lifecycle", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const workerUrl = new URL(
       `data:text/javascript,${encodeURIComponent(`
-        import { parentPort, workerData } from "node:worker_threads";
-        parentPort.postMessage({
-          status: "completed",
-          value: { kind: "complete", json: JSON.stringify(workerData.wasmModule instanceof WebAssembly.Module) },
-          output: { count: 0, source: { kind: "complete", json: "[]" } },
-        });
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", ({ input }) => parentPort.postMessage({
+          status: "ok",
+          value: {
+            status: "completed",
+            value: { kind: "complete", json: JSON.stringify(input.wasmModule instanceof WebAssembly.Module) },
+            output: { count: 0, source: { kind: "complete", json: "[]" } },
+          },
+        }));
       `)}`,
     );
 

@@ -142,6 +142,7 @@ export const en: TranslationMap = {
       zoomOut: "Zoom out",
       zoomReset: "Reset zoom",
       terminalPanel: "Toggle terminal panel",
+      homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
@@ -213,6 +214,9 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
+    agentNotepad: "Agent Notepad",
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
@@ -556,6 +560,8 @@ export const en: TranslationMap = {
       policyTitle: "Update policy",
       channel: "Release channel",
       channelDescription: "Choose which OpenClaw release track this Gateway follows.",
+      checkForUpdates: "Check for updates",
+      checkForUpdatesDescription: "Periodically check for new versions and show update notices.",
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
@@ -563,6 +569,7 @@ export const en: TranslationMap = {
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
         "Extended stable reports available releases but never installs them automatically.",
+      checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
       commits: "Commits",
@@ -579,8 +586,8 @@ export const en: TranslationMap = {
       updateNowDescription: "Install the available update and restart the Gateway.",
       latestAttempt: "Latest update attempt",
       attemptedAt: "Attempted",
-      attemptTarget: "Target",
-      installedIdentity: "Installed",
+      beforeUpdate: "Before update",
+      afterAttempt: "After attempt",
       attemptInstallKind: "Attempt install type",
       attemptReason: "Reason code",
       failedStep: "Failure details",
@@ -603,9 +610,9 @@ export const en: TranslationMap = {
     verificationFailedWithIdentity:
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
-      "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     outcomeUnknown:
-      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -633,6 +640,8 @@ export const en: TranslationMap = {
       alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
+      managedServiceHandoffUnavailable:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
       managedServiceHandoffFailed:
         "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
@@ -1732,7 +1741,7 @@ export const en: TranslationMap = {
       title: "Model & Thinking",
       model: "Model",
       thinking: "Thinking",
-      fastMode: "Fast mode",
+      fastMode: "Fast Mode",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {
@@ -1745,6 +1754,8 @@ export const en: TranslationMap = {
         auto: "Auto",
         fast: "Fast",
         standard: "Standard",
+        on: "On",
+        off: "Off",
       },
     },
     channels: {
@@ -2813,11 +2824,6 @@ export const en: TranslationMap = {
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
       action: "Connect an AI provider",
     },
-    connectionFailure: {
-      title: "Configured AI needs attention",
-      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
-      action: "Review connection",
-    },
     loading: "Checking this Gateway for available AI access…",
     testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
@@ -3038,6 +3044,23 @@ export const en: TranslationMap = {
       doneTitle: "Memory import finished",
       doneBody: "Migrated {migrated}, skipped {skipped}. You can continue setting up OpenClaw.",
     },
+  },
+  assistantPanel: {
+    title: "Assistant sidebar",
+    home: "Home",
+    toggle: "Talk to your Home agent",
+    openHome: "Open Home full page",
+    close: "Close assistant sidebar",
+    resize: "Resize assistant sidebar",
+    dockBottom: "Dock assistant sidebar at bottom",
+    dockRight: "Dock assistant sidebar at right",
+    context: "Working on: {context}",
+    contextOff: "Work context off",
+    removeContext: "Remove work context",
+    includeContext: "Include work context",
+    selection: "Selected text",
+    attachSelection: "Attach selected text",
+    removeSelection: "Remove selected text",
   },
   custodian: {
     title: "OpenClaw",
@@ -3548,8 +3571,8 @@ export const en: TranslationMap = {
       "Install anyway approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",
     installAnyway: "Install anyway",
     connectToChange: "Connect to the gateway to change plugins.",
-    adminRequired: "Browsing only. Plugin changes require operator.admin access.",
-    changesDisabled: "Browsing only. This gateway does not allow plugin changes.",
+    adminRequired: "Plugin changes require operator.admin access.",
+    changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",
     installedSuccess: "Installed {name}.",
     installedRestart: "Installed {name}. A Gateway restart is required to apply the change.",
@@ -4487,8 +4510,6 @@ export const en: TranslationMap = {
     },
   },
   attention: {
-    custodianAlertAria: "Ask OpenClaw, {count} undismissed alert",
-    custodianAlertsAria: "Ask OpenClaw, {count} undismissed alerts",
     cronErrorUnknown: "Unknown error",
     cronFailed: "{job} failed",
     cronOverdue: "{job} overdue",
@@ -4856,6 +4877,7 @@ export const en: TranslationMap = {
   },
   modelProviders: {
     title: "Configured providers",
+    configureModels: "Configure Models",
     subtitle: "Model providers with auth, plan, quota, and cost data.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
@@ -4948,10 +4970,10 @@ export const en: TranslationMap = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Default models",
-      subtitle: "Choose the primary, ordered fallbacks, and utility model.",
-      primary: "Default model",
-      utility: "Utility model",
+      title: "Defaults",
+      subtitle: "Applies across all providers and models where applicable.",
+      primary: "Model",
+      utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
@@ -4959,14 +4981,21 @@ export const en: TranslationMap = {
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
       disabled: "Disabled",
-      fallbacks: "Fallbacks",
-      noFallbacks: "No fallback models configured.",
-      unsaved: "Unsaved changes",
-      addFallback: "Add fallback",
+      fallback: "Fallback Model",
+      noFallback: "No fallback model",
       selectModel: "Select a model",
-      selectFallback: "Select a fallback model",
       noModels: "Configure a provider before selecting default models.",
-      saved: "Default models saved.",
+      thinkingHelpLabel: "About thinking defaults",
+      thinkingHelp:
+        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+      thinkingDefaultHelp:
+        "Uses the selected model's thinking policy instead of saving a global thinking override.",
+      fastModeHelpLabel: "About fast mode defaults",
+      fastModeHelp:
+        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+      fastModeDefaultHelp:
+        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+      saved: "Defaults saved.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -4976,7 +5005,7 @@ export const en: TranslationMap = {
       saveKey: "Save API key for {provider} from Control UI",
       removeKey: "Remove API key for {provider} from Control UI",
       addProvider: "Add model provider {provider} from Control UI",
-      defaultModel: "Update default model selection from Control UI",
+      defaultModel: "Update defaults from Control UI",
     },
   },
   usage: {
@@ -5267,9 +5296,12 @@ export const en: TranslationMap = {
     togglePasswordVisibility: "Toggle password visibility",
     failure: {
       rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      profileUnavailable: {
+        title: "Profile verification unavailable",
+        stepRetry: "Retry shortly.",
+        stepAdmin:
+          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
       authRequired: {
         title: "Auth required",
         summary:
@@ -5693,6 +5725,16 @@ export const en: TranslationMap = {
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
     },
+    mermaid: {
+      title: "Mermaid diagram",
+      options: "Diagram options",
+      diagram: "Show diagram",
+      source: "Show source",
+      copySource: "Copy source",
+      expand: "Expand diagram",
+      rendering: "Rendering diagram…",
+      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+    },
     codeBlock: {
       languageFallback: "Code",
       hiddenLine: "1 hidden line",
@@ -5948,6 +5990,8 @@ export const en: TranslationMap = {
     },
     questions: {
       other: "Type your own answer here",
+      answer: "Answer",
+      answerPlaceholder: "{label}",
       submit: "Submit",
       next: "Next",
       back: "Back",
@@ -6001,7 +6045,6 @@ export const en: TranslationMap = {
       currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
-      moreDetails: "More details",
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
@@ -6044,6 +6087,9 @@ export const en: TranslationMap = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       onlyForSession: "Only for this session",
+      selectionTargetSession: "Selection target: This session only",
+      selectionTargetAgent: "Selection target: This agent's default",
+      selectionTargetGlobal: "Selection target: Global default",
       useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
@@ -6092,14 +6138,13 @@ export const en: TranslationMap = {
       },
     },
     rail: {
-      title: "Session companion",
+      title: "Side chat",
       subtitle: "Ask about this session or its project",
-      expand: "Expand session companion",
-      collapse: "Collapse session companion",
-      close: "Close session companion",
-      show: "Show session companion",
-      moreActions: "More companion actions",
-      clear: "Clear companion session",
+      expand: "Expand side chat",
+      collapse: "Collapse side chat",
+      close: "Close side chat",
+      show: "Show side chat",
+      clear: "Clear side chat",
       pullRequests: "Pull requests",
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",
@@ -6111,16 +6156,16 @@ export const en: TranslationMap = {
         stopped: "Why did it stop?",
         remaining: "What's left?",
       },
-      askLabel: "Ask the session companion",
+      askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
-      askBusy: "The companion is already answering a question.",
+      askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
-      askRateLimited: "The companion reached its question limit. Try again shortly.",
-      askUnavailable: "The companion cannot answer right now.",
+      askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       asOf: "as of {time}",
       health: {
@@ -6204,14 +6249,13 @@ export const en: TranslationMap = {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      count: "Retained accepted inputs: {count}",
-      queued: "Accepted by the Gateway. Waiting for its turn.",
+      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
-        "Cancelled before its turn. This input will not run automatically; copy it to send a new message.",
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
-        "Interrupted before its turn. This input will not run automatically; copy it to send a new message.",
-      earlier: "Earlier accepted inputs",
-      latest: "Latest accepted inputs",
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      earlier: "Show earlier messages",
+      latest: "Show latest messages",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",
@@ -6803,15 +6847,16 @@ export const en: TranslationMap = {
     },
     actions: {
       runNow: "Run now",
+      runNowJob: "Run now: {name}",
       runIfDue: "Run if due",
-      pause: "Pause",
-      resume: "Resume",
+      pauseJob: "Pause: {name}",
+      resumeJob: "Resume: {name}",
       clone: "Clone",
       remove: "Remove",
       removeConfirmTitle: 'Remove "{name}"?',
       removeConfirmMessage:
         "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
-      more: "More actions",
+      moreJob: "More actions for {name}",
     },
     runNotStarted: {
       notDue: "This automation is not due yet.",

@@ -1,8 +1,10 @@
-import type { SessionTreeEntry } from "@openclaw/agent-core";
+import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { sql } from "kysely";
-import { resolveSessionContextWindow } from "../../../packages/agent-core/src/harness/session/session.js";
-import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  iterateSessionContextEntries,
+  iterateSessionContextMessages,
+} from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -29,10 +31,62 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
+type ContextEntry = SessionTreeEntry & { seq: number };
+type TranscriptContextSnapshot = {
+  header: TranscriptEvent;
+  entries: ContextEntry[];
+  readEntry: (entry: ContextEntry, omitCheckpoint?: boolean) => SessionTreeEntry;
+};
+
 /** Read a transient context without opening the writer lifecycle or copying native evidence. */
 export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
 ): TranscriptEvent[] {
+  const result = withTranscriptContextSnapshot(
+    scope,
+    "model-context",
+    ({ header, entries, readEntry }) => {
+      const payloads = new Map<ContextEntry, SessionTreeEntry>();
+      for (const { entry, context } of iterateSessionContextEntries(entries)) {
+        const omitCheckpoint =
+          context !== "current" &&
+          entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          isCompactionReplayCheckpoint(entry.message.providerReplay);
+        payloads.set(entry, readEntry(entry, omitCheckpoint));
+      }
+      return [...(header ? [header] : []), ...entries.map((entry) => payloads.get(entry) ?? entry)];
+    },
+  );
+  return result.found ? result.value : [];
+}
+
+/** Consume full-fidelity context lazily inside one read snapshot, never retaining raw history. */
+export function readSessionTranscriptContextMessages<T>(
+  scope: SessionTranscriptReadScope,
+  read: (messages: Iterable<AgentMessage>, header: unknown) => T,
+): T {
+  const result = withTranscriptContextSnapshot(
+    scope,
+    "transcript",
+    ({ header, entries, readEntry }) => {
+      const messages = iterateSessionContextMessages(entries, readEntry);
+      try {
+        return read(messages, header);
+      } finally {
+        // Retained iterators cannot read after the snapshot closes, including early rejection.
+        messages.return(undefined);
+      }
+    },
+  );
+  return result.found ? result.value : read([], undefined);
+}
+
+function withTranscriptContextSnapshot<T>(
+  scope: SessionTranscriptReadScope,
+  view: "model-context" | "transcript",
+  read: (snapshot: TranscriptContextSnapshot) => T,
+): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
@@ -69,30 +123,31 @@ export function readSessionTranscriptModelContext(
                   ])
                   .orderBy("seq", "asc"),
               )) {
-                // The navigation projection preserves discriminants and state, with empty
-                // bodies. Only selected model messages are subsequently hydrated.
-                // SAFETY: SQL retains entry discriminants/state; the detached manager validates readability.
+                // Only navigation crosses into JavaScript before the canonical context is selected.
+                // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.
                 yield { ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq };
               }
             })(),
           );
-          const selected = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-          const entries = selected.map((node) => node.entry);
-          const window = resolveSessionContextWindow(entries);
-          const boundary = entries[window.boundaryIndex];
-          const kept = entries.slice(window.firstKeptIndex, window.boundaryIndex);
-          const resetKept =
-            boundary?.type === "reset" ? new Set(selectResetKeptEntries(kept)) : undefined;
+          // Navigation entries belong to this snapshot; normalize ancestry without another copy.
+          const entries = selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(
+            ({ entry, parentId }) => {
+              entry.parentId = parentId;
+              return entry;
+            },
+          );
           const readPayload = prepareSqliteQuerySync<
             { seq: number; omitCheckpoint: number },
             { event_json: string }
           >(database.db, (parameter) =>
             base
               .select((eb) =>
-                projectModelContextEventSql(
-                  eb.ref("event_json"),
-                  parameter((row) => row.omitCheckpoint),
-                ).as("event_json"),
+                view === "model-context"
+                  ? projectModelContextEventSql(
+                      eb.ref("event_json"),
+                      parameter((row) => row.omitCheckpoint),
+                    ).as("event_json")
+                  : eb.ref("event_json").as("event_json"),
               )
               .where(
                 "seq",
@@ -100,48 +155,24 @@ export function readSessionTranscriptModelContext(
                 parameter((row) => row.seq),
               ),
           );
-          const events: TranscriptEvent[] = header ? [JSON.parse(header.event_json)] : [];
-          for (const [index, node] of selected.entries()) {
-            const entry = node.entry;
-            const retained = index >= window.firstKeptIndex && index < window.boundaryIndex;
-            const inContext =
-              window.boundaryIndex < 0 ||
-              index >= window.boundaryIndex ||
-              (retained && (!resetKept || resetKept.has(entry)));
-            const hasModelPayload =
-              entry.type === "message" ||
-              entry.type === "custom_message" ||
-              entry.type === "branch_summary" ||
-              index === window.boundaryIndex;
-            // appendResetKeptMessage consumes explicit reset retention regardless of ordinary exclusion.
-            const excluded =
-              !resetKept?.has(entry) &&
-              entry.type === "message" &&
-              "excludeFromContext" in entry.message &&
-              entry.message.excludeFromContext === true;
-            const row =
-              inContext && hasModelPayload && !excluded
-                ? readPayload({
-                    seq: node.entry.seq,
-                    omitCheckpoint:
-                      retained &&
-                      entry.type === "message" &&
-                      entry.message.role === "assistant" &&
-                      isCompactionReplayCheckpoint(entry.message.providerReplay)
-                        ? 1
-                        : 0,
-                  }).rows[0]
-                : undefined;
-            // SAFETY: Payload selection changes only storage-only message fields, not the persisted entry union.
-            const projected = row ? (JSON.parse(row.event_json) as SessionTreeEntry) : entry;
-            events.push({ ...projected, parentId: node.parentId });
-          }
-          return events;
+          return read({
+            header: header ? JSON.parse(header.event_json) : undefined,
+            entries,
+            readEntry: (entry, omitCheckpoint = false) => {
+              const row = readPayload({ seq: entry.seq, omitCheckpoint: omitCheckpoint ? 1 : 0 })
+                .rows[0];
+              return {
+                // SAFETY: The canonical payload is selected by its navigation row in this snapshot.
+                ...(JSON.parse(row!.event_json) as SessionTreeEntry),
+                parentId: entry.parentId,
+              };
+            },
+          });
         },
-        { operationLabel: "session model-context read" },
+        { operationLabel: "session context snapshot read" },
       ),
     toDatabaseOptions(resolved),
     { throwOnMissingTable: true },
   );
-  return result.found ? result.value : [];
+  return result;
 }

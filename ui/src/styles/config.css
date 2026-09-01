@@ -1058,12 +1058,6 @@
   color: var(--danger);
 }
 
-.mcp-server-loading {
-  padding: var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 /* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;

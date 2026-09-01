@@ -5,8 +5,10 @@ import type {
   WorkerNodeRuntimePreparation,
   WorkerProvider,
 } from "../../plugins/types.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentTransitionPatch } from "./store.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
@@ -17,6 +19,7 @@ type WorkerNodeProvisioningOptions = Pick<
   | "store"
   | "isStopping"
   | "prepareNodeBootstrap"
+  | "prepareInstallation"
   | "prepareNodeRuntime"
   | "closeNodeRuntime"
   | "prepareNodeEnrollment"
@@ -36,7 +39,28 @@ type WorkerNodeProvisioningOptions = Pick<
 };
 
 export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOptions) {
-  const prepare = async (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+  const prepareBundle = async (
+    preparedInstallation?: WorkerInstallationArtifact,
+    signal?: AbortSignal,
+  ) => {
+    // Packaging belongs to the service; runtime grants and node installation consume
+    // the same prepared artifact without retaining a cancelled packaging wait.
+    const artifact =
+      preparedInstallation?.install === "bundle"
+        ? preparedInstallation
+        : await options.prepareInstallation("bundle", signal);
+    signal?.throwIfAborted();
+    if (artifact.install !== "bundle") {
+      throw new Error("Worker bundle preparation returned the wrong install channel");
+    }
+    return artifact;
+  };
+
+  const prepare = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    signal?: AbortSignal,
+  ) => {
     if (
       record.state !== "requested" ||
       !provider.requiresNodeEnrollment ||
@@ -46,8 +70,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     }
     // Preparing the immutable runtime must finish before a fresh paid allocation.
     try {
-      await options.prepareNodeBootstrap(record);
+      await options.prepareNodeBootstrap(record, signal);
     } catch (error) {
+      signal?.throwIfAborted();
       const current = options.store.get(record.environmentId);
       if (
         current?.state === "requested" &&
@@ -75,7 +100,12 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     }
   };
 
-  const createEnrollmentOperation = (record: WorkerEnvironmentRecord, provider: WorkerProvider) => {
+  const createEnrollmentOperation = (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    signal?: AbortSignal,
+    preparedInstallation?: WorkerInstallationArtifact,
+  ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
     }
@@ -90,6 +120,26 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
     let enrollment: WorkerNodeEnrollment | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
+    const close = () => {
+      if (!open) {
+        return;
+      }
+      open = false;
+      signal?.removeEventListener("abort", close);
+      controller.abort();
+      if (runtime) {
+        options.closeNodeRuntime?.(runtime);
+        runtime = undefined;
+      }
+      if (enrollment) {
+        options.closeNodeEnrollment?.(enrollment);
+        enrollment = undefined;
+      }
+    };
+    signal?.addEventListener("abort", close, { once: true });
+    if (signal?.aborted) {
+      close();
+    }
     const assertCurrent = () => {
       const current = options.store.get(record.environmentId);
       if (
@@ -104,26 +154,29 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         throw new DOMException("Worker provisioning operation is closed", "AbortError");
       }
     };
+    const assertRuntimeCurrent = () => {
+      assertCurrent();
+      if (pending) {
+        throw new Error("Worker node enrollment has already begun");
+      }
+    };
     return {
       prepareRuntime: prepareNodeRuntime
         ? async () => {
-            assertCurrent();
-            if (pending) {
-              throw new Error("Worker node enrollment has already begun");
-            }
-            pendingRuntime ??= prepareNodeRuntime(record, controller.signal).then((prepared) => {
+            assertRuntimeCurrent();
+            pendingRuntime ??= (async () => {
+              const artifact = await prepareBundle(preparedInstallation, controller.signal);
+              assertRuntimeCurrent();
+              const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
-                assertCurrent();
-                if (pending) {
-                  throw new Error("Worker node enrollment has already begun");
-                }
+                assertRuntimeCurrent();
               } catch (error) {
                 options.closeNodeRuntime?.(prepared);
                 throw error;
               }
               runtime = prepared;
               return prepared;
-            });
+            })();
             return await pendingRuntime;
           }
         : undefined,
@@ -146,18 +199,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         });
         return await pending;
       },
-      close: () => {
-        open = false;
-        controller.abort();
-        if (runtime) {
-          options.closeNodeRuntime?.(runtime);
-          runtime = undefined;
-        }
-        if (enrollment) {
-          options.closeNodeEnrollment?.(enrollment);
-          enrollment = undefined;
-        }
-      },
+      close,
     };
   };
 
@@ -166,6 +208,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     lease: NodeLease,
     provider: WorkerProvider,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
+    preparedInstallation?: WorkerInstallationArtifact,
+    cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -177,7 +221,14 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
-      nodeBuild = await options.ensureNodeWorkerBundle(lease.node.deviceId);
+      const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
+      cancellation?.assertActive();
+      nodeBuild = await options.ensureNodeWorkerBundle({
+        deviceId: lease.node.deviceId,
+        artifact,
+        signal: cancellation?.signal,
+      });
+      cancellation?.assertActive();
     } catch (error) {
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
