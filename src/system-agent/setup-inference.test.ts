@@ -2445,6 +2445,10 @@ describe("activateSetupInference", () => {
       status: "auth",
       error: expect.stringContaining("verified inference owner changed"),
     });
+    // The specific owner failure cause is preserved (redacted) for diagnosis.
+    expect(result.error).toContain(
+      "The successful inference credential is no longer the active route owner.",
+    );
     expect(configHarness.current()).toEqual({});
   });
 

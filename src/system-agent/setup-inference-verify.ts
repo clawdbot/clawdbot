@@ -8,6 +8,7 @@ import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -434,12 +435,13 @@ export async function verifySetupInferenceConfig(params: {
             deps,
           });
           params.onVerifiedExecution?.(test.auth, binding);
-        } catch {
+        } catch (error) {
           return {
             ok: false,
             status: "auth",
-            error:
-              "The verified inference owner changed before validation completed. Retry the inference check.",
+            error: await redactSetupInferenceError(
+              `The verified inference owner changed before validation completed. Retry the inference check. (${formatErrorMessage(error)})`,
+            ),
             ...(authProfiles ? { authProfiles } : {}),
           };
         }
