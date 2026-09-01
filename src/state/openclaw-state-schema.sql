@@ -499,6 +499,101 @@ CREATE INDEX IF NOT EXISTS idx_operator_approvals_runtime_pending
   ON operator_approvals(runtime_epoch, approval_id)
   WHERE status = 'pending';
 
+-- External verifier attempts are append-only, proof-free audit records. The
+-- canonical approval row remains the authorization source of truth.
+CREATE TABLE IF NOT EXISTS plugin_external_verification_attempts (
+  attempt_id TEXT NOT NULL PRIMARY KEY CHECK (length(attempt_id) > 0),
+  approval_id TEXT NOT NULL,
+  plugin_id TEXT NOT NULL CHECK (length(plugin_id) > 0),
+  run_id TEXT NOT NULL CHECK (length(run_id) > 0),
+  tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+  tool_call_id TEXT,
+  agent_id TEXT,
+  session_key TEXT,
+  session_id TEXT,
+  interaction_id TEXT NOT NULL CHECK (length(interaction_id) = 64),
+  decision TEXT NOT NULL CHECK (decision IN ('allow-once', 'allow-always')),
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 80),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  ended_at_ms INTEGER,
+  outcome TEXT CHECK (outcome IN ('succeeded', 'failed', 'cancelled', 'timed-out')),
+  error_class TEXT CHECK (error_class IS NULL OR length(error_class) BETWEEN 1 AND 64),
+  terminal_source TEXT,
+  completion_applied INTEGER CHECK (completion_applied IN (0, 1)),
+  grant_authorization_id TEXT,
+  grant_issued_at_ms INTEGER,
+  resolver_plugin_id TEXT,
+  runtime_epoch TEXT NOT NULL,
+  FOREIGN KEY (approval_id) REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  UNIQUE (approval_id, interaction_id),
+  CHECK (expires_at_ms >= created_at_ms),
+  CHECK (
+    (
+      ended_at_ms IS NULL
+      AND outcome IS NULL
+      AND error_class IS NULL
+      AND terminal_source IS NULL
+      AND completion_applied IS NULL
+      AND grant_authorization_id IS NULL
+      AND grant_issued_at_ms IS NULL
+      AND resolver_plugin_id IS NULL
+    )
+    OR (
+      ended_at_ms IS NOT NULL
+      AND outcome IS NOT NULL
+      AND completion_applied IS NOT NULL
+      AND ended_at_ms >= created_at_ms
+    )
+  ),
+  CHECK (
+    (
+      outcome = 'succeeded'
+      AND resolver_plugin_id IS NOT NULL
+      AND (
+        (
+          decision = 'allow-always'
+          AND grant_authorization_id IS NOT NULL
+          AND grant_issued_at_ms IS NOT NULL
+        )
+        OR (
+          decision = 'allow-once'
+          AND grant_authorization_id IS NULL
+          AND grant_issued_at_ms IS NULL
+        )
+      )
+    )
+    OR (outcome IS NULL OR outcome != 'succeeded')
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plugin_external_verification_active_approval
+  ON plugin_external_verification_attempts(approval_id)
+  WHERE ended_at_ms IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_plugin_external_verification_run_active
+  ON plugin_external_verification_attempts(run_id, created_at_ms)
+  WHERE ended_at_ms IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_plugin_external_verification_approval_created
+  ON plugin_external_verification_attempts(approval_id, created_at_ms DESC);
+
+-- Every terminal approval transition closes its active verifier attempt in the
+-- same SQLite transaction. External success ends the attempt before allowing
+-- the approval, so this trigger only handles denial/expiry/cancellation races.
+CREATE TRIGGER IF NOT EXISTS trg_operator_approval_closes_external_verification
+AFTER UPDATE OF status ON operator_approvals
+WHEN OLD.status = 'pending' AND NEW.status != 'pending'
+BEGIN
+  UPDATE plugin_external_verification_attempts
+  SET
+    ended_at_ms = NEW.resolved_at_ms,
+    outcome = CASE WHEN NEW.status = 'expired' THEN 'timed-out' ELSE 'cancelled' END,
+    terminal_source = NEW.terminal_reason,
+    completion_applied = 0
+  WHERE approval_id = NEW.approval_id AND ended_at_ms IS NULL;
+END;
+
 CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
   approval_id TEXT NOT NULL PRIMARY KEY
     REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,

@@ -459,22 +459,42 @@ describe("GatewayChatClient", () => {
     });
   });
 
-  it("lists and resolves plugin approvals through the gateway", async () => {
+  it("lists, starts external verification, and resolves plugin approvals through the gateway", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
     const pending = [{ id: "plugin:skill-1" }];
-    const request = vi.fn().mockResolvedValueOnce(pending).mockResolvedValueOnce({ ok: true });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({ intent: "start", actionToken: "action-1" })
+      .mockResolvedValueOnce({ outcome: "started", presentations: ["Scan challenge"] })
+      .mockResolvedValueOnce({ ok: true });
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
     await expect(client.listPluginApprovals()).resolves.toEqual(pending);
+    await expect(
+      client.prepareExternalPluginApproval("plugin:skill-1", "allow-once"),
+    ).resolves.toEqual({ intent: "start", actionToken: "action-1" });
+    await expect(
+      client.startExternalPluginApproval("plugin:skill-1", "allow-once", "action-1"),
+    ).resolves.toEqual({ outcome: "started", presentations: ["Scan challenge"] });
     await expect(client.resolvePluginApproval("plugin:skill-1", "allow-once")).resolves.toEqual({
       ok: true,
     });
 
     expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
+    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.external.prepare", {
+      id: "plugin:skill-1",
+      decision: "allow-once",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "plugin.approval.external.start", {
+      id: "plugin:skill-1",
+      decision: "allow-once",
+      actionToken: "action-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "plugin.approval.resolve", {
       id: "plugin:skill-1",
       decision: "allow-once",
     });

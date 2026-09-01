@@ -6,7 +6,9 @@ type QrTerminalModules = {
   size: number;
 };
 
-const COMPACT_MARGIN_MODULES = 1;
+// QR spec quiet zone is 4 modules; anything less breaks phone scanners once
+// surrounding UI text sits next to the code or the ANSI palette is stripped.
+const COMPACT_MARGIN_MODULES = 4;
 const TERMINAL_BLACK_ON_WHITE = "\x1b[47m\x1b[30m";
 const TERMINAL_RESET = "\x1b[0m";
 const FULL_BLOCK = "█";

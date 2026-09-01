@@ -2965,6 +2965,33 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
   });
 
+  it("fails closed when a plugin returns invalid external verification metadata", async () => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Invalid external verification",
+        description: "Must remain blocked",
+        externalResolution: { label: " " },
+        onResolution,
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required (gateway unavailable)",
+    });
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
   it.each([
     [
       "surfaces validation rejections",

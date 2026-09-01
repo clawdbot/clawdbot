@@ -150,6 +150,13 @@ function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
     .run("2026.7.0");
 }
 
+function markStateDatabaseAsV5(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA user_version = 5;
+    UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+  `);
+}
+
 function createInitialStateSchemaShape() {
   const shape = createSqliteSchemaShapeFromSql(
     new URL("./openclaw-state-schema.sql", import.meta.url),
@@ -6146,28 +6153,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         )
         .get() as { sql: string }
     ).sql;
+    // This fixture models the shipped two-kind schema, which predates external
+    // verification attempts and their operator-approval trigger.
+    legacyDb.exec(`
+      DROP TRIGGER trg_operator_approval_closes_external_verification;
+      DROP TABLE plugin_external_verification_attempts;
+    `);
     legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
     legacyDb.exec(currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"));
     legacyDb.exec("DROP TABLE operator_approvals_current");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
       kind: "operator-approvals-system-agent",
       path: databasePath,
     });
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
-      ],
-      warnings: [],
-    });
+    const repaired = repairOpenClawStateDatabaseSchema(options);
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).toContain(
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    );
 
     const reopened = openOpenClawStateDatabase(options);
     const migratedSql = reopened.db
       .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'")
       .get() as { sql: string };
     expect(migratedSql.sql).toContain("'system-agent'");
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'plugin_external_verification_attempts'",
+        )
+        .get(),
+    ).toEqual({ name: "plugin_external_verification_attempts" });
   });
 
   it("does not recursively recommend doctor when operator approval repair refuses a shape", () => {

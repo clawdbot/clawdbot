@@ -17,6 +17,7 @@ import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+  normalizePluginExternalResolution,
 } from "../infra/plugin-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
@@ -208,10 +209,26 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
-  const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
-    const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
+    const externalResolution = normalizePluginExternalResolution(approval.externalResolution);
+    const gatewayAllowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
+    const allowedDecisions = externalResolution
+      ? [...(externalResolution.decisions ?? ["allow-once"]), "deny"]
+      : gatewayAllowedDecisions;
+    if (externalResolution && !params.ctx?.runId?.trim()) {
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "failed",
+        deniedReason: "plugin-approval",
+        reason: "External verification approval requires a host-derived run id",
+        params: params.baseParams,
+      };
+    }
+    const embeddedApprovalBroker =
+      !externalResolution && isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
       const result = await embeddedApprovalBroker.request({
         request: {
@@ -301,11 +318,16 @@ async function requestPluginToolApproval(params: {
             description: approval.description,
             ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
-            allowedDecisions: approval.allowedDecisions,
+            allowedDecisions: externalResolution
+              ? gatewayAllowedDecisions
+              : approval.allowedDecisions,
+            ...(externalResolution ? { externalResolution } : {}),
             toolName: params.toolName,
             toolCallId: params.toolCallId,
             agentId: params.ctx?.agentId,
             sessionKey: params.ctx?.sessionKey,
+            sessionId: params.ctx?.sessionId,
+            runId: params.ctx?.runId,
             ...(params.ctx?.approvalReviewerDeviceId
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
               : {}),

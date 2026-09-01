@@ -1,6 +1,8 @@
 // Defines plugin approval request/resolution payloads and actions.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { PluginExternalResolution } from "../plugins/external-verification-approval-types.js";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
+import { sanitizeExecApprovalDisplayText } from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
 // Plugin approval types and renderers mirror exec approval decisions while
@@ -27,13 +29,11 @@ export type PluginApprovalRequestPayload = {
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
-  externalResolution?: {
-    label: string;
-    decisions?: readonly ("allow-once" | "allow-always")[];
-  } | null;
+  externalResolution?: PluginExternalResolution | null;
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  sessionId?: string | null;
   /** Host-derived source run; never accepted from plugin approval RPC params. */
   runId?: string | null;
   turnSourceChannel?: string | null;
@@ -66,6 +66,7 @@ export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
@@ -132,6 +133,30 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
 }
 
+/** Normalize the bounded external route shared by creation and presentation paths. */
+export function normalizePluginExternalResolution(
+  value: PluginExternalResolution | null | undefined,
+): PluginExternalResolution | null {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || Array.from(label).length > PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("external decisions must be unique allow-once/allow-always values");
+  }
+  return { label, decisions: [...decisions] };
+}
+
 /** Build the pending plugin approval message. */
 export function buildPluginApprovalRequestMessage(
   request: PluginApprovalRequest,
@@ -159,6 +184,18 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
+  const externalResolution = normalizePluginExternalResolution(request.request.externalResolution);
+  if (externalResolution) {
+    lines.push(externalResolution.label);
+    if (externalResolution.decisions?.includes("allow-once")) {
+      lines.push(`Verify once: /approve ${request.id} external allow-once`);
+    }
+    if (externalResolution.decisions?.includes("allow-always")) {
+      lines.push(`Verify and trust for session: /approve ${request.id} external allow-always`);
+    }
+    lines.push(`Deny: /approve ${request.id} deny`);
+    return lines.join("\n");
+  }
   lines.push(
     `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
       request.request,
