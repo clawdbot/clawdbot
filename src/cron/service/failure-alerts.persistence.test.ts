@@ -602,6 +602,128 @@ describe("cron failure alert outcome write-back", () => {
     expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
 
+  it("does not overwrite a newer alert cycle committed by a sibling service", async () => {
+    const store = fixtures.makeStorePath();
+    const job = createAlertJob({ id: "alert-outcome-sibling-cycle", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    // Service A: the send stays in flight while a sibling commits a newer cycle.
+    let releaseA: (() => void) | undefined;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const sendA = vi.fn(async (params) => {
+      await gateA;
+      params.onDeliveryAttempt?.(true);
+    });
+    const stateA = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => endedAt,
+      sendCronFailureAlert: sendA,
+    });
+    await finalizeAlertOutcome({
+      state: stateA,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt,
+    });
+
+    // Service B on the same store: a later failure past the cooldown starts a
+    // newer alert cycle and commits it.
+    const laterAt = endedAt + 600_000;
+    const sendB = vi.fn(async () => undefined);
+    const stateB = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => laterAt,
+      sendCronFailureAlert: sendB,
+    });
+    const jobForB = structuredClone(job);
+    jobForB.state.runningAtMs = laterAt;
+    await finalizeAlertOutcome({
+      state: stateB,
+      job: jobForB,
+      status: "error",
+      error: "provider unavailable again",
+      startedAt: laterAt - 10,
+      endedAt: laterAt,
+    });
+    await vi.waitFor(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureAlertAtMs).toBe(
+        laterAt,
+      );
+    });
+
+    // Service A's delayed send settles with a stale snapshot; it must not
+    // overwrite the sibling's newer cycle.
+    releaseA?.();
+    await sendA.mock.results[0]?.value;
+    await Promise.resolve();
+    await stateA.op;
+    await Promise.resolve();
+    await stateA.op;
+
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(persisted?.lastFailureAlertAtMs).toBe(laterAt);
+    expect(persisted?.lastFailureNotificationDelivered).not.toBe(true);
+  });
+
+  it("restores the live fields when the outcome persist fails", async () => {
+    const store = fixtures.makeStorePath();
+    const job = createAlertJob({ id: "alert-outcome-persist-restore", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let releaseSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendCronFailureAlert = vi.fn(async (params) => {
+      await sendGate;
+      params.onDeliveryAttempt?.(true);
+    });
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => endedAt,
+      sendCronFailureAlert,
+    });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt,
+    });
+
+    // The run itself is durable; from here on every write to this row fails.
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TEMP TRIGGER reject_outcome_write
+      BEFORE UPDATE ON cron_jobs
+      WHEN NEW.store_key = '${cronStoreKey(store.storePath)}' AND NEW.job_id = '${job.id}'
+      BEGIN
+        SELECT RAISE(ABORT, 'outcome write failed');
+      END;
+    `);
+    try {
+      releaseSend?.();
+      await sendCronFailureAlert.mock.results[0]?.value;
+      await Promise.resolve();
+      await state.op;
+      await Promise.resolve();
+      await state.op;
+
+      // The live gateway must not report an outcome SQLite refused to commit.
+      const live = state.store?.jobs[0]?.state;
+      expect(live?.lastFailureNotificationDeliveryStatus).toBe("unknown");
+      expect(live?.lastFailureNotificationDelivered).toBeUndefined();
+      expect(live?.lastFailureNotificationDeliveryError).toBeUndefined();
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS reject_outcome_write;");
+    }
+  });
+
   it("does not clobber a newer alert cycle that owns the fields", async () => {
     let resolveSend: (() => void) | undefined;
     const sendGate = new Promise<void>((resolve) => {

@@ -22,7 +22,7 @@ import type {
 } from "../types.js";
 import { locked } from "./locked.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { persist } from "./store.js";
+import { ensureLoaded, persist } from "./store.js";
 import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
@@ -213,16 +213,36 @@ async function recordFailureAlertOutcome(
 ): Promise<void> {
   try {
     await locked(state, async () => {
+      // A sibling service on the same store partition may have committed a
+      // newer snapshot while this send was in flight; refresh the cached
+      // store before validating so a stale snapshot cannot overwrite a newer
+      // alert cycle. ensureLoaded is a no-op when no sibling committed.
+      await ensureLoaded(state);
       const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
       if (!job || job.state.lastFailureAlertAtMs !== params.alertAtMs) {
         return;
       }
+      const prior = {
+        delivered: job.state.lastFailureNotificationDelivered,
+        status: job.state.lastFailureNotificationDeliveryStatus,
+        error: job.state.lastFailureNotificationDeliveryError,
+      };
       job.state.lastFailureNotificationDelivered = params.delivered;
       job.state.lastFailureNotificationDeliveryStatus = params.delivered
         ? "delivered"
         : "not-delivered";
       job.state.lastFailureNotificationDeliveryError = params.error;
-      await persist(state, { stateOnly: true });
+      try {
+        await persist(state, { stateOnly: true });
+      } catch (persistErr) {
+        // Never let the live gateway report an outcome SQLite refused to
+        // commit; a later unrelated persist would make the stale value
+        // durable.
+        job.state.lastFailureNotificationDelivered = prior.delivered;
+        job.state.lastFailureNotificationDeliveryStatus = prior.status;
+        job.state.lastFailureNotificationDeliveryError = prior.error;
+        throw persistErr;
+      }
     });
   } catch (err) {
     state.deps.log.warn(
