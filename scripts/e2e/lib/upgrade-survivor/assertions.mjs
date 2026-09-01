@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { tsImport } from "tsx/esm/api";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import {
@@ -12,6 +13,11 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
+
+const { isTrustedOfficialPluginInstallRecord } = await tsImport(
+  "../../../../src/plugins/official-external-install-records.ts",
+  import.meta.url,
+);
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
@@ -1139,19 +1145,8 @@ function hasCompanionPluginConsent(record) {
   ].some((value) => value !== undefined);
 }
 
-function isTrustedOfficialNpmCompanion(record, packageName) {
-  const isPackageSpec = (value) =>
-    value === undefined ||
-    (typeof value === "string" && (value === packageName || value.startsWith(`${packageName}@`)));
-  return (
-    record.source === "npm" &&
-    record.artifactKind === undefined &&
-    record.sourcePath === undefined &&
-    record.resolvedName === packageName &&
-    isPackageSpec(record.spec) &&
-    isPackageSpec(record.resolvedSpec) &&
-    (record.clawhubPackage === undefined || record.clawhubPackage === packageName)
-  );
+function isTrustedOfficialNpmCompanion(record, pluginId, packageName) {
+  return isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record });
 }
 
 function assertCompanionPluginConsent(record, pluginId, integrity) {
@@ -1234,7 +1229,7 @@ function assertPluginArtifactConsent(
     capabilityConsentSupported === "1" &&
     (!allowsOfficialConsentExemption ||
       hasCompanionPluginConsent(record) ||
-      !isTrustedOfficialNpmCompanion(record, packageJson.name))
+      !isTrustedOfficialNpmCompanion(record, pluginId, packageJson.name))
   ) {
     assertCompanionPluginConsent(record, pluginId, integrity);
   }

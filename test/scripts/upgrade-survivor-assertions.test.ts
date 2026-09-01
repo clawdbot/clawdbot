@@ -1324,6 +1324,15 @@ process.stdout.write(sessionDir + "\\n");
 
   it("accepts verified first-party companions without recording operator acceptance", () => {
     expect(() => assertCompanionPluginRecords()).not.toThrow();
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        discord.resolvedSpec = "@openclaw/discord@2026.8.1";
+      }),
+    ).not.toThrow();
   });
 
   it("requires exact artifact-bound consent for an unverified companion install", () => {
@@ -1363,6 +1372,23 @@ process.stdout.write(sessionDir + "\\n");
           throw new Error("discord fixture missing");
         }
         discord.artifactKind = "npm-pack";
+      }),
+    ).toThrow(/discord plugin accepted surface missing/);
+  });
+
+  it.each([
+    ["spec", "@openclaw/discord@file:payload"],
+    ["resolvedSpec", "@openclaw/discord@file:payload"],
+    ["spec", "@openclaw/discord@npm:@example/discord"],
+    ["resolvedSpec", "@openclaw/discord@git+https://example.invalid/discord.git"],
+  ] as const)("rejects an official-looking non-registry %s", (field, value) => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        discord[field] = value;
       }),
     ).toThrow(/discord plugin accepted surface missing/);
   });
