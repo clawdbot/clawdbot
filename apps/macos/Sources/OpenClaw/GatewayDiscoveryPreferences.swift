@@ -36,10 +36,6 @@ enum GatewayDiscoveryPreferences {
         }
     }()
 
-    static func preferredGatewayVerifiedForRoute(_ routeBinding: String?) -> Bool {
-        self.preferredRouteBindingVerification(routeBinding) == .match
-    }
-
     static func preferredGatewayVerifiedForRoute(
         _ routeBinding: String?,
         key: SymmetricKey?) -> Bool
