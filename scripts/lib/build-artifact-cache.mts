@@ -232,21 +232,25 @@ export function publishArtifactFiles(
 }
 
 /** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
-function resolveTsdownCompilerIdentity() {
+export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
   const dts = fs.realpathSync(tsdownRequire.resolve("rolldown-plugin-dts"));
   const compilerRequire = createRequire(dts);
-  const hash = createHash("sha256");
-  for (const file of [
+  return [
     tsdown,
     require.resolve("tsdown/package.json"),
     dts,
     tsdownRequire.resolve("rolldown-plugin-dts/package.json"),
     compilerRequire.resolve("typescript"),
     compilerRequire.resolve("typescript/package.json"),
-  ]) {
+  ];
+}
+
+function resolveTsdownCompilerIdentity() {
+  const hash = createHash("sha256");
+  for (const file of resolveTsdownCompilerFiles()) {
     hash.update(fs.readFileSync(file));
   }
   return hash.digest("hex");
@@ -302,6 +306,9 @@ export type BuildCacheParams = {
   artifactRoot?: string;
   fs?: BuildCacheFs;
   env?: NodeJS.ProcessEnv;
+  // Compiler-owned membership replaces the static byte set, retaining this same
+  // whole-generation record, output validation, lock and publication owner.
+  inputSignature?: (inputs: string[]) => string;
 };
 
 function normalizePortablePath(filePath: string) {
@@ -348,7 +355,10 @@ function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildCach
   });
 }
 
-export function resolveBuildStepCacheState(step: BuildCacheStep, params: BuildCacheParams = {}) {
+export function resolveBuildStepCacheState(
+  step: BuildCacheStep,
+  params: BuildCacheParams = {},
+): BuildCacheState {
   if (!step.cache) {
     return { cacheable: false, fresh: false, reason: "no-cache" };
   }
@@ -359,18 +369,33 @@ export function resolveBuildStepCacheState(step: BuildCacheStep, params: BuildCa
   if (inputFiles.length === 0) {
     return { cacheable: true, fresh: false, reason: "missing-inputs" };
   }
-  const signature = hashInputFiles(
-    rootDir,
-    inputFiles,
-    fsImpl,
-    step.cache.env ?? [],
-    params.env ?? process.env,
-    step.label.startsWith("tsdown") ? resolveTsdownCompilerIdentity() : "",
-  );
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
   const lock = acquireBuildArtifactLock(stampPath);
   try {
     const stamp = readArtifactRecord(stampPath);
+    let signature: string;
+    let consumedInputs: string[] | undefined;
+    if (params.inputSignature) {
+      signature = params.inputSignature([]);
+      try {
+        if (stamp?.inputs) {
+          signature = params.inputSignature(stamp.inputs);
+          consumedInputs = stamp.inputs;
+        }
+      } catch {
+        // Missing previous inputs invalidate normally; the successful compiler
+        // supplies the next membership before this owner can seal a generation.
+      }
+    } else {
+      signature = hashInputFiles(
+        rootDir,
+        inputFiles,
+        fsImpl,
+        step.cache.env ?? [],
+        params.env ?? process.env,
+        step.label.startsWith("tsdown") ? resolveTsdownCompilerIdentity() : "",
+      );
+    }
     const outputFiles = listCacheFiles(artifactRoot, step.cache.outputs, fsImpl);
     const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
     const stampedOutputs = Object.keys(stamp?.outputs ?? {});
@@ -387,7 +412,8 @@ export function resolveBuildStepCacheState(step: BuildCacheStep, params: BuildCa
       signature,
       requiredOutputs,
     );
-    const stampMatches = stamp?.signature === signature;
+    const stampMatches =
+      (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
     const cacheHitContractMatches =
       stampMatches && hasAllFiles(artifactRoot, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
     const alwaysRestore = step.cache.restore === "always";
@@ -401,6 +427,7 @@ export function resolveBuildStepCacheState(step: BuildCacheStep, params: BuildCa
       restorable,
       reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
       signature,
+      ...(consumedInputs ? { consumedInputs } : {}),
       outputRoot,
       stampPath,
       inputFiles: inputFiles.length,
@@ -414,7 +441,21 @@ export function resolveBuildStepCacheState(step: BuildCacheStep, params: BuildCa
   }
 }
 
-export type BuildCacheState = ReturnType<typeof resolveBuildStepCacheState>;
+export type BuildCacheState = {
+  cacheable: boolean;
+  fresh: boolean;
+  reason: string;
+  restorable?: boolean;
+  signature?: string;
+  consumedInputs?: string[];
+  outputRoot?: string;
+  stampPath?: string;
+  inputFiles?: number;
+  outputFiles?: number;
+  relativeOutputFiles?: string[];
+  stampedOutputs?: string[];
+  record?: ArtifactRecord;
+};
 
 export function writeBuildStepCacheStamp(
   step: BuildCacheStep,
@@ -452,6 +493,9 @@ export function writeBuildStepCacheStamp(
       cacheState.signature,
       cacheState.relativeOutputFiles,
     );
+    if (cacheState.consumedInputs) {
+      record.inputs = cacheState.consumedInputs;
+    }
     // Invalidate before the first copied byte; readers and publishers use this
     // same lock, so neither crashes nor overlap can expose a partial snapshot.
     fsImpl.rmSync(cacheState.stampPath, { force: true });

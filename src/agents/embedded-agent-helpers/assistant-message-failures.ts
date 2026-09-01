@@ -25,7 +25,7 @@ export function buildAssistantFailoverSignal(
 }
 export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
-  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
     return null;

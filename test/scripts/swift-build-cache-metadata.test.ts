@@ -40,16 +40,16 @@ function writeInput(root: string, relative: string, content = "source\n") {
   return file;
 }
 
-function setTime(file: string, time: bigint) {
+function setTime(time: bigint, ...files: string[]) {
   const result = spawnSync(
     "python3",
     [
       "-I",
       "-S",
       "-c",
-      "import os,sys; os.utime(sys.argv[1], ns=(int(sys.argv[2]),)*2)",
-      file,
+      "import os,sys\nfor file in sys.argv[2:]: os.utime(file, ns=(int(sys.argv[1]),)*2)",
       String(time),
+      ...files,
     ],
     { encoding: "utf8", timeout: 10_000 },
   );
@@ -61,7 +61,7 @@ function fixture() {
   mkdirSync(path.join(root, "apps/macos/.build"), { recursive: true });
   const source = writeInput(root, sourcePath);
   chmodSync(source, 0o644);
-  setTime(source, originalTime);
+  setTime(originalTime, source);
   return { root, source, metadata: path.join(root, metadataPath) };
 }
 
@@ -79,9 +79,7 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
       "apps/shared/OpenClawKit/Package.swift",
       "apps/swabble/Package.swift",
     ];
-    for (const relative of unchanged.slice(1)) {
-      setTime(writeInput(root, relative), originalTime);
-    }
+    setTime(originalTime, ...unchanged.slice(1).map((relative) => writeInput(root, relative)));
     const changed = writeInput(root, "apps/macos/Sources/Changed.swift", "before\n");
     const modeChanged = writeInput(root, "apps/macos/Sources/ModeChanged.swift");
     chmodSync(modeChanged, 0o644);
@@ -93,16 +91,19 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
       const file = path.join(root, relative);
       writeFileSync(`${file}.replacement`, readFileSync(file));
       renameSync(`${file}.replacement`, file);
-      setTime(file, checkoutTime);
     }
     expect(statSync(source, { bigint: true }).ino).not.toBe(inode);
     writeFileSync(changed, "after!\n");
-    setTime(changed, checkoutTime);
     chmodSync(modeChanged, 0o600);
-    setTime(modeChanged, checkoutTime);
     rmSync(removed);
     const added = writeInput(root, "apps/macos/Sources/Added.swift");
-    setTime(added, checkoutTime);
+    setTime(
+      checkoutTime,
+      ...unchanged.map((relative) => path.join(root, relative)),
+      changed,
+      modeChanged,
+      added,
+    );
     writeFileSync(metadata, archive);
 
     expect(run(root, "restore")).toContain("9 verified input timestamps");
@@ -142,7 +143,6 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     const artifact = JSON.parse(readFileSync(metadata, "utf8"));
     const outside = tempDirs.make("openclaw-swift-cache-outside-");
     const external = writeInput(outside, "Feature.swift");
-    setTime(external, checkoutTime);
     for (const relative of [
       external,
       `../${path.basename(outside)}/Feature.swift`,
@@ -150,8 +150,7 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     ]) {
       artifact.files[relative] = artifact.files[sourcePath];
     }
-    writeInput(root, "other.swift");
-    setTime(path.join(root, "other.swift"), checkoutTime);
+    setTime(checkoutTime, external, writeInput(root, "other.swift"));
     rmSync(source);
     symlinkSync(external, source);
     symlinkSync(outside, path.join(root, "apps/macos/Sources/linked-directory"), "dir");
@@ -166,7 +165,7 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
 
     rmSync(source);
     writeInput(root, sourcePath);
-    setTime(source, checkoutTime);
+    setTime(checkoutTime, source);
     const linkedMetadata = writeInput(outside, "metadata.json", JSON.stringify(artifact));
     rmSync(metadata);
     symlinkSync(linkedMetadata, metadata);

@@ -26,6 +26,7 @@ import {
   restoreBuildStepCacheOutputs,
   finalizeBuildStepCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
+import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
@@ -1280,6 +1281,52 @@ describe("resolveBuildStepCacheState", () => {
       fs.rmSync(rootDir, { force: true, recursive: true });
     }
   });
+
+  it.each<{ name: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }>([
+    { name: "bounded plugins", before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" }, after: {} },
+    { name: "optional plugins", before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, after: {} },
+    {
+      name: "Docker plugins",
+      before: {},
+      after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
+    },
+  ])(
+    "invalidates declaration signatures when $name change the real entry graph",
+    ({ before, after }) => {
+      withBuildCacheFixture(({ rootDir }) => {
+        for (const id of ["plain", "acpx", "external"]) {
+          const directory = path.join(rootDir, "extensions", id);
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(path.join(directory, "openclaw.plugin.json"), JSON.stringify({ id }));
+          fs.writeFileSync(path.join(directory, "index.ts"), "export {};\n");
+          fs.writeFileSync(
+            path.join(directory, "package.json"),
+            JSON.stringify({
+              name: `@openclaw/${id}`,
+              openclaw: { build: { bundledDist: id !== "external" } },
+            }),
+          );
+        }
+        expect(listBundledPluginBuildEntries({ cwd: rootDir, env: after })).not.toEqual(
+          listBundledPluginBuildEntries({ cwd: rootDir, env: before }),
+        );
+        const unified = getBuildAllStep("tsdown-unified");
+        const initial = resolveBuildStepCacheState(unified, { rootDir, env: before });
+        expect(resolveBuildStepCacheState(unified, { rootDir, env: after }).signature).not.toBe(
+          initial.signature,
+        );
+        expect(resolveBuildStepCacheState(unified, { rootDir, env: before }).signature).toBe(
+          initial.signature,
+        );
+        for (const label of ["tsdown-ai", "tsdown-packages"]) {
+          const step = getBuildAllStep(label);
+          expect(resolveBuildStepCacheState(step, { rootDir, env: after }).signature).toBe(
+            resolveBuildStepCacheState(step, { rootDir, env: before }).signature,
+          );
+        }
+      });
+    },
+  );
 
   it("marks cacheable steps fresh when the input signature matches", () => {
     withBuildCacheFixture(({ rootDir, step }) => {

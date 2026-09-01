@@ -39,6 +39,8 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -1549,6 +1551,31 @@ describe("chat history pagination", () => {
     } finally {
       addEventListener.mockRestore();
     }
+  });
+});
+
+describe("retained input navigation", () => {
+  it("does not show an inventory banner for a single retained message", () => {
+    const historyState = makeChatHost({
+      sessionKey: "agent:main:retained-input",
+      currentSessionId: "retained-input-session",
+    });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "retained-input",
+          runId: "retained-run",
+          acceptedAt: 100,
+          state: "interrupted",
+          message: { role: "user", content: "Retained message", timestamp: 100 },
+        },
+      ],
+    });
+
+    const container = renderChatView({ historyState });
+
+    expect(container.querySelector(".chat-history-error--inline")).toBeNull();
   });
 });
 

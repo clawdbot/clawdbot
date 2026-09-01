@@ -286,8 +286,13 @@ the owner. The content records live under
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
-and caches their complete staged generation. Cache hits restore into fresh staging
-and pass the same entry and relative declaration closure checks before publication.
+and caches their complete staged generation. Each successful compiler supplies its
+source membership through a private staged receipt; missing receipts or inputs
+changed during compilation prevent publication. The shared input snapshot policy
+validates consumed bytes, inherited configuration, generator and manifest inputs,
+and resolution topology without starting a compiler on hits. Cache hits restore
+into fresh staging and pass the same entry and relative declaration closure checks
+before publication.
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.
 

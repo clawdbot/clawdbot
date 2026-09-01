@@ -33,6 +33,7 @@ import {
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
+  TSDOWN_UNIFIED_CACHE_ENV,
   TSDOWN_UNIFIED_CACHE_INPUTS,
   resolveTsdownBuildPlan,
   type MemoryLimitParams,
@@ -127,7 +128,7 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS.flatMap((group) => ["--filter", group]),
     ),
     cache: {
-      env: ["OPENCLAW_BUILD_PRIVATE_QA", "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+      env: [...TSDOWN_UNIFIED_CACHE_ENV, "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
       inputs: TSDOWN_UNIFIED_CACHE_INPUTS,
       outputs: declarationCacheOutputs(["dist"]),
       // Shared declaration snapshots cannot make a replaced live dist complete.

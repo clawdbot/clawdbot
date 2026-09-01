@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
+import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -126,6 +127,10 @@ export const TSDOWN_PACKAGES_CACHE_INPUT = {
   extensions: TSDOWN_SOURCE_EXTENSIONS,
   excludeDirectories: ["dist", "node_modules"],
 };
+export const TSDOWN_UNIFIED_CACHE_ENV = [
+  "OPENCLAW_BUILD_PRIVATE_QA",
+  ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
+];
 export const TSDOWN_UNIFIED_CACHE_INPUTS = [
   ...TSDOWN_DECLARATION_TOOL_INPUTS,
   "tsdown.config.ts",

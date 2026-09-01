@@ -23,7 +23,7 @@ import {
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { admitChatSubmission } from "./history-merge.ts";
+import { admitChatSubmission, shouldDisplayChatSubmission } from "./history-merge.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
@@ -83,7 +83,8 @@ function preserveDeliveredUserTurn(
     const target = { sessionKey, agentId };
     const cached = readChatMessagesFromCache(state.chatMessagesBySession, state, target);
     if (
-      state.chatSubmissions?.shouldDisplay(
+      state.chatSubmissions &&
+      shouldDisplayChatSubmission(
         submission,
         findChatSubmissionMessage(cached, submission.pendingRunId, true),
       )

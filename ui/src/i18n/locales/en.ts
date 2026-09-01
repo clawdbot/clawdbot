@@ -6222,14 +6222,13 @@ export const en: TranslationMap = {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      count: "Retained accepted inputs: {count}",
-      queued: "Accepted by the Gateway. Waiting for its turn.",
+      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
-        "Cancelled before its turn. This input will not run automatically; copy it to send a new message.",
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
-        "Interrupted before its turn. This input will not run automatically; copy it to send a new message.",
-      earlier: "Earlier accepted inputs",
-      latest: "Latest accepted inputs",
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      earlier: "Show earlier messages",
+      latest: "Show latest messages",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",

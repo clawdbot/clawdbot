@@ -2913,7 +2913,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
-      "cannot enforce its tool policy",
+      "cannot enforce its permission or tool policy",
     );
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),

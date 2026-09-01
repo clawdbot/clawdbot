@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
+import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
@@ -38,6 +39,31 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it("dismisses a tooltip before native modal cancellation and preserves the draft", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { modal, dialog, notes } = await mountModal();
+    notes.value = "Unsaved draft";
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = "Draft editing help";
+    tooltip.anchor = notes;
+    modal.append(tooltip);
+    await tooltip.updateComplete;
+    notes.focus();
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await expect.poll(() => popup.open).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+
+    await expect.poll(() => popup.open).toBe(false);
+    expect(dialog.open).toBe(true);
+    expect(modal.open).toBe(true);
+    expect(notes.value).toBe("Unsaved draft");
+    expect(document.activeElement).toBe(notes);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => dialog.open).toBe(false);
+  });
+
   it.each(["", "palette", "drawer"])(
     "preserves selected content through chrome focus and retained reopen (%s)",
     async (variant) => {
