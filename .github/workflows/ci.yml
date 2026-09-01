@@ -4061,7 +4061,6 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          dependency-cache: ${{ github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && runner.environment == 'github-hosted' && 'true' || 'false' }}
           install-bun: "false"
 
       - name: TS tests (macOS)

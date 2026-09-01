@@ -28,7 +28,7 @@ inputs:
     required: false
     default: "off"
   dependency-cache:
-    description: Whether to restore workspace node_modules and its pnpm store from the exact semantic dependency cache.
+    description: Whether to restore workspace node_modules and its local pnpm store from the exact semantic dependency cache.
     required: false
     default: "false"
   vitest-fs-cache:
@@ -75,9 +75,6 @@ outputs:
   dependency-cache-key:
     description: Exact semantic dependency cache key.
     value: ${{ steps.dependency-cache-key.outputs.key }}
-  dependency-cache-paths:
-    description: Importer and store path patterns for the exact archive.
-    value: ${{ steps.dependency-cache-store.outputs.paths }}
   pnpm-store-cache-hit:
     description: Whether the pnpm store restored an exact key.
     value: ${{ steps.setup-pnpm.outputs.store-cache-hit }}
@@ -168,37 +165,15 @@ runs:
         fi
 
     - name: Configure dependency cache store
-      id: dependency-cache-store
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
         set -euo pipefail
-        store_dir="$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
-        store_pattern=.cache/openclaw-pnpm-store
-        if [ "${RUNNER_OS:-}" = "macOS" ]; then
-          # Only disposable hosted Macs grant cleanup authority over the HOME store.
-          # Keep the coarse cache's existing native path and archive version.
-          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
-            echo "::error::The macOS exact dependency cache requires a GitHub-hosted runner"
-            exit 1
-          fi
-          store_dir="${HOME:?}/Library/pnpm/store"
-          store_pattern='~/Library/pnpm/store'
-        fi
-        echo "PNPM_CONFIG_STORE_DIR=$store_dir" >> "$GITHUB_ENV"
+        # Keep both sides of pnpm's hard links below the workspace so one tar
+        # archive preserves them without relying on runner-home path depth.
         # Pnpm also needs registry metadata for offline supply-chain checks.
-        echo "PNPM_CONFIG_CACHE_DIR=$store_dir/cache" >> "$GITHUB_ENV"
-        # Actions expands HOME before making tar entries workspace-relative;
-        # its input globber rejects parent traversals. Share the original patterns.
-        {
-          echo 'paths<<EOF'
-          # macOS rejects hard links sourced from app-bundle metadata. Archive
-          # the store first so restored bundle files link from their store owner.
-          if [ "${RUNNER_OS:-}" = "macOS" ]; then printf '%s\n' "$store_pattern"; fi
-          printf '%s\n' node_modules ui/node_modules 'packages/*/node_modules' 'extensions/*/node_modules' 'examples/*/node_modules'
-          if [ "${RUNNER_OS:-}" != "macOS" ]; then printf '%s\n' "$store_pattern"; fi
-          echo EOF
-        } >> "$GITHUB_OUTPUT"
+        echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" >> "$GITHUB_ENV"
+        echo "PNPM_CONFIG_CACHE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store/cache" >> "$GITHUB_ENV"
 
     - name: Resolve dependency cache key
       id: dependency-cache-key
@@ -217,7 +192,7 @@ runs:
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
-        rm -rf "$GITHUB_WORKSPACE/node_modules" "${PNPM_CONFIG_STORE_DIR:?}"
+        rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
         find \
           "$GITHUB_WORKSPACE/ui" \
           "$GITHUB_WORKSPACE/packages" \
@@ -232,7 +207,13 @@ runs:
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ steps.dependency-cache-store.outputs.paths }}
+        path: |
+          node_modules
+          ui/node_modules
+          packages/*/node_modules
+          extensions/*/node_modules
+          examples/*/node_modules
+          .cache/openclaw-pnpm-store
         key: ${{ steps.dependency-cache-key.outputs.key }}
 
     - name: Prepare dependency cache miss fallback
@@ -241,7 +222,7 @@ runs:
       run: |
         # actions/cache treats service, download, and extraction failures as
         # misses. Clear any partial extraction before restoring the pnpm store.
-        rm -rf "$GITHUB_WORKSPACE/node_modules" "${PNPM_CONFIG_STORE_DIR:?}"
+        rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
         find \
           "$GITHUB_WORKSPACE/ui" \
           "$GITHUB_WORKSPACE/packages" \
@@ -404,8 +385,9 @@ runs:
           --config.side-effects-cache=true
         )
         if [ "$DEPENDENCY_CACHE" = "true" ]; then
-          # Prefer real hard links so one archive preserves store/package identity.
-          # Pnpm safely falls back to copies for files it cannot hard-link.
+          # Both trees live below the workspace. Prefer real hard links so the
+          # single cache archive can preserve store/package identity; pnpm
+          # safely falls back to copies for files it cannot hard-link.
           export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
         fi
         if [ -n "$LOCKFILE_FLAG" ]; then

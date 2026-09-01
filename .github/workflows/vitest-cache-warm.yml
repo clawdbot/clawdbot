@@ -38,7 +38,7 @@ jobs:
         with:
           build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
-          dependency-cache: "true"
+          dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
           install-bun: "false"
           node-compile-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
           node-compile-cache-scope: "test"
@@ -59,7 +59,13 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ steps.setup-node-env.outputs.dependency-cache-paths }}
+          path: |
+            node_modules
+            ui/node_modules
+            packages/*/node_modules
+            extensions/*/node_modules
+            examples/*/node_modules
+            .cache/openclaw-pnpm-store
           key: ${{ steps.setup-node-env.outputs.dependency-cache-key }}
 
       - name: Warm build cache
