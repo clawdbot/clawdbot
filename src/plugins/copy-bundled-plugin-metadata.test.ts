@@ -401,6 +401,7 @@ describe("copyBundledPluginMetadata", () => {
       packageName: "@openclaw/acpx-plugin",
       packageOpenClaw: { extensions: ["./index.ts"] },
       env: excludeOptionalEnv,
+      seedStaleDist: true,
       expectedExists: false,
     },
     {
@@ -409,42 +410,35 @@ describe("copyBundledPluginMetadata", () => {
       packageName: "@openclaw/whatsapp",
       packageOpenClaw: {
         extensions: ["./index.ts"],
+        build: { bundledDist: false },
         install: { npmSpec: "@openclaw/whatsapp" },
       },
       env: {},
+      seedStaleDist: false,
       expectedExists: false,
     },
-  ] as const)("$name", ({ pluginId, packageName, packageOpenClaw, env, expectedExists }) => {
-    const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
-    createPlugin(repoRoot, {
-      id: pluginId,
-      packageName,
-      packageOpenClaw,
-    });
+  ] as const)(
+    "$name",
+    ({ pluginId, packageName, packageOpenClaw, env, seedStaleDist, expectedExists }) => {
+      const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
+      createPlugin(repoRoot, {
+        id: pluginId,
+        packageName,
+        packageOpenClaw,
+      });
+      if (seedStaleDist) {
+        const staleDistDir = path.join(repoRoot, "dist", "extensions", pluginId);
+        fs.mkdirSync(staleDistDir, { recursive: true });
+        fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {};\n", "utf8");
+      }
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env });
+      copyBundledPluginMetadataWithEnv({ repoRoot, env });
 
-    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
-  });
-
-  it("removes build-excluded bundled plugin metadata", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
-    createPlugin(repoRoot, {
-      id: "whatsapp",
-      packageName: "@openclaw/whatsapp",
-      packageOpenClaw: {
-        extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
-      },
-    });
-    const staleDistDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
-    fs.mkdirSync(staleDistDir, { recursive: true });
-    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
-
-    copyBundledPluginMetadata({ repoRoot });
-
-    expect(fs.existsSync(staleDistDir)).toBe(false);
-  });
+      expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(
+        expectedExists,
+      );
+    },
+  );
 
   it("preserves isolated source-checkout output for an external plugin", () => {
     const repoRoot = makeRepoRoot("openclaw-external-plugin-local-dist-meta-");
