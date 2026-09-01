@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Anthropic tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { probeClaudeCliAuthStatusMock } = vi.hoisted(() => ({
   probeClaudeCliAuthStatusMock: vi.fn(),
@@ -717,6 +717,11 @@ describe("anthropic provider replay hooks", () => {
       restoresMissingCost,
       checksCliPolicy,
     }) => {
+      // The Sonnet contract below asserts introductory pricing before the September cutover.
+      vi.setSystemTime(Date.UTC(2026, 7, 31));
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const resolved = provider.resolveDynamicModel?.({
         provider: "anthropic",
