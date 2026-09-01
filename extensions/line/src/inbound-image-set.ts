@@ -30,6 +30,8 @@ type PendingImageSet<TEvent, TLifecycle> = {
   /** Wakes the holder once the set is whole or its wait has expired. */
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
+  /** Restarted on every arrival, so it is kept for the parts after the first. */
+  flushDelayMs: number;
 };
 
 /** The whole set, ordered the way the sender picked it. */
@@ -148,7 +150,14 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       forming.total ??= input.total;
       if (forming.total !== undefined && forming.parts.size >= forming.total) {
         forming.release();
+        return null;
       }
+      // Every arrival restarts the wait, so the delay bounds the gap between
+      // parts rather than the whole upload. Without this a part slower than the
+      // delay misses the set and opens a second one, answering the send twice.
+      clearTimeout(forming.timer);
+      forming.timer = setTimeout(forming.release, forming.flushDelayMs);
+      forming.timer.unref?.();
       return null;
     }
 
@@ -159,6 +168,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     const pending: PendingImageSet<TEvent, TLifecycle> = {
       parts: new Map([[input.messageId, part]]),
       total: input.total,
+      flushDelayMs: input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS,
       release: () => {
         clearTimeout(pending.timer);
         release();
@@ -168,7 +178,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     const releaseLane = await enterLane(input.laneKey);
     // The wait starts here, not on arrival: time spent queued behind earlier work
     // on this lane is not time LINE spent delivering the rest of the set.
-    pending.timer = setTimeout(pending.release, input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS);
+    pending.timer = setTimeout(pending.release, pending.flushDelayMs);
     pending.timer.unref?.();
     if (pending.total !== undefined && pending.parts.size >= pending.total) {
       pending.release();

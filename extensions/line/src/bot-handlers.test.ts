@@ -1734,6 +1734,56 @@ describe("handleLineWebhookEvents", () => {
     ]);
   });
 
+  it("keeps the delivered order for a set whose parts carry no index", async () => {
+    // `imageSet.index` is optional in LINE's contract - a sender on LINE 11.15
+    // or earlier for Android omits it - so the only order those parts have is
+    // the one the spool's buffer resolved before handing them over.
+    downloadLineMediaMock.mockImplementation(async (messageId: string) => ({
+      path: `/media/${messageId}.png`,
+      contentType: "image/png",
+      size: 10,
+    }));
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+    });
+    const base = 1_700_000_000_000;
+    const unindexedPart = (messageId: string, timestamp: number) =>
+      createTestMessageEvent({
+        message: {
+          id: messageId,
+          type: "image",
+          contentProvider: { type: "line" },
+          imageSet: { id: "image-set-unindexed" },
+        } as MessageEvent["message"],
+        source: { type: "user", userId: "U1" },
+        webhookEventId: `evt-${messageId}`,
+        replyToken: `reply-${messageId}`,
+        timestamp,
+      });
+
+    await handleLineWebhookEvents(
+      [
+        unindexedPart("m1", base + 100),
+        unindexedPart("m2", base + 200),
+        unindexedPart("m3", base + 300),
+      ],
+      context,
+    );
+
+    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+    // The order handed over survives: no index means nothing may re-sort it.
+    expect(built?.allMedia?.map((media) => media.path)).toEqual([
+      "/media/m1.png",
+      "/media/m2.png",
+      "/media/m3.png",
+    ]);
+    // Answering still uses the freshest token, which is a separate fact.
+    expect(built?.event?.replyToken).toBe("reply-m3");
+  });
+
   it("keeps events that are not part of a set on their own turns", async () => {
     const processMessage = vi.fn();
     const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });

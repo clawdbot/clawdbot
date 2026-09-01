@@ -485,6 +485,14 @@ async function handleMessageEvent(
       }
     }
 
+    // Which part the turn answers as is a different fact from what order its
+    // media reads in. Reply tokens expire, so a set delivered out of order
+    // answers with its freshest part, while the media keeps the sender's order.
+    const answerAs = setParts.reduce(
+      (freshest, part) => (part.timestamp > freshest.timestamp ? part : freshest),
+      event,
+    );
+
     const dispatchTurn = async (params: {
       media: readonly MediaRef[];
       mediaUnavailable: boolean;
@@ -492,7 +500,7 @@ async function handleMessageEvent(
       lifecycle?: LineWebhookTurnAdoptionLifecycle;
     }): Promise<boolean> => {
       const messageContext = await buildLineMessageContext({
-        event,
+        event: answerAs,
         allMedia: [...params.media],
         mediaUnavailable: params.mediaUnavailable,
         cfg,
@@ -643,16 +651,10 @@ function groupLineDeliveryTurns(events: readonly WebhookEvent[]): WebhookEvent[]
         : undefined;
     const joined = setId === undefined ? undefined : bySetId.get(setId);
     if (joined) {
-      // The turn answers as its freshest part: reply tokens expire, so a set
-      // delivered out of order must not reply with the oldest one's token.
-      // Media order is decided separately, by the index the sender picked.
-      const head = joined[0];
-      if (head && event.timestamp > head.timestamp) {
-        joined[0] = event;
-        joined.push(head);
-      } else {
-        joined.push(event);
-      }
+      // Append only. The order the parts arrive in is the order the spool's
+      // buffer already resolved; moving one to the front to pick a reply token
+      // would rewrite the media order for a set whose parts carry no index.
+      joined.push(event);
       continue;
     }
     const started = [event];

@@ -50,6 +50,28 @@ describe("createLineImageSetIngressBuffer", () => {
     });
   });
 
+  it("extends the wait on every arrival so a slow part joins the same set", async () => {
+    // Without `total` the timer is the only completion signal. A part slower
+    // than the delay must extend the set, not open a second one that answers
+    // the same send a second time.
+    const held = arrive({ index: 1, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(80);
+    const second = arrive({ index: 2, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(80);
+    const third = arrive({ index: 3, flushDelayMs: 100 });
+    await vi.advanceTimersByTimeAsync(100);
+
+    const delivery = await held;
+    // Released before the assertions below: a set that wrongly closed early
+    // still holds the lane, and the later part would block on it instead of
+    // reporting what actually went wrong.
+    delivery?.finish();
+    expect(delivery?.events).toEqual(["image-1", "image-2", "image-3"]);
+    // Both later parts join the holder rather than becoming holders of their own.
+    await expect(second).resolves.toBeNull();
+    await expect(third).resolves.toBeNull();
+  });
+
   it("keeps one order for a set LINE indexed only partly", async () => {
     // `index` is optional per part, so a set can arrive partly indexed. Ranking
     // the unindexed part by arrival against an indexed one would make the
