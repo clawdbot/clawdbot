@@ -57,17 +57,36 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
     }
   };
 
-  // Hide fs.promises.glob so the resolver takes its capability fallback, exactly as
-  // on a runtime that ships no fs.glob. Restored in `finally`.
-  const withoutFsGlob = async (body: () => Promise<void>): Promise<void> => {
-    const original = Object.getOwnPropertyDescriptor(fs, "glob");
+  // Hide BOTH native glob APIs — fs.promises.glob and path.matchesGlob — so the
+  // resolver takes its capability fallback AND the fallback's own symlink-descent
+  // alignment runs without a native matcher, exactly as on a runtime that ships
+  // neither (Node added glob at 22.0 and matchesGlob at 22.5; some Bun builds ship
+  // neither). Each original descriptor is saved and restored in `finally`, or the
+  // property is deleted when the runtime had none, so no sibling test observes the
+  // gap.
+  const withoutNativeGlobApis = async (body: () => Promise<void>): Promise<void> => {
+    const originalGlob = Object.getOwnPropertyDescriptor(fs, "glob");
+    const originalMatchesGlob = Object.getOwnPropertyDescriptor(path, "matchesGlob");
     Object.defineProperty(fs, "glob", { value: undefined, configurable: true, writable: true });
+    Object.defineProperty(path, "matchesGlob", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
     try {
       expect(typeof fs.glob).not.toBe("function");
+      expect(typeof path.matchesGlob).not.toBe("function");
       await body();
     } finally {
-      if (original) {
-        Object.defineProperty(fs, "glob", original);
+      if (originalGlob) {
+        Object.defineProperty(fs, "glob", originalGlob);
+      } else {
+        delete (fs as { glob?: unknown }).glob;
+      }
+      if (originalMatchesGlob) {
+        Object.defineProperty(path, "matchesGlob", originalMatchesGlob);
+      } else {
+        delete (path as { matchesGlob?: unknown }).matchesGlob;
       }
     }
   };
@@ -107,7 +126,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
 
       const pattern = "**/pkg/linked/**/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
         expect(matches).toStrictEqual(["pkg/linked/AGENTS.md", "pkg/linked/nested/AGENTS.md"]);
         expect(matches).toStrictEqual(oracle);
@@ -133,7 +152,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
         return;
       }
 
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = await resolveExtraBootstrapPatternPaths(
           workspaceDir,
           "**/pkg/linked/**/AGENTS.md",
@@ -161,7 +180,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
 
       const pattern = "*/loop/**/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
         expect(matches).toStrictEqual(["pkg/loop/AGENTS.md"]);
         expect(matches).toStrictEqual(oracle);
@@ -188,7 +207,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
 
       const pattern = "dir/a/**/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
         expect(matches).toStrictEqual([]);
         expect(matches).toStrictEqual(oracle);
@@ -215,7 +234,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
 
       const pattern = "self/**/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
         expect(matches).toStrictEqual(["self/AGENTS.md", "self/sub/AGENTS.md"]);
         expect(matches).toStrictEqual(oracle);
@@ -250,7 +269,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
 
       const pattern = "pkg/{link-a,link-b}/**/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
         expect(matches).toStrictEqual([
           "pkg/link-a/AGENTS.md",
@@ -292,7 +311,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
       // `*/linked/AGENTS.md` match, so the partial-match gate must prune it.
       const pattern = "*/linked/AGENTS.md";
       const oracle = await nodeGlobRelative(workspaceDir, pattern);
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const readdirSpy = vi.spyOn(fs, "readdir");
         try {
           const matches = (
@@ -332,7 +351,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
       // Dirent, so the descent — not readdir following a walk-root link — is what
       // reaches the file.
       const pattern = "**/pkg/linked/**/AGENTS.md";
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = await resolveExtraBootstrapPatternPaths(workspaceDir, pattern);
         expect(matches).toStrictEqual(["pkg/linked/AGENTS.md"]);
         // The yielded relative path resolves (through the link) to the real file.
@@ -358,9 +377,116 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
         return;
       }
 
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
           "pkg/linked/**/AGENTS.md",
+        ]);
+        const loaded = files.find((file) => file.path === path.join(pkgDir, "linked", "AGENTS.md"));
+        expect(loaded?.content).toBe("linked agents");
+        expect(diagnostics).toStrictEqual([]);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(10) descends a literal directory symlink with path.matchesGlob also absent (fs.glob parity)",
+    async () => {
+      // matchesGlob-absent descent: `linked` is reached mid-walk as a symlink Dirent
+      // and aligned by the literal `linked` (after the literal `mods`, not a `**`), so
+      // the descent-alignment step must decide the segment match itself. When
+      // path.matchesGlob is also absent that step throws `TypeError` pre-fix, dropping
+      // the file behind the link; the fix resolves the segment through Minimatch.
+      const workspaceDir = await createWorkspaceDir("matchesglob-descent");
+      const modsDir = path.join(workspaceDir, "mods");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(modsDir, { recursive: true });
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "behind-link", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(modsDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "**/mods/linked/AGENTS.md";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["mods/linked/AGENTS.md"]);
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(11) discards an escaping symlink descent with path.matchesGlob also absent",
+    async () => {
+      // matchesGlob-absent escape: descent through `linked` is attempted (so the
+      // alignment step runs its segment match with path.matchesGlob absent), but the
+      // shared realpath-containment filter drops the out-of-workspace match, so the
+      // resolver returns no match and does not throw once the fix is applied.
+      const rootDir = await createWorkspaceDir("matchesglob-escape");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      const modsDir = path.join(workspaceDir, "mods");
+      await fs.mkdir(modsDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
+      if (!(await trySymlink(path.join("..", "..", "outside"), path.join(modsDir, "linked")))) {
+        return;
+      }
+
+      await withoutNativeGlobApis(async () => {
+        const matches = await resolveExtraBootstrapPatternPaths(
+          workspaceDir,
+          "**/mods/linked/AGENTS.md",
+        );
+        expect(matches).toStrictEqual([]);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(12) matches an ordinary non-symlink directory tree with both native glob APIs absent",
+    async () => {
+      // Non-symlink guard: a symlink-free tree never reaches the descent-alignment
+      // step, so it must resolve identically with both native glob APIs absent — the
+      // fix touches only the alignment matcher, never the plain directory/file walk.
+      const workspaceDir = await createWorkspaceDir("matchesglob-plain");
+      const nested = path.join(workspaceDir, "a", "b");
+      await fs.mkdir(nested, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
+      await fs.writeFile(path.join(nested, "AGENTS.md"), "nested", "utf-8");
+
+      const pattern = "**/AGENTS.md";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["AGENTS.md", "a/b/AGENTS.md"]);
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(13) loads a descended-symlink bootstrap file through the loader with both native glob APIs absent",
+    async () => {
+      // Loader boundary through descent: unlike case (9), whose walk root IS the link
+      // (readdir follows it), here `linked` is reached mid-walk as a Dirent, so the
+      // descent-alignment step runs. With path.matchesGlob absent the pre-fix walk
+      // throws, the loader emits an `io` diagnostic, and the configured file is
+      // dropped; the fix must load the file and surface no diagnostic.
+      const workspaceDir = await createWorkspaceDir("matchesglob-loader");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "linked agents", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      await withoutNativeGlobApis(async () => {
+        const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+          "**/pkg/linked/**/AGENTS.md",
         ]);
         const loaded = files.find((file) => file.path === path.join(pkgDir, "linked", "AGENTS.md"));
         expect(loaded?.content).toBe("linked agents");

@@ -926,18 +926,35 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     }
   };
 
-  // Run `body` with fs.promises.glob hidden so the resolver takes its capability
-  // fallback, exactly as it would on a runtime that ships no fs.glob (older Node,
-  // some Bun builds). Restored in `finally` so no sibling test observes the gap.
-  const withoutFsGlob = async (body: () => Promise<void>): Promise<void> => {
-    const original = Object.getOwnPropertyDescriptor(fs, "glob");
+  // Run `body` with BOTH native glob APIs hidden — fs.promises.glob and
+  // path.matchesGlob — so the resolver takes its capability fallback AND that
+  // fallback resolves segments without a native matcher, exactly as on a runtime
+  // that ships neither (older Node, some Bun builds). Each original descriptor is
+  // saved and restored in `finally`, or the property is deleted when the runtime
+  // had none, so no sibling test observes the gap.
+  const withoutNativeGlobApis = async (body: () => Promise<void>): Promise<void> => {
+    const originalGlob = Object.getOwnPropertyDescriptor(fs, "glob");
+    const originalMatchesGlob = Object.getOwnPropertyDescriptor(path, "matchesGlob");
     Object.defineProperty(fs, "glob", { value: undefined, configurable: true, writable: true });
+    Object.defineProperty(path, "matchesGlob", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
     try {
       expect(typeof fs.glob).not.toBe("function");
+      expect(typeof path.matchesGlob).not.toBe("function");
       await body();
     } finally {
-      if (original) {
-        Object.defineProperty(fs, "glob", original);
+      if (originalGlob) {
+        Object.defineProperty(fs, "glob", originalGlob);
+      } else {
+        delete (fs as { glob?: unknown }).glob;
+      }
+      if (originalMatchesGlob) {
+        Object.defineProperty(path, "matchesGlob", originalMatchesGlob);
+      } else {
+        delete (path as { matchesGlob?: unknown }).matchesGlob;
       }
     }
   };
@@ -965,7 +982,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     // below.
     const workspaceDir = await createWorkspaceDir("control");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root", "utf-8");
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const callUnguardedGlob = () =>
         (fs.glob as unknown as (pattern: string, options: unknown) => AsyncIterable<string>)(
           "**/AGENTS.md",
@@ -986,7 +1003,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     await fs.writeFile(path.join(workspaceDir, "pkg-a", "AGENTS.md"), "a", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "pkg-b", "deep", "AGENTS.md"), "bd", "utf-8");
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (
         await resolveExtraBootstrapPatternPaths(workspaceDir, "**/AGENTS.md")
       ).toSorted();
@@ -1006,7 +1023,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     await fs.writeFile(path.join(workspaceDir, "packages", "two", "TOOLS.md"), "two", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "elsewhere", "TOOLS.md"), "no", "utf-8");
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (
         await resolveExtraBootstrapPatternPaths(workspaceDir, "packages/*/TOOLS.md")
       ).toSorted();
@@ -1024,7 +1041,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "pkg agents", "utf-8");
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
         "**/AGENTS.md",
       ]);
@@ -1054,7 +1071,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
         return;
       }
 
-      await withoutFsGlob(async () => {
+      await withoutNativeGlobApis(async () => {
         const matches = await resolveExtraBootstrapPatternPaths(
           workspaceDir,
           "pkg/linked/**/AGENTS.md",
@@ -1080,7 +1097,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["packages/a/x/AGENTS.md", "packages/b/y/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });
@@ -1100,7 +1117,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["a/x/AGENTS.md", "b/y/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });
@@ -1124,7 +1141,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["packages/a/deep/AGENTS.md", "packages/b/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });
@@ -1141,7 +1158,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     await fs.writeFile(path.join(workspaceDir, "packages", "a", "x", "AGENTS.md"), "a", "utf-8");
     await fs.writeFile(path.join(workspaceDir, "packages", "b", "y", "AGENTS.md"), "b", "utf-8");
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
         "packages/[ab]/*/AGENTS.md",
       ]);
@@ -1167,7 +1184,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["a/b/AGENTS.md", "c/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });
@@ -1191,7 +1208,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["packages/[ab]/x/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });
@@ -1215,7 +1232,7 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback", () => {
     const oracle = await nodeGlobRelative(workspaceDir, pattern);
     expect(oracle).toStrictEqual(["pkga/x/AGENTS.md", "pkgb/y/AGENTS.md"]);
 
-    await withoutFsGlob(async () => {
+    await withoutNativeGlobApis(async () => {
       const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
       expect(matches).toStrictEqual(oracle);
     });

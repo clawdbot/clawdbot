@@ -115,6 +115,15 @@ function patternSegmentIsMagic(segment: string): boolean {
   return new Minimatch(segment, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS).hasMagic();
 }
 
+// Whether a directory segment satisfies one pattern segment, via the same
+// Minimatch grammar as the rest of the fallback. Deliberately NOT `path.matchesGlob`:
+// it is absent on the runtimes this fallback exists for (Node ships fs.glob at 22.0
+// but matchesGlob only at 22.5; some Bun builds ship neither), so calling it would
+// throw the moment symlink descent aligns a segment and drop the whole bootstrap set.
+function patternSegmentMatches(segment: string, patternSegment: string): boolean {
+  return new Minimatch(patternSegment, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS).match(segment);
+}
+
 // Ancestor node for the active descent path in the fallback walk. `symlinkDepths`
 // holds the 0-based path-segment indices at which a directory symlink was
 // followed to reach this frame. It is what makes the walk terminate without a
@@ -185,7 +194,7 @@ function expansionAllowsSymlinkDescent(
       }
       return align(dirIndex + 1, patternIndex);
     }
-    if (!path.matchesGlob(segment, patternSegment)) {
+    if (!patternSegmentMatches(segment, patternSegment)) {
       return false;
     }
     if (dirIndex === lastDirIndex) {
