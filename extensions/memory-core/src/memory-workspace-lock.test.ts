@@ -1,20 +1,15 @@
-// Workspace lock tests cover orphaned-row recovery for the sqlite-backed lock.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { getFileLockProcessStartTime } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
-import { configureMemoryCoreDreamingState, memoryCoreWorkspaceStateKey } from "./dreaming-state.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import { auditShortTermPromotionArtifacts } from "./short-term-promotion-artifacts.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
   shortTermTestState as testing,
 } from "./test-helpers.js";
-
-// Mirrors the lock module's unexported SHORT_TERM_LOCK_TTL_MS.
-const LOCK_TTL_MS = 10 * 60_000;
 
 describe("memory workspace lock orphan recovery", () => {
   let fixtureRoot = "";
@@ -26,14 +21,14 @@ describe("memory workspace lock orphan recovery", () => {
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
     resetMemoryCoreDreamingStateForTests();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -43,47 +38,75 @@ describe("memory workspace lock orphan recovery", () => {
     return workspaceDir;
   }
 
-  it("steals an orphaned lock whose recycled owner pid still answers the liveness probe", async () => {
+  it("reclaims a stale legacy lock after its process id is reused", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    vi.setSystemTime(now);
     const workspaceDir = await makeWorkspace();
-    // The container-restart shape from #134999: the owner pid is alive in the
-    // new pid namespace (here: this very process), so only the lock TTL's age
-    // bound can unwedge the row.
-    const lockTtlMs = LOCK_TTL_MS;
     await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.pid}:${Date.now() - lockTtlMs - 5_000}`,
-      acquiredAt: Date.now() - lockTtlMs - 5_000,
+      owner: `${process.pid}:${now - 120_000}`,
+      acquiredAt: now - 120_000,
     });
 
-    await expect(withMemoryWorkspaceLock(workspaceDir, async () => "recovered")).resolves.toBe(
-      "recovered",
+    const result = withMemoryWorkspaceLock(workspaceDir, async () => "recovered").then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
     );
+    await vi.advanceTimersByTimeAsync(10_040);
+
+    expect(await result).toEqual({ status: "resolved", value: "recovered" });
   });
 
-  it("registers the workspace lock with a store TTL so orphaned rows self-expire", async () => {
-    const workspaceDir = await makeWorkspace();
-    const registered: Array<{ key: string; ttlMs?: number }> = [];
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("memory-core", {
-        ...options,
-        env: { ...process.env },
-      });
-      return {
-        ...store,
-        registerIfAbsent: (key: string, value: T, opts?: { ttlMs?: number }) => {
-          registered.push({ key, ttlMs: opts?.ttlMs });
-          return store.registerIfAbsent(key, value, opts);
-        },
-      };
-    });
-    try {
-      await withMemoryWorkspaceLock(workspaceDir, async () => undefined);
-    } finally {
-      await configureMemoryCoreDreamingStateForTests();
+  it("reclaims a stale lock when a live process id has a different start identity", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const ownerStartTime = getFileLockProcessStartTime(process.ppid);
+    expect(ownerStartTime).not.toBeNull();
+    if (ownerStartTime === null) {
+      throw new Error("Expected the test runner process start identity");
     }
+    const workspaceDir = await makeWorkspace();
+    await testing.writeShortTermLock(workspaceDir, {
+      owner: `${process.ppid}:${now - 120_000}`,
+      ownerStartTime: ownerStartTime + 1,
+      acquiredAt: now - 120_000,
+    });
 
-    const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-    expect(registered.filter((entry) => entry.key === lockKey)).toEqual([
-      { key: lockKey, ttlMs: LOCK_TTL_MS },
-    ]);
+    const result = withMemoryWorkspaceLock(workspaceDir, async () => "recovered").then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
+    );
+    await vi.advanceTimersByTimeAsync(10_040);
+
+    expect(await result).toEqual({ status: "resolved", value: "recovered" });
+  });
+
+  it("keeps a stale-looking lock while its owner task is active", async () => {
+    const workspaceDir = await makeWorkspace();
+    let enteredResolve: (() => void) | undefined;
+    let releaseResolve: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => {
+      enteredResolve = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
+    const owner = withMemoryWorkspaceLock(workspaceDir, async () => {
+      enteredResolve?.();
+      await release;
+    });
+    await entered;
+
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
+    try {
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(audit.issues.map((issue) => issue.code)).not.toContain("recall-lock-stale");
+    } finally {
+      vi.restoreAllMocks();
+      releaseResolve?.();
+      await owner;
+    }
   });
 });

@@ -135,7 +135,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   });
   const lockEntry = await lockStore.lookup(lockKey);
   if (lockEntry) {
-    if (isShortTermLockStealable(lockEntry, Date.now())) {
+    if (isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
@@ -178,7 +178,7 @@ export async function repairShortTermPromotionArtifacts(params: {
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && isShortTermLockStealable(lockEntry, Date.now())) {
+  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
     removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
   }
 

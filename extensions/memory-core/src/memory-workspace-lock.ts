@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fsSync from "node:fs";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  getFileLockProcessStartTime,
+  isPidDefinitelyDead,
+} from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
@@ -15,16 +17,9 @@ import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
 const MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
-/**
- * Store-level backstop for orphaned lock rows: a lock is registered with this
- * TTL, and a row older than it is stealable even when its owner pid answers
- * the liveness probe. Container pid namespaces reset across restarts, so a
- * recycled pid (pid 1 in particular) can keep a dead holder's lock looking
- * alive forever without this age bound.
- */
-const SHORT_TERM_LOCK_TTL_MS = 10 * 60_000;
 const MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS = 40;
 const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
+const activeMemoryWorkspaceLockOwners = new Map<string, string>();
 
 type MemoryWorkspaceLease = { key: string; active: boolean };
 type MemoryWorkspaceLockScope = {
@@ -75,53 +70,36 @@ export function resolveLockPath(workspaceDir: string): string {
 
 function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
-  if (!match) {
-    return null;
-  }
-  const pid = Number.parseInt(match[1] ?? "", 10);
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
-  return pid;
+  const pid = Number.parseInt(match?.[1] ?? "", 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
-function isProcessLikelyAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch (err) {
-    if (extractErrorCode(err) === "ESRCH") {
-      return false;
-    }
-    // EPERM and unknown errors remain potentially alive unless procfs proves a zombie.
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const state = status.match(/^State:\s+(\S)/m)?.[1];
-    return state !== "Z" && state !== "X";
-  } catch {
-    // An unreadable proc entry is not enough evidence to steal an active lock.
-    return true;
-  }
-}
-
-/**
- * Decides whether a held lock row may be stolen. Beyond the pid-liveness
- * rule, a row that has outlived the lock TTL is stealable unconditionally:
- * container restarts reset pid namespaces, so a recycled owner pid can answer
- * the liveness probe for a holder that died weeks ago.
- */
-export function isShortTermLockStealable(existing: ShortTermLockEntry, nowMs: number): boolean {
-  if (nowMs - existing.acquiredAt > SHORT_TERM_LOCK_TTL_MS) {
-    return true;
-  }
+export function isShortTermLockStealable(
+  lockKey: string,
+  existing: ShortTermLockEntry,
+  nowMs: number,
+): boolean {
   if (nowMs - existing.acquiredAt <= SHORT_TERM_LOCK_STALE_MS) {
     return false;
   }
   const ownerPid = parseLockOwnerPid(existing.owner);
-  return ownerPid === null || !isProcessLikelyAlive(ownerPid);
+  if (ownerPid === null) {
+    return true;
+  }
+  if (ownerPid === process.pid) {
+    // The current process can own this row only through the tracked local lease.
+    // A same-PID row without that lease survived a prior process or failed cleanup.
+    return activeMemoryWorkspaceLockOwners.get(lockKey) !== existing.owner;
+  }
+  if (isPidDefinitelyDead(ownerPid)) {
+    return true;
+  }
+  // Shipped rows lack start identity. Keep a live foreign PID authoritative.
+  if (existing.ownerStartTime === undefined) {
+    return false;
+  }
+  const currentStartTime = getFileLockProcessStartTime(ownerPid);
+  return currentStartTime !== null && currentStartTime !== existing.ownerStartTime;
 }
 
 export async function deleteShortTermLockEntryIfCurrent(
@@ -163,27 +141,28 @@ export async function withMemoryWorkspaceLock<T>(
     const startedAt = Date.now();
 
     while (true) {
+      const acquiredAt = Date.now();
+      const ownerStartTime = getFileLockProcessStartTime(process.pid);
       const lockEntry: ShortTermLockEntry = {
-        owner: `${process.pid}:${Date.now()}`,
-        acquiredAt: Date.now(),
+        owner: `${process.pid}:${acquiredAt}`,
+        acquiredAt,
+        ...(ownerStartTime === null ? {} : { ownerStartTime }),
       };
-      // The TTL is the durable backstop: an unclean exit leaves a row that
-      // self-expires instead of wedging every later sync behind a dead owner.
-      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry, {
-        ttlMs: SHORT_TERM_LOCK_TTL_MS,
-      });
+      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry);
       if (acquired) {
         const lease = { key: lockKey, active: true };
+        activeMemoryWorkspaceLockOwners.set(lockKey, lockEntry.owner);
         try {
           return await runWorkspaceLockScope(lease, task);
         } finally {
           lease.active = false;
+          activeMemoryWorkspaceLockOwners.delete(lockKey);
           await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry).catch(() => false);
         }
       }
 
       const existing = await lockStore.lookup(lockKey);
-      if (existing && isShortTermLockStealable(existing, Date.now())) {
+      if (existing && isShortTermLockStealable(lockKey, existing, Date.now())) {
         if (await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, existing)) {
           continue;
         }
