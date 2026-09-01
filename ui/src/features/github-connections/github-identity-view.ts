@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { icons } from "../../components/icons.ts";
@@ -267,6 +267,16 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
   `;
 }
 
+export function renderGitHubConnectionError(error: string | null, control?: TemplateResult) {
+  return error
+    ? renderSettingsRow({
+        title: t("agentTools.githubErrorTitle"),
+        description: html`<span role="alert">${formatUiExternalText(error)}</span>`,
+        control,
+      })
+    : nothing;
+}
+
 export function renderGitHubConnectionSetup(controller: GitHubIdentityController) {
   const draft = controller.draft;
   const disabled = controller.busy || !controller.configurable || controller.authorizationActive;
@@ -287,12 +297,6 @@ export function renderGitHubConnectionSetup(controller: GitHubIdentityController
       />`,
     });
   return html`
-    ${controller.error
-      ? renderSettingsRow({
-          title: t("agentTools.githubErrorTitle"),
-          description: html`<span role="alert">${formatUiExternalText(controller.error)}</span>`,
-        })
-      : nothing}
     ${renderGitHubAuthorization(controller)}
     ${controller.patVisible
       ? html`
@@ -370,6 +374,7 @@ export function renderGitHubIdentity(
             ${t("githubConnections.manageCommon")}
           </button>`,
       })}
+      ${renderGitHubConnectionError(controller.error)}
       ${controller.configurable
         ? html`<details class="settings-row settings-row--stacked">
             <summary class="settings-row__title">
