@@ -18,6 +18,8 @@ export function visitAgentEntries(
         visitor(entry, `agents.entries.${agentId}`);
       }
     }
+    // Roster conversion discards a residual list; its settings must not affect other owners.
+    return;
   }
   if (Array.isArray(agents?.list)) {
     agents.list.forEach((entry, index) => {

@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 describe("per-agent legacy migrations after roster normalization", () => {
+  it("does not create global model settings from a discarded legacy roster", () => {
+    const result = applyLegacyDoctorMigrations({
+      agents: {
+        entries: { main: { name: "canonical" } },
+        list: [
+          { id: "old", model: "vllm/qwen-test", params: { qwenThinkingFormat: "chat-template" } },
+        ],
+      },
+    });
+    expect(result.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
+  });
+
   it.each(["entries", "list"])("preserves migrated values in a %s roster", (shape) => {
     const agent = {
       tools: { exec: { timeoutSec: 45 } },
