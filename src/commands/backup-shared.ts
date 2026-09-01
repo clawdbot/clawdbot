@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import {
   readConfigFileSnapshot,
   resolveConfigPath,
@@ -573,9 +572,6 @@ export async function resolveBackupPlanFromDisk(
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
   const discoveredWorkspaceDirs = cleanupPlan.workspaceDirs;
-  const workspaceDirs = includeWorkspace
-    ? discoveredWorkspaceDirs
-    : [...discoveredWorkspaceDirs, resolveDefaultAgentWorkspaceDir()];
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({
@@ -588,7 +584,7 @@ export async function resolveBackupPlanFromDisk(
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs,
+    workspaceDirs: discoveredWorkspaceDirs,
     agentRoots,
     pluginInventory,
     unresolvedOwnership,

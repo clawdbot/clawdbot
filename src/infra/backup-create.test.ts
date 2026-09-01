@@ -916,7 +916,11 @@ describe("createBackupArchive", () => {
         },
         async (state) => {
           const sentinel = state.statePath("sentinel-state.json");
+          const nestedStateDir = state.statePath("workspace");
+          const nestedState = path.join(nestedStateDir, "durable-state.json");
+          await fs.mkdir(nestedStateDir, { recursive: true });
           await fs.writeFile(sentinel, '{"ok":true}\n', "utf8");
+          await fs.writeFile(nestedState, '{"nested":true}\n', "utf8");
           await state.writeConfig({
             agents: {
               defaults: { workspace: resolveWorkspace(state) },
@@ -932,6 +936,9 @@ describe("createBackupArchive", () => {
 
           expect(archive.assets.map((asset) => asset.kind)).not.toContain("workspace");
           expect(entries.some((entry) => entry.endsWith("/sentinel-state.json"))).toBe(true);
+          expect(entries.some((entry) => entry.endsWith("/workspace/durable-state.json"))).toBe(
+            true,
+          );
         },
       );
     },
