@@ -32,7 +32,6 @@ import {
   prepareManagedPluginArtifactConsentHandler,
   resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
-  resolvePluginInstallRecordTrust,
   type PluginCapabilityConsentAcknowledgment,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
@@ -42,6 +41,7 @@ import {
   formatPluginCapabilityConsentRequired,
   resolveAcceptedSurfaceCurrent,
   resolvePluginInstallRecordIntegrity,
+  resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
@@ -926,7 +926,13 @@ export const listManagedPlugins = withManagedPluginCache(
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-      if (enabled && record.origin !== "bundled" && ownership.ok && installRecord) {
+      if (
+        enabled &&
+        record.origin !== "bundled" &&
+        !manifest?.trustedOfficialInstall &&
+        ownership.ok &&
+        installRecord
+      ) {
         const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
         if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
           capabilityConsentDiagnostics.push({

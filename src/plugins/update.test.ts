@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolvePluginArtifactDeclaredSurface } from "./capability-consent.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -156,8 +156,6 @@ vi.mock("./package-entry-resolution.js", async (importOriginal) => {
     },
   };
 });
-
-vi.resetModules();
 
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
 
@@ -1147,7 +1145,7 @@ describe("updateNpmInstalledPlugins", () => {
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
       if (omitStageReview) {
-        await expect(pendingUpdate).rejects.toThrow("did not review the staged artifact");
+        await expect(pendingUpdate).rejects.toThrow("did not expose its verified artifact");
         return;
       }
       if (review === "throw" || review === "throw-undefined") {
