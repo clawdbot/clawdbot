@@ -95,6 +95,23 @@ describe("scheduled tool policy provenance", () => {
     await expect(removal).rejects.toThrow("authority closed");
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
     expect(commitGuard).toHaveBeenCalledTimes(2);
+
+    const staleBlockerEntered = createDeferred();
+    const releaseStaleBlocker = createDeferred();
+    const staleBlocker = updateWithPrecondition(state, job.id, {}, async () => {
+      staleBlockerEntered.resolve();
+      await releaseStaleBlocker.promise;
+    });
+    await staleBlockerEntered.promise;
+    const staleRemoval = removeStaleJobFamily(
+      state,
+      { declarationKey: "guarded", name: "guarded", ownerPluginTag: "test" },
+      { commitGuard },
+    );
+    releaseStaleBlocker.resolve();
+    await staleBlocker;
+    await expect(staleRemoval).rejects.toThrow("authority closed");
+    expect(commitGuard).toHaveBeenCalledTimes(3);
     if (state.timer) {
       clearTimeout(state.timer);
     }

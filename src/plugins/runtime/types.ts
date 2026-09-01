@@ -127,7 +127,10 @@ export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
-    /** Resolve the current Gateway cron service while this runtime generation is active. */
+    /**
+     * Resolve a trusted, lifecycle-revocable facade for the current Gateway cron service.
+     * Every operation rechecks this runtime generation and fails after it retires.
+     */
     getCron?: () => PluginHookGatewayCronService | undefined;
     /** Dispatch a Gateway method as the current trusted plugin. */
     request: <T = unknown>(

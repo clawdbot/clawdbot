@@ -15,6 +15,31 @@ const hookTurn = {
 } satisfies Parameters<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>[0];
 
 describe("plugin runtime hook dispatch ownership", () => {
+  it("rejects an untrusted plugin before exposing Gateway cron capability", () => {
+    const getCron = vi.fn(() => undefined);
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntime({
+        gateway: {
+          isAvailable: async () => true,
+          getCron,
+          request: async <T = unknown>(): Promise<T> => {
+            throw new Error("Gateway request should not run in this test");
+          },
+        },
+      }),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "untrusted-cron", origin: "workspace" });
+    const api = builder.createApi(record, { config: {} });
+    builder.registry.plugins.push(record);
+
+    expect(() => api.runtime.gateway.getCron?.()).toThrow(
+      'getCron is only available for trusted plugins in this release. Plugin "untrusted-cron" loaded with origin "workspace"',
+    );
+    expect(getCron).not.toHaveBeenCalled();
+  });
+
   it.each([
     { origin: "bundled" as const, trustedOfficialInstall: undefined },
     { origin: "global" as const, trustedOfficialInstall: true },

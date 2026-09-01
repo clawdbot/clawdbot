@@ -2,14 +2,14 @@
 // types do not pull scheduler implementation dependencies into their graph.
 import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-store.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
+import type { CronCommitGuardOptions } from "../cron/service/state.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
   /** Remove an owned declarative job family from obsolete SQLite store partitions. */
-  removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }): Promise<number>;
+  removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: CronCommitGuardOptions,
+  ): Promise<number>;
   readScratch(id: string): Promise<CronJobScratchState>;
   writeScratch(
     id: string,

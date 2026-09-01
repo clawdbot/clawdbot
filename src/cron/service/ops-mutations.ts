@@ -50,6 +50,7 @@ import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
+  CronCommitGuardOptions,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -463,9 +464,11 @@ export async function add(
 export async function removeStaleJobFamily(
   state: CronServiceState,
   family: { declarationKey: string; name: string; ownerPluginTag: string },
+  opts?: CronCommitGuardOptions,
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
+    opts?.commitGuard?.();
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }

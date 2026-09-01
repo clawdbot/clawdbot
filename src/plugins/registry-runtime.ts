@@ -173,7 +173,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         | "openKeyedStore"
         | "openSyncKeyedStore"
         | "openChannelIngressQueue"
-        | "openChannelIngressDrain",
+        | "openChannelIngressDrain"
+        | "getCron",
     ) => {
       const record =
         pluginRuntimeRecordById.get(pluginId) ??
@@ -308,7 +309,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
             ...(gateway.getCron
-              ? { getCron: () => runWithPluginScope(() => gateway.getCron?.()) }
+              ? {
+                  getCron: () => {
+                    assertTrustedPluginRuntime("getCron");
+                    return runWithPluginScope(() => gateway.getCron?.());
+                  },
+                }
               : {}),
             request: async (method, params, options) => {
               const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();

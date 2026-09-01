@@ -11,6 +11,7 @@ import * as readOps from "./service/ops-read.js";
 import * as runOps from "./service/ops-run.js";
 import {
   type CronAddOptions,
+  type CronCommitGuardOptions,
   type CronServiceDeps,
   type CronRunMode,
   type CronUpdatePrecondition,
@@ -108,12 +109,11 @@ export class CronService implements CronServiceContract {
     return await mutationOps.add(this.state, input, opts);
   }
 
-  async removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }) {
-    return await mutationOps.removeStaleJobFamily(this.state, family);
+  async removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: CronCommitGuardOptions,
+  ) {
+    return await mutationOps.removeStaleJobFamily(this.state, family, opts);
   }
 
   async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {

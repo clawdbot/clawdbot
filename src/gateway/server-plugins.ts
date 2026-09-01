@@ -39,6 +39,7 @@ import type {
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
@@ -498,6 +499,29 @@ function createGatewayPluginRuntimeBindings(
   const resolveBoundGatewayContext = resolveGatewayContext
     ? () => (active ? resolveGatewayContext() : undefined)
     : undefined;
+  const assertCronRuntimeActive = (): void => {
+    if (!active) {
+      throw new Error("Gateway cron is unavailable because this plugin runtime has retired.");
+    }
+  };
+  const resolveCron = (): GatewayCronServiceContract => {
+    assertCronRuntimeActive();
+    const cron = resolveBoundGatewayContext?.()?.cron;
+    if (!cron) {
+      throw new Error("Gateway cron is unavailable for this plugin runtime.");
+    }
+    // Gateway owns the concrete scheduler behind this narrow plugin facade.
+    return cron as GatewayCronServiceContract;
+  };
+  const cron: PluginHookGatewayCronService = {
+    list: (opts) => resolveCron().list(opts),
+    add: (input) => resolveCron().add(input, { commitGuard: assertCronRuntimeActive }),
+    update: (id, patch) =>
+      resolveCron().update(id, patch, { commitGuard: assertCronRuntimeActive }),
+    remove: (id) => resolveCron().remove(id, { commitGuard: assertCronRuntimeActive }),
+    removeStaleJobFamily: (family) =>
+      resolveCron().removeStaleJobFamily(family, { commitGuard: assertCronRuntimeActive }),
+  };
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));
@@ -522,8 +546,7 @@ function createGatewayPluginRuntimeBindings(
       gateway: {
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         getCron: () =>
-          // SAFETY: Gateway cron is the concrete service behind the narrower public plugin facade.
-          resolveBoundGatewayContext?.()?.cron as PluginHookGatewayCronService | undefined,
+          resolveBoundGatewayContext?.()?.cron ? cron : undefined,
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
       },
