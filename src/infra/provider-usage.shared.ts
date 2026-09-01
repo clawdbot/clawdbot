@@ -12,6 +12,7 @@ export const PROVIDER_LABELS = {
   deepseek: "DeepSeek",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
+  kimi: "Kimi",
   minimax: "MiniMax",
   openai: "OpenAI",
   openrouter: "OpenRouter",
@@ -62,6 +63,9 @@ export function resolveUsageProviderId(
     normalized === "minimax-portal-cn"
   ) {
     return "minimax";
+  }
+  if (normalized === "kimi-code" || normalized === "kimi-coding") {
+    return "kimi";
   }
   return normalized || undefined;
 }

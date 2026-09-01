@@ -5,6 +5,9 @@
   },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
+  "contracts": {
+    "usageProviders": ["kimi"]
+  },
   "providerRequest": {
     "providers": {
       "kimi": {

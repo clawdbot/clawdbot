@@ -40,6 +40,8 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
@@ -72,7 +74,19 @@ export type {
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+
+function resolveApiKeyUsageStatusProviders(
+  cfg: OpenClawConfig,
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">,
+): ReadonlySet<UsageProviderId> {
+  return new Set(
+    listAvailableManifestContractValues({
+      snapshot,
+      contract: "usageProviders",
+      config: cfg,
+    }),
+  );
+}
 
 type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
   metadataSnapshot: NonNullable<
@@ -605,6 +619,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         allowKeychainPrompt: false,
         authAliasLookupParams,
       });
+      const apiKeyUsageStatusProviders = resolveApiKeyUsageStatusProviders(
+        cfg,
+        preparedSnapshot.metadataSnapshot,
+      );
 
       // Usage queries usually need refreshable credentials. Keep API-key status
       // enrichment explicit so static auth providers are not polled by default.

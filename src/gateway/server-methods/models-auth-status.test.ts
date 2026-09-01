@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
+  listAvailableManifestContractValues: vi.fn(() => ["clawrouter", "deepseek", "kimi"]),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
@@ -120,6 +121,10 @@ vi.mock("../../secrets/runtime.js", () => ({
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  listAvailableManifestContractValues: mocks.listAvailableManifestContractValues,
 }));
 
 vi.mock("../server-model-catalog-auth.js", () => ({
@@ -320,6 +325,7 @@ function resetAuthStatusMocks(): void {
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
+  mocks.listAvailableManifestContractValues.mockReturnValue(["clawrouter", "deepseek", "kimi"]);
 }
 
 function firstDeferredAuthScope() {
@@ -1526,6 +1532,83 @@ describe("models.authStatus", () => {
       providerId: "deepseek",
       windows: [],
       summary: "Balance ¥42.50",
+    });
+  });
+
+  it("adds Kimi API-key quota windows to auth status usage", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("kimi")],
+      providers: [createStaticApiKeyProvider("kimi")],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 8 },
+            { label: "7d", usedPercent: 3 },
+          ],
+        },
+      ],
+    });
+
+    const first = await readAuthStatus();
+    expect(first.providers[0]?.usage).toBeUndefined();
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["kimi"],
+      agentDir: "/tmp/agent",
+      authStore: preparedAuthStore,
+      config: expect.any(Object),
+      timeoutMs: 5_000,
+    });
+    let result: ModelAuthStatusResult | undefined;
+    await waitForFast(async () => {
+      result = await readAuthStatus();
+      expect(result.providers[0]?.usage).toBeDefined();
+    });
+    const refreshed = expectDefined(result, "refreshed auth status");
+    expect(refreshed.providers[0]?.usage).toEqual({
+      providerId: "kimi",
+      windows: [
+        { label: "5h", usedPercent: 8 },
+        { label: "7d", usedPercent: 3 },
+      ],
+    });
+  });
+
+  it("loads API-key usage for providers declared by the manifest contract", async () => {
+    const metadataSnapshot = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [] },
+      plugins: [],
+    };
+    setPreparedMetadataSnapshot(metadataSnapshot);
+    mocks.listAvailableManifestContractValues.mockReturnValue(["manifest-usage"]);
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("manifest-usage")],
+      providers: [createStaticApiKeyProvider("manifest-usage")],
+    });
+
+    await readAuthStatus();
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["manifest-usage"],
+      agentDir: "/tmp/agent",
+      authStore: preparedAuthStore,
+      config: expect.any(Object),
+      timeoutMs: 5_000,
+    });
+    expect(mocks.listAvailableManifestContractValues).toHaveBeenCalledWith({
+      snapshot: metadataSnapshot,
+      contract: "usageProviders",
+      config: expect.any(Object),
     });
   });
 

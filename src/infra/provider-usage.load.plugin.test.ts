@@ -1,8 +1,11 @@
 // Tests provider usage loading from plugin-provided sources.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
+import { loadProviderUsageSummary } from "./provider-usage.load.js";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
+const resolveProviderUsageAuthWithPluginMock = vi.fn();
+const listProviderUsagePluginDescriptorsMock = vi.fn();
 const { EnvHttpProxyAgent, envAgentSpy, loadUndiciRuntimeDeps, undiciFetch } = vi.hoisted(() => {
   const envAgentSpyLocal = vi.fn();
   const undiciFetchLocal = vi.fn();
@@ -42,12 +45,14 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
+    listProviderUsagePluginDescriptors: (...args: unknown[]) =>
+      listProviderUsagePluginDescriptorsMock(...args),
+    resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
+      resolveProviderUsageAuthWithPluginMock(...args),
     resolveProviderUsageSnapshotWithPlugin: (...args: unknown[]) =>
       resolveProviderUsageSnapshotWithPluginMock(...args),
   };
 });
-
-let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
@@ -97,15 +102,15 @@ function requireUndiciFetchInit(): Record<string, unknown> {
 }
 
 describe("provider-usage.load plugin boundary", () => {
-  beforeAll(async () => {
-    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     envAgentSpy.mockClear();
     loadUndiciRuntimeDeps.mockClear();
     undiciFetch.mockReset();
     EnvHttpProxyAgent.lastCreated = undefined;
+    listProviderUsagePluginDescriptorsMock.mockReset();
+    listProviderUsagePluginDescriptorsMock.mockReturnValue([]);
+    resolveProviderUsageAuthWithPluginMock.mockReset();
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(undefined);
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
   });
@@ -183,6 +188,91 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.context?.provider).toBe("openai");
     expect(pluginCall.context?.token).toBe("codex-app-server");
     expect(pluginCall.context?.authProfileId).toBe("openai:work");
+  });
+
+  it("auto-discovers plugin-owned usage providers and routes auth + snapshot hooks", async () => {
+    listProviderUsagePluginDescriptorsMock.mockReturnValueOnce([
+      {
+        provider: "kimi",
+        displayName: "Kimi",
+      },
+    ]);
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "resolved-kimi-token",
+    });
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "kimi",
+      displayName: "Kimi",
+      windows: [
+        { label: "5h", usedPercent: 12 },
+        { label: "7d", usedPercent: 34 },
+      ],
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("usage plugin mock should receive the fetch function without calling it");
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        env: {
+          KIMI_API_KEY: "env-kimi-token",
+        },
+        fetch: mockFetch as unknown as typeof fetch,
+        skipPluginAuthWithoutCredentialSource: true,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 12 },
+            { label: "7d", usedPercent: 34 },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();
+    const pluginCall = requireFirstPluginUsageCall();
+    expect(pluginCall.provider).toBe("kimi");
+    expect(pluginCall.context?.provider).toBe("kimi");
+    expect(pluginCall.context?.token).toBe("resolved-kimi-token");
+    expect(pluginCall.context?.timeoutMs).toBe(5_000);
+    expect(pluginCall.context?.fetchFn).toEqual(expect.any(Function));
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("respects plugin-owned handled skips without falling back to usage polling", async () => {
+    listProviderUsagePluginDescriptorsMock.mockReturnValueOnce([
+      {
+        provider: "kimi",
+        displayName: "Kimi",
+      },
+    ]);
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ handled: true });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("custom Kimi usage proxy should not be polled");
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        env: { KIMI_API_KEY: "kimi-token" },
+        fetch: mockFetch as unknown as typeof fetch,
+        skipPluginAuthWithoutCredentialSource: true,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [],
+    });
+
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("passes an env proxy fetch into plugin usage context when no explicit fetch is supplied", async () => {

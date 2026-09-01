@@ -12,6 +12,9 @@ describe("provider-usage.shared", () => {
   it.each([
     { value: "clawrouter", expected: "clawrouter" },
     { value: "deepseek", expected: "deepseek" },
+    { value: "kimi", expected: "kimi" },
+    { value: "kimi-code", expected: "kimi" },
+    { value: "kimi-coding", expected: "kimi" },
     { value: "zai", expected: "zai" },
     { value: "z-ai", expected: "z-ai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
