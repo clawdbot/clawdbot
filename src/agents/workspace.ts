@@ -323,10 +323,22 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
     return true;
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "EEXIST") {
-      throw err;
+    if (anyErr.code === "EEXIST") {
+      return false;
     }
-    return false;
+    // Windows NTFS reports EPERM (and AV-held files may surface EACCES)
+    // instead of EEXIST when the `wx` flag collides with an existing bootstrap
+    // file. Treat those as "already exists" only when the path actually
+    // exists; a real permission error on a missing path must still fail.
+    if (anyErr.code === "EPERM" || anyErr.code === "EACCES") {
+      try {
+        await fs.access(filePath);
+        return false;
+      } catch {
+        // Path does not exist; fall through to rethrow the original error.
+      }
+    }
+    throw err;
   }
 }
 

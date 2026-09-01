@@ -199,6 +199,36 @@ describe("ensureAgentWorkspace", () => {
     expect(readWorkspaceStateSnapshot(tempDir).attestation).toBeDefined();
   });
 
+  it("treats Windows NTFS EPERM on an existing bootstrap file as already present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const existingContent = "existing custom agents instructions\n";
+    await fs.writeFile(agentsPath, existingContent, "utf8");
+
+    const realWriteFile = fs.writeFile.bind(fs);
+    const writeSpy = vi
+      .spyOn(fs, "writeFile")
+      .mockImplementation(async (filePath, content, options) => {
+        const flag = (options as { flag?: string } | undefined)?.flag;
+        if (flag === "wx" && filePath === agentsPath) {
+          const error = new Error(
+            "EPERM: operation not permitted, open 'AGENTS.md'",
+          ) as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+        return await realWriteFile(filePath, content, options);
+      });
+
+    try {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    } finally {
+      writeSpy.mockRestore();
+    }
+
+    await expect(fs.readFile(agentsPath, "utf8")).resolves.toBe(existingContent);
+  });
+
   it("does not overwrite a foreign root workspace-state.json file", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const foreignStatePath = path.join(tempDir, "workspace-state.json");
