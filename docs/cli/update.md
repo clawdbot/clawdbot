@@ -193,6 +193,11 @@ It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
+Managed npm package directories without an install record are reinstalled from
+the selected registry source, using the active channel or exact version pin.
+Registry verification and any required capability review finish before the
+repaired install record is published.
+
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
