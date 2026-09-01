@@ -23,18 +23,16 @@ enum GatewayDiscoveryPreferences {
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
     private static let routeBindingVerifierPrefix = "hmac-sha256:gateway-discovery-route-binding:v1:"
     private static let routeBindingVerifierDomain = "openclaw.gateway-discovery.route-binding:v1"
-    private static let routeBindingKey: SymmetricKey? = {
-        return switch AppLaunchRuntimePlan.current.mode {
-        case .interactive:
-            GatewayActivationBindingKeyStore.loadOrCreate()
-        case .background:
-            // Background startup may verify an existing receipt, but this query
-            // can neither create an item nor present SecurityAgent UI.
-            GatewayActivationBindingKeyStore.loadExistingWithoutAuthenticationUI()
-        case .elevationHost:
-            nil
-        }
-    }()
+    private static let routeBindingKey: SymmetricKey? = switch AppLaunchRuntimePlan.current.mode {
+    case .interactive:
+        GatewayActivationBindingKeyStore.loadOrCreate()
+    case .background:
+        // Background startup may verify an existing receipt, but this query
+        // can neither create an item nor present SecurityAgent UI.
+        GatewayActivationBindingKeyStore.loadExistingWithoutAuthenticationUI()
+    case .elevationHost:
+        nil
+    }
 
     static func preferredGatewayVerifiedForRoute(
         _ routeBinding: String?,
@@ -91,10 +89,6 @@ enum GatewayDiscoveryPreferences {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
-    static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
-        self.setPreferredStableID(stableID, routeBinding: routeBinding, key: self.routeBindingKey)
-    }
-
     static func setPreferredStableID(
         _ stableID: String?,
         routeBinding: String?,
@@ -108,10 +102,6 @@ enum GatewayDiscoveryPreferences {
             return
         }
         AppDefaults.standard.set(verifier, forKey: self.preferredRouteBindingKey)
-    }
-
-    static func preferredRouteBindingVerification(_ routeBinding: String?) -> RouteBindingVerification {
-        self.preferredRouteBindingVerification(routeBinding, key: self.routeBindingKey)
     }
 
     static func preferredRouteBindingVerification(
@@ -138,18 +128,6 @@ enum GatewayDiscoveryPreferences {
             using: key)
         let encoded = tag.map { String(format: "%02x", $0) }.joined()
         return self.routeBindingVerifierPrefix + encoded
-    }
-
-    @MainActor
-    static func prepareStartupConfig(
-        isPreview: Bool,
-        saver: ([String: Any]) -> Bool) -> StartupConfig
-    {
-        self.prepareStartupConfig(
-            isPreview: isPreview,
-            saver: saver,
-            key: self.routeBindingKey,
-            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
     }
 
     @MainActor
@@ -300,15 +278,18 @@ enum GatewayDiscoveryPreferences {
     }
 
     @discardableResult
-    static func clearPreferredStableIDIfRouteBindingMismatch(_ currentRouteBinding: String?) -> Bool {
-        switch self.preferredRouteBindingVerification(currentRouteBinding) {
+    static func clearPreferredStableIDIfRouteBindingMismatch(
+        _ currentRouteBinding: String?,
+        key: SymmetricKey?) -> Bool
+    {
+        switch self.preferredRouteBindingVerification(currentRouteBinding, key: key) {
         case .noPreference:
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return false
         case .match, .invalidReceipt, .unverifiable:
             return false
         case .mismatch:
-            self.setPreferredStableID(nil, routeBinding: nil)
+            self.setPreferredStableID(nil)
             return true
         }
     }

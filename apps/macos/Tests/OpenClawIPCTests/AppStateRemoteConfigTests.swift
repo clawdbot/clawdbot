@@ -1,6 +1,9 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
+
+private let gatewayRouteBindingTestKey = SymmetricKey(data: Data(repeating: 0xB7, count: 32))
 
 private struct StoredGatewayPreference {
     let stableID: String?
@@ -99,6 +102,7 @@ struct AppStateRemoteConfigTests {
             let read = Task {
                 await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
+                    routeBindingKey: nil,
                     beforeConfigRead: { await gate.suspendRead() })
             }
             await gate.waitUntilStarted()
@@ -121,7 +125,8 @@ struct AppStateRemoteConfigTests {
         defer { restoreGatewayPreference(previousGatewayPreference) }
         GatewayDiscoveryPreferences.setPreferredStableID(
             "gateway-a",
-            routeBinding: "remote:direct:wss://gateway-a.example.test:443")
+            routeBinding: "remote:direct:wss://gateway-a.example.test:443",
+            key: gatewayRouteBindingTestKey)
 
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-b")
 
@@ -569,6 +574,7 @@ struct AppStateRemoteConfigTests {
 
             let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
+                routeBindingKey: nil,
                 beforeConfigRead: {})
             #expect(source.directRemoteURL?.absoluteString == "wss://gateway-a.example.test")
             #expect(source.token == "file-token")
@@ -814,9 +820,12 @@ struct AppStateRemoteConfigTests {
                 remoteTarget: "")
             GatewayDiscoveryPreferences.setPreferredStableID(
                 "gateway-a",
-                routeBinding: oldBinding)
+                routeBinding: oldBinding,
+                key: gatewayRouteBindingTestKey)
 
-            let state = AppState(preview: true)
+            let state = AppState(
+                preview: true,
+                gatewayRouteBindingKey: gatewayRouteBindingTestKey)
 
             #expect(state.remoteUrl == "wss://gateway-b.example.test")
             #expect(state._testReconcilePreferredGatewayRouteBinding())
@@ -856,9 +865,12 @@ struct AppStateRemoteConfigTests {
                     remoteTarget: "alice@gateway-a.example.test")
                 GatewayDiscoveryPreferences.setPreferredStableID(
                     "gateway-a",
-                    routeBinding: oldBinding)
+                    routeBinding: oldBinding,
+                    key: gatewayRouteBindingTestKey)
 
-                let state = AppState(preview: true)
+                let state = AppState(
+                    preview: true,
+                    gatewayRouteBindingKey: gatewayRouteBindingTestKey)
                 let settings = CommandResolver.connectionSettings()
 
                 #expect(state.remoteTarget == "bob@gateway-b.example.test")

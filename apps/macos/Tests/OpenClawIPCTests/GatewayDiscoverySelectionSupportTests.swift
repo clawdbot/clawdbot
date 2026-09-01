@@ -46,6 +46,15 @@ struct GatewayDiscoverySelectionSupportTests {
             body)
     }
 
+    private func makeState(
+        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) }) -> AppState
+    {
+        AppState(
+            preview: true,
+            gatewayConfigSaver: gatewayConfigSaver,
+            gatewayRouteBindingKey: self.routeBindingKey)
+    }
+
     private func makeGateway(
         serviceHost: String?,
         servicePort: Int?,
@@ -77,7 +86,7 @@ struct GatewayDiscoverySelectionSupportTests {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
             state.remoteTarget = "user@old-host"
 
@@ -89,7 +98,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     gatewayTls: true,
                     supportsSecureDirectTransport: true,
                     stableID: "tailscale-serve|\(tailnetHost)"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .direct)
             #expect(state.remoteUrl == "wss://\(tailnetHost)")
@@ -117,10 +127,13 @@ struct GatewayDiscoverySelectionSupportTests {
             let deduped = GatewayDiscoveryModel.sortedDeduped(gateways: [wideArea, tailscaleServe])
             #expect(deduped.count == 1)
             let selected = try #require(deduped.first)
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
 
-            GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: selected, state: state)
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: selected,
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(selected.stableID == tailscaleServe.stableID)
             #expect(state.remoteTransport == .direct)
@@ -132,7 +145,7 @@ struct GatewayDiscoverySelectionSupportTests {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -142,7 +155,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     tailnetDns: tailnetHost,
                     gatewayTls: true,
                     stableID: "wide-area|openclaw.internal.|gateway-host"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:18789")
@@ -153,7 +167,7 @@ struct GatewayDiscoverySelectionSupportTests {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -162,7 +176,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 18789,
                     tailnetDns: tailnetHost,
                     stableID: "wide-area|openclaw.internal.|gateway-host"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:18789")
@@ -172,7 +187,7 @@ struct GatewayDiscoverySelectionSupportTests {
     @Test func `selecting nearby lan gateway keeps ssh without direct reachability signal`() async {
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
             state.remoteTarget = "user@old-host"
             state.remoteUrl = "ws://localhost:29876"
@@ -182,7 +197,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     serviceHost: "nearby-gateway.local",
                     servicePort: 18789,
                     stableID: "bonjour|nearby-gateway"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:29876")
@@ -193,7 +209,7 @@ struct GatewayDiscoverySelectionSupportTests {
     @Test func `Bonjour direct reachability flag keeps SSH`() async {
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
             state.remoteUrl = "ws://localhost:29876"
 
@@ -203,7 +219,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 19999,
                     gatewayDirectReachable: true,
                     stableID: "bonjour|nearby-gateway-custom"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:29876")
@@ -213,7 +230,7 @@ struct GatewayDiscoverySelectionSupportTests {
     @Test func `Bonjour TLS flag keeps SSH`() async {
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.remoteTransport = .ssh
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -222,7 +239,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 443,
                     gatewayTls: true,
                     stableID: "bonjour|nearby-gateway-tls"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:18789")
@@ -256,7 +274,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     ],
                 ],
             ]))
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state._testEnableGatewayConfigSync()
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
@@ -264,7 +282,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     serviceHost: "attacker.local",
                     servicePort: 18789,
                     stableID: "bonjour|gateway-a"),
-                state: state)
+                state: state,
+                routeBindingKey: self.routeBindingKey)
 
             await state._testAwaitGatewayConfigSync()
             let persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
@@ -275,6 +294,7 @@ struct GatewayDiscoverySelectionSupportTests {
 
             var source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
+                routeBindingKey: self.routeBindingKey,
                 beforeConfigRead: {})
             #expect(source.token == nil)
             #expect(source.password == nil)
@@ -292,6 +312,7 @@ struct GatewayDiscoverySelectionSupportTests {
             state._testApplyConfigFromDisk()
             source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
+                routeBindingKey: self.routeBindingKey,
                 beforeConfigRead: {})
             #expect(source.token == nil)
             #expect(source.password == "attacker-password")
@@ -304,6 +325,7 @@ struct GatewayDiscoverySelectionSupportTests {
             state._testApplyConfigFromDisk()
             source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
+                routeBindingKey: self.routeBindingKey,
                 beforeConfigRead: {})
             #expect(source.token == "ambient-token")
             #expect(source.password == "ambient-password")
@@ -313,7 +335,7 @@ struct GatewayDiscoverySelectionSupportTests {
     @Test func `same discovery route preserves its active token`() async {
         let configPath = TestIsolation.tempConfigPath()
         await self.withIsolation(configPath: configPath) {
-            let state = AppState(preview: true)
+            let state = self.makeState()
             state.connectionMode = .remote
             state.remoteTransport = .ssh
             state.remoteTarget = "\(NSUserName())@gateway-a.local"
@@ -364,9 +386,9 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `stored device auth owner requires a verified discovery receipt`() async throws {
+    @Test func `stored device auth owner requires a verified discovery receipt`() async {
         let configPath = TestIsolation.tempConfigPath()
-        try await self.withIsolation(configPath: configPath) {
+        await self.withIsolation(configPath: configPath) {
             let routeBinding = "remote:direct:wss://gateway-a.example.test:443"
 
             #expect(GatewayDiscoveryPreferences.authorizedDeviceAuthGatewayID(
@@ -411,7 +433,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     ],
                 ],
             ]))
-            let state = AppState(preview: true)
+            let state = self.makeState()
             let routeBinding = try #require(GatewayDiscoveryPreferences.deviceAuthGatewayID(
                 connectionMode: .remote,
                 remoteTransport: .direct,
@@ -441,6 +463,7 @@ struct GatewayDiscoverySelectionSupportTests {
 
                 var source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
+                    routeBindingKey: self.routeBindingKey,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == nil)
                 let blockedNodeAuth = try await self.connectNodeAuth(source: source)
@@ -449,6 +472,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 GatewayDiscoveryPreferences.setPreferredStableID(nil)
                 source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
+                    routeBindingKey: self.routeBindingKey,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == routeBinding)
                 let allowedNodeAuth = try await self.connectNodeAuth(source: source)
@@ -539,7 +563,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(startup.migrationPersisted)
                 #expect(saveCount == 0)
                 #expect(GatewayRemoteConfig.resolveTransport(root: startup.root) == .direct)
-                let state = AppState(preview: true)
+            let state = self.makeState()
                 let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
                     routeBindingKey: self.routeBindingKey,
@@ -601,7 +625,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(startup.migrationPersisted)
                 #expect(GatewayRemoteConfig.resolveTokenString(root: startup.root) == "configured-token")
 
-                let state = AppState(preview: true)
+            let state = self.makeState()
                 let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
                     routeBindingKey: nil,
@@ -640,7 +664,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 "gateway-a",
                 routeBinding: routeBinding,
                 key: self.routeBindingKey)
-            let state = AppState(preview: true)
+            let state = self.makeState()
             let stateDir = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
@@ -708,7 +732,7 @@ struct GatewayDiscoverySelectionSupportTests {
             #expect(!deferred.migrationChanged)
             #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
 
-            let state = AppState(preview: true)
+            let state = self.makeState()
             var source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 routeBindingKey: nil,
@@ -742,7 +766,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     ],
                 ],
             ]))
-            let state = AppState(preview: true)
+            let state = self.makeState()
             GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
             AppDefaults.standard.set(
                 "legacy-raw-route",
@@ -782,6 +806,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 }
                 var source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
+                    routeBindingKey: self.routeBindingKey,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == nil)
                 try await self.requireNoAuth(source)
@@ -800,6 +825,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
                 source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
+                    routeBindingKey: self.routeBindingKey,
                     beforeConfigRead: {})
                 #expect(source.deviceAuthGatewayID == newRouteBinding)
                 try self.requireOnlyAuth(
@@ -828,8 +854,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 ],
             ]))
             var ownersDuringSave: [String?] = []
-            let state = AppState(
-                preview: true,
+            let state = self.makeState(
                 gatewayConfigSaver: { _ in
                     ownersDuringSave.append(GatewayDiscoveryPreferences.preferredStableID())
                     return false
@@ -840,7 +865,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 remoteTransport: .direct,
                 remoteURL: gatewayAURL,
                 remoteTarget: ""))
-            let routeBindingKey = try #require(GatewayDiscoveryPreferences.defaultRouteBindingKey())
+            let routeBindingKey = self.routeBindingKey
             GatewayDiscoveryPreferences.setPreferredStableID(
                 "gateway-a",
                 routeBinding: routeBinding,
@@ -943,7 +968,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     remoteTarget: "user@gateway-a.local"),
                 key: self.routeBindingKey) == .invalidReceipt)
 
-            let state = AppState(preview: true)
+            let state = self.makeState()
             let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 routeBindingKey: self.routeBindingKey,
@@ -1034,7 +1059,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 GatewayDiscoveryPreferences.routeBinding(root: startup.root),
                 key: self.routeBindingKey) == .invalidReceipt)
 
-            let state = AppState(preview: true)
+            let state = self.makeState()
             let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 routeBindingKey: self.routeBindingKey,
@@ -1111,7 +1136,7 @@ struct GatewayDiscoverySelectionSupportTests {
                 GatewayDiscoveryPreferences.routeBinding(root: startup.root),
                 key: self.routeBindingKey) == .invalidReceipt)
 
-            let state = AppState(preview: true)
+            let state = self.makeState()
             let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 routeBindingKey: self.routeBindingKey,

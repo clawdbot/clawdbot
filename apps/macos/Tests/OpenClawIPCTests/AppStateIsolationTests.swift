@@ -6,6 +6,28 @@ import Testing
 @MainActor
 struct AppStateIsolationTests {
     @Test
+    func `route binding key is reusable without authentication UI`() async throws {
+        try await TestIsolation.withUserDefaultsValues([
+            "gateway.preferredStableID": nil,
+            "bridge.preferredStableID": nil,
+            "gateway.preferredStableIDRouteBinding.v1": nil,
+        ]) {
+            let created = try #require(GatewayActivationBindingKeyStore.loadOrCreate())
+            let existing = try #require(
+                GatewayActivationBindingKeyStore.loadExistingWithoutAuthenticationUI())
+            let routeBinding = "remote:direct:wss://gateway.example.test:443"
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway",
+                routeBinding: routeBinding,
+                key: created)
+
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                routeBinding,
+                key: existing) == .match)
+        }
+    }
+
+    @Test
     func `preview constructor uses launch namespace and owned config`() async throws {
         // Fail before touching defaults when the bundle was launched without its resource owner.
         let profile = try #require(AppProfile.current.name)

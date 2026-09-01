@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Observation
 import OpenClawKit
@@ -104,6 +105,7 @@ final class AppState {
 
     @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
     @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
+    @ObservationIgnored private let gatewayRouteBindingKey: SymmetricKey?
     @ObservationIgnored private var pendingDiscoveryCredentialReset: PendingDiscoveryCredentialReset?
     @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
     #if DEBUG
@@ -495,10 +497,14 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
+        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) },
+        gatewayRouteBindingKey: SymmetricKey? = nil)
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
+        self.gatewayRouteBindingKey = gatewayRouteBindingKey ?? (isPreview
+            ? nil
+            : GatewayDiscoveryPreferences.defaultRouteBindingKey())
         self.bundleLocationAllowsPersistentIntegration =
             !AppProfile.current.isActive &&
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
@@ -572,7 +578,9 @@ final class AppState {
 
         let startupConfig = GatewayDiscoveryPreferences.prepareStartupConfig(
             isPreview: self.isPreview,
-            saver: self.gatewayConfigSaver)
+            saver: self.gatewayConfigSaver,
+            key: self.gatewayRouteBindingKey,
+            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
         let configRoot = startupConfig.root
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
@@ -1078,7 +1086,8 @@ extension AppState {
     @discardableResult
     private func reconcilePreferredGatewayRouteBinding() -> Bool {
         GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(
-            self.currentGatewayRouteBinding())
+            self.currentGatewayRouteBinding(),
+            key: self.gatewayRouteBindingKey)
     }
 
     private func currentGatewayRouteBinding() -> String? {
@@ -1102,7 +1111,9 @@ extension AppState {
             GatewayDiscoveryPreferences.setPreferredStableID(nil)
             return
         }
-        _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(routeBinding)
+        _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(
+            routeBinding,
+            key: self.gatewayRouteBindingKey)
     }
 
     private func updateRemoteTarget(host: String) {

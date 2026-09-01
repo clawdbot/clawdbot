@@ -171,11 +171,13 @@ struct GatewayEndpointStoreTests {
             let base = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 profile: AppProfile(environment: [:]),
+                routeBindingKey: nil,
                 beforeConfigRead: {})
             let workProfile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
             let work = await GatewayEndpointStore._testLiveSourceSnapshot(
                 state: state,
                 profile: workProfile,
+                routeBindingKey: nil,
                 beforeConfigRead: {})
             #expect(base.localPort == 18789)
             #expect(work.localPort == workProfile.defaultGatewayPort)
