@@ -39,15 +39,15 @@ describe("pluginInstallPathMatchesRoot", () => {
 
 describe("toPublicPluginVerificationDiagnostic", () => {
   it("redacts credentials before bounding public detail", () => {
-    const fixtureCredential = "fixture-only-public-diagnostic-value";
-    registerSecretValueForRedaction(fixtureCredential);
+    const registeredFixture = "fixture-only-public-diagnostic-value";
+    registerSecretValueForRedaction(registeredFixture);
     const diagnostic = toPublicPluginVerificationDiagnostic({
       kind: "plugin-verification",
       reason: "invalid-package-json",
-      detail: `${fixtureCredential} ${"x".repeat(1_200)}`,
+      detail: `${registeredFixture} ${"x".repeat(1_200)}`,
     });
 
-    expect(diagnostic.detail).not.toContain(fixtureCredential);
+    expect(diagnostic.detail).not.toContain(registeredFixture);
     expect(diagnostic.detail.length).toBeLessThanOrEqual(1_000);
   });
 
