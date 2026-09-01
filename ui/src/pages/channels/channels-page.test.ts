@@ -222,6 +222,80 @@ describe("ChannelsPage lifecycle", () => {
     source.channels.dispose();
   });
 
+  it("loads an icon when channel status arrives after plugin metadata", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    let includeMattermost = false;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "mattermost",
+              name: "Mattermost",
+              description: "OpenClaw Mattermost channel plugin.",
+              origin: "bundled",
+              installed: true,
+              enabled: true,
+              state: "loaded",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      if (method === "channels.status" && includeMattermost) {
+        return {
+          ts: 1,
+          channelOrder: ["mattermost"],
+          channelLabels: { mattermost: "Mattermost" },
+          channels: { mattermost: { configured: true } },
+          channelAccounts: {},
+          channelDefaultAccountId: {},
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mattermost-plugin-icon");
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object)),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    includeMattermost = true;
+    await source.channels.refresh(false);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Mattermost");
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:mattermost-plugin-icon",
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("loads schema again when the runtime-config source changes", async () => {
     const gateway = createGateway();
     const first = createContext(gateway);

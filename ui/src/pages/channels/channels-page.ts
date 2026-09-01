@@ -124,6 +124,10 @@ class ChannelsPage extends OpenClawLightDomElement {
         const handleChange = () => {
           if (this.channelsSource === channels) {
             this.reconcilePairingFilter(channels.state.pairingSnapshot);
+            const gateway = this.context.gateway.snapshot;
+            if (gateway.phase === "connected" && gateway.client) {
+              this.pluginPresentation.ensure(gateway.client);
+            }
             this.requestUpdate();
           }
         };
