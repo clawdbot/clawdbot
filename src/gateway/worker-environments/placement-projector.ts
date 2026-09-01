@@ -97,6 +97,7 @@ export function projectWorkerSessionPlacement(
   diskSpace?: SessionPlacementDiskSpace,
   runner?: SessionPlacementRunner,
   identity?: { providerId: string; profileId: string },
+  failedRecoveryAction?: "restart" | "stop-first",
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -238,6 +239,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
         ...terminal,
       };
   }
