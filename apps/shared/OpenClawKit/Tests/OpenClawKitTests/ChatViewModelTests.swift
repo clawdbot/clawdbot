@@ -8762,6 +8762,47 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
+    @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let cooldown = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "cooldown")
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: unavailable.modelID,
+                modelProvider: unavailable.provider))],
+            modelResponses: [[unavailable], [available], [cooldown]],
+            modelAvailabilityIsSessionScoped: true)
+        try await loadAndWaitBootstrap(vm: vm)
+        vm.input = "hello"
+        #expect(!vm.canSend)
+
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "patch")))
+        try await waitUntil("patch refresh clears auth gate") {
+            await MainActor.run { vm.modelChoices.first?.available == true }
+        }
+        #expect(vm.canSend)
+
+        transport.emit(.sessionsChanged(.init(sessionKey: "main", reason: "command-metadata")))
+        try await waitUntil("command metadata refresh replaces availability") {
+            await MainActor.run { vm.modelChoices.first?.unavailableReason == "cooldown" }
+        }
+        #expect(vm.canSend)
+    }
+
     @Test @MainActor func `late catalog response cannot restore an obsolete auth gate`() async throws {
         let staleRefreshGate = AsyncGate()
         let unavailable = modelChoice(

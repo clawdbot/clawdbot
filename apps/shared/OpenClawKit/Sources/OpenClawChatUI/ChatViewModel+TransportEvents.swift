@@ -191,6 +191,14 @@ extension OpenClawChatViewModel {
         }
         guard change.reason == "patch" || change.reason == "command-metadata" else { return }
         self.requestSessionsRefresh()
+        guard let eventSessionKey,
+              self.matchesCurrentSessionKey(
+                  incoming: eventSessionKey,
+                  agentId: change.agentId,
+                  current: self.sessionKey)
+        else { return }
+        let session = self.currentSessionSnapshot()
+        Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
     }
 
     private func handleLifecycleSessionChange(
