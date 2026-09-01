@@ -29,6 +29,7 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 let tempDir: string;
@@ -232,6 +233,58 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(false);
     expect(details.completed).toBe(true);
+  });
+
+  it("waits for an active native turn route before starting compaction", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    const route = getCodexAppServerTurnRouter(fake.client).reserveThread({
+      threadId: "thread-1",
+      onNotification: vi.fn(),
+    });
+    route.armTurn();
+    await route.bindTurn("active-turn");
+
+    const pending = startCompaction(sessionFile);
+    await flushAsyncTasks();
+    expect(
+      fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
+    ).toHaveLength(0);
+
+    route.release();
+    await vi.waitFor(() => {
+      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    });
+    await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+  });
+
+  it("retries a native compaction rejected by an active app-server writer", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32600, message: "thread thread-1 already has an active writer" },
+        "thread/compact/start",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    await expect(
+      maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+        },
+        { nativeCompletionTimeoutMs: 1_000 },
+      ),
+    ).resolves.toMatchObject({ ok: true, compacted: true });
+    expect(
+      fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
+    ).toHaveLength(2);
   });
 
   it("does not compact a thread created with restricted native authority", async () => {

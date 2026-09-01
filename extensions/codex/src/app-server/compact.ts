@@ -52,12 +52,14 @@ import {
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { getExistingCodexAppServerTurnRouter } from "./turn-router.js";
 
 // ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
 // previously suppressed warning can intentionally emit again.
 const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
 const codexNativeCompactionQueue = new KeyedAsyncQueue();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
+const CODEX_NATIVE_COMPACTION_ACTIVE_WRITER_RETRY_MS = 250;
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
@@ -340,6 +342,75 @@ async function runExclusiveCodexNativeCompaction<T>(
   }
 }
 
+async function requestCodexNativeCompactionWithRetry(params: {
+  client: CodexAppServerClient;
+  threadId: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  requestTimeoutMs?: number;
+}): Promise<void> {
+  const deadline = Date.now() + Math.max(1, params.timeoutMs);
+  for (;;) {
+    params.signal?.throwIfAborted();
+    try {
+      if (params.requestTimeoutMs === undefined) {
+        await params.client.request("thread/compact/start", { threadId: params.threadId });
+      } else {
+        await params.client.request(
+          "thread/compact/start",
+          { threadId: params.threadId },
+          {
+            timeoutMs: params.requestTimeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
+          },
+        );
+      }
+      return;
+    } catch (error) {
+      if (!isCodexActiveThreadWriterError(error)) {
+        throw error;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw error;
+      }
+      const delayMs = Math.min(CODEX_NATIVE_COMPACTION_ACTIVE_WRITER_RETRY_MS, remainingMs);
+      await waitForCodexCompactionRetry(delayMs, params.signal);
+    }
+  }
+}
+
+function isCodexActiveThreadWriterError(error: unknown): boolean {
+  return (
+    error instanceof CodexAppServerRpcError &&
+    /already has an active writer/i.test(coerceErrorMessage(error))
+  );
+}
+
+async function waitForCodexCompactionRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("compaction aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+}
+
 /**
  * Starts native Codex compaction for a manually requested bound session, or
  * reports why Codex-owned automatic compaction should handle the trigger.
@@ -550,6 +621,8 @@ async function compactCodexNativeThread(
         let compactionSucceeded = false;
         let compactionRequestDefinitelyRejected = false;
         let tokensAfter: number | undefined;
+        const nativeCompletionTimeoutMs =
+          options.nativeCompletionTimeoutMs ?? resolveCompactionTimeoutMs(params.config);
         const releaseCompactionThread = async (threadId: string) => {
           if (
             await unsubscribeCodexThreadBestEffort(client, {
@@ -568,7 +641,7 @@ async function compactCodexNativeThread(
           client,
           threadId: binding.threadId,
           signal: params.abortSignal,
-          timeoutMs: options.nativeCompletionTimeoutMs ?? resolveCompactionTimeoutMs(params.config),
+          timeoutMs: nativeCompletionTimeoutMs,
           interruptGraceMs:
             options.nativeInterruptGraceMs ?? CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS,
           retireUnconfirmed: async () => {
@@ -700,6 +773,20 @@ async function compactCodexNativeThread(
                   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
                 )
               : undefined;
+            const threadRouter = getExistingCodexAppServerTurnRouter(client);
+            if (threadRouter) {
+              const threadIdle = await threadRouter.waitForThreadIdle({
+                threadId: binding.threadId,
+                timeoutMs: nativeCompletionTimeoutMs,
+                ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+              });
+              if (!threadIdle) {
+                params.abortSignal?.throwIfAborted();
+                throw new Error(
+                  "codex app-server active thread writer did not become idle before native compaction",
+                );
+              }
+            }
             await acquireThreadSubscription(guardedRequestTimeoutMs);
             await clearContextEngineProjectionBeforeNativeCompaction({
               sessionId: params.sessionId,
@@ -709,15 +796,15 @@ async function compactCodexNativeThread(
             });
             try {
               completionWatch.beginRequest();
-              if (guardedRequestTimeoutMs === undefined) {
-                await client.request("thread/compact/start", { threadId: binding.threadId });
-              } else {
-                await client.request(
-                  "thread/compact/start",
-                  { threadId: binding.threadId },
-                  { timeoutMs: guardedRequestTimeoutMs },
-                );
-              }
+              await requestCodexNativeCompactionWithRetry({
+                client,
+                threadId: binding.threadId,
+                timeoutMs: nativeCompletionTimeoutMs,
+                ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+                ...(guardedRequestTimeoutMs !== undefined
+                  ? { requestTimeoutMs: guardedRequestTimeoutMs }
+                  : {}),
+              });
               return { started: true as const, accepted: true as const };
             } catch (error) {
               if (error instanceof CodexAppServerRpcError) {
