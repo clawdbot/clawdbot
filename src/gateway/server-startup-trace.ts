@@ -171,6 +171,10 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     ): Promise<T> {
       const before = performance.now();
       const spanId = `gateway-startup-${++spanSequence}`;
+      const startMemory = process.memoryUsage();
+      log.info(
+        `startup heap diagnostic: start ${name} heapUsedMb=${Math.round(startMemory.heapUsed / 1024 / 1024)} rssMb=${Math.round(startMemory.rss / 1024 / 1024)}`,
+      );
       emitDiagnosticsTimelineEvent(
         {
           type: "span.start",
@@ -216,6 +220,10 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
         throw error;
       } finally {
         const now = performance.now();
+        const endMemory = process.memoryUsage();
+        log.info(
+          `startup heap diagnostic: end ${name} heapUsedMb=${Math.round(endMemory.heapUsed / 1024 / 1024)} rssMb=${Math.round(endMemory.rss / 1024 / 1024)}`,
+        );
         const eventLoopSample = takeEventLoopSample();
         emit(name, now - before, now - started, eventLoopSample);
         emitEventLoopTimelineSample(name, eventLoopSample);

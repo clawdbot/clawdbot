@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { constants, DatabaseSync } from "node:sqlite";
 import { sql, type Generated } from "kysely";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -60,6 +60,46 @@ describe("kysely sync helpers", () => {
       { id: 1, name: "Ada" },
       { id: 2, name: "Grace" },
     ]);
+  });
+
+  it("identifies wide startup reads without logging private SQLite values", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table transcript_events (session_id text, event_json text)");
+    database
+      .prepare("insert into transcript_events values (?, ?)")
+      .run("private-session", "private-message");
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const uptime = vi.spyOn(process, "uptime").mockReturnValue(1);
+    try {
+      const db = getNodeSqliteKysely<{
+        transcript_events: { session_id: string; event_json: string };
+      }>(database);
+
+      expect(
+        executeSqliteQuerySync(
+          database,
+          db
+            .selectFrom("transcript_events")
+            .select("event_json")
+            .where("session_id", "=", "private-session"),
+        ).rows,
+      ).toEqual([{ event_json: "private-message" }]);
+
+      const events = warning.mock.calls.map(([entry]) => JSON.parse(String(entry)));
+      expect(events.map((event) => event.event)).toEqual(["sqlite-read-start", "sqlite-read-end"]);
+      expect(events[1]).toMatchObject({
+        tables: ["transcript_events"],
+        columns: ["event_json"],
+        limited: false,
+        sessionScoped: true,
+        rowCount: 1,
+      });
+      expect(JSON.stringify(events)).not.toContain("private-session");
+      expect(JSON.stringify(events)).not.toContain("private-message");
+    } finally {
+      uptime.mockRestore();
+      warning.mockRestore();
+    }
   });
 
   it("returns identical results while repeated statements move from cold to warm", () => {

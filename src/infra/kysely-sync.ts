@@ -18,6 +18,79 @@ const authorizerActiveSymbol = Symbol("openclaw.kyselySyncAuthorizerActive");
 // Process-wide retention scales with open handles; repeated variable SQL can enter.
 const statementCacheCapacity = 32;
 const statementCacheEntryBytes = 64 * 1024;
+const startupHeapDiagnosticsWindowSeconds = 120;
+const startupHeapDiagnosticTables = [
+  "transcript_events",
+  "trajectory_runtime_events",
+  "session_transcript_active_events",
+  "session_nodes",
+  "session_windows",
+  "memory_index_chunks",
+  "plugin_state_entries",
+  "task_runs",
+  "session_state_events",
+  "channel_ingress_events",
+] as const;
+const startupHeapDiagnosticColumns = [
+  "event_json",
+  "entry_json",
+  "value_json",
+  "detail_json",
+  "payload_json",
+  "embedding",
+] as const;
+
+function describeStartupHeapQuery(sql: string):
+  | {
+      tables: string[];
+      columns: string[];
+      limited: boolean;
+      sessionScoped: boolean;
+      callers: string[];
+    }
+  | undefined {
+  if (process.uptime() > startupHeapDiagnosticsWindowSeconds || !/^select\b/i.test(sql)) {
+    return undefined;
+  }
+  const normalized = sql.toLowerCase();
+  const tables = startupHeapDiagnosticTables.filter((table) => normalized.includes(table));
+  if (tables.length === 0) {
+    return undefined;
+  }
+  const projection = normalized.slice(0, normalized.indexOf(" from "));
+  const columns = startupHeapDiagnosticColumns.filter((column) => projection.includes(column));
+  if (columns.length === 0 && !/(?:^|[\s,])(?:[\w"]+\.)?\*/.test(projection)) {
+    return undefined;
+  }
+  return {
+    tables: [...tables],
+    columns: [...columns],
+    limited: /\blimit\b/.test(normalized),
+    sessionScoped: /"?session_id"?\s*(?:=|in\b)/.test(normalized),
+    callers: (new Error().stack ?? "")
+      .split("\n")
+      .slice(3, 8)
+      .map((frame) => frame.trim()),
+  };
+}
+
+function emitStartupHeapQueryDiagnostic(
+  event: "sqlite-read-start" | "sqlite-read-end",
+  query: NonNullable<ReturnType<typeof describeStartupHeapQuery>>,
+  rowCount?: number,
+): void {
+  const memory = process.memoryUsage();
+  console.warn(
+    JSON.stringify({
+      subsystem: "startup-heap-diagnostic",
+      event,
+      ...query,
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+      ...(rowCount === undefined ? {} : { rowCount }),
+    }),
+  );
+}
 
 type SqliteAuthorizer = Parameters<DatabaseSync["setAuthorizer"]>[0];
 
@@ -240,8 +313,17 @@ function executeCompiledSqliteQuerySync<Row>(
         // Node's all() snapshots the column count before SQLite can reprepare
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
+        const diagnostic = describeStartupHeapQuery(compiledQuery.sql);
+        if (diagnostic) {
+          // Emit before materialization so a fatal V8 OOM still identifies its query owner.
+          emitStartupHeapQueryDiagnostic("sqlite-read-start", diagnostic);
+        }
         try {
-          return { rows: [...iterator] as Row[] };
+          const rows = [...iterator] as Row[];
+          if (diagnostic) {
+            emitStartupHeapQueryDiagnostic("sqlite-read-end", diagnostic, rows.length);
+          }
+          return { rows };
         } catch (error) {
           try {
             iterator.return?.();

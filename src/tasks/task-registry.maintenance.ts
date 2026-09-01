@@ -1012,11 +1012,28 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
   const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
+  const initialMemory = process.memoryUsage();
+  log.info("startup heap diagnostic: task maintenance start", {
+    taskCount: tasks.length,
+    overflowCount: cronHistoryOverflowTaskIds.size,
+    heapUsedMb: Math.round(initialMemory.heapUsed / 1024 / 1024),
+    rssMb: Math.round(initialMemory.rss / 1024 / 1024),
+  });
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
   let processed = 0;
   for (const task of tasks) {
+    if (processed > 0 && processed % 500 === 0) {
+      const memory = process.memoryUsage();
+      log.info("startup heap diagnostic: task maintenance progress", {
+        processed,
+        taskCount: tasks.length,
+        pruned,
+        heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+        rssMb: Math.round(memory.rss / 1024 / 1024),
+      });
+    }
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
     if (!current) {
       continue;
@@ -1116,6 +1133,14 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       log.warn("Failed to sweep expired plugin state entries", { error });
     }
   }
+  const finalMemory = process.memoryUsage();
+  log.info("startup heap diagnostic: task maintenance end", {
+    processed,
+    taskCount: tasks.length,
+    pruned,
+    heapUsedMb: Math.round(finalMemory.heapUsed / 1024 / 1024),
+    rssMb: Math.round(finalMemory.rss / 1024 / 1024),
+  });
   return { reconciled, recovered, cleanupStamped, pruned };
 }
 
