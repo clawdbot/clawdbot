@@ -48,6 +48,7 @@ import {
   getLineSourceInfo,
   readLineTextMessageBody,
   type LineInboundContext,
+  type LineInboundMentionAccess,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
@@ -170,6 +171,7 @@ async function resolveLineEventAdmission(
   resolveBoundAccess: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
+  mentions?: LineInboundMentionAccess;
 } | null> {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
@@ -195,11 +197,15 @@ async function resolveLineEventAdmission(
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
+  // LINE marks mentions only on group text messages, so admission resolves the
+  // mention facts exactly there and records the same ones on the turn context.
+  const resolvesLineMentions = isGroup && event.type === "message";
   const mentionFacts = (() => {
-    if (!isGroup || event.type !== "message") {
+    if (!resolvesLineMentions || event.type !== "message") {
       return {
         canDetectMention: false,
         wasMentioned: false,
+        explicitlyMentionedBot: false,
         hasAnyMention: false,
         implicitMentionKinds: [],
       };
@@ -218,6 +224,7 @@ async function resolveLineEventAdmission(
     return {
       canDetectMention: event.message.type === "text",
       wasMentioned: wasMentionedByNative || wasMentionedByPattern,
+      explicitlyMentionedBot: wasMentionedByNative,
       hasAnyMention: hasAnyLineMention(event.message),
       implicitMentionKinds: implicitMentionKindWhen(
         "quoted_bot",
@@ -247,15 +254,7 @@ async function resolveLineEventAdmission(
       ...(isGroup && groupConfig?.enabled === false
         ? { route: { id: "line:group-config", enabled: false } }
         : {}),
-      mentionFacts:
-        isGroup && event.type === "message"
-          ? {
-              canDetectMention: mentionFacts.canDetectMention,
-              wasMentioned: mentionFacts.wasMentioned,
-              hasAnyMention: mentionFacts.hasAnyMention,
-              implicitMentionKinds: mentionFacts.implicitMentionKinds,
-            }
-          : undefined,
+      mentionFacts: resolvesLineMentions ? mentionFacts : undefined,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
@@ -303,7 +302,14 @@ async function resolveLineEventAdmission(
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
-    return { access, resolveBoundAccess: resolveAccess };
+    // The turn answering this event reads "was the bot addressed" from its own
+    // context. Carry admission's answer there: consumers read the missing fact
+    // as "not addressed", which lets a reply to a mention end silently.
+    const wasMentioned = access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned;
+    const mentions: LineInboundMentionAccess | undefined = resolvesLineMentions
+      ? { ...mentionFacts, wasMentioned, effectiveWasMentioned: wasMentioned, requireMention }
+      : undefined;
+    return { access, resolveBoundAccess: resolveAccess, mentions };
   }
 
   if (access.senderAccess.decision === "allow") {
@@ -488,6 +494,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       commandAuthorized: decision.access.commandAccess.authorized,
       resolveChannelIngress: decision.resolveBoundAccess,
       inboundHistory: historyReservation.inboundHistory,
+      mentions: decision.mentions,
       buildContext: context.buildContext,
     });
 
