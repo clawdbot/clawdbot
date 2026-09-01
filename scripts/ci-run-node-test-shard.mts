@@ -42,8 +42,14 @@ type ShardGroupConfig = {
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
+  timing_key?: string;
 };
-export type ShardGroupPlan = { kind: "group"; name: string; plan: ShardGroupConfig };
+export type ShardGroupPlan = {
+  kind: "group";
+  name: string;
+  plan: ShardGroupConfig;
+  timingKey?: string;
+};
 export type ShardPlan = ShardTargetPlan | ShardGroupPlan;
 type RunShardOptions = {
   concurrency?: number;
@@ -100,11 +106,10 @@ export function resolveShardPlans(env: NodeJS.ProcessEnv = process.env): ShardPl
             shard_name: env.OPENCLAW_VITEST_SHARD_NAME,
           },
         ];
-  return plans.map((plan) => ({
-    kind: "group",
-    name: plan.shard_name ?? plan.configs?.[0] ?? "group",
-    plan,
-  }));
+  return plans.map((plan) => {
+    const name = plan.shard_name ?? plan.configs?.[0] ?? "group";
+    return { kind: "group", name, plan, timingKey: plan.timing_key ?? name };
+  });
 }
 
 export function buildChildEnv(
@@ -280,7 +285,7 @@ export function resolveShardChildCommand(
   };
 }
 
-function runChild(args: string[], childEnv: NodeJS.ProcessEnv, label: string) {
+function runChild(args: string[], childEnv: NodeJS.ProcessEnv, label: string, timingKey: string) {
   return new Promise<number>((resolve) => {
     // Use Node directly. `pnpm exec node` may reconcile the workspace before
     // tests, which destroys the sticky dependency fast path.
@@ -295,12 +300,12 @@ function runChild(args: string[], childEnv: NodeJS.ProcessEnv, label: string) {
     // and an oversized newline-free tail is force-flushed so the pending
     // partial line stays bounded too.
     const flushers = [child.stdout, child.stderr].map((stream) => relayChildStream(stream, label));
-    process.stdout.write(`[shard:${label}] begin\n`);
+    process.stdout.write(`[shard:${timingKey}] begin\n`);
     child.on("close", (code) => {
       for (const flush of flushers) {
         flush();
       }
-      process.stdout.write(`[shard:${label}] end (exit ${code ?? 1})\n`);
+      process.stdout.write(`[shard:${timingKey}] end (exit ${code ?? 1})\n`);
       resolve(code ?? 1);
     });
     child.on("error", (error) => {
@@ -363,7 +368,12 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         serial: concurrency === 1,
         cacheSlot,
       });
-      const code = await runner(args, childEnv, entry.name);
+      const code = await runner(
+        args,
+        childEnv,
+        entry.name,
+        entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name,
+      );
       if (code !== 0) {
         // Ordinary CI stops scheduling after failure; cache warmers explicitly
         // continue so later groups still seed their independent transforms.

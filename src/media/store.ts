@@ -474,7 +474,7 @@ async function writeMediaStreamToFile(params: {
   maxBytes: number;
 }): Promise<{ sniffBuffer: Buffer; size: number }> {
   const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
-  const sniffChunks: Buffer[] = [];
+  const sniffBuffer = Buffer.allocUnsafe(16384);
   let sniffLen = 0;
   let total = 0;
   try {
@@ -498,15 +498,14 @@ async function writeMediaStreamToFile(params: {
       if (total > params.maxBytes) {
         throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
       }
-      if (sniffLen < 16384) {
-        const remaining = 16384 - sniffLen;
-        sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
-        sniffLen += Math.min(buffer.byteLength, remaining);
+      if (sniffLen < sniffBuffer.length) {
+        // The next pull may reuse the chunk; retain only the prefix we own.
+        sniffLen += buffer.copy(sniffBuffer, sniffLen);
       }
       await handle.writeFile(buffer);
     }
     return {
-      sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
+      sniffBuffer: sniffBuffer.subarray(0, sniffLen),
       size: total,
     };
   } finally {

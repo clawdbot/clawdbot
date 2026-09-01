@@ -124,6 +124,7 @@ function buildPluginRecordFromInstalledIndex(
     ...(manifest?.description ? { description: manifest.description } : {}),
     format,
     ...(bundleFormat ? { bundleFormat } : {}),
+    bundleCapabilities: manifest?.bundleCapabilities,
     ...(manifest?.kind ? { kind: manifest.kind } : {}),
     source: plugin.source ?? plugin.manifestPath,
     rootDir: plugin.rootDir,

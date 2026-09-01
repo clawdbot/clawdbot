@@ -2259,15 +2259,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it.each(["src/cli/help-exit.process.test.ts", "src/cli/update-dry-run-state.process.test.ts"])(
-    "routes CLI process test %s through its isolated project",
-    (file) => {
-      expectSingleVitestRunPlan(buildVitestRunPlans([file]), {
-        config: "test/vitest/vitest.cli-process.config.ts",
-        includePatterns: [file],
-      });
-    },
-  );
+  it.each([
+    "src/cli/help-exit.process.test.ts",
+    "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/one-shot-exit.test.ts",
+    "src/cli/program/subcli-descriptors.test.ts",
+  ])("routes CLI process test %s through its isolated project", (file) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([file]), {
+      config: "test/vitest/vitest.cli-process.config.ts",
+      includePatterns: [file],
+    });
+  });
 
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);

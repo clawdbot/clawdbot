@@ -10,12 +10,12 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mattermostPlugin } from "../../extensions/mattermost/channel-plugin-api.js";
-import { setMattermostRuntime } from "../../extensions/mattermost/runtime-api.js";
+import mattermostEntry from "../../extensions/mattermost/index.js";
 import * as bootstrapRegistry from "../../src/channels/plugins/bootstrap-registry.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { runMessageAction } from "../../src/infra/outbound/message-action-runner.js";
 
+const mattermostPlugin = mattermostEntry.loadChannelPlugin();
 const CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const USER_ID = "bbbbbbbbbbbbbbbbbbbbbbbbbb";
 const BOT_ID = "cccccccccccccccccccccccccc";
@@ -102,8 +102,7 @@ function createMattermostHttpHandler(params: {
 }
 
 function registerMattermostRuntime(params: { sequence?: string[]; activityError?: Error }) {
-  // Reuse the real plugin's metadata instead of loading a second source graph
-  // through Jiti when attachmentText triggers bootstrap alias discovery.
+  // Bootstrap must use the same entry-owned instance as delivery and runtime setup.
   vi.spyOn(bootstrapRegistry, "getBootstrapChannelPlugin").mockImplementation((id) =>
     id === mattermostPlugin.id ? mattermostPlugin : undefined,
   );
@@ -114,7 +113,7 @@ function registerMattermostRuntime(params: { sequence?: string[]; activityError?
       throw params.activityError;
     }
   });
-  setMattermostRuntime(runtime);
+  mattermostEntry.setChannelRuntime?.(runtime);
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "mattermost", source: "test", plugin: mattermostPlugin }]),
   );

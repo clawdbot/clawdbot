@@ -80,8 +80,8 @@ function readCompactLog(
     }
     const started = starts.get(key);
     if (exitCode === "0" && started !== undefined) {
-      // Keep contention from PLAN_CONCURRENCY=2: the packer predicts the same
-      // two-up workload; isolated timings would invalidate its admission caps.
+      // Preserve the workload as executed. Packed plans may be serial or
+      // concurrent, and admission must use the wrapper span it actually ran.
       recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
     }
     starts.delete(key);

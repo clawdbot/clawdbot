@@ -32,6 +32,7 @@ import {
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
+import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
@@ -108,6 +109,7 @@ const RELEASE_CANDIDATE_STATE_KEYS = [
   "targetSha",
   "toolingSha",
   "workflowRef",
+  "publishWorkflowRef",
   "provider",
   "mode",
   "releaseProfile",
@@ -145,6 +147,7 @@ Options:
   --tag <tag>                         Planned release tag. The tag must not exist yet.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
+  --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
@@ -207,6 +210,7 @@ export function parseArgs(argv: string[]) {
     tag: "",
     targetSha: "",
     workflowRef: "",
+    publishWorkflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
     pluginSdkApiAcknowledgement: "",
@@ -224,6 +228,7 @@ export function parseArgs(argv: string[]) {
           ["--tag", "tag"],
           ["--target-sha", "targetSha"],
           ["--workflow-ref", "workflowRef"],
+          ["--publish-workflow-ref", "publishWorkflowRef"],
           ["--repo", "repo"],
           ["--full-release-run", "fullReleaseRunId"],
           ["--npm-preflight-run", "npmPreflightRunId"],
@@ -285,6 +290,15 @@ export function parseArgs(argv: string[]) {
   }
   if (!options.tag.includes("-alpha.") && options.workflowRef !== "main") {
     throw new Error("--workflow-ref must be main for regular beta and stable release candidates");
+  }
+  if (
+    options.publishWorkflowRef &&
+    (options.tag.includes("-alpha.") ||
+      !/^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(options.publishWorkflowRef))
+  ) {
+    throw new Error(
+      "--publish-workflow-ref must name a protected release-publish tag for a regular release",
+    );
   }
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
@@ -451,6 +465,7 @@ export function buildReleaseCandidateState(
     targetSha,
     toolingSha,
     workflowRef: options.workflowRef,
+    publishWorkflowRef: options.publishWorkflowRef,
     provider: options.provider,
     mode: options.mode,
     releaseProfile: options.releaseProfile,
@@ -1461,7 +1476,9 @@ function pluginPlanArgs(options: ReturnType<typeof parseArgs>) {
 
 function collectPluginPlan(script: string, options: ReturnType<typeof parseArgs>): unknown {
   return JSON.parse(
-    run("node", ["--import", "tsx", script, ...pluginPlanArgs(options)], { capture: true }),
+    run("node", ["--import", "tsx", join(TOOLING_ROOT, script), ...pluginPlanArgs(options)], {
+      capture: true,
+    }),
   );
 }
 
@@ -1505,7 +1522,8 @@ export function buildPublishCommand(
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
 ) {
   const workflowRef =
-    npmPreflightSource?.workflowRef ??
+    options.publishWorkflowRef ||
+    npmPreflightSource?.workflowRef ||
     (options.tag.includes("-alpha.") ? options.workflowRef : "main");
   if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
     throw new Error(
@@ -1872,6 +1890,15 @@ async function main() {
     toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
     workflowRef: options.workflowRef,
   });
+  // Publication may use repaired tooling while the prepared tarball retains its original producer.
+  const publishWorkflowIdentity = options.publishWorkflowRef
+    ? verifyReleaseToolingIdentity({
+        repository: options.repo,
+        workflowRef: options.publishWorkflowRef,
+        workflowFullRef: `refs/tags/${options.publishWorkflowRef}`,
+        workflowSha: toolingSha,
+      })
+    : undefined;
   options.parallelsRegistryPackageArtifacts = options.parallelsRegistryPackageArtifactDirs.map(
     (artifactDir) =>
       validateParallelsRegistryPackageArtifact(artifactDir, {
@@ -2148,6 +2175,7 @@ async function main() {
     tag: options.tag,
     targetSha,
     workflowRef: options.workflowRef,
+    publishWorkflowIdentity,
     npmDistTag: options.npmDistTag,
     fullReleaseValidationRunId: options.fullReleaseRunId,
     fullReleaseValidationRunAttempt: fullRun.runAttempt,

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
@@ -9,6 +10,79 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("reconciles distinct commentary items once across reconnect", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const runId = "commentary-reconciliation-run";
+        const items = [
+          { itemId: "commentary-item-one", text: "Inspecting the workspace." },
+          { itemId: "commentary-item-two", text: "Checking the result." },
+        ];
+        const events = items.map(({ itemId, text }, index) => ({
+          data: { kind: "preamble", itemId, phase: "update", progressText: text },
+          runId,
+          seq: index + 1,
+          sessionKey: "agent:main:main",
+          stream: "item",
+          ts: 2_000 + index,
+        }));
+        const historyMessages = items.map(({ itemId, text }, index) => ({
+          role: "assistant",
+          content: [{ type: "text", text }],
+          timestamp: 1_000 + index,
+          __openclaw: { id: `commentary-message-${index}`, runId, seq: index + 1 },
+          openclawStreamFallback: { itemId, replacementText: text, source: "segment" },
+        }));
+        const sessionInfo = {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+        };
+        const gateway = await installMockGateway(page, {
+          historyMessages: [],
+          inFlightRun: { runId, startedAt: 1_000, text: "" },
+          sessionInfo,
+        });
+        const transcript = page.locator(".chat-thread-inner");
+        const itemOccurrences = async () => {
+          const bubbles = await transcript.locator(".chat-bubble").allTextContents();
+          return items.map(({ text }) => bubbles.filter((bubble) => bubble.trim() === text).length);
+        };
+
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
+        for (const event of events) {
+          await gateway.emitGatewayEvent("agent", event);
+        }
+        await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+        const startupCount = (await gateway.getRequests("chat.startup")).length;
+        await gateway.setMethodResponse("chat.startup", {
+          messages: historyMessages,
+          inFlightRun: { runId, startedAt: 1_000, text: "", events },
+          sessionInfo,
+          thinkingLevel: null,
+        });
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await gateway.waitForRequest("chat.startup", { after: startupCount });
+        await expect.poll(itemOccurrences).toEqual([1, 1]);
+
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
+          });
+        }
+      },
+    );
+  });
+
   it.each([
     { persistence: "between deltas", terminal: "final" },
     { persistence: "before streaming", terminal: "error" },

@@ -1347,7 +1347,11 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
 }
 
-function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[] }): {
+function runCheckShardFixture(options: {
+  frozenTarget: boolean;
+  scripts: string[];
+  task?: "guards" | "test-types";
+}): {
   calls: string[];
   output: string;
   status: number | null;
@@ -1356,6 +1360,10 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
   const fakeBin = path.join(root, "bin");
   const callsPath = path.join(root, "pnpm-calls.txt");
   mkdirSync(fakeBin);
+  if (options.task === "test-types") {
+    mkdirSync(path.join(root, "scripts"));
+    writeFileSync(path.join(root, "scripts/run-tsgo-core-test-shards.mts"), "// --stripe\n");
+  }
   writeFileSync(
     path.join(root, "package.json"),
     `${JSON.stringify({
@@ -1365,6 +1373,7 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
+    'if [ "$*" = "run --silent" ]; then exit 1; fi',
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
   ]);
   const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
@@ -1378,10 +1387,11 @@ function runGuardCheckFixture(options: { frozenTarget: boolean; scripts: string[
       FROZEN_TARGET: options.frozenTarget ? "true" : "false",
       FORMAT_CHECK: "false",
       HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+      HOSTED_RUNNER_STRIPES: "true",
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PNPM_CALLS: callsPath,
       PR_BASE_SHA: "",
-      TASK: "guards",
+      TASK: options.task ?? "guards",
     },
   });
   return {
@@ -3559,9 +3569,6 @@ NODE
     expect(source.match(/check_name: "android-build-play"/gu)).toHaveLength(1);
     expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(androidJob.name).toBe("${{ matrix.check_name || 'android' }}");
-    expect(androidJob["runs-on"]).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\",\"CONTRIBUTOR\"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
-    );
     expect(runStep.env.CI_RUNNER_BACKEND).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1",
     );
@@ -4001,6 +4008,18 @@ NODE
         }),
         `${jobName}: returning-contributor fork`,
       ).toBe(expectedHybridForkRunners[jobName as keyof typeof expectedHostedRunners]);
+      for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+        expect(
+          evaluateWorkflowExpression(expression, {
+            ...canonicalPullRequest,
+            authorAssociation: "CONTRIBUTOR",
+            headRepository: "contributor/openclaw",
+            runnerBackend,
+            runAttempt: 2,
+          }),
+          `${jobName}: returning-contributor fork retry (${runnerBackend || "unset"})`,
+        ).toBe(hostedRunner);
+      }
     }
 
     const widenedHybridMatrixRows = [
@@ -8112,7 +8131,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("runs temp path guardrails in the hosted guard shard", () => {
     const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
-    const current = runGuardCheckFixture({
+    const current = runCheckShardFixture({
       frozenTarget: false,
       scripts: [...requiredScripts, "check:temp-path-guardrails"],
     });
@@ -8122,7 +8141,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       current.calls.indexOf("dup:check"),
     );
 
-    const frozenMissing = runGuardCheckFixture({
+    const frozenMissing = runCheckShardFixture({
       frozenTarget: true,
       scripts: requiredScripts,
     });
@@ -8133,7 +8152,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "[skip] frozen target predates the temp path guardrails",
     );
 
-    const currentMissing = runGuardCheckFixture({
+    const currentMissing = runCheckShardFixture({
       frozenTarget: false,
       scripts: requiredScripts,
     });
@@ -8153,6 +8172,46 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       preflightGuards.indexOf("pnpm dup:check"),
     );
   });
+
+  it.each([
+    {
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      frozenTarget: false,
+      status: 0,
+      calls: ["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"],
+    },
+    {
+      scripts: ["tsgo:scripts"],
+      frozenTarget: false,
+      status: 1,
+      calls: ["tsgo:extensions:test", "tsgo:scripts"],
+    },
+    {
+      scripts: [],
+      frozenTarget: false,
+      status: 1,
+      calls: ["tsgo:extensions:test"],
+    },
+    {
+      scripts: [],
+      frozenTarget: true,
+      status: 0,
+      calls: ["tsgo:extensions:test"],
+    },
+    {
+      scripts: ["tsgo:test:root"],
+      frozenTarget: true,
+      status: 0,
+      calls: ["tsgo:extensions:test", "tsgo:test:root"],
+    },
+  ])(
+    "runs declared typechecks for scripts=$scripts frozen=$frozenTarget",
+    ({ scripts, frozenTarget, status, calls }) => {
+      const result = runCheckShardFixture({ scripts, frozenTarget, task: "test-types" });
+      expect(result.status, result.output).toBe(status);
+      expect(result.calls).toEqual(calls);
+    },
+  );
 
   it("rejects ambiguous zero-before main pushes and preserves concrete bases", () => {
     const zeroSha = "0".repeat(40);
@@ -10013,6 +10072,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Smoke test built CLI with Bun",
     );
 
+    expect(
+      buildArtifactSteps.some(
+        (step: WorkflowStep) =>
+          typeof step.uses === "string" && step.uses.endsWith("/ensure-base-commit"),
+      ),
+    ).toBe(false);
     expect(setupStep.with["install-bun"]).toBe("true");
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
@@ -10184,6 +10249,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
     );
     expect(verifierStep.run).toContain(
+      'OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}"',
+    );
+    expect(verifierStep.run).toContain(
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
     );
     expect(verifierStep.run).toContain(
@@ -10199,7 +10267,38 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.run).toContain(".artifacts/startup-memory/summary.md");
     expect(verifierStep.env.RUN_CHANNELS).toBe("${{ needs.preflight.outputs.run_checks }}");
     expect(verifierStep.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
-    expect(verifierStep.run).toContain(
+    const pluginSingleton = verifierStep.run.indexOf(
+      'run_verifier "plugin-singleton" pnpm test:build:singleton',
+    );
+    const pluginWriterBarrier = verifierStep.run.indexOf("\nwait_checks\n", pluginSingleton);
+    const parallelGatewayWatch = verifierStep.run.indexOf(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then',
+    );
+    const gatewayWriterBarrier = verifierStep.run.indexOf(
+      "\n  wait_checks\n",
+      parallelGatewayWatch,
+    );
+    const firstReader = verifierStep.run.indexOf(
+      'run_verifier "doctor-plugin-index" run_doctor_plugin_index',
+    );
+    const parallelDiscord = verifierStep.run.indexOf(
+      'if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then',
+    );
+    const readerWaveBarrier = verifierStep.run.indexOf("\nwait_checks\n", parallelDiscord);
+    const hostedDiscord = verifierStep.run.indexOf(
+      'if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then',
+    );
+    expect(pluginWriterBarrier).toBeGreaterThan(pluginSingleton);
+    expect(parallelGatewayWatch).toBeGreaterThan(pluginWriterBarrier);
+    expect(gatewayWriterBarrier).toBeGreaterThan(parallelGatewayWatch);
+    expect(firstReader).toBeGreaterThan(gatewayWriterBarrier);
+    expect(parallelDiscord).toBeGreaterThan(firstReader);
+    expect(readerWaveBarrier).toBeGreaterThan(parallelDiscord);
+    expect(hostedDiscord).toBeGreaterThan(readerWaveBarrier);
+    expect(verifierStep.run.slice(parallelDiscord, readerWaveBarrier)).toContain(
+      'start_check "discord-component-attachments" run_discord_component_attachments',
+    );
+    expect(verifierStep.run.slice(hostedDiscord)).toContain(
       'start_check "discord-component-attachments" run_discord_component_attachments',
     );
     expect(verifierStep.run).toContain('["discord-component-attachments"]="skipped"');
@@ -10582,15 +10681,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
     const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
-    const discordAttachments = run.indexOf('start_check "discord-component-attachments"');
-    const discordAttachmentsWait = run.indexOf("\n  wait_checks\n", discordAttachments);
+    const parallelDiscord = run.indexOf(
+      'if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then',
+    );
+    const hostedDiscord = run.indexOf(
+      'if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then',
+    );
+    const hostedDiscordWait = run.indexOf("\n  wait_checks\n", hostedDiscord);
     const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
     expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
     expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
     expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
-    expect(discordAttachments).toBeGreaterThan(hostedGatewayWait);
-    expect(discordAttachmentsWait).toBeGreaterThan(discordAttachments);
-    expect(tuiPty).toBeGreaterThan(discordAttachmentsWait);
+    expect(parallelDiscord).toBeLessThan(firstWait);
+    expect(hostedDiscord).toBeGreaterThan(hostedGatewayWait);
+    expect(hostedDiscordWait).toBeGreaterThan(hostedDiscord);
+    expect(tuiPty).toBeGreaterThan(hostedDiscordWait);
     expect(tuiPtyWait).toBeGreaterThan(tuiPty);
     expect(run.slice(tuiPty, tuiPtyWait)).toContain("src/tui/tui-pty-local.e2e.test.ts");
     expect(run.slice(tuiPty, tuiPtyWait)).toContain("--testNamePattern");
@@ -10598,9 +10703,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    // Startup memory is isolated before the three artifact waves; hosted
-    // runners also serialize the remaining verifiers inside run_verifier.
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(6);
+    // Startup memory, artifact writers, and TUI retain explicit barriers;
+    // hosted runners also serialize the remaining verifiers inside run_verifier.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(8);
   });
 
   it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {

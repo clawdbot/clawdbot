@@ -12,12 +12,12 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
-  isAssistantForModelRef,
   normalizeAssistantUsageForContext,
   resolveActiveErrorContext,
   resolveLatestCallUsage,
@@ -143,18 +143,10 @@ export async function normalizeEmbeddedRunAttempt(input: {
     currentAttemptCompletedAssistant,
   } = attempt;
   const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
-  const sessionAssistantForCandidate =
-    !currentAttemptAssistant &&
-    !isAssistantForModelRef(sessionLastAssistant, {
-      provider: runtime.effectiveModel.provider,
-      model: runtime.effectiveModel.id,
-    })
-      ? undefined
-      : sessionLastAssistant;
-  const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
+  const attemptAssistant = resolveCurrentAttemptAssistant(attempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
-    assistant: currentAttemptAssistant,
+    assistant: attemptAssistant,
     abortSignal: params.abortSignal,
   });
   const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
@@ -257,8 +249,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
     replayState.replayInvalid = true;
   }
   replayState = observeReplayMetadata(replayState, attempt.replayMetadata);
-  const formattedAssistantErrorText = sessionAssistantForCandidate
-    ? formatAssistantErrorText(sessionAssistantForCandidate, {
+  const formattedAssistantErrorText = attemptAssistant
+    ? formatAssistantErrorText(attemptAssistant, {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
         agentId: params.agentId,
@@ -271,8 +263,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
       })
     : undefined;
   const assistantErrorText =
-    sessionAssistantForCandidate?.stopReason === "error"
-      ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
+    attemptAssistant?.stopReason === "error"
+      ? attemptAssistant.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
   if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";

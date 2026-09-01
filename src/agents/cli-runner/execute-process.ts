@@ -81,6 +81,7 @@ export async function executeCliProcess(params: {
   cliSessionIdToUse?: string;
   resolvedSessionId?: string;
   executionCommand: string;
+  executionArgv0?: string;
   executionLeadingArgv: readonly string[];
   executionArgs: string[];
   env: Record<string, string>;
@@ -269,6 +270,7 @@ export async function executeCliProcess(params: {
         replaceExistingScope: Boolean(params.useResume && scopeKey),
         mode: "child",
         argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+        argv0: params.executionArgv0,
         timeoutMs: runParams.timeoutMs,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         cwd: context.cwd ?? context.workspaceDir,
