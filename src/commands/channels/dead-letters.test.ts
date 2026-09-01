@@ -4,10 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   channelsDeadLettersListCommand,
   channelsDeadLettersResubmitCommand,
@@ -36,7 +34,6 @@ function createRuntime() {
 
 describe("channel dead-letter commands", () => {
   afterEach(() => {
-    resetPluginRuntimeStateForTest();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -99,130 +96,6 @@ describe("channel dead-letter commands", () => {
       await expect(
         channelsDeadLettersResubmitCommand("event-1", { channel: "line" }, runtime),
       ).rejects.toThrow("is completed and cannot be resubmitted");
-    });
-  });
-
-  it("reads the queue of the plugin that owns the channel, not the channel id", async () => {
-    await withTempState(async () => {
-      // An installed plugin whose package id is not the channel it serves: the runtime
-      // stores its rows under the plugin id, so an operator naming the channel must
-      // still reach them.
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "@vendor/external-chat-plugin",
-            plugin: { id: "external-chat", meta: { aliases: [] } },
-            source: "test",
-          },
-        ]),
-      );
-      const queue = createChannelIngressQueue<{ text: string }>({
-        channelId: "@vendor/external-chat-plugin",
-        accountId: "default",
-      });
-      await queue.enqueue("event-1", { text: "recover me" });
-      const claim = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
-      const runtime = createRuntime();
-
-      await channelsDeadLettersListCommand({ channel: "external-chat", json: true }, runtime);
-
-      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-        channelId: string;
-        deadLetters: Array<{ id: string }>;
-      };
-      // The operator asked about the channel, so the report still names the channel.
-      expect(output.channelId).toBe("external-chat");
-      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
-
-      await channelsDeadLettersResubmitCommand("event-1", { channel: "external-chat" }, runtime);
-      expect(await queue.claimNext({ ownerId: "replay-worker" })).toMatchObject({
-        id: "event-1",
-      });
-    });
-  });
-
-  it("applies the plugin's stored account key when the operator types an alias", async () => {
-    await withTempState(async () => {
-      // Owner resolution is alias-aware; if the account half were not, an alias would
-      // address half of one key and half of another.
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "@vendor/external-chat-plugin",
-            plugin: {
-              id: "external-chat",
-              meta: { aliases: ["ext"] },
-              config: { resolveDurableAccountKey: (id: string) => `stored-${id}` },
-            },
-            source: "test",
-          },
-        ]),
-      );
-      const queue = createChannelIngressQueue<{ text: string }>({
-        channelId: "@vendor/external-chat-plugin",
-        accountId: "stored-default",
-      });
-      await queue.enqueue("event-1", { text: "recover me" });
-      const claim = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
-      const runtime = createRuntime();
-
-      await channelsDeadLettersListCommand({ channel: "ext", json: true }, runtime);
-
-      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-        deadLetters: Array<{ id: string }>;
-      };
-      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
-    });
-  });
-
-  it("normalizes the account id the way the removal command does", async () => {
-    await withTempState(async () => {
-      // Both commands feed the same seam. If this one only trimmed, `--account Work`
-      // would read the queue that `channels remove --delete` never purges.
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "@vendor/external-chat-plugin",
-            plugin: {
-              id: "external-chat",
-              meta: { aliases: [] },
-              config: { resolveDurableAccountKey: (id: string) => `stored-${id}` },
-            },
-            source: "test",
-          },
-        ]),
-      );
-      const queue = createChannelIngressQueue<{ text: string }>({
-        channelId: "@vendor/external-chat-plugin",
-        accountId: "stored-work",
-      });
-      await queue.enqueue("event-1", { text: "recover me" });
-      const claim = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
-      const runtime = createRuntime();
-
-      await channelsDeadLettersListCommand(
-        { channel: "external-chat", account: "Work", json: true },
-        runtime,
-      );
-
-      const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-        accountId: string;
-        deadLetters: Array<{ id: string }>;
-      };
-      expect(output.accountId).toBe("work");
-      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
     });
   });
 });

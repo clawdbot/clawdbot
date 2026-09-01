@@ -11,6 +11,7 @@ import {
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { findRegisteredChannelOwner } from "../../channels/registry.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -23,7 +24,6 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { resolveChannelIngressQueueKey } from "./ingress-queue-owner.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -48,37 +48,65 @@ function listAccountIds(
 }
 
 type IngressDiscardOutcome =
-  | { ok: true; purge: ChannelIngressQueueAccountPurge }
-  | { ok: false; message: string };
+  | { kind: "discarded"; purge: ChannelIngressQueueAccountPurge }
+  | { kind: "kept"; reason: string }
+  | { kind: "failed"; message: string };
+
+/**
+ * Names the queue this account's rows live in, or reports that the host cannot prove
+ * the whole queue is this account's to discard.
+ *
+ * The runtime opens every plugin ingress queue under the PLUGIN's id, which is not the
+ * channel id whenever an installed plugin's package id is not the channel it serves
+ * (`openChannelIngressQueue` forces `channelId: pluginId`). One plugin may also serve
+ * several channels, and the stored rows record no channel of their own - so for those
+ * the queue is shared, and one channel's removal would take its siblings' rows with it.
+ * Decline there: keeping rows is today's behaviour, discarding a sibling's unanswered
+ * inbound events is not recoverable.
+ */
+function resolveDiscardableIngressQueue(params: {
+  channelId: string;
+  catalogPluginId?: string | undefined;
+}): { channelId: string } | { sharedWithPluginId: string } {
+  const owner = findRegisteredChannelOwner(params.channelId);
+  if (owner && owner.channelCount > 1) {
+    return { sharedWithPluginId: owner.pluginId };
+  }
+  return {
+    channelId:
+      owner?.pluginId ?? normalizeOptionalString(params.catalogPluginId) ?? params.channelId,
+  };
+}
 
 /**
  * Discards a removed account's ingress rows without letting that failure rewrite the
- * outcome of the removal.
- *
- * The config write has already landed by the time this runs, so the account is gone
- * whatever happens here. Letting the purge throw would surface a completed deletion as
- * a failed command - the state store can refuse a write for reasons that have nothing
- * to do with this account, such as another process owning it. Report the shortfall in
- * the same line that reports the deletion instead, the way the pre-removal runtime stop
- * already does.
+ * outcome of the removal: the config write has already landed, so the account is gone
+ * whatever happens here, and a state store that refuses a write for reasons unrelated
+ * to this account would otherwise surface a completed deletion as a failed command.
+ * Report the shortfall in the deletion's own line, as the pre-removal runtime stop does.
  */
-function discardRemovedAccountIngressRows(
-  // Derived from the callee rather than restated: the two were identical by hand, and
-  // nothing would have caught them drifting apart.
-  params: Parameters<typeof resolveChannelIngressQueueKey>[0],
-): IngressDiscardOutcome {
+function discardRemovedAccountIngressRows(params: {
+  channelId: string;
+  accountId: string;
+  catalogPluginId?: string | undefined;
+}): IngressDiscardOutcome {
   try {
-    // Resolving inside the try is the point. Half the key comes from a plugin-declared
-    // callback, and evaluating that as an argument left it OUTSIDE this guard: a plugin
-    // whose resolver threw escaped the command after the config write had landed, which
-    // is the one outcome this function exists to prevent. The resolved key still reaches
-    // the purge whole, never split back into fields.
+    const queue = resolveDiscardableIngressQueue(params);
+    if ("sharedWithPluginId" in queue) {
+      return {
+        kind: "kept",
+        reason: `plugin "${queue.sharedWithPluginId}" serves more than one channel and its stored events do not record which`,
+      };
+    }
     return {
-      ok: true,
-      purge: purgeChannelIngressQueueAccount(resolveChannelIngressQueueKey(params)),
+      kind: "discarded",
+      purge: purgeChannelIngressQueueAccount({
+        channelId: queue.channelId,
+        accountId: params.accountId,
+      }),
     };
   } catch (error) {
-    return { ok: false, message: formatErrorMessage(error) };
+    return { kind: "failed", message: formatErrorMessage(error) };
   }
 }
 
@@ -275,17 +303,17 @@ export async function channelsRemoveCommand(
         channelId: plugin.id,
         accountId: preparedRemoval.accountKey,
         catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
-        plugin,
       })
     : undefined;
   const summary = [
     deleteConfig
       ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
       : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    ...(discard?.ok && discard.purge.discarded > 0
+    ...(discard?.kind === "discarded" && discard.purge.discarded > 0
       ? [formatDiscardedIngressEvents(discard.purge)]
       : []),
-    ...(discard?.ok === false
+    ...(discard?.kind === "kept" ? [`Kept its stored ingress events: ${discard.reason}.`] : []),
+    ...(discard?.kind === "failed"
       ? [`Its stored ingress events could not be discarded: ${discard.message}`]
       : []),
   ].join(" ");

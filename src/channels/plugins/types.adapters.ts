@@ -89,34 +89,6 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     enabled: boolean;
   }) => OpenClawConfig;
   deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
-  /**
-   * The account id this channel's durable per-account state is stored under, when that
-   * is not the configured id.
-   *
-   * Only a plugin that transforms the id before opening its own store needs this:
-   * WhatsApp opens its ingress queue with a hash of the account id, so a host that
-   * addresses those rows by the configured id selects nothing. The host cannot derive
-   * the transform, and the plugin cannot be asked at removal time because the removal
-   * runs after its runtime is stopped — so the plugin declares it.
-   *
-   * The host passes the NORMALIZED account id (`normalizeAccountId`), which is what
-   * `channels add` writes - it normalizes before applying the config regardless of what
-   * a plugin's `setup.resolveAccountId` returned - and it is the same key the config
-   * delete uses. So on a non-canonical key like `Work` the purge and the config delete
-   * miss together rather than one succeeding without the other: that account was
-   * already un-removable before this seam existed, and nothing is orphaned by the pair
-   * agreeing.
-   *
-   * The direction that does lose data is narrower: a plugin whose default-account
-   * resolver returns a normalized preference while its account listing returns raw
-   * keys can open its queue under the normalized id for an account whose config key is
-   * not, and a removal naming the raw key then purges live rows while deleting no
-   * config entry. WhatsApp is in that shape, reachable only through the library entry
-   * that omits an account id. Aligning it is a change to the plugin's account identity
-   * with a migration behind it, not something this seam can paper over - the seam's
-   * contract is "transform the id the host gives you".
-   */
-  resolveDurableAccountKey?: (accountId: string) => string;
   isEnabled?: ChannelAdapterCallback<(account: ResolvedAccount, cfg: OpenClawConfig) => boolean>;
   disabledReason?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => string

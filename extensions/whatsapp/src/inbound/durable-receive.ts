@@ -8,7 +8,6 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getWhatsAppRuntime } from "../runtime.js";
-import { resolveWhatsAppDurableAccountKey } from "./durable-account-key.js";
 import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
@@ -46,6 +45,10 @@ type WhatsAppIngressFacts = {
   laneKey: string;
 };
 
+function hashNamespacePart(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
 function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
@@ -70,7 +73,7 @@ export type WhatsAppDurableInboundQueue = ChannelIngressQueue<WhatsAppDurableInb
 /** Account-scoped queue shared with the pre-drain WhatsApp receive journal. */
 export function createWhatsAppDurableInboundQueue(accountId: string): WhatsAppDurableInboundQueue {
   return getWhatsAppRuntime().state.openChannelIngressQueue<WhatsAppDurableInboundPayload>({
-    accountId: resolveWhatsAppDurableAccountKey(accountId),
+    accountId: hashNamespacePart(accountId),
     stateDir: getWhatsAppRuntime().state.resolveStateDir(),
   });
 }

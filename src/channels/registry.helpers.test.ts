@@ -13,7 +13,7 @@ import { listChatChannels } from "./chat-meta.js";
 import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
 import {
   formatChannelSelectionLine,
-  getRegisteredChannelOwnerPluginId,
+  findRegisteredChannelOwner,
   normalizeAnyChannelId,
 } from "./registry.js";
 
@@ -128,11 +128,43 @@ describe("channel registry helpers", () => {
       ]),
     );
 
-    expect(getRegisteredChannelOwnerPluginId("openclaw-weixin")).toBe(
-      "@tencent-weixin/openclaw-weixin",
-    );
+    expect(findRegisteredChannelOwner("openclaw-weixin")).toEqual({
+      pluginId: "@tencent-weixin/openclaw-weixin",
+      channelCount: 1,
+    });
     // Operators type what the docs call the channel, so an alias has to resolve too.
-    expect(getRegisteredChannelOwnerPluginId("wechat")).toBe("@tencent-weixin/openclaw-weixin");
-    expect(getRegisteredChannelOwnerPluginId("not-registered")).toBeNull();
+    expect(findRegisteredChannelOwner("wechat")).toEqual({
+      pluginId: "@tencent-weixin/openclaw-weixin",
+      channelCount: 1,
+    });
+    expect(findRegisteredChannelOwner("not-registered")).toBeNull();
+  });
+
+  it("counts every channel a plugin registers, so a caller can tell a shared store", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/two-channel-plugin",
+          plugin: { id: "alpha-chat", meta: { aliases: [] } },
+          source: "test",
+        },
+        {
+          pluginId: "@vendor/two-channel-plugin",
+          plugin: { id: "beta-chat", meta: { aliases: [] } },
+          source: "test",
+        },
+      ]),
+    );
+
+    // Both channels report the same owner and the same count: neither of them owns the
+    // plugin's durable state alone.
+    expect(findRegisteredChannelOwner("alpha-chat")).toEqual({
+      pluginId: "@vendor/two-channel-plugin",
+      channelCount: 2,
+    });
+    expect(findRegisteredChannelOwner("beta-chat")).toEqual({
+      pluginId: "@vendor/two-channel-plugin",
+      channelCount: 2,
+    });
   });
 });

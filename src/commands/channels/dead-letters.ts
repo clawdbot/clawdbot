@@ -4,9 +4,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { resolveChannelIngressQueueKey } from "./ingress-queue-owner.js";
 
 type ChannelsDeadLettersOptions = {
   channel?: string;
@@ -20,22 +18,7 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  // Normalize, do not merely trim. The removal command sends `normalizeAccountId`
-  // output into the same seam, and `resolveDurableAccountKey` is documented to receive
-  // it — so trimming here would have `--account Work` read one queue name while
-  // `channels remove --delete` purged another.
-  const accountId = normalizeAccountId(options.account);
-  return {
-    channelId,
-    accountId,
-    // The operator names a channel; the rows are stored under ids the PLUGIN composes -
-    // both halves of them - so resolve the whole key before opening the queue. Opening
-    // it under what the operator typed would also create an empty queue nothing writes to.
-    queueKey: resolveChannelIngressQueueKey({
-      channelId,
-      accountId,
-    }),
-  };
+  return { channelId, accountId: options.account?.trim() || "default" };
 }
 
 function parseLimit(value: unknown): number {
@@ -51,8 +34,8 @@ export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { channelId, accountId, queueKey } = resolveScope(options);
-  const queue = createChannelIngressQueue(queueKey);
+  const { channelId, accountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId, accountId });
   if (!queue.listFailed) {
     throw new Error("This runtime does not support channel ingress dead-letter inspection.");
   }
@@ -81,8 +64,8 @@ export async function channelsDeadLettersResubmitCommand(
   options: ChannelsDeadLettersOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const { channelId, accountId, queueKey } = resolveScope(options);
-  const queue = createChannelIngressQueue(queueKey);
+  const { channelId, accountId } = resolveScope(options);
+  const queue = createChannelIngressQueue({ channelId, accountId });
   if (!queue.resubmit) {
     throw new Error("This runtime does not support channel ingress dead-letter resubmission.");
   }

@@ -748,7 +748,7 @@ describe("channelsRemoveCommand", () => {
     );
   });
 
-  it("discards the rows under the account key the plugin stores them beneath", async () => {
+  it("keeps the ingress rows when one plugin serves several channels", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
         channels: {
@@ -759,98 +759,45 @@ describe("channelsRemoveCommand", () => {
         },
       }),
     );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
-    // A plugin that transforms the account id before opening its queue - WhatsApp
-    // hashes it - so the configured id selects nothing.
-    const deletePlugin = createExternalChatDeletePlugin();
-    const scopedPlugin: ChannelPlugin = {
-      ...deletePlugin,
-      config: {
-        ...deletePlugin.config,
-        resolveDurableAccountKey: (accountId) => `stored-${accountId}`,
+    // One plugin, two channels, one queue between them: the rows record no channel of
+    // their own, so this account's removal cannot tell its rows from its sibling's.
+    const loadedPlugin = createExternalChatDeletePlugin();
+    const registry = createTestRegistry([
+      {
+        pluginId: "@vendor/external-chat-plugin",
+        plugin: loadedPlugin,
+        source: "test",
       },
-    };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
+      {
+        pluginId: "@vendor/external-chat-plugin",
+        plugin: { id: "external-chat-voice", meta: { aliases: [] } },
+        source: "test",
+      },
+    ]);
+    setActivePluginRegistry(registry);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(registry);
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "@vendor/external-chat-plugin",
-      accountId: "stored-default",
+      accountId: "default",
     });
-    await queue.enqueue("inbound-1", { text: "never answered" });
+    await queue.enqueue("inbound-1", { text: "belongs to a sibling channel" });
 
     await channelsRemoveCommand(
-      { channel: "external-chat", account: "default", delete: true },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(runtime.log).toHaveBeenCalledWith(
-      'Deleted external-chat account "default". Discarded 1 stored ingress event, 1 of which had not been answered yet.',
-    );
-    expect(
-      purgeChannelIngressQueueAccount({
-        channelId: "@vendor/external-chat-plugin",
-        accountId: "stored-default",
-      }),
-    ).toEqual({ discarded: 0, undelivered: 0 });
-  });
-
-  it("still reports the deletion when the plugin's own key resolver throws", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      }),
-    );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
-    // The resolver is plugin-declared, so it is arbitrary code running after the config
-    // write has already landed. A throw there must not turn a completed deletion into a
-    // failed command.
-    const deletePlugin = createExternalChatDeletePlugin();
-    const scopedPlugin: ChannelPlugin = {
-      ...deletePlugin,
-      config: {
-        ...deletePlugin.config,
-        resolveDurableAccountKey: () => {
-          throw new Error("plugin resolver exploded");
-        },
+      {
+        channel: "external-chat",
+        account: "default",
+        delete: true,
       },
-    };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
-
-    await channelsRemoveCommand(
-      { channel: "external-chat", account: "default", delete: true },
       runtime,
       { hasFlags: true },
     );
 
     expect(runtime.log).toHaveBeenCalledWith(
-      'Deleted external-chat account "default". Its stored ingress events could not be discarded: plugin resolver exploded',
+      'Deleted External Chat account "default". Kept its stored ingress events: plugin "@vendor/external-chat-plugin" serves more than one channel and its stored events do not record which.',
     );
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
+    // The sibling's unanswered event is still claimable, which is the whole point.
+    await expect(queue.claimNext({ ownerId: "worker" })).resolves.toMatchObject({
+      id: "inbound-1",
+    });
   });
 });
