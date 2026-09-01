@@ -8,6 +8,16 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 
 const MB = 1024 * 1024;
 
+function normalizeMediaMaxBytes(limitMb: number | undefined): number | undefined {
+  if (limitMb === undefined) {
+    return undefined;
+  }
+  const limitBytes = limitMb * MB;
+  return Number.isFinite(limitBytes) && limitBytes > 0
+    ? Math.max(1, Math.floor(limitBytes))
+    : undefined;
+}
+
 /** Resolves channel media limit bytes from account-specific config or agent defaults. */
 export function resolveChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
@@ -21,11 +31,9 @@ export function resolveChannelMediaMaxBytes(params: {
     cfg: params.cfg,
     accountId,
   });
-  if (channelLimit) {
-    return channelLimit * MB;
+  const channelLimitBytes = normalizeMediaMaxBytes(channelLimit);
+  if (channelLimitBytes !== undefined) {
+    return channelLimitBytes;
   }
-  if (params.cfg.agents?.defaults?.mediaMaxMb) {
-    return params.cfg.agents.defaults.mediaMaxMb * MB;
-  }
-  return undefined;
+  return normalizeMediaMaxBytes(params.cfg.agents?.defaults?.mediaMaxMb);
 }

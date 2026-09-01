@@ -136,23 +136,17 @@ export function resolveTlonAccount(
   const ownerShip = merged.ownerShip ?? null;
   const defaultAuthorizedShips = merged.defaultAuthorizedShips ?? [];
   const configured = Boolean(ship && url && code);
-  const configuredMediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg,
-    accountId: resolvedAccountId,
-    resolveChannelLimitMb: () => merged.mediaMaxMb,
-  });
 
   return {
     accountId: resolvedAccountId,
     name: merged.name ?? null,
     enabled: merged.enabled !== false,
     configured,
-    mediaMaxBytes:
-      configuredMediaMaxBytes !== undefined &&
-      Number.isFinite(configuredMediaMaxBytes) &&
-      configuredMediaMaxBytes > 0
-        ? Math.max(1, Math.floor(configuredMediaMaxBytes))
-        : undefined,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: resolvedAccountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     ship,
     url,
     code,
