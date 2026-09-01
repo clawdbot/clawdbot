@@ -13,6 +13,11 @@ import {
 // number in sync with the real cap for the eviction tests below to actually
 // exercise the capacity boundary.
 const READY_ENTRY_CAPACITY = 1000;
+// Must track MAX_HTTP_CONTINUATION_RETAINED_BYTES in
+// openai-responses-continuation.ts (a private module constant, not exported)
+// -- keep this number in sync with the real budget for the tests below to
+// actually exercise the byte-budget boundary.
+const RETAINED_BYTES_BUDGET = 64 * 1024 * 1024;
 
 const firstUser = {
   type: "message",
@@ -43,6 +48,18 @@ const assistantOutput = {
   ],
 };
 
+/** Builds response.output content whose serialized size is at least `bytes`
+ * -- used to exercise the byte-budget boundary without depending on the
+ * production estimator's exact formula. */
+function oversizedResponseItems(bytes: number): unknown[] {
+  return [
+    {
+      ...assistantOutput,
+      content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [], logprobs: [] }],
+    },
+  ];
+}
+
 function continuationState(): ResponsesContinuationState {
   return {
     lastRequest: {
@@ -66,6 +83,31 @@ function nextRequest(phase = "final_answer"): ResponsesContinuationRequest {
         role: "assistant",
         phase,
         content: [{ type: "output_text", text: "answer", annotations: [] }],
+      },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+    ] as never,
+    metadata: { openclaw_turn_attempt: "2", openclaw_turn_id: "turn-2", stable: "yes" },
+    store: true,
+    model: "gpt-5.6-luna",
+  };
+}
+
+/** Like nextRequest(), but echoes back the same oversized assistant reply
+ * text oversizedResponseItems(bytes) committed -- resolveResponsesContinuationRequest
+ * requires the replayed assistant turn to match the retained baseline
+ * verbatim, so a plain nextRequest() (hardcoded small "answer" text) would
+ * correctly report history_changed against an oversized baseline, not
+ * "continued" -- that's the resolver working, not the eviction bug this
+ * test targets. */
+function nextRequestAfterOversized(bytes: number): ResponsesContinuationRequest {
+  return {
+    input: [
+      firstUser,
+      {
+        type: "message",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "x".repeat(bytes), annotations: [] }],
       },
       { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
     ] as never,
@@ -460,5 +502,71 @@ describe("OpenAI Responses continuation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("skips caching a single entry that alone exceeds the retained-byte budget", () => {
+    const first = claim({});
+    // Evicting every other entry still wouldn't make this one fit, so the
+    // commit must be a no-op for caching purposes rather than trying to make
+    // room for it.
+    first?.commit(continuationState().lastRequest, {
+      id: "resp_oversized",
+      output: oversizedResponseItems(RETAINED_BYTES_BUDGET + 1) as never,
+    });
+
+    // Not cached: the next claim for the same session sees no baseline.
+    const afterOversized = claim({ request: nextRequest() });
+    expect(afterOversized?.request.previous_response_id).toBeUndefined();
+
+    // The oversized commit must not leave the entry stuck "claimed" forever
+    // -- a normal-sized commit right after succeeds and is retained.
+    afterOversized?.commit(continuationState().lastRequest, {
+      id: "resp_normal",
+      output: continuationState().lastResponseItems,
+    });
+    const afterNormal = claim({ request: nextRequest() });
+    expect(afterNormal?.request.previous_response_id).toBe("resp_normal");
+    afterNormal?.release();
+  });
+
+  it("evicts the oldest ready entries once the aggregate retained-byte budget is reached, well below the count cap", () => {
+    // Each entry is sized well under a quarter of the budget (leaving slack
+    // for the surrounding JSON structure's own bytes, on top of the raw
+    // text run sized here) so 4 entries stay comfortably under budget and
+    // the 5th genuinely pushes the running total over it -- the budget, not
+    // the 1000-entry count cap, is what forces eviction here.
+    const entryBytes = Math.floor(RETAINED_BYTES_BUDGET / 5);
+    const fillEntries = 4;
+    for (let i = 0; i < fillEntries; i++) {
+      const c = claim({ sessionId: `budget-session-${i}` });
+      c?.commit(continuationState().lastRequest, {
+        id: `budget-resp-${i}`,
+        output: oversizedResponseItems(entryBytes) as never,
+      });
+    }
+
+    // One more commit of the same size pushes the running total over budget;
+    // the oldest entry (budget-session-0) must be evicted to make room, well
+    // short of the 1000-entry count cap.
+    const overflow = claim({ sessionId: "budget-session-overflow" });
+    overflow?.commit(continuationState().lastRequest, {
+      id: "budget-resp-overflow",
+      output: oversizedResponseItems(entryBytes) as never,
+    });
+
+    const evicted = claim({
+      sessionId: "budget-session-0",
+      request: nextRequestAfterOversized(entryBytes),
+    });
+    expect(evicted?.request.previous_response_id).toBeUndefined();
+    evicted?.release();
+
+    const survivorId = `budget-session-${fillEntries - 1}`;
+    const survivor = claim({
+      sessionId: survivorId,
+      request: nextRequestAfterOversized(entryBytes),
+    });
+    expect(survivor?.request.previous_response_id).toBe(`budget-resp-${fillEntries - 1}`);
+    survivor?.release();
   });
 });
