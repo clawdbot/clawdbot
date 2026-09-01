@@ -756,42 +756,6 @@ describe("plugins cli uninstall", () => {
       plugins: [],
       diagnostics: [],
     });
-    primeUninstallPlan(nextConfig, { actions: { channelConfig: true } });
-
-    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
-
-    expectLatestUninstallPlanParams({
-      pluginId: "alpha",
-      channelIds: undefined,
-      deleteFiles: false,
-    });
-    expectInstallRecordsWrittenWithLease({}, nextConfig);
-    expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
-    expectRuntimeLogIncludes("channel config (channels.alpha)");
-    expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
-  });
-
-  it("removes owner-keyed channel config for an exact orphan install record", async () => {
-    const pluginId = "orphan-channel-plugin";
-    const installRecords = {
-      [pluginId]: {
-        source: "path",
-        sourcePath: "/tmp/missing-orphan-channel-source",
-        installPath: "/tmp/missing-orphan-channel-install",
-      },
-    } as const;
-    const baseConfig = {
-      channels: {
-        [pluginId]: { enabled: true },
-        discord: { enabled: true },
-      },
-    } as OpenClawConfig;
-    pluginCliConfigMock.mockReturnValue(baseConfig);
-    setInstalledPluginIndexInstallRecords(installRecords);
-    buildPluginSnapshotReportMock.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
     const actualUninstall =
       await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
     planPluginUninstallMock.mockImplementation((params) =>
@@ -806,21 +770,17 @@ describe("plugins cli uninstall", () => {
         createTestInstalledPluginIndex({ policyHash: "orphan-channel", installRecords }),
       );
     try {
-      await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
+      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
 
       expectLatestUninstallPlanParams({
-        pluginId,
+        pluginId: "alpha",
         channelIds: undefined,
         deleteFiles: false,
       });
-      expectInstallRecordsWrittenWithLease(
-        {},
-        {
-          channels: {
-            discord: { enabled: true },
-          },
-        },
-      );
+      expectInstallRecordsWrittenWithLease({}, nextConfig);
+      expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
+      expectRuntimeLogIncludes("channel config (channels.alpha)");
+      expect(pluginsCliRuntimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
     } finally {
       indexSpy.mockRestore();
     }

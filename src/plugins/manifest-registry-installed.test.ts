@@ -552,7 +552,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned").ok).toBe(false);
     expect(resolveInstalledPluginLifecycleOwnership(orphanedOwner, "orphaned")).toMatchObject({
       ok: true,
-      value: { installOwner: "orphaned", pluginIds: [] },
+      value: { kind: "orphan", installOwner: "orphaned", pluginIds: [] },
     });
     expect(hasMissingInstalledPluginOwnerMetadata(orphanedOwner, env)).toBe(false);
 
@@ -564,6 +564,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
     };
     expect(resolveInstalledPluginPackageOwnership(legacyAmbiguous, "pack/one").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(legacyAmbiguous, "pack/one").ok).toBe(false);
     expect(hasMissingInstalledPluginOwnerMetadata(legacyAmbiguous, env)).toBe(true);
 
     const packageAlias = path.join(stateDir, "pack-alias");
@@ -580,6 +581,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
     };
     expect(resolveInstalledPluginPackageOwnership(aliasedAmbiguous, "pack/one").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(aliasedAmbiguous, "pack/one").ok).toBe(false);
     expect(hasMissingInstalledPluginOwnerMetadata(aliasedAmbiguous, env)).toBe(true);
 
     const unrelatedOwner = "unrelated";
