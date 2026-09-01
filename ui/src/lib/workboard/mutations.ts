@@ -2,10 +2,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   changedDraftPayload,
+  captureCardRemoval,
   draftPayload,
   rebaseWorkboardDraft,
   removeCardAndReferences,
   replaceCard,
+  restoreCardRemoval,
   resetDraftState,
   selectedWorkboardBoardParams,
 } from "./card-state.ts";
@@ -243,11 +245,14 @@ export async function deleteWorkboardCard(params: {
   invalidateWorkboardLoads(params.host);
   state.busyCardIds.add(params.cardId);
   state.error = null;
+  const removal = captureCardRemoval(state.cards, params.cardId);
+  state.cards = removeCardAndReferences(state.cards, params.cardId);
   params.requestUpdate?.();
   try {
     await params.client.request("workboard.cards.delete", { id: params.cardId });
     state.cards = removeCardAndReferences(state.cards, params.cardId);
   } catch (error) {
+    state.cards = restoreCardRemoval(state.cards, removal);
     state.error = formatError(error);
   } finally {
     state.busyCardIds.delete(params.cardId);

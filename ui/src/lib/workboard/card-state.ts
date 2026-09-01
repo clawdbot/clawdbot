@@ -3,6 +3,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
+  WorkboardLink,
   WorkboardMetadata,
   WorkboardStaleState,
   WorkboardStatus,
@@ -104,6 +105,76 @@ export function removeCardAndReferences(
       Object.keys(metadata).length ? { ...card, metadata } : { ...card, metadata: undefined },
     );
   }
+  return nextCards;
+}
+
+export type WorkboardCardRemoval = {
+  cardId: string;
+  card?: WorkboardCard;
+  cardIndex: number;
+  incomingLinks: Array<{
+    cardId: string;
+    links: WorkboardLink[];
+  }>;
+};
+
+export function captureCardRemoval(
+  cards: readonly WorkboardCard[],
+  cardId: string,
+): WorkboardCardRemoval {
+  const cardIndex = cards.findIndex((card) => card.id === cardId);
+  return {
+    cardId,
+    card: cardIndex >= 0 ? cards[cardIndex] : undefined,
+    cardIndex,
+    incomingLinks: cards.flatMap((card) => {
+      if (card.id === cardId) {
+        return [];
+      }
+      const links = card.metadata?.links?.filter((link) => link.targetCardId === cardId);
+      return links?.length ? [{ cardId: card.id, links: [...links] }] : [];
+    }),
+  };
+}
+
+export function restoreCardRemoval(
+  cards: readonly WorkboardCard[],
+  removal: WorkboardCardRemoval,
+): WorkboardCard[] {
+  const nextCards = [...cards];
+  if (removal.card && !nextCards.some((card) => card.id === removal.cardId)) {
+    const insertAt = Math.min(Math.max(removal.cardIndex, 0), nextCards.length);
+    nextCards.splice(insertAt, 0, removal.card);
+  }
+
+  for (const incoming of removal.incomingLinks) {
+    const cardIndex = nextCards.findIndex((card) => card.id === incoming.cardId);
+    if (cardIndex < 0) {
+      continue;
+    }
+    const card = nextCards[cardIndex];
+    if (!card) {
+      continue;
+    }
+    const currentLinks = card.metadata?.links ?? [];
+    const linksToRestore = incoming.links.filter(
+      (link) =>
+        !currentLinks.some(
+          (current) =>
+            current.id === link.id ||
+            (current.type === link.type && current.targetCardId === link.targetCardId),
+        ),
+    );
+    if (linksToRestore.length === 0) {
+      continue;
+    }
+    const metadata: WorkboardMetadata = {
+      ...card.metadata,
+      links: [...currentLinks, ...linksToRestore],
+    };
+    nextCards[cardIndex] = { ...card, metadata };
+  }
+
   return nextCards;
 }
 
