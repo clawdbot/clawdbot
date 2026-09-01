@@ -1377,6 +1377,30 @@ describe("release state artifacts", () => {
     };
   }
 
+  function attemptedBlockedArtifact(
+    mode: "decision" | "drain",
+    sealedPlan: ReturnType<typeof executionPlan>,
+    attempts: { runAttempt: number; jobs: Record<string, unknown>[] }[],
+  ) {
+    const runAttempt = attempts.at(-1)!.runAttempt;
+    const composite = composeReleaseAttemptJobs(attempts, {
+      plannedRunAttempt: 1,
+      effectiveRunAttempt: runAttempt,
+    });
+    return artifact(mode, 2, sealedPlan, {
+      compositeJobsSha256: composite.sha256,
+      conclusion: "failure",
+      status: mode === "decision" ? "in_progress" : "completed",
+      dispatchActor: "github-actions[bot]",
+      jobs: composite.jobs,
+      observedRunAttempts: attempts.map((attempt) => attempt.runAttempt),
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runAttempt,
+      triggeringActor: "release-operator",
+    });
+  }
+
   function stateExpected(maxParentRunAttempt = 2) {
     return {
       maxParentRunAttempt,
@@ -1819,6 +1843,93 @@ describe("release state artifacts", () => {
       decision: { activeRunIds: ["101"], state: "blocked_diagnostics_running" },
       drain: { activeRunIds: [], blockers: [{ job: "test" }, { job: "terminal diagnostic" }] },
     });
+  });
+
+  it("retains a failed logical job when a later attempt replaces its job URL", () => {
+    const sealedPlan = executionPlan(
+      { rerunGroup: "ci" },
+      { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
+    );
+    const retriedJob = { ...FAILED_JOB, url: "https://example.invalid/jobs/retried" };
+    const attempts = [
+      { runAttempt: 1, jobs: [FAILED_JOB] },
+      { runAttempt: 2, jobs: [retriedJob] },
+    ];
+    const decision = attemptedBlockedArtifact("decision", sealedPlan, attempts.slice(0, 1));
+    const drain = attemptedBlockedArtifact("drain", sealedPlan, attempts);
+    expect(selectPair(sealedPlan, decision, drain)).toMatchObject({
+      decision: { state: "blocked_diagnostics_running" },
+      drain: {
+        state: "blocked_complete",
+        blockers: [{ job: "test", url: retriedJob.url }],
+      },
+    });
+    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
+      "Full Release Validation state: blocked_complete\n- Blocker: test (failure)",
+    );
+  });
+
+  it.each([
+    "same accepted attempt",
+    "regressed accepted attempt",
+    "retained job in a newer attempt",
+    "blocker URL outside its job evidence",
+    "foreign-run blocker borrowing child job evidence",
+    "historical plan without attempt validation",
+    "renamed job",
+    "changed failure conclusion",
+  ])("rejects replacement blocker URLs with %s", (scenario) => {
+    const sealedPlan = executionPlan(
+      { rerunGroup: "ci" },
+      scenario === "historical plan without attempt validation"
+        ? {}
+        : { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
+    );
+    const first = { runAttempt: 1, jobs: [FAILED_JOB] };
+    const replaced = {
+      ...FAILED_JOB,
+      url: "https://example.invalid/jobs/retried",
+      ...(scenario === "renamed job" ? { name: "different test" } : {}),
+      ...(scenario === "changed failure conclusion" ? { conclusion: "timed_out" } : {}),
+    };
+    const second = {
+      runAttempt: 2,
+      jobs:
+        scenario === "renamed job"
+          ? [{ ...FAILED_JOB, conclusion: "success" }, replaced]
+          : [replaced],
+    };
+    const decision = attemptedBlockedArtifact(
+      "decision",
+      sealedPlan,
+      scenario === "regressed accepted attempt"
+        ? [first, { ...second, jobs: [FAILED_JOB] }]
+        : [first],
+    );
+    const drain = attemptedBlockedArtifact(
+      "drain",
+      sealedPlan,
+      scenario === "same accepted attempt" || scenario === "regressed accepted attempt"
+        ? [{ runAttempt: 1, jobs: [replaced] }]
+        : scenario === "retained job in a newer attempt"
+          ? [
+              { ...first, jobs: [replaced] },
+              { runAttempt: 2, jobs: [{ ...FAILED_JOB, name: "other", conclusion: "success" }] },
+            ]
+          : [first, second],
+    );
+    if (scenario === "blocker URL outside its job evidence") {
+      drain.blockers = drain.blockers.map((blocker) => ({
+        ...blocker,
+        url: "https://example.invalid/jobs/unrelated",
+      }));
+    }
+    if (scenario === "foreign-run blocker borrowing child job evidence") {
+      for (const snapshot of [decision, drain]) {
+        snapshot.blockers.push({ ...snapshot.blockers[0], runId: "999" });
+      }
+    }
+    expect(() => selectPair(sealedPlan, decision, drain)).toThrow("changed or removed");
   });
 
   it("selects a terminal blocked pair when workflow evidence refines to failed jobs", () => {
