@@ -290,6 +290,10 @@ struct GatewayDiscoverySelectionSupportTests {
                 as? [String: Any]
             #expect(persistedRemote?["token"] == nil)
             #expect(persistedRemote?["password"] == nil)
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "bonjour|gateway-a")
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                GatewayDiscoveryPreferences.routeBinding(root: OpenClawConfigFile.loadDict()),
+                key: self.routeBindingKey) == .match)
             #expect(CommandResolver.parseSSHTarget(state.remoteTarget)?.host == "attacker.local")
 
             var source = await GatewayEndpointStore._testLiveSourceSnapshot(

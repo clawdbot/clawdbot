@@ -502,12 +502,8 @@ final class AppState {
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
-        self.gatewayRouteBindingKey = gatewayRouteBindingKey ?? (isPreview
-            ? nil
-            : GatewayDiscoveryPreferences.defaultRouteBindingKey())
-        self.bundleLocationAllowsPersistentIntegration =
-            !AppProfile.current.isActive &&
-            (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
+        self.gatewayRouteBindingKey = gatewayRouteBindingKey ?? Self.defaultGatewayRouteBindingKey(isPreview)
+        self.bundleLocationAllowsPersistentIntegration = Self.allowsPersistentIntegration(isPreview)
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
@@ -576,11 +572,7 @@ final class AppState {
             AppDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let startupConfig = GatewayDiscoveryPreferences.prepareStartupConfig(
-            isPreview: self.isPreview,
-            saver: self.gatewayConfigSaver,
-            key: self.gatewayRouteBindingKey,
-            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
+        let startupConfig = Self.prepareGatewayStartup(isPreview, self.gatewayConfigSaver, self.gatewayRouteBindingKey)
         let configRoot = startupConfig.root
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
@@ -1105,6 +1097,9 @@ extension AppState {
         if self.pendingDiscoveryCredentialReset?.routeBinding != self.currentGatewayRouteBinding() {
             self.pendingDiscoveryCredentialReset = nil
         }
+        // A discovery selection owns its receipt through the old-config read and
+        // atomic credential-clearing save. Retiring it here would expose ambient auth.
+        if self.pendingDiscoveryCredentialReset != nil { return }
         // The authoritative config snapshot has no discovery selection event to
         // transfer owner authority. Retire it only when that snapshot moved.
         guard previousRouteBinding == routeBinding else {
@@ -1114,6 +1109,27 @@ extension AppState {
         _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(
             routeBinding,
             key: self.gatewayRouteBindingKey)
+    }
+
+    private static func defaultGatewayRouteBindingKey(_ isPreview: Bool) -> SymmetricKey? {
+        isPreview ? nil : GatewayDiscoveryPreferences.defaultRouteBindingKey()
+    }
+
+    private static func allowsPersistentIntegration(_ isPreview: Bool) -> Bool {
+        !AppProfile.current.isActive &&
+            (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
+    }
+
+    private static func prepareGatewayStartup(
+        _ isPreview: Bool,
+        _ saver: ([String: Any]) -> Bool,
+        _ key: SymmetricKey?) -> GatewayDiscoveryPreferences.StartupConfig
+    {
+        GatewayDiscoveryPreferences.prepareStartupConfig(
+            isPreview: isPreview,
+            saver: saver,
+            key: key,
+            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
     }
 
     private func updateRemoteTarget(host: String) {

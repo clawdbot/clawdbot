@@ -686,45 +686,41 @@ struct DashboardPrimaryGatewayAdapterTests {
     }
 
     @Test func `promotion retires discovery owner only after persistence`() async throws {
-        let previousStableID = GatewayDiscoveryPreferences.preferredStableID()
-        let previousVerifier = GatewayDiscoveryPreferences.preferredRouteBindingVerifier()
-        defer {
-            GatewayDiscoveryPreferences.setPreferredStableID(previousStableID)
-            if let previousVerifier {
-                AppDefaults.standard.set(
-                    previousVerifier,
-                    forKey: "gateway.preferredStableIDRouteBinding.v1")
+        try await TestIsolation.withUserDefaultsValues([
+            "gateway.preferredStableID": nil,
+            "bridge.preferredStableID": nil,
+            "gateway.preferredStableIDRouteBinding.v1": nil,
+        ]) {
+            GatewayDiscoveryPreferences.setPreferredStableID("discovered-gateway")
+            AppDefaults.standard.set(
+                "legacy-raw-route",
+                forKey: "gateway.preferredStableIDRouteBinding.v1")
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            let state = AppState(preview: true)
+            let endpoint: @Sendable (String) async throws -> GatewayConnection.EndpointSnapshot = { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: "profile-token", password: nil),
+                    routeAuthority: nil)
             }
-        }
-        GatewayDiscoveryPreferences.setPreferredStableID("discovered-gateway")
-        AppDefaults.standard.set(
-            "legacy-raw-route",
-            forKey: "gateway.preferredStableIDRouteBinding.v1")
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        let state = AppState(preview: true)
-        let endpoint: @Sendable (String) async throws -> GatewayConnection.EndpointSnapshot = { _ in
-            GatewayConnection.EndpointSnapshot(
-                config: (url: url, token: "profile-token", password: nil),
-                routeAuthority: nil)
-        }
-        let rejected = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: endpoint,
-            persist: { _, _ in false })
+            let rejected = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: endpoint,
+                persist: { _, _ in false })
 
-        await #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
-            try await rejected.apply(profileID: "studio")
+            await #expect(throws: DashboardPrimaryGatewayError.notPromotable) {
+                try await rejected.apply(profileID: "studio")
+            }
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "discovered-gateway")
+
+            let accepted = DashboardPrimaryGatewayAdapter(
+                state: state,
+                endpoint: endpoint,
+                persist: { _, _ in true })
+            try await accepted.apply(profileID: "studio")
+
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
         }
-        #expect(GatewayDiscoveryPreferences.preferredStableID() == "discovered-gateway")
-
-        let accepted = DashboardPrimaryGatewayAdapter(
-            state: state,
-            endpoint: endpoint,
-            persist: { _, _ in true })
-        try await accepted.apply(profileID: "studio")
-
-        #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-        #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
     }
 
     @Test func `deep link applies direct endpoint and clears omitted token and pin`() throws {
