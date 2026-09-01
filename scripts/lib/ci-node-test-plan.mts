@@ -293,7 +293,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 19],
   ["agentic-agents-embedded-overflow-compaction", 20],
   ["agentic-agents-embedded-run", 46],
-  ["agentic-agents-support", 165],
+  // Main runs 33537556582/33537739443/33543106647 totaled 478.25s/450.21s/418.13s
+  // across the complete support inventory. Keep its upper bound as the fallback
+  // when membership changes and exact generation timings no longer match.
+  ["agentic-agents-support", 479],
   ["agentic-agents-tools", 69],
   // The measured 131s pair split per config; apportioned by the hosted
   // per-config walls (139s/67s) until direct Blacksmith samples exist.
@@ -442,7 +445,7 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 20],
   ["agentic-agents-embedded-overflow-compaction", 21],
   ["agentic-agents-embedded-run", 47],
-  ["agentic-agents-support", 165],
+  ["agentic-agents-support", 479],
   ["agentic-control-plane-startup-core", 33],
   // Run 31691151297 measured 296.68s for gateway-core and 303.93s for unit-src.
   // Run 31694057974 measured the two isolated UI envelopes at 159.50s and
@@ -619,6 +622,9 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
 // run 0.64x on Blacksmith, so only the ones that overshoot are pinned here:
 // leaving these low packs partners onto the tallest bins, which set the wall.
 const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
+  // Preserve the observed support budget through inventory growth without
+  // scaling the current Blacksmith evidence by an older whole-suite ratio.
+  ["agentic-agents-support", 479],
   ["agentic-agents-core-models", 81],
   ["agentic-cli-process", 110],
   ["agentic-commands-doctor", 83],
