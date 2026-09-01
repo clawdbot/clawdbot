@@ -86,7 +86,10 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
     if (approval.status === "allowed") {
       return `✅ OpenClaw change approved. Applying: ${truncateDetail(approval.presentation.description)}`;
     }
-    if (approval.status === "denied" || approval.status === "cancelled") {
+    if (approval.status === "cancelled") {
+      return "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.";
+    }
+    if (approval.status === "denied") {
       return "❌ OpenClaw change denied. No change was made.";
     }
     if (approval.status === "expired") {
@@ -150,13 +153,15 @@ function appendViewSubject(
 /** Render a canonical native resolved event while retaining safe request context. */
 export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalView): string {
   if (view.approvalKind === "system-agent") {
-    return view.decision === "deny"
-      ? "❌ OpenClaw change denied. No change was made."
-      : view.applicationStatus === "applied"
-        ? `✅ OpenClaw change approved and applied: ${truncateDetail(view.operationSummary)}`
-        : view.applicationStatus === "not-applied"
-          ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
-          : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
+    return view.terminalStatus === "cancelled"
+      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
+      : view.decision === "deny"
+        ? "❌ OpenClaw change denied. No change was made."
+        : view.applicationStatus === "applied"
+          ? `✅ OpenClaw change approved and applied: ${truncateDetail(view.operationSummary)}`
+          : view.applicationStatus === "not-applied"
+            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+            : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
   }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [

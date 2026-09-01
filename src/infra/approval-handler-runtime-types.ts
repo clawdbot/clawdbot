@@ -56,8 +56,8 @@ export type ChannelApprovalNativePresentationAdapter<
 > = {
   buildPendingPayload: (
     params: ChannelApprovalCapabilityHandlerContext & {
-      request?: ApprovalRequest;
-      approvalKind?: ChannelApprovalKind;
+      request: ApprovalRequest;
+      approvalKind: ChannelApprovalKind;
       nowMs: number;
       view: PendingApprovalView;
     },

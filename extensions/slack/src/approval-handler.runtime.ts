@@ -207,11 +207,13 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
           : "A command needs your approval.";
   } else if (phase === "resolved") {
     const decisionLabel =
-      isSystemAgent && view.applicationStatus === "applied"
-        ? "Applied"
-        : isSystemAgent && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : resolveSlackApprovalDecisionLabel(view.decision);
+      isSystemAgent && view.terminalStatus === "cancelled"
+        ? "Cancelled"
+        : isSystemAgent && view.applicationStatus === "applied"
+          ? "Applied"
+          : isSystemAgent && view.applicationStatus === "not-applied"
+            ? "Not applied"
+            : resolveSlackApprovalDecisionLabel(view.decision);
     heading = `*${approvalName} approval: ${decisionLabel}*`;
     const resolvedBy = formatSlackApprover(view.resolvedBy);
     description = resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.";

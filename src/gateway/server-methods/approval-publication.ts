@@ -74,8 +74,9 @@ export async function publishAppliedApprovalResolution(params: {
     resolvedBy,
     ts,
     request: params.liveRecord.request,
-    ...(params.record.kind === "system-agent" && params.record.status === "expired"
-      ? { terminalStatus: "expired" as const }
+    ...(params.record.kind === "system-agent" &&
+    (params.record.status === "expired" || params.record.status === "cancelled")
+      ? { terminalStatus: params.record.status }
       : {}),
   };
   await runSideEffect({

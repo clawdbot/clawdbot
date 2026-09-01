@@ -26,7 +26,6 @@ export type SystemAgentApprovalRequest = {
 };
 
 export type SystemAgentApprovalApplicationStatus = "applied" | "not-applied";
-type SystemAgentApprovalTerminalStatus = "expired" | "cancelled";
 
 export type SystemAgentApprovalResolved = {
   id: string;
@@ -35,7 +34,7 @@ export type SystemAgentApprovalResolved = {
   ts: number;
   request?: SystemAgentApprovalRequestPayload;
   applicationStatus?: SystemAgentApprovalApplicationStatus;
-  terminalStatus?: SystemAgentApprovalTerminalStatus;
+  terminalStatus?: "expired" | "cancelled";
 };
 
 export const SYSTEM_AGENT_APPROVAL_TIMEOUT_MS = 10 * 60_000;

@@ -141,11 +141,13 @@ export function buildMSTeamsResolvedApprovalCard(
         : "Exec";
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
   const decisionLabel =
-    view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-      ? "Applied"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-        ? "Not applied"
-        : formatApprovalDecision(view.decision);
+    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
+      ? "Cancelled"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+        ? "Applied"
+        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+          ? "Not applied"
+          : formatApprovalDecision(view.decision);
   return buildAdaptiveCard([
     ...buildCardHeading(
       `${kindLabel} Approval: ${decisionLabel}`,

@@ -135,6 +135,7 @@ type SystemAgentApprovalResolvedView = SystemAgentApprovalViewBase & {
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
   applicationStatus?: SystemAgentApprovalApplicationStatus;
+  terminalStatus?: "expired" | "cancelled";
 };
 
 /** Expired system change approval view without reply actions. */
@@ -164,6 +165,6 @@ export type ApprovalViewModel = PendingApprovalView | ResolvedApprovalView | Exp
 export type ApprovalRequest = ApprovalRequestInput;
 /** Stored approval resolution variants accepted by resolved view builders. */
 export type ApprovalResolved =
-  | (ExecApprovalResolved & { applicationStatus?: never })
-  | (PluginApprovalResolved & { applicationStatus?: never })
+  | (ExecApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
+  | (PluginApprovalResolved & { applicationStatus?: never; terminalStatus?: never })
   | SystemAgentApprovalResolved;

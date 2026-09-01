@@ -59,13 +59,15 @@ export function buildChannelApprovalResolvedText(params: {
   view: ResolvedApprovalView;
 }): string {
   if (params.view.approvalKind === "system-agent") {
-    return params.resolved.decision === "deny"
-      ? "❌ OpenClaw change denied. No change was made."
-      : params.view.applicationStatus === "applied"
-        ? `✅ OpenClaw change approved and applied: ${params.view.operationSummary}`
-        : params.view.applicationStatus === "not-applied"
-          ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
-          : `✅ OpenClaw change approved. Applying: ${params.view.operationSummary}`;
+    return params.view.terminalStatus === "cancelled"
+      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
+      : params.resolved.decision === "deny"
+        ? "❌ OpenClaw change denied. No change was made."
+        : params.view.applicationStatus === "applied"
+          ? `✅ OpenClaw change approved and applied: ${params.view.operationSummary}`
+          : params.view.applicationStatus === "not-applied"
+            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+            : `✅ OpenClaw change approved. Applying: ${params.view.operationSummary}`;
   }
   if (params.view.approvalKind === "plugin") {
     return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);

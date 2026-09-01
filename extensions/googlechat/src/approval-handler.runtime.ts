@@ -276,11 +276,13 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
 function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
   const decisionLabel =
-    view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-      ? "Applied"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-        ? "Not applied"
-        : formatDecision(view.decision);
+    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
+      ? "Cancelled"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+        ? "Applied"
+        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+          ? "Not applied"
+          : formatDecision(view.decision);
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {

@@ -43,6 +43,33 @@ describe("telegramApprovalNativeRuntime", () => {
     ).toContain("ID: req\\n1");
   });
 
+  it("renders a cancelled system-agent result as lifecycle cancellation", () => {
+    expect(
+      buildTelegramCanonicalApprovalTerminalText({
+        result: {
+          applied: true,
+          approval: {
+            id: "system-agent:cancelled",
+            status: "cancelled",
+            reason: "run-aborted",
+            urlPath: "/approve/system-agent:cancelled",
+            createdAtMs: 0,
+            expiresAtMs: 60_000,
+            resolvedAtMs: 1_000,
+            presentation: {
+              kind: "system-agent",
+              title: "OpenClaw change",
+              description: "Restart the Gateway",
+              proposalHash: "a".repeat(64),
+              allowedDecisions: ["allow-once", "deny"],
+            },
+          },
+        },
+        fallbackApprovalId: "system-agent:cancelled",
+      }),
+    ).toBe("⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.");
+  });
+
   it("renders only the allowed pending buttons", async () => {
     const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
@@ -588,6 +615,53 @@ describe("telegramApprovalNativeRuntime", () => {
         textMode: "html",
       },
     );
+  });
+
+  it("sends origin notices only through the originating Telegram account", async () => {
+    const editMessage = vi.fn().mockResolvedValue({ ok: true });
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+    const request = {
+      approvalKind: "system-agent" as const,
+      id: "system-agent:origin-account",
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "g".repeat(64),
+        allowedDecisions: ["allow-once", "deny"] as const,
+        sessionId: "delegation-origin-account",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "1234",
+        turnSourceAccountId: "origin",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    };
+    const payload = { text: "✅ OpenClaw change approved and applied." };
+
+    await telegramApprovalNativeRuntime.transport.updateEntry?.({
+      cfg: {} as never,
+      accountId: "forwarding",
+      context: { token: "tg-token", deps: { editMessage, sendMessage } },
+      entry: { chatId: "5678", messageId: "m1" },
+      request,
+      approvalKind: "system-agent",
+      payload,
+      phase: "resolved",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await telegramApprovalNativeRuntime.transport.updateEntry?.({
+      cfg: {} as never,
+      accountId: "origin",
+      context: { token: "tg-token", deps: { editMessage, sendMessage } },
+      entry: { chatId: "5678", messageId: "m1" },
+      request,
+      approvalKind: "system-agent",
+      payload,
+      phase: "resolved",
+    });
+    expect(sendMessage).toHaveBeenCalledOnce();
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {

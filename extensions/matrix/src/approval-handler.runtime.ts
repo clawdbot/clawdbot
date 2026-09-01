@@ -395,15 +395,17 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
     );
   }
   const decisionLabel =
-    view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-      ? "Applied"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-        ? "Not applied"
-        : view.decision === "allow-once"
-          ? "Allowed once"
-          : view.decision === "allow-always"
-            ? "Allowed always"
-            : "Denied";
+    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
+      ? "Cancelled"
+      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
+        ? "Applied"
+        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
+          ? "Not applied"
+          : view.decision === "allow-once"
+            ? "Allowed once"
+            : view.decision === "allow-always"
+              ? "Allowed always"
+              : "Denied";
   return [
     `${view.approvalKind === "system-agent" ? "OpenClaw change" : "Exec approval"}: ${decisionLabel}`,
     "",

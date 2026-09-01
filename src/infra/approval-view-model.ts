@@ -187,6 +187,7 @@ export function buildResolvedApprovalView(
       decision: resolved.decision,
       resolvedBy: resolved.resolvedBy,
       applicationStatus: resolved.applicationStatus,
+      terminalStatus: resolved.terminalStatus,
     };
   }
   if (normalizedRequest.approvalKind === "plugin") {

@@ -270,8 +270,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       if (
         approvalKind === "system-agent" &&
-        request &&
-        request?.request.turnSourceChannel?.trim().toLowerCase() === "telegram"
+        request.request.turnSourceChannel?.trim().toLowerCase() === "telegram"
       ) {
         const originTarget = request.request.turnSourceTo?.trim();
         const parsedOrigin = originTarget ? parseTelegramTarget(originTarget) : undefined;
@@ -281,7 +280,13 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const originThreadId =
           parseStrictPositiveInteger(request.request.turnSourceThreadId) ??
           parsedOrigin?.messageThreadId;
-        if (originChatId && (entry.chatId !== originChatId || editError !== undefined)) {
+        const sourceAccountId = request.request.turnSourceAccountId?.trim();
+        const isSourceAccount = !sourceAccountId || sourceAccountId === resolved.accountId;
+        if (
+          originChatId &&
+          isSourceAccount &&
+          (entry.chatId !== originChatId || editError !== undefined)
+        ) {
           if (!terminalizedSystemAgentApprovals.has(request.id)) {
             const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
             const originTo =
@@ -295,7 +300,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
             });
             terminalizedSystemAgentApprovals.add(request.id);
           }
-        } else if (originChatId) {
+        } else if (originChatId && isSourceAccount) {
           terminalizedSystemAgentApprovals.add(request.id);
         }
       }
