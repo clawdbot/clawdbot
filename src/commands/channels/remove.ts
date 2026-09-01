@@ -11,6 +11,7 @@ import {
 } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -62,18 +63,21 @@ type IngressDiscardOutcome =
  * the same line that reports the deletion instead, the way the pre-removal runtime stop
  * already does.
  */
-function discardRemovedAccountIngressRows(
-  // Forwarded whole rather than destructured and rebuilt: splitting the resolved key
-  // back into fields here is the one place a half could be substituted by mistake.
-  queueKey: {
-    channelId: string;
-    accountId: string;
-  },
-): IngressDiscardOutcome {
+function discardRemovedAccountIngressRows(params: {
+  channelId: string;
+  accountId: string;
+  catalogPluginId?: string | undefined;
+  plugin?: Pick<ChannelPlugin, "config"> | undefined;
+}): IngressDiscardOutcome {
   try {
+    // Resolving inside the try is the point. Half the key comes from a plugin-declared
+    // callback, and evaluating that as an argument left it OUTSIDE this guard: a plugin
+    // whose resolver threw escaped the command after the config write had landed, which
+    // is the one outcome this function exists to prevent. The resolved key still reaches
+    // the purge whole, never split back into fields.
     return {
       ok: true,
-      purge: purgeChannelIngressQueueAccount(queueKey),
+      purge: purgeChannelIngressQueueAccount(resolveChannelIngressQueueKey(params)),
     };
   } catch (error) {
     return { ok: false, message: formatErrorMessage(error) };
@@ -269,17 +273,12 @@ export async function channelsRemoveCommand(
   // still configured if that write fails. A disabled account keeps its rows because
   // re-enabling it drains them.
   const discard = deleteConfig
-    ? discardRemovedAccountIngressRows(
-        // Passed whole, not spread: spreading would let a later property override one
-        // half of the resolved key and compile clean, which is the mistake this
-        // function exists to prevent.
-        resolveChannelIngressQueueKey({
-          channelId: plugin.id,
-          accountId: preparedRemoval.accountKey,
-          catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
-          plugin,
-        }),
-      )
+    ? discardRemovedAccountIngressRows({
+        channelId: plugin.id,
+        accountId: preparedRemoval.accountKey,
+        catalogPluginId: resolvedPluginState?.catalogEntry?.pluginId,
+        plugin,
+      })
     : undefined;
   const summary = [
     deleteConfig

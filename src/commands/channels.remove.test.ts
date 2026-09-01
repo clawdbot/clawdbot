@@ -803,4 +803,54 @@ describe("channelsRemoveCommand", () => {
       }),
     ).toEqual({ discarded: 0, undelivered: 0 });
   });
+
+  it("still reports the deletion when the plugin's own key resolver throws", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    // The resolver is plugin-declared, so it is arbitrary code running after the config
+    // write has already landed. A throw there must not turn a completed deletion into a
+    // failed command.
+    const deletePlugin = createExternalChatDeletePlugin();
+    const scopedPlugin: ChannelPlugin = {
+      ...deletePlugin,
+      config: {
+        ...deletePlugin.config,
+        resolveDurableAccountKey: () => {
+          throw new Error("plugin resolver exploded");
+        },
+      },
+    };
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Its stored ingress events could not be discarded: plugin resolver exploded',
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });

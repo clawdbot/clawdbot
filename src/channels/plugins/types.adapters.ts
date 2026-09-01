@@ -99,11 +99,13 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
    * the transform, and the plugin cannot be asked at removal time because the removal
    * runs after its runtime is stopped — so the plugin declares it.
    *
-   * The host passes the NORMALIZED account id (`normalizeAccountId`), which is what
-   * `channels add` writes, and it is the same key the config delete uses - so on a
-   * hand-written non-canonical key like `Work` the purge and the config delete miss
-   * together rather than one succeeding without the other. That account was already
-   * un-removable before this seam existed; nothing is orphaned by the pair agreeing.
+   * The host passes the NORMALIZED account id (`normalizeAccountId`), and it is the
+   * same key the config delete uses - so on a non-canonical key like `Work` the purge
+   * and the config delete miss together rather than one succeeding without the other.
+   * That account was already un-removable before this seam existed; nothing is orphaned
+   * by the pair agreeing. (`channels add` normalizes only as its fallback: a plugin
+   * declaring `setup.resolveAccountId` writes whatever that returns, and some only
+   * trim, so a non-canonical key does not require hand-editing config.)
    *
    * The direction that does lose data is narrower: a plugin whose default-account
    * resolver returns a normalized preference while its account listing returns raw
