@@ -470,6 +470,34 @@ describe("Codex ring-zero thread config", () => {
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
+
+  it("keeps scheduled-authority apps enabled inside the restricted tool surface", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicyRestricted = true;
+    params.scheduledRuntimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { version: 1, auth: {}, apps: [] },
+    };
+    const apps = {
+      _default: { enabled: false },
+      calendar: { enabled: true },
+    };
+
+    const start = buildThreadStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      config: { apps },
+    });
+
+    expect(start.config?.["features.apps"]).toBe(true);
+    expect(start.config?.apps).toEqual(apps);
+    expect(start.config?.["features.multi_agent"]).toBe(false);
+  });
 });
 
 describe("Codex delegation capability", () => {

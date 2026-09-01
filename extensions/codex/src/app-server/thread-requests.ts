@@ -457,7 +457,10 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
-        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames)
+        ? buildRestrictedToolConfigPatch(
+            restrictedToolSurfaceMcpServerNames,
+            Boolean(params.scheduledRuntimeAuthority),
+          )
         : buildCodexRingZeroThreadConfigPatch(
             params,
             options.hostSystemAgentActive,
@@ -493,7 +496,10 @@ export function buildCodexRingZeroThreadConfigPatch(
   };
 }
 
-function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string[]): JsonObject {
+function buildRestrictedToolConfigPatch(
+  inheritedMcpServerNames: readonly string[],
+  scheduledAppAuthorityActive = false,
+): JsonObject {
   // Restricted turns already send environments: [] and disable native code mode.
   // Remove Codex-owned tool sources here; project-document suppression belongs to
   // ring-zero, message-only, and tool-disabled context policy at the caller.
@@ -502,6 +508,7 @@ function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string
   );
   return {
     ...CODEX_RING_ZERO_THREAD_CONFIG,
+    ...(scheduledAppAuthorityActive ? { "features.apps": true } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
   };
 }
