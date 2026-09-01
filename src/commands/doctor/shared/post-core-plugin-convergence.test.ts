@@ -472,6 +472,28 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+  it("blocks convergence when a missing plugin cannot activate without capability consent", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: ['Plugin "consent-fixture" requires capability consent.'],
+      failedPluginIds: ["consent-fixture"],
+      capabilityConsentRequired: true,
+      records: {},
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { entries: { "consent-fixture": { enabled: true } } } },
+      env: {},
+    });
+
+    expect(result.errored).toBe(true);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({ message: 'Plugin "consent-fixture" requires capability consent.' }),
+    ]);
+    expect(result.smokeFailures).toEqual([]);
+    expect(result.installRecords).toEqual({});
+  });
+
   it("keeps inactive repair failures nonblocking", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],

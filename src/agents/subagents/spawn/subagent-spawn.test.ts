@@ -3,6 +3,7 @@ import os from "node:os";
 // persistence, registry registration, and lifecycle event emission.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -103,6 +104,8 @@ type InheritedSpawnPreferenceCase = {
   swarmEnabled?: boolean;
   collect?: boolean;
   requesterRunId?: string;
+  requesterThinkingLevel?: ThinkLevel;
+  thinkingOverride?: string;
 };
 
 const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
@@ -112,6 +115,31 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     requesterState: { thinkingLevel: "high" },
     preferenceKey: "thinkingLevel",
     expected: "high",
+  },
+  {
+    name: "inherits active-turn Ultra instead of the stored session thinking level",
+    task: "inherit active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    preferenceKey: "thinkingLevel",
+    expected: "ultra",
+  },
+  {
+    name: "inherits active-turn off instead of a stored Ultra override",
+    task: "inherit active thinking off",
+    requesterState: { thinkingLevel: "ultra" },
+    requesterThinkingLevel: "off",
+    preferenceKey: "thinkingLevel",
+    expected: "off",
+  },
+  {
+    name: "keeps explicit child thinking ahead of active-turn Ultra",
+    task: "override active thinking",
+    requesterState: { thinkingLevel: "medium" },
+    requesterThinkingLevel: "ultra",
+    thinkingOverride: "low",
+    preferenceKey: "thinkingLevel",
+    expected: "low",
   },
   {
     name: "inherits requester fast mode for collector children",
@@ -164,10 +192,11 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
     expected: "medium",
   },
   {
-    name: "applies requester-agent subagent thinking before caller session thinking",
+    name: "applies requester-agent subagent thinking before active-turn thinking",
     task: "requester policy thinking",
     requesterState: { thinkingLevel: "high" },
     requesterAgent: { subagents: { thinking: "medium" } },
+    requesterThinkingLevel: "ultra",
     preferenceKey: "thinkingLevel",
     expected: "medium",
   },
@@ -1793,6 +1822,8 @@ describe("spawnSubagentDirect seam flow", () => {
       swarmEnabled,
       collect,
       requesterRunId,
+      requesterThinkingLevel,
+      thinkingOverride,
     }) => {
       if (agentDefaults || requesterAgent || swarmEnabled) {
         hoisted.configOverride = createConfigOverride({
@@ -1821,8 +1852,12 @@ describe("spawnSubagentDirect seam flow", () => {
       });
 
       const result = await spawnSubagentDirect(
-        { task, ...(collect ? { collect: true } : {}) },
-        { agentSessionKey: "agent:main:main", ...(requesterRunId ? { requesterRunId } : {}) },
+        { task, thinking: thinkingOverride, ...(collect ? { collect: true } : {}) },
+        {
+          agentSessionKey: "agent:main:main",
+          ...(requesterRunId ? { requesterRunId } : {}),
+          requesterThinkingLevel,
+        },
       );
 
       expect(result.status).toBe("accepted");

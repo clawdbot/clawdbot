@@ -402,7 +402,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   // This dist-only group is outside the sampled nondist logs and retains its
   // prior measured hint. The exclusive-bin cap keeps its lane lightly packed.
   ["core-runtime-tui-pty", 116],
-  ["core-tooling-isolated", 37],
+  // This PR-only owner is excluded from sampled push plans. Retained exact runs
+  // measured 108.79s/130.83s, so use the conservative wall until its owner can
+  // supply canonical samples through another path.
+  ["core-tooling-isolated", 131],
   ["core-unit-fast-1", 66],
   ["core-unit-fast-2", 64],
   // The measured 116s pair split per config; apportioned by the hosted

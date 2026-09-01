@@ -442,6 +442,11 @@ export class ChatPane extends ChatPaneLayoutRender {
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
       ...composerAvailability,
+      disabledReason:
+        state.chatRunError?.kind === "auth_refresh" &&
+        composerAvailability.disabledReason === modelUnavailableMessage
+          ? null
+          : composerAvailability.disabledReason,
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),

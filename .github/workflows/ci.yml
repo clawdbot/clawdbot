@@ -1001,20 +1001,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # Push/PR preflight is dependency-free: the manifest planner closure and
-      # the protocol coverage script import only node builtins and relative
-      # files, and Node strips their types natively. Only manual dispatches
-      # (which may check out frozen targets with older planner syntax) still
-      # install and run through tsx.
+      # Current-revision preflight is dependency-free: the manifest planner
+      # closure and protocol coverage import only node builtins and relative
+      # files, and Node strips their types natively. Different-revision manual
+      # targets retain tsx for their candidate-owned syntax.
       - name: Setup manifest pnpm
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
         uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && steps.checkout_ref.outputs.sha != github.workflow_sha
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Build CI manifest
@@ -1048,13 +1047,14 @@ jobs:
           OPENCLAW_CI_HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
-          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.sha }}
+          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.workflow_sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
           OPENCLAW_CI_RUNNER_PROFILE: ${{ steps.runner_profile.outputs.runner_profile }}
         run: |
           manifest_node_args=()
-          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+            [ "$OPENCLAW_CI_CHECKOUT_REVISION" != "$OPENCLAW_CI_WORKFLOW_REVISION" ]; then
             manifest_node_args+=(--import tsx)
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
@@ -1619,10 +1619,14 @@ jobs:
 
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
+        env:
+          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.workflow_sha }}
         run: |
-          # Dispatches may target frozen checkouts whose script needs the tsx
-          # shim; push/PR checkouts run the dependency-free .mts natively.
-          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+          # Different-revision dispatches may need their candidate-owned tsx
+          # shim; current workflow source runs the dependency-free .mts owner.
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] &&
+            [ "$OPENCLAW_CI_CHECKOUT_REVISION" != "$OPENCLAW_CI_WORKFLOW_REVISION" ]; then
             node scripts/check-protocol-event-coverage.mjs
           else
             node scripts/check-protocol-event-coverage.mts

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
@@ -169,7 +170,9 @@ describe("channel migration artifact consent", () => {
         expect(result.summary.errors).toEqual([]);
       } else {
         expect(result.config).toEqual(originalConfig);
-        expect(result.summary.errors.join("\n")).toMatch(/capabilit/i);
+        expect(result.summary.errors).toEqual([
+          expect.objectContaining({ pluginId, code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }),
+        ]);
       }
     }
     expect(committed).toBe(review === "accept");

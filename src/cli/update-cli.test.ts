@@ -32,6 +32,7 @@ import {
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
@@ -1216,7 +1217,10 @@ describe("update-cli", () => {
   const pluginSyncResult = (
     config: OpenClawConfig,
     changed = false,
-    overrides: { warnings?: string[]; errors?: string[] } = {},
+    overrides: {
+      warnings?: string[];
+      errors?: Array<{ pluginId: string; message: string; code?: string }>;
+    } = {},
   ) => ({
     changed,
     config,
@@ -3902,49 +3906,93 @@ describe("update-cli", () => {
     expect(getLogOutput()).toContain("Plugin update aborted");
   });
 
-  it("blocks restart when a plugin update awaits capability consent", async () => {
-    mockOwnedGitService();
-    mockGitUpdateAfterMutation();
-    serviceLoaded.mockResolvedValue(true);
-    mockNpmPluginOutcomes([
-      {
-        pluginId: "consent-fixture",
-        status: "error",
-        code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-        message: "Operator review token changed.",
-      },
-    ]);
-
-    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
-
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(jsonOutput?.status).toBe("error");
-    expect(jsonOutput?.reason).toBe("post-update-plugins");
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
-    expect(lastWriteJsonCall()).toMatchObject({
-      postUpdate: {
-        plugins: {
-          npm: {
-            outcomes: [
-              {
-                pluginId: "consent-fixture",
-                status: "error",
-                code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
-              },
+  it.each(
+    (["installed", "bridge"] as const).flatMap((source) =>
+      (["update", "finalize"] as const).map((mode) => ({ source, mode })),
+    ),
+  )(
+    "fails $mode without restarting when $source awaits capability consent",
+    async ({ source, mode }) => {
+      const pluginId = "consent-fixture";
+      const config = stableConfig({ plugins: { entries: { [pluginId]: { enabled: true } } } });
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue(configSnapshot(config));
+      mockOwnedGitService();
+      mockGitUpdateAfterMutation();
+      serviceLoaded.mockResolvedValue(true);
+      if (source === "bridge") {
+        const install = await import("../plugins/install.js");
+        vi.spyOn(install, "installPluginFromNpmSpec").mockRejectedValueOnce(
+          new ManagedPluginLifecycleError("Operator review token changed.", {
+            capabilityConsent: { pluginId, reviewToken: "operator-review" },
+          }),
+        );
+        const actual = await vi.importActual<typeof import("../plugins/update-channel.js")>(
+          "../plugins/update-channel.js",
+        );
+        syncPluginsForUpdateChannel.mockImplementationOnce((params) =>
+          actual.syncPluginsForUpdateChannel({
+            ...params,
+            externalizedBundledPluginBridges: [
+              { bundledPluginId: pluginId, npmSpec: "@example/companion" },
             ],
+          }),
+        );
+      } else {
+        mockNpmPluginOutcomes([
+          {
+            pluginId,
+            status: "error",
+            code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+            message: "Operator review token changed.",
           },
-        },
-      },
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expectNoSideEffects(serviceRestart, runRestartScript, runDaemonRestart);
-    expect(runUpdateFailureTriage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        failure: expect.objectContaining({ result: jsonOutput }),
-        mode: "json",
-      }),
-    );
-  });
+        ]);
+      }
+
+      if (mode === "finalize") {
+        vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+          FRESH_POST_UPDATE_ENTRYPOINT,
+        );
+      }
+      const command =
+        mode === "finalize"
+          ? updateFinalizeCommand({ yes: true, json: true, restart: false })
+          : updateCommand({ yes: true, json: true });
+      await expect(command).rejects.toEqual(new ExitError(1));
+
+      const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
+      expect(jsonOutput?.status).toBe("error");
+      if (mode === "update") {
+        expect(jsonOutput?.reason).toBe("post-update-plugins");
+      }
+      expect(jsonOutput?.postUpdate?.plugins?.status).toBe("error");
+      expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes).toEqual([
+        expect.objectContaining({
+          pluginId,
+          status: "error",
+          code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+        }),
+      ]);
+      if (source === "bridge") {
+        expect(jsonOutput?.postUpdate?.plugins?.sync.errors).toEqual([
+          "Failed to update consent-fixture: Operator review token changed.",
+        ]);
+      }
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expectNoSideEffects(serviceRestart, runRestartScript, runDaemonRestart);
+      expect(runUpdateFailureTriage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          failure: expect.objectContaining({
+            result: expect.objectContaining({
+              status: "error",
+              reason: "post-update-plugins",
+              postUpdate: { plugins: jsonOutput?.postUpdate?.plugins },
+            }),
+          }),
+          mode: "json",
+        }),
+      );
+    },
+  );
 
   it("keeps json update output successful when post-core plugin updates warn", async () => {
     updateNpmInstalledPlugins.mockImplementationOnce(
@@ -4101,7 +4149,7 @@ describe("update-cli", () => {
     syncPluginsForUpdateChannel.mockResolvedValueOnce(
       pluginSyncResult(baseConfig, false, {
         warnings: [trustWarning],
-        errors: [clawHubSyncRiskError],
+        errors: [{ pluginId: "demo", message: clawHubSyncRiskError }],
       }),
     );
     vi.mocked(defaultRuntime.writeJson).mockClear();
@@ -4121,7 +4169,7 @@ describe("update-cli", () => {
         params.logger?.warn?.(trustWarning);
         return pluginSyncResult(params.config, false, {
           warnings: [trustWarning],
-          errors: [clawHubSyncRiskError],
+          errors: [{ pluginId: "demo", message: clawHubSyncRiskError }],
         });
       },
     );

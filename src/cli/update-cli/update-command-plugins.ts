@@ -221,6 +221,15 @@ export async function updatePluginsAfterCoreUpdate(params: {
   });
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
+  const collectPluginOutcome = (rawOutcome: PluginUpdateOutcome) => {
+    const includeWarningInReason =
+      params.json || !rawOutcome.warning || !hasLoggedPluginWarning(rawOutcome.warning);
+    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome, { includeWarningInReason });
+    pluginUpdateOutcomes.push(guided.outcome);
+    if (guided.warning) {
+      warnings.push(guided.warning);
+    }
+  };
 
   const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
     integrityDrifts.push({
@@ -261,7 +270,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     ...capabilityConsent,
   });
   for (const error of cohort.sync.summary.errors) {
-    warnings.push(createPostUpdatePluginWarning({ reason: error }));
+    collectPluginOutcome({ ...error, status: "error" });
   }
   let pluginConfig = cohort.config;
   let pluginsChanged = cohort.changed || params.configChanged === true;
@@ -283,13 +292,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
   pluginUpdateOutcomes.push(...cohort.repairOutcomes);
   for (const rawOutcome of cohort.updateOutcomes) {
-    const includeWarningInReason =
-      params.json || !rawOutcome.warning || !hasLoggedPluginWarning(rawOutcome.warning);
-    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome, { includeWarningInReason });
-    pluginUpdateOutcomes.push(guided.outcome);
-    if (guided.warning) {
-      warnings.push(guided.warning);
-    }
+    collectPluginOutcome(rawOutcome);
   }
 
   pluginUpdateOutcomes.push(
@@ -309,17 +312,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
       }),
   );
 
-  // Mandatory post-core convergence: repair any configured plugin install
-  // records that are still missing payloads on disk and run a static smoke
-  // check that the repaired payloads are at least loadable. Failures here
-  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
-  // restarting the gateway. See `post-core-plugin-convergence.ts`.
-  //
-  // We pass `baselineInstallRecords: pluginConfig.plugins?.installs ?? {}`
-  // so that convergence layers its mutations on top of the latest
-  // *in-memory* sync/npm record state — not on the stale pre-update disk
-  // snapshot. The merged map convergence returns is the single source of
-  // truth for the subsequent commit block.
+  // Convergence checks activation before restart. Seed it from the current
+  // sync/npm records so repair cannot overwrite them with an older disk snapshot.
   const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
@@ -345,12 +339,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
   pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
   const convergenceErrored = convergenceFolded.errored;
-  // Reseed `pluginConfig` from convergence's authoritative post-merge
-  // record map. This is unconditional because convergence is what
-  // reconciled the baseline (sync/npm in-memory state) with disk and any
-  // new repairs, and convergence already persisted that exact map. If
-  // we did not adopt it here, the commit block below would overwrite the
-  // disk with `convergenceBaselineRecords` (no repairs included).
+  // Repair already persisted this authoritative map; the commit below must not
+  // restore the pre-convergence records and discard successful repairs.
   pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
   if (convergence.changes.length > 0) {
     pluginsChanged = true;
@@ -414,7 +404,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       switchedToBundled: cohort.sync.summary.switchedToBundled,
       switchedToNpm: cohort.sync.summary.switchedToNpm,
       warnings: cohort.sync.summary.warnings,
-      errors: cohort.sync.summary.errors,
+      errors: cohort.sync.summary.errors.map((error) => error.message),
     },
     npm: {
       changed: npmPluginsChanged,
@@ -451,10 +441,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
       runtime.log(formatPluginUpdateWarning(warning));
     }
   }
-  for (const error of cohort.sync.summary.errors) {
-    runtime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
-  }
-
   const updated = pluginUpdateOutcomes.filter((entry) => entry.status === "updated").length;
   const unchanged = pluginUpdateOutcomes.filter((entry) => entry.status === "unchanged").length;
   const failed = pluginUpdateOutcomes.filter((entry) => entry.status === "error").length;

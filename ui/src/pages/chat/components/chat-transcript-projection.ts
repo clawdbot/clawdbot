@@ -16,13 +16,13 @@ import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
-  assistantMessageExpansionSignature,
   buildCachedChatItems,
   collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  deleteExpansionState,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -171,7 +171,7 @@ export function projectChatTranscript(
     );
     for (const key of expandedAssistantMessages.keys()) {
       if (!retainedKeys.has(key)) {
-        expandedAssistantMessages.delete(key);
+        deleteExpansionState(expandedAssistantMessages, key);
       }
     }
   }
@@ -195,7 +195,7 @@ export function projectChatTranscript(
     }
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
-    expandedAssistantMessages.set(key, pending);
+    setExpansionState(expandedAssistantMessages, key, pending);
     requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
@@ -207,7 +207,8 @@ export function projectChatTranscript(
         result?.ok && result.message && typeof result.message === "object"
           ? extractTextCached(result.message)
           : null;
-      expandedAssistantMessages.set(
+      setExpansionState(
+        expandedAssistantMessages,
         key,
         markdown === null
           ? { status: "error", revision: revision + 1 }
@@ -603,7 +604,8 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
-    assistantMessageExpansionSignature(expandedAssistantMessages),
+    expandedAssistantMessages,
+    getExpansionStateVersion(expandedAssistantMessages),
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),

@@ -50,6 +50,8 @@ type RepairMissingPluginInstallsResult = {
   warnings: string[];
   /** Unresolved consent errors, kept typed for update finalization. */
   outcomes?: PluginUpdateOutcome[];
+  /** Consent blocked activation; a retained usable enabled artifact only emits a notice. */
+  capabilityConsentRequired?: true;
   /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
   /** Successful install-record or package repairs that invalidate retained metadata. */
@@ -177,6 +179,7 @@ async function repairMissingPluginInstallsWithLease(
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
+  const consentBlockedPluginIds = new Set<string>();
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -204,6 +207,7 @@ async function repairMissingPluginInstallsWithLease(
       warnings.push(...messages);
       if (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED) {
         outcome = { pluginId, status: "error", code, message: messages.join(" ") };
+        consentBlockedPluginIds.add(pluginId);
       }
     }
     failedPlugins.set(pluginId, outcome);
@@ -415,6 +419,8 @@ async function repairMissingPluginInstallsWithLease(
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
       failedPlugins.delete(candidate.pluginId);
+      // Catalog recovery can succeed after the recorded-package attempt refused consent.
+      consentBlockedPluginIds.delete(candidate.pluginId);
     }
     if (installed.failedPluginId) {
       recordFailure(installed.failedPluginId, installed.warnings, installed.code);
@@ -436,6 +442,7 @@ async function repairMissingPluginInstallsWithLease(
     changes,
     warnings,
     ...(outcomes.length > 0 ? { outcomes } : {}),
+    ...(consentBlockedPluginIds.size > 0 ? { capabilityConsentRequired: true as const } : {}),
     ...(notices.length > 0 ? { notices } : {}),
     ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
     ...(repairedPluginIds.size > 0
