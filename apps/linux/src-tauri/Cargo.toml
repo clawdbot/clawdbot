@@ -39,7 +39,9 @@ tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-opener = "2.5.5"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
-tauri-plugin-updater = "2.11.0"
+# 2.11.0 returns Windows installer errors after Tauri has torn down the UI.
+# Lift this pin once cleanup runs only after a successful installer launch.
+tauri-plugin-updater = "=2.10.1"
 tauri-plugin-window-state = "2.4.1"
 tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
