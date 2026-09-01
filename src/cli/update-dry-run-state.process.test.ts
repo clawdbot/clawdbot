@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
@@ -51,8 +50,8 @@ function snapshotDatabaseArtifacts(snapshot: string[]): string[] {
 function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
-  const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
-  return spawnSync(process.execPath, ["--import", "tsx", entryPath, ...args], {
+  const entryPath = path.resolve("openclaw.mjs");
+  return spawnSync(process.execPath, [entryPath, ...args], {
     cwd: path.resolve("."),
     encoding: "utf8",
     env: {
@@ -88,6 +87,33 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
 }
 
 describe("update process state", () => {
+  it.each([true, false])(
+    "keeps cleanup preview/refusal byte-identical (dryRun=%s)",
+    async (dryRun) => {
+      const root = tempDirs.make("openclaw-cleanup-process-");
+      const config = path.join(root, "config", "openclaw.json");
+      const runs = path.join(root, "state", "session-sqlite-migration-runs");
+      const cache = path.join(root, "cache");
+      const temporary = path.join(root, "tmp");
+      await fs.mkdir(path.dirname(config), { recursive: true });
+      await fs.mkdir(runs, { recursive: true });
+      await fs.mkdir(cache);
+      await fs.mkdir(temporary);
+      await fs.writeFile(config, "{ invalid-config");
+      await fs.writeFile(path.join(runs, "unknown.json"), "{ invalid-manifest");
+      const before = await snapshotTree(root);
+      const result = runUpdateProcess(
+        root,
+        dryRun ? ["update", "--json", "--dry-run", "cleanup"] : ["update", "cleanup", "--json"],
+        { XDG_CACHE_HOME: cache, TMPDIR: temporary },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(dryRun ? 0 : 1);
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: dryRun ? "preview" : "refused" });
+      expect(await snapshotTree(root)).toEqual(before);
+    },
+  );
+
   it("keeps malformed config immutable while producing a best-effort preview", async () => {
     const root = tempDirs.make("openclaw-update-dry-run-malformed-");
     const configPath = path.join(root, "config", "openclaw.json");
@@ -208,33 +234,41 @@ describe("update process state", () => {
     expect(await snapshotTree(root)).toEqual(before);
   });
 
-  it("fences the full mutable update path before observation or action", async () => {
-    const root = tempDirs.make("openclaw-update-owned-state-");
-    const configPath = path.join(root, "config", "openclaw.json");
-    const stateDir = path.join(root, "state");
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
-    const externalEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_SUPERVISOR_MODE: "external",
-    };
-    claimOpenClawStateOwnership("gateway-supervisor", { env: externalEnv });
-    const databasePath = openOpenClawStateDatabase({ env: externalEnv }).path;
-    closeOpenClawStateDatabaseForTest();
-    const before = await snapshotTree(root);
-    const beforeDatabaseHash = await sha256File(databasePath);
+  it.each(["update", "cleanup"])(
+    "fences the mutable %s path before observation or action",
+    async (command) => {
+      const root = tempDirs.make("openclaw-update-owned-state-");
+      const configPath = path.join(root, "config", "openclaw.json");
+      const stateDir = path.join(root, "state");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
+      const externalEnv = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_SUPERVISOR_MODE: "external",
+      };
+      claimOpenClawStateOwnership("gateway-supervisor", { env: externalEnv });
+      const databasePath = openOpenClawStateDatabase({ env: externalEnv }).path;
+      closeOpenClawStateDatabaseForTest();
+      const before = await snapshotTree(root);
+      const beforeDatabaseHash = await sha256File(databasePath);
 
-    const refused = runUpdateProcess(root, ["update", "--timeout", "1", "--no-restart", "--json"]);
+      const refused = runUpdateProcess(
+        root,
+        command === "cleanup"
+          ? ["update", "cleanup", "--yes", "--json"]
+          : ["update", "--timeout", "1", "--no-restart", "--json"],
+      );
 
-    expect(refused.error).toBeUndefined();
-    expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/gateway-supervisor/u);
-    expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
-    expect(await snapshotTree(root)).toEqual(before);
-    expect(await sha256File(databasePath)).toBe(beforeDatabaseHash);
-  });
+      expect(refused.error).toBeUndefined();
+      expect(refused.status).not.toBe(0);
+      expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/gateway-supervisor/u);
+      expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
+      expect(await snapshotTree(root)).toEqual(before);
+      expect(await sha256File(databasePath)).toBe(beforeDatabaseHash);
+    },
+  );
 });

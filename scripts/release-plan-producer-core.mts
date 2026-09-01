@@ -219,26 +219,38 @@ function withCandidateSnapshot<T>(
 ): T {
   const snapshotRoot = mkdtempSync(join(tmpdir(), "openclaw-release-candidate-"));
   try {
-    const tree = execFileSync(
-      "git",
-      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions", "packages"],
-      { cwd: repoRoot },
-    ).toString("utf8");
+    // Enumerate package directories, then metadata only. Recursive runtime listings
+    // grow with unrelated source files and can overflow the child-process buffer.
+    const metadataPaths = ["package.json"];
+    for (const directory of git(repoRoot, [
+      "ls-tree",
+      "-d",
+      "-z",
+      "--name-only",
+      candidateSha,
+      "--",
+      "extensions/",
+      "packages/",
+    ])
+      .split("\0")
+      .filter(Boolean)) {
+      metadataPaths.push(`${directory}/package.json`);
+      if (directory.startsWith("extensions/")) {
+        metadataPaths.push(`${directory}/README.md`);
+      }
+    }
+    const tree = execFileSync("git", ["ls-tree", "-z", candidateSha, "--", ...metadataPaths], {
+      cwd: repoRoot,
+    }).toString("utf8");
     const inventoryPaths: string[] = [];
     for (const entry of tree.split("\0").filter(Boolean)) {
       const [metadata, path] = entry.split("\t");
-      if (
-        !path ||
-        (path !== "package.json" &&
-          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path) &&
-          !/^packages\/[^/]+\/package\.json$/u.test(path))
-      ) {
-        continue;
-      }
       if (metadata?.startsWith("120000 ")) {
         throw new Error("candidate package inventory must not contain symbolic links");
       }
-      inventoryPaths.push(path);
+      if (metadata?.startsWith("100") && path) {
+        inventoryPaths.push(path);
+      }
     }
     if (!inventoryPaths.includes("package.json")) {
       throw new Error("candidate package.json is missing");

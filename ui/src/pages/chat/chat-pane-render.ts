@@ -628,7 +628,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         suggestionViewer || catalogKey
           ? undefined
           : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
-      onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => {

@@ -16,6 +16,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
+import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
@@ -4006,6 +4007,42 @@ describe("runWithModelFallback", () => {
     ).toEqual([
       { provider: "anthropic", model: "claude-opus-4-5" },
       { provider: "anthropic", model: "claude-haiku-3-5" },
+    ]);
+  });
+
+  it("keeps the configured-primary tail when inherited fallbacks stay unset", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+
+    // Reply/command preparation must project inherited fallbacks to `undefined`
+    // so the candidate resolver owns the ladder and appends the configured
+    // primary as the final candidate (C -> B -> A, not C -> B).
+    const fallbacksOverride = resolveEffectiveModelFallbacks({
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: false,
+    });
+    expect(fallbacksOverride).toBeUndefined();
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride,
+      }),
+    ).toEqual([
+      { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+      { provider: "openai", model: "gpt-4.1-mini" },
     ]);
   });
 

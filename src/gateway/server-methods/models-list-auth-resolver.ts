@@ -39,6 +39,7 @@ export function createModelsListAuthResolver(params: {
   preparedAuthStore: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  preparedSyntheticAuthComplete?: boolean;
   workspaceDir: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): ModelAuthAvailabilityResolver {
@@ -52,6 +53,7 @@ export function createModelsListAuthResolver(params: {
     metadataSnapshot: params.metadataSnapshot,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
+    preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete,
     skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(
       params.metadataSnapshot,

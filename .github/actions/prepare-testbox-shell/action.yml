@@ -1,9 +1,12 @@
 name: Prepare Testbox shell
-description: Pin the checked-out base ref and expose the setup-node toolchain to Testbox.
+description: Pin the checked-out base ref and expose the prepared toolchains to Testbox.
 
 inputs:
   base-ref:
-    description: Commit or ref that Testbox should treat as origin/main; defaults to HEAD.
+    description: Event base for pull requests, or ref to treat as origin/main for manual runs; defaults to HEAD.
+    required: false
+  go-version:
+    description: Go version to install and expose to Testbox; empty skips Go setup.
     required: false
 
 runs:
@@ -17,6 +20,14 @@ runs:
         set -euo pipefail
 
         base_ref="${TESTBOX_BASE_REF:-HEAD}"
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          # The checked-out merge can have a newer base than the event payload.
+          base_ref="$(node scripts/lib/merge-head-diff-base.mjs \
+            --base "$base_ref" --head HEAD --prefer-first-parent)"
+          BASE_SHA="$base_ref" FETCH_REF="$GITHUB_BASE_REF" \
+            python3 -I -S "$GITHUB_ACTION_PATH/../git-owner/owner.py" \
+              --policy "$GITHUB_ACTION_PATH/../ensure-base-commit/policy.py"
+        fi
         if ! base_sha="$(git rev-parse --verify "${base_ref}^{commit}")"; then
           echo "Testbox base commit is missing from the maintained checkout: $base_ref" >&2
           exit 1
@@ -42,3 +53,24 @@ runs:
         exec /usr/local/bin/corepack pnpm "$@"
         PNPM
         sudo chmod 0755 /usr/local/bin/pnpm
+
+    - name: Setup Go environment
+      if: inputs.go-version != ''
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: false
+
+    - name: Expose Go tools
+      if: inputs.go-version != ''
+      shell: bash
+      env:
+        TESTBOX_GO_VERSION: ${{ inputs.go-version }}
+      run: |
+        set -euo pipefail
+
+        test "$(go env GOVERSION)" = "go${TESTBOX_GO_VERSION}"
+        go_root="$(go env GOROOT)"
+        for tool in go gofmt; do
+          sudo ln -sf "$go_root/bin/$tool" "/usr/local/bin/$tool"
+        done

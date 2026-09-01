@@ -37,6 +37,7 @@ import {
   registerSignalExitGate,
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
@@ -84,7 +85,13 @@ export function resolvePreparedGatewayUpdatePolicy(
 
 export type ManagedGatewayUpdateVerdict =
   | { kind: "absent" | "foreign" }
-  | { kind: "owned"; root: string; fingerprint: string; refreshDefinition: boolean }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
   | { kind: "unresolved"; root: string; fingerprint: string }
   | { kind: "unavailable"; message: string };
 
@@ -165,11 +172,36 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
   preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+  allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
   const inspection = await inspectManagedGatewayServiceBeforeUpdate(params);
+  if (
+    params.allowInstallRootChange &&
+    before &&
+    verdict?.kind === "owned" &&
+    verdict.refreshDefinition &&
+    (inspection.kind === "foreign" || inspection.kind === "unresolved") &&
+    (params.state.definitionMutationCapability?.kind ?? "writable") === "writable"
+  ) {
+    const retained = await inspectManagedGatewayServiceBeforeUpdate({
+      state: params.state,
+      root: verdict.root,
+    });
+    // A verified core install can replace its root before rewriting the launcher.
+    // Pin the original command even when pnpm has removed its old package directory.
+    if (
+      matchesStoppedService(
+        { ...before, serviceUpdateVerdict: { ...verdict, refreshDefinition: false } },
+        params.state,
+        retained,
+      )
+    ) {
+      return { ...verdict, requiresInstallRootRefresh: true };
+    }
+  }
   if (
     before &&
     verdict &&
@@ -416,7 +448,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     // Enabled systemd units may be manually stopped; loaded LaunchAgents can
     // respawn. Windows needs the live numeric task state, not its last result.
     offline:
-      (serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "unresolved") &&
       serviceState.runtime?.status === "stopped" &&
       (process.platform === "darwin"
         ? serviceState.loadState.status === "not-loaded" ||
@@ -562,8 +593,10 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
-  root?: string;
   jsonMode: boolean;
+  nodeRunner?: string;
+  timeoutMs?: number;
+  invocationCwd?: string;
 }): Promise<void> {
   const before = params.preManagedServiceStop;
   if (!before?.stopped || !before.serviceEnv) {
@@ -582,23 +615,33 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       requireEffective: true,
       validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
     });
-    // Recovery follows the verified installation or the update's returned replacement root.
-    const revalidated = await revalidateManagedGatewayServiceAfterUpdate({
+    // A failed candidate can name a different root without replacing the serving installation.
+    await revalidateManagedGatewayServiceAfterUpdate({
       state,
-      root: params.root ?? verdict.root,
+      root: verdict.root,
       preManagedServiceStop: before,
     });
-    await service.restart({
-      env: state.env,
-      preserveDefinition: revalidated.kind !== "owned" || !revalidated.refreshDefinition,
-      stdout: serviceControlStdoutForMode(params.jsonMode),
-    });
+    // The installed CLI owns the current config dialect and restart health check.
+    // Recovery preserves the service definition and never bypasses its guards.
+    await runUpdatedInstallGatewayCommand(
+      {
+        result: { root: verdict.root },
+        opts: { json: params.jsonMode },
+        invocationEnv: before.serviceEnv,
+        serviceEnv: state.env,
+        nodeRunner: params.nodeRunner,
+        timeoutMs: params.timeoutMs,
+        invocationCwd: params.invocationCwd,
+      },
+      "restart",
+      true,
+    );
     if (!params.jsonMode) {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
     }
   } catch (err) {
     defaultRuntime.error(
-      `Failed to restart managed gateway service after failed update: ${String(err)}`,
+      `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw gateway status --deep\` before restarting it manually.`,
     );
   }
 }

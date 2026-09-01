@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
+import "./tooltip.ts";
 
 const NATIVE_LINK_MENU_ELEMENT_NAME = `test-openclaw-native-link-menu-${crypto.randomUUID()}`;
 const containers: HTMLElement[] = [];
@@ -114,7 +115,7 @@ describe("native link menu", () => {
     expect(calls).toEqual(["close", "copy"]);
   });
 
-  it("closes on Escape without leaking the key to an underlying dialog", async () => {
+  it("dismisses a tooltip before its menu without leaking either Escape", async () => {
     const trigger = document.createElement("a");
     trigger.href = "https://example.com";
     document.body.append(trigger);
@@ -123,6 +124,28 @@ describe("native link menu", () => {
     const menu = await mountMenu({ trigger, onClose });
     const escaped = vi.fn();
     menu.addEventListener("keydown", escaped);
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = "Link action details";
+    tooltip.anchor = menuItems(menu)[0]!;
+    menu.append(tooltip);
+    await tooltip.updateComplete;
+    tooltip.anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await popup.updateComplete;
+    expect(popup.open).toBe(true);
+
+    const firstEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    menu.dispatchEvent(firstEscape);
+
+    expect(popup.open).toBe(false);
+    expect(firstEscape.defaultPrevented).toBe(true);
+    expect(escaped).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(trigger);
 
     const keydown = new KeyboardEvent("keydown", {
       key: "Escape",

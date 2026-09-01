@@ -1694,8 +1694,9 @@ export function scheduleFollowupDrain(
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
   // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+  void runWithGatewayIndependentRootWorkContinuation(
+    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    "session:followup-drain",
   ).catch((err: unknown) => {
     if (FOLLOWUP_QUEUES.get(key) === queue && queue.drainOwner === drainOwner) {
       queue.draining = false;

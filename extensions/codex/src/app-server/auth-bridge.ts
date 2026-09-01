@@ -12,7 +12,6 @@ import {
   findPersistedAuthProfileCredential,
   loadAuthProfileStoreForSecretsRuntime,
   refreshOAuthCredentialForRuntime,
-  resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
   resolveDefaultAgentDir,
@@ -23,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   hasUsableOAuthCredential,
+  resolveAuthProfileOrder,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";

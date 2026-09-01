@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const runtimeProcessEntrypoints = {
+  githubExec: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/github-exec-launcher",
+    distWorkerPath: "agents/github-exec-launcher.js",
+  },
   sqliteReadOnly: {
     currentModuleUrl,
     sourceWorkerName: "sqlite-readonly-location.worker",
@@ -11,6 +16,16 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",
     distWorkerPath: "state/openclaw-database-verify.worker.js",
+  },
+  sessionTranscriptArchive: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-accessor.sqlite-archive.worker",
+    distWorkerPath: "config/sessions/session-accessor.sqlite-archive.worker.js",
+  },
+  sessionTranscriptReconcile: {
+    currentModuleUrl,
+    sourceWorkerName: "../config/sessions/session-transcript-reconcile.worker",
+    distWorkerPath: "config/sessions/session-transcript-reconcile.worker.js",
   },
   tailscaleRouteOwner: {
     currentModuleUrl,

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -30,6 +31,7 @@ import {
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -62,6 +64,74 @@ type SourceScope = Awaited<ReturnType<typeof seedMessageCutSource>>;
 
 beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 afterEach(() => resetPluginRuntimeStateForTest());
+
+it.each(mutationMethods)(
+  "rejects %s while its source initializer is still running",
+  async (method) => {
+    await withOpenClawTestState({ label: "message-cut-initializing-source" }, async (testState) => {
+      await testState.writeConfig(cfg);
+      const runtime = createRuntimeAgent();
+      const key = "agent:main:dashboard:initializing-source";
+      const initialized = createDeferredCore();
+      const release = createDeferredCore();
+      let source: SourceScope | undefined;
+      const creation = runtime.session.createSessionEntry({
+        cfg,
+        key,
+        initialEntry: { agentHarnessId: "test-harness" },
+        afterCreate: async (entry) => {
+          source = { agentId: entry.agentId, sessionKey: key, sessionId: entry.sessionId };
+          await appendTranscriptMessage(source, {
+            eventId: "user-2",
+            parentId: null,
+            message: { role: "user", content: "Pending history" },
+          });
+          await appendTranscriptMessage(source, {
+            eventId: "alternate-user",
+            parentId: null,
+            message: { role: "user", content: "Alternate pending history" },
+          });
+          await appendTranscriptEvent(source, {
+            type: "leaf",
+            id: "pending-leaf",
+            parentId: "alternate-user",
+            targetId: "user-2",
+          });
+          initialized.resolve();
+          await release.promise;
+        },
+      });
+      const creationResult = creation.then(
+        (created) => ({ created }),
+        (error: unknown) => ({ error }),
+      );
+      let mutation: ReturnType<typeof invokeMessageCut> | undefined;
+      try {
+        await initialized.promise;
+        const scope = expectDefined(source, "pending source");
+        const before = await readMutationStorage(scope);
+        mutation = invokeMessageCut(method, scope);
+        // The initializer remains blocked: rejection must not wait on its lifecycle fence.
+        await vi.waitFor(() => expect(mutation?.respond).toHaveBeenCalled());
+        expect(await mutation.error).toBeUndefined();
+        expect(mutation.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.UNAVAILABLE,
+            message: expect.stringContaining("initializing"),
+          }),
+        );
+        expect(await readMutationStorage(scope)).toEqual(before);
+      } finally {
+        release.resolve();
+        await creationResult;
+        await mutation?.error;
+      }
+      expect(await creationResult).toHaveProperty("created.entry.sessionId", source?.sessionId);
+    });
+  },
+);
 
 async function seedMessageCutSource(incognito = false) {
   const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}source`;
@@ -151,6 +221,42 @@ function invokeMessageCut(
   return { respond, error };
 }
 
+it.each(mutationMethods)(
+  "observes initialization written by another process for %s",
+  async (method) => {
+    await withOpenClawTestState({ label: "message-cut-initialization-cache" }, async (state) => {
+      await state.writeConfig(cfg);
+      const scope = await seedMessageCutSource();
+      // Another process can publish a pending row without touching this process's entry cache.
+      listSessionEntriesCore({ agentId: scope.agentId });
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
+      const peer = new DatabaseSync(database.path);
+      try {
+        peer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.initializationPending', json('true')) WHERE session_key = ?",
+          )
+          .run(scope.sessionKey);
+        const mutation = invokeMessageCut(method, scope);
+        expect(await mutation.error).toBeUndefined();
+        expect(mutation.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: ErrorCodes.UNAVAILABLE,
+            message: expect.stringContaining("initializing"),
+          }),
+        );
+        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.sessionId).toBe(
+          scope.sessionId,
+        );
+      } finally {
+        peer.close();
+      }
+    });
+  },
+);
+
 async function readMutationStorage(scope: SourceScope) {
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
   const db = getSessionKysely(database.db);
@@ -230,7 +336,7 @@ async function revokeWithPublicLifecyclePredecessor(
     const pending = enqueue(params);
     if (
       params.label === "runExclusiveSessionLifecycleMutation" &&
-      params.storePath === JSON.stringify([storePath, scope.sessionId])
+      params.storePath === JSON.stringify([storePath, scope.sessionKey])
     ) {
       queuedMutations += 1;
     }
@@ -261,7 +367,7 @@ async function revokeWithPublicLifecyclePredecessor(
   );
   let mutation: ReturnType<typeof invokeMessageCut> | undefined;
   try {
-    // Observe the actual shared sessionId enqueue; the removal acquires other keys first.
+    // Both operations now acquire the source key before its physical session id.
     await vi.waitFor(() => expect(queuedMutations).toBe(1));
     mutation = invoke();
     await vi.waitFor(() => expect(queuedMutations).toBe(2));

@@ -9,14 +9,11 @@ function createAttemptParams(
 }
 
 describe("resolveCodexDynamicToolDirectNames", () => {
-  it("preserves ring-zero and message tools alongside progress_card", () => {
+  it("preserves conditional ring-zero and message tools", () => {
     const ringZeroParams = createAttemptParams({ toolsAllow: ["openclaw"] });
     const messageParams = createAttemptParams({ sourceReplyDeliveryMode: "message_tool_only" });
 
-    expect(resolveCodexDynamicToolDirectNames(ringZeroParams, true)).toEqual([
-      "openclaw",
-      "progress_card",
-    ]);
-    expect(resolveCodexDynamicToolDirectNames(messageParams)).toEqual(["message", "progress_card"]);
+    expect(resolveCodexDynamicToolDirectNames(ringZeroParams, true)).toEqual(["openclaw"]);
+    expect(resolveCodexDynamicToolDirectNames(messageParams)).toEqual(["message"]);
   });
 });

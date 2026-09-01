@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw update` (safe-ish source update + gateway auto-restart)"
+summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely
   - You are debugging `openclaw update` output or options
+  - You want to inspect or retire migration recovery originals after an update
   - You need to understand `--update` shorthand behavior
 title: "Update"
 ---
@@ -21,6 +22,7 @@ updates go through the package-manager flow described in
 openclaw update
 openclaw update status
 openclaw update repair
+openclaw update cleanup --dry-run
 openclaw update wizard
 openclaw update --channel extended-stable
 openclaw update --channel beta
@@ -66,6 +68,10 @@ print progress steps.
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
 completion in a new shell profile remains an interactive choice.
+
+`--tag` changes only this package update. A saved `update.channel` continues to
+govern later foreground and automatic updates, even after a one-off beta
+install. Use `--channel` to change that policy.
 
 For source checkouts, `--dry-run` previews the update flow without fetching Git
 refs or checking working-tree changes. The real update checks for uncommitted
@@ -141,15 +147,85 @@ plugin finalization steps still exit non-zero.
 
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
-accept capability changes, and JSON mode does not prompt. A denied update can
-preserve the previous usable plugin and finish with a warning; an unresolved
-missing or invalid active payload can still fail finalization.
+accept capability changes, and JSON mode does not prompt. An unresolved review
+preserves the previous plugin, exits non-zero, and blocks any requested Gateway
+restart.
 
 If the core package has already changed, run `openclaw update repair` in an
 interactive terminal to review plugin capabilities. After reviewing the changes,
 automation can use `openclaw update repair --accept-capabilities`. Acceptance
 applies to each artifact's recomputed declared surface during this invocation;
 it does not approve future capability additions.
+
+## `update cleanup`
+
+Retire migration recovery originals after you have verified that the upgrade and
+session history work. Start with a preview, which can run while the Gateway is
+active:
+
+```bash
+openclaw update cleanup --dry-run
+openclaw --profile work update cleanup --dry-run --json
+```
+
+Cleanup targets the selected profile and `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH`
+overrides. It displays that state directory and does not redirect to a managed
+service. Confirm the displayed directory is the installation you intend to clean.
+`--dry-run` reads only configuration and recovery metadata, without opening
+databases, taking a maintenance lock, loading plugins, or creating state.
+Candidate bytes still require identity verification; historical artifacts are
+listed separately as requiring verification. Protected and blocked artifacts
+include reason codes.
+
+Before applying, stop the Gateway for that same profile/state directory and wait
+for other SQLite maintenance commands to finish. Cleanup requires exclusive
+offline state ownership and never stops or restarts a service itself.
+
+<Warning>
+Cleanup permanently removes the selected rollback originals, including branches
+and metadata intentionally removed by a verified repair. Doctor restore cannot
+recreate them afterward. Keep them, or preserve an independent backup containing
+them, if you still need that rollback path. Current SQLite history stays in place.
+</Warning>
+
+```bash
+openclaw update cleanup
+openclaw update cleanup --yes --json
+```
+
+Interactive confirmation defaults to **No**. JSON mode never prompts or grants
+consent; unattended deletion requires `--yes`. Consent does not override
+ownership, file identity, or dependency checks. Applicable flags (`--dry-run`,
+`--yes`, and `--json`) work before or after `cleanup`; update-only flags
+`--channel`, `--tag`, `--timeout`, `--no-restart`, and `--accept-capabilities`
+are rejected.
+
+Only owner-recorded recovery artifacts with complete import evidence are
+eligible. Unknown or unimported history, malformed inputs, trajectories,
+forensic corrupt databases, operator backups, and unmanifested artifacts stay
+protected. Old manifests are verified offline where possible; missing evidence
+is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+
+The JSON result contains `stateDir`, `status`, `artifacts`, and `totals`. Each
+artifact reports its path, run ids, logical bytes, outcome, and reason. Totals
+separate candidates, verification-required, protected, blocked, and removed
+bytes. Removal failures exit nonzero. Keep the recovery manifests and rerun
+cleanup to finish recorded interrupted work; a retry does not delete a recreated
+file. Removed logical bytes do not promise
+equivalent physical space reclamation on cloned or snapshotted filesystems.
+When a path cannot be inspected, its logical size comes from recorded artifact
+metadata when available. Cleanup records durable intent before removal and uses
+exclusive no-copy publication. Failures are reported; retries reconcile file
+operations that already completed. Manifest files are synchronized before removal;
+parent directories are synchronized where supported. Windows does not provide the
+same parent-directory durability guarantee.
+
+Doctor restore reports intentionally disposed originals and pending cleanup
+explicitly. Neither update nor cleanup creates an automatic full-state backup;
+these recovery originals are **not a full pre-upgrade backup**. See
+[Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
+for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
+for restoring retained originals.
 
 ## `update wizard`
 
@@ -184,9 +260,12 @@ aligned:
 
 ### Restart handoff
 
-The Gateway core auto-updater (when enabled via config) launches the CLI
-update path outside the live Gateway request handler. Control-plane
-`update.run` package-manager updates and supervised git-checkout updates use
+The Gateway core auto-updater requires a managed service restart path. It hands
+the CLI update to a detached helper before the Gateway exits. A foreground
+Gateway keeps update hints but leaves installation and activation to the
+operator: stop it, run `openclaw update`, then launch it again.
+
+Control-plane `update.run` package-manager updates and supervised git-checkout updates use
 the same managed-service handoff instead of replacing the package tree or
 rebuilding `dist/` inside the live Gateway process: the Gateway starts a
 detached helper and exits, and that helper runs `openclaw update --yes --json`
@@ -208,6 +287,10 @@ then refreshes service metadata, restarts the service, and verifies the
 restarted Gateway before reporting `Gateway: restarted and verified.`.
 Doctor repair and plugin validation run before restart; a verified restart
 does not run another Doctor from the old updater process.
+After plugin convergence, the updated CLI also runs any plugin-owned
+post-update readiness checks against an isolated state snapshot. An error keeps
+the Gateway stopped and returns the check's remediation before restart; this
+gate does not run interactive setup, download models, or change config.
 Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.

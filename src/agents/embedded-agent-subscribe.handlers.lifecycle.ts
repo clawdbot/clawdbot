@@ -12,7 +12,7 @@ import {
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {
-  classifyFailoverReason,
+  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
@@ -148,9 +148,8 @@ export function handleAgentEnd(
 
   if (isError && lastAssistant) {
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "", {
-      provider: lastAssistant.provider,
-      providerPlugin: null,
+    const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
+      providerOwner: ctx.params.providerOwner ?? null,
     });
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
@@ -158,9 +157,11 @@ export function handleAgentEnd(
       agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
+      providerOwner: ctx.params.providerOwner,
     });
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
+      providerOwner: ctx.params.providerOwner,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {

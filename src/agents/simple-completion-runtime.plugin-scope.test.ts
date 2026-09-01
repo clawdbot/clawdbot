@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -12,15 +14,60 @@ import {
 import { createSyncSuiteTempRootTracker } from "../plugins/test-helpers/fs-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import {
+  completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("openclaw-simple-completion-plugin-scope");
+
+function createTransportOwnerFixture(rootDir: string, owner: "A" | "B") {
+  fs.mkdirSync(rootDir);
+  const fixture = createColdPluginFixture({
+    rootDir,
+    pluginId: `completion-owner-${owner.toLowerCase()}`,
+    providerId: "completion-owner-provider",
+  });
+  fs.writeFileSync(
+    fixture.runtimeSource,
+    `const fs = require("node:fs");
+const { getApiProvider } = require("openclaw/plugin-sdk/llm");
+const owner = ${JSON.stringify(owner)};
+fs.writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded", "utf8");
+module.exports = {
+  id: ${JSON.stringify(fixture.pluginId)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(fixture.providerId)}, label: owner, auth: [],
+      async prepareRuntimeAuth() { return { apiKey: "fixture-auth-" + owner }; },
+      createStreamFn() {
+        const source = getApiProvider("openai-completions");
+        if (!source) throw new Error("OpenAI completion transport is not registered");
+        return (model, context, options) => source.streamSimple(
+          { ...model, api: "openai-completions" }, context,
+          { ...options, headers: { ...options?.headers, "x-completion-stream": owner } },
+        );
+      },
+      wrapSimpleCompletionStreamFn({ streamFn }) {
+        return (model, context, options) => streamFn(model, context, {
+          ...options, headers: { ...options?.headers, "x-completion-wrapper": owner },
+        });
+      },
+    });
+  },
+};
+`,
+    "utf8",
+  );
+  return fixture;
+}
 
 afterEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
@@ -157,6 +204,180 @@ module.exports = {
       expect(preparedRuntime?.metadataSnapshot.plugins.map((plugin) => plugin.id)).toEqual([
         selected.pluginId,
       ]);
+    },
+  );
+
+  it.each(["acquired", "borrowed", "empty"] as const)(
+    "keeps %s transport ownership across ambient replacement and repeated completion",
+    async (mode) => {
+      const tempRoot = fs.realpathSync(tempRoots.makeTempDir());
+      const selected = createTransportOwnerFixture(path.join(tempRoot, "selected"), "A");
+      const ambient = createTransportOwnerFixture(path.join(tempRoot, "ambient"), "B");
+      const unrelatedRoot = path.join(tempRoot, "unrelated");
+      fs.mkdirSync(unrelatedRoot);
+      const unrelated = createColdPluginFixture({
+        rootDir: unrelatedRoot,
+        pluginId: "unrelated-provider-plugin",
+        providerId: "unrelated-provider",
+      });
+      let requestCount = 0;
+      const server = createServer((request, response) => {
+        request.resume();
+        requestCount += 1;
+        const text = [
+          requestCount,
+          request.headers["x-completion-stream"] ?? "none",
+          request.headers["x-completion-wrapper"] ?? "none",
+          request.headers.authorization,
+        ].join("|");
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            id: "completion-owner-response",
+            object: "chat.completion.chunk",
+            model: "selected-model",
+            choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Completion owner fixture did not expose a TCP port");
+        }
+        const configFor = (fixture: typeof selected): OpenClawConfig => ({
+          agents: {
+            defaults: { workspace: fixture.rootDir, model: `${fixture.providerId}/selected-model` },
+          },
+          models: {
+            providers: {
+              [fixture.providerId]: {
+                api: "openai-completions",
+                apiKey: "fixture-auth-source",
+                baseUrl: `http://127.0.0.1:${address.port}/v1`,
+                models: [
+                  {
+                    id: "selected-model",
+                    name: "Selected",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 1024,
+                  },
+                ],
+              },
+            },
+          },
+          plugins: {
+            load: { paths: [fixture.rootDir, unrelated.rootDir] },
+            slots: { memory: "none" },
+            entries: {
+              [fixture.pluginId]: { enabled: true },
+              [unrelated.pluginId]: { enabled: true },
+            },
+          },
+        });
+        const cfg = configFor(selected);
+        const env = {
+          ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: tempRoots.makeTempDir() }),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+        };
+        await withEnvAsync(env, async () => {
+          const input = {
+            config: cfg,
+            agentId: "main",
+            agentDir: path.join(tempRoot, "agent"),
+            workspaceDir: selected.rootDir,
+          };
+          const lease =
+            mode === "acquired"
+              ? undefined
+              : await acquireAgentRunPreparedModelRuntime(
+                  {
+                    ...input,
+                    readOnly: mode === "empty",
+                    loadRuntimePlugins: mode === "borrowed",
+                    ...(mode === "borrowed"
+                      ? {
+                          runtimePluginSelections: [
+                            {
+                              provider: selected.providerId,
+                              modelId: "selected-model",
+                              agentId: "main",
+                            },
+                          ],
+                        }
+                      : {}),
+                  },
+                  { catalogMode: "static" },
+                );
+          try {
+            if (mode === "empty") {
+              expect(lease?.snapshot.pluginRegistry).toBeUndefined();
+            }
+            const activateAmbient = () =>
+              loadAndActivateRootPluginRegistry({
+                config: configFor(ambient),
+                workspaceDir: ambient.rootDir,
+                onlyPluginIds: [ambient.pluginId],
+                throwOnLoadError: true,
+              });
+            if (mode !== "acquired") {
+              activateAmbient();
+            }
+            const prepared = await prepareSimpleCompletionModel({
+              cfg,
+              agentId: "main",
+              agentDir: input.agentDir,
+              workspaceDir: input.workspaceDir,
+              provider: selected.providerId,
+              modelId: "selected-model",
+              ...(lease ? { preparedModelRuntime: lease.snapshot } : {}),
+            });
+            if ("error" in prepared) {
+              throw new Error(prepared.error);
+            }
+            if (mode === "acquired") {
+              activateAmbient();
+            }
+            // Callers use the logical API before dispatch, including CLI system-prompt selection.
+            expect(prepared.model.api).toBe("openai-completions");
+            expect(isColdPluginRuntimeLoaded(ambient)).toBe(true);
+            const owner = mode === "empty" ? "none" : "A";
+            const auth = mode === "empty" ? "fixture-auth-source" : "fixture-auth-A";
+            for (const turn of [1, 2]) {
+              const result = await completeWithPreparedSimpleCompletionModel({
+                model: prepared.model,
+                auth: prepared.auth,
+                cfg,
+                context: { messages: [{ role: "user", content: `Turn ${turn}`, timestamp: turn }] },
+              });
+              expect(result).toMatchObject({
+                stopReason: "stop",
+                content: [{ type: "text", text: `${turn}|${owner}|${owner}|Bearer ${auth}` }],
+              });
+            }
+            expect(prepared.model.api).toBe("openai-completions");
+            expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
+          } finally {
+            lease?.release();
+          }
+        });
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
     },
   );
 });

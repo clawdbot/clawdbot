@@ -306,7 +306,6 @@ module.exports = {
         );
         const result = await runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
-          requestId: 1,
         });
         expect(result.status).toBe("ok");
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);

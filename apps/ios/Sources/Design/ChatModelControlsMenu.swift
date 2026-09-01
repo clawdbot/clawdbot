@@ -614,7 +614,7 @@ struct ChatModelControlsMenuItems: View {
         selectionID: String,
         showsDefaultBadge: Bool = false) -> some View
     {
-        let isSelected = self.viewModel.modelSelectionID == selectionID
+        let isSelected = self.viewModel.isSelectedModel(selectionID)
         return Button {
             self.viewModel.selectModel(selectionID)
             self.onSelection()

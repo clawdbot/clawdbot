@@ -25,6 +25,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import { ControlUiGitHubError } from "../../control-ui-github-api.js";
 import type { HealthSummary } from "../../health/types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
@@ -1148,63 +1149,93 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
-  it("withholds every operator scope when configured-role identity verification fails", async () => {
-    await withOpenClawTestState({ label: "gateway-github-role-verification-failure" }, async () => {
-      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(
-        vi.fn(async () => {
-          throw new Error("GitHub unavailable");
-        }),
-      );
-      loadConfigMock.mockImplementationOnce(() => ({
-        gateway: {
-          auth: {
-            mode: "none",
-            identityScopes: { "ada@github": ["operator.admin"] },
-          },
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" as const },
-                agents: "*" as const,
-                scopes: ["operator.read" as const],
+  it.each([
+    {
+      error: new Error("private upstream failure"),
+      message: "profile verification is unavailable",
+    },
+    {
+      error: new ControlUiGitHubError(429, "private upstream failure"),
+      message: "GitHub is rate limiting profile verification",
+    },
+  ])(
+    "rejects unavailable configured-role identity with actionable guidance ($message)",
+    async ({ error, message }) => {
+      await withOpenClawTestState(
+        { label: "gateway-github-role-verification-failure" },
+        async () => {
+          createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(
+            vi.fn(async () => {
+              throw error;
+            }),
+          );
+          loadConfigMock.mockImplementationOnce(() => ({
+            gateway: {
+              auth: {
+                mode: "none",
+                identityScopes: { "ada@github": ["operator.admin"] },
               },
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    sessions: { others: "view" as const },
+                    agents: "*" as const,
+                    scopes: ["operator.read" as const],
+                  },
+                },
+              },
+              controlUi: { allowedOrigins: ["http://127.0.0.1:19001"] },
             },
-          },
-          controlUi: { allowedOrigins: ["http://127.0.0.1:19001"] },
-        },
-      }));
-      resolveConnectAuthStateMock.mockResolvedValueOnce({
-        authResult: {
-          ok: true,
-          method: "tailscale",
-          user: "ada@github",
-          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
-        },
-        authOk: true,
-        authMethod: "tailscale",
-        sharedAuthOk: true,
-      });
-      const harness = attachGatewayHarness({
-        connId: "conn-github-role-verification-failure",
-        connectNonce: "nonce-github-role-verification-failure",
-      });
+          }));
+          resolveConnectAuthStateMock.mockResolvedValueOnce({
+            authResult: {
+              ok: true,
+              method: "tailscale",
+              user: "ada@github",
+              tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+            },
+            authOk: true,
+            authMethod: "tailscale",
+            sharedAuthOk: true,
+          });
+          const close = createCloseMock();
+          const harness = attachGatewayHarness({
+            connId: "conn-github-role-verification-failure",
+            connectNonce: "nonce-github-role-verification-failure",
+            close,
+          });
 
-      harness.sendConnect("connect-github-role-verification-failure", {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "test", version: "dev", platform: "test", mode: "test" },
-        role: "operator",
-        caps: [],
-      });
+          harness.sendConnect("connect-github-role-verification-failure", {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: { id: "test", version: "dev", platform: "test", mode: "test" },
+            role: "operator",
+            caps: [],
+          });
 
-      await waitForFast(() => {
-        expect(harness.client).toMatchObject({ connect: { scopes: [] } });
-        expect(harness.socketSend).toHaveBeenCalled();
-      });
-      expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
-    });
-  });
+          await waitForFast(() => {
+            expect(harness.send).toHaveBeenCalledWith(
+              expect.objectContaining({
+                id: "connect-github-role-verification-failure",
+                ok: false,
+                error: expect.objectContaining({
+                  code: ErrorCodes.UNAVAILABLE,
+                  message: expect.stringContaining(message),
+                  retryable: true,
+                  details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+                }),
+              }),
+            );
+            expect(close).toHaveBeenCalledWith(1013, expect.stringContaining(message));
+          });
+          expect(harness.client).toBeNull();
+          expect(harness.socketSend).not.toHaveBeenCalled();
+          expect(JSON.stringify(harness.send.mock.calls)).not.toContain("private upstream failure");
+        },
+      );
+    },
+  );
 
   it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
     await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {

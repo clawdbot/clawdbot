@@ -3,8 +3,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
@@ -726,7 +726,7 @@ describe("chat pane initialization", () => {
     } as unknown as ApplicationContext;
     state.sessionKey = "main";
     state.hello = hello;
-    state.initialUserMessage = createInitialUserMessageHandoff();
+    state.chatSubmissions = createChatSubmissions();
     state.chatRunId = "run-reconnected";
     state.chatStream = "The response survived navigation.";
     state.loadAssistantIdentity = vi.fn(async () => undefined);

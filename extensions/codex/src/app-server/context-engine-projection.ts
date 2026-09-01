@@ -356,6 +356,10 @@ function renderMessageBody(
   message: AgentMessage,
   options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
 ): string {
+  // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
+  if (message.role === "compactionSummary" || message.role === "branchSummary") {
+    return truncateText(message.summary.trim(), options.maxTextPartChars);
+  }
   if (!hasMessageContent(message)) {
     return "";
   }

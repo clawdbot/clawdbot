@@ -55,10 +55,37 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Ensure tag commit is reachable from main
+      - name: Checkout trusted release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Verify trusted release tooling identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          node .release-tooling/scripts/release-tooling-identity.mjs verify \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-full-ref "$WORKFLOW_FULL_REF" \
+            --workflow-sha "$WORKFLOW_SHA"
+
+      - name: Ensure tag commit is reachable from its release branch
         id: ancestry
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
@@ -69,28 +96,54 @@ jobs:
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           release_tag = os.environ["RELEASE_TAG"]
+
+          def is_ancestor(sha, ref):
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", sha, ref)
+                  return True
+              except GitFailure as error:
+                  if error.code == 1:
+                      return False
+                  raise
+
           run_git(
               workspace,
               "fetch",
-              "--quiet",
+              "--no-tags",
               "origin",
-              "main",
+              "+refs/heads/main:refs/remotes/origin/main",
               timeout=120,
               reclaim_locks=True,
           )
+          if not is_ancestor(os.environ["WORKFLOW_SHA"], "origin/main"):
+              print("Linux release tooling must be reachable from current main.", file=sys.stderr)
+              raise SystemExit(1)
           tag_sha = git_output(
               workspace,
               "rev-parse",
               f"refs/tags/{release_tag}^{{commit}}",
           ).rstrip("\n")
-          try:
-              run_git(workspace, "merge-base", "--is-ancestor", tag_sha, "origin/main")
-          except GitFailure:
-              print(
-                  f"Tag {release_tag} ({tag_sha}) is not reachable from main; "
-                  "Linux bundles ship for main-based releases only."
+          if not is_ancestor(tag_sha, "origin/main"):
+              # The validated stable tag chooses its sole eligible release branch;
+              # numeric correction tags share the base version's release branch.
+              release_branch = f"release/{release_tag[1:].split('-', 1)[0]}"
+              release_ref = f"refs/remotes/origin/{release_branch}"
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{release_branch}:{release_ref}",
+                  timeout=120,
+                  reclaim_locks=True,
               )
-              raise SystemExit(1)
+              if not is_ancestor(tag_sha, release_ref):
+                  print(
+                      f"Tag {release_tag} ({tag_sha}) is not reachable from main "
+                      f"or {release_branch}.",
+                      file=sys.stderr,
+                  )
+                  raise SystemExit(1)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"tag_sha={tag_sha}\n")
           PYTHON

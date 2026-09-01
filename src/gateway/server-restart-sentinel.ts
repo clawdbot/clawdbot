@@ -52,6 +52,7 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
   deliveryContextFromSession,
+  hasDeliveryTargetFields,
   mergeDeliveryContext,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
@@ -89,13 +90,6 @@ function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
 ): RestartSentinelPayload | null {
   return payload ? structuredClone(payload) : null;
-}
-
-function hasRoutableDeliveryContext(context?: {
-  channel?: string;
-  to?: string;
-}): context is { channel: string; to: string } {
-  return Boolean(context?.channel && context?.to);
 }
 
 function enqueueRestartSentinelWake(
@@ -485,7 +479,7 @@ async function loadRestartSentinelStartupTask(params: {
               deps: params.deps,
               attempt: attempt + 1,
             });
-          }).catch((err: unknown) => {
+          }, "restart-sentinel:wake").catch((err: unknown) => {
             log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
           });
         }, CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS);
@@ -547,7 +541,7 @@ async function loadRestartSentinelStartupTask(params: {
     let sessionDeliveryContext = deliveryContextFromSession(entry);
     let chatType = sessionDeliveryOrigin(entry)?.chatType ?? "direct";
     if (
-      !hasRoutableDeliveryContext(sessionDeliveryContext) &&
+      !hasDeliveryTargetFields(sessionDeliveryContext) &&
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {

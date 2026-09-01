@@ -18,7 +18,6 @@ import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
-  formatDeliveryQueueHealthLine,
   healthCommand,
   healthCommandNonExiting,
 } from "./health.js";
@@ -911,87 +910,6 @@ describe("formatContextEngineHealthLine", () => {
     expect(formatContextEngineHealthLine(summary)).toBe(
       "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
-  });
-});
-
-describe("formatDeliveryQueueHealthLine", () => {
-  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [
-        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
-        { queueName: "session", count: 1 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes dead-lettered ingress entries per channel account", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [],
-      ingressFailed: [
-        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
-        { channelId: "telegram", accountId: "ops", count: 2 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes ingress pressure per channel account", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [],
-      ingressPressure: [
-        {
-          channelId: "telegram",
-          accountId: "ops",
-          laneCount: 1,
-          pendingCount: 56,
-          claimedCount: 0,
-          blockedCount: 55,
-          oldestReceivedAt: 90_000,
-        },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes dead letters and ingress pressure together", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
-      ingressPressure: [
-        {
-          channelId: "line",
-          accountId: "default",
-          laneCount: 2,
-          pendingCount: 3,
-          claimedCount: 1,
-          blockedCount: 2,
-          oldestReceivedAt: 3_690_000,
-        },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
-    );
-  });
-
-  it("returns null when no dead-lettered entries are reported", () => {
-    const summary = createHealthSummary();
-
-    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
   });
 });
 

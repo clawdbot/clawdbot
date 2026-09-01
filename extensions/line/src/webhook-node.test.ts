@@ -105,7 +105,7 @@ function createMiddlewareRequest(
 }
 
 function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
-  const bot = { handleWebhook: vi.fn(async () => {}) };
+  const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
   const runtime = createRuntimeMock();
   const handler = createLineNodeWebhookHandler({
     channelSecret: secret,
@@ -198,6 +198,7 @@ async function invokeNodePostContract(params: {
       // oxlint-disable-next-line typescript/only-throw-error -- Webhook boundaries must report non-Error throws from downstream dispatchers.
       throw params.failWith;
     }
+    return "durable" as const;
   });
   const runtime = createRuntimeMock();
   const handler = createLineNodeWebhookHandler({
@@ -369,7 +370,7 @@ describe("LINE webhook shared POST contract", () => {
 
 describe("createLineNodeWebhookHandler", () => {
   it("returns 200 for GET", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
@@ -386,7 +387,7 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("returns 204 for HEAD", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
@@ -414,7 +415,7 @@ describe("createLineNodeWebhookHandler", () => {
   });
 
   it("rejects unsigned POST requests before reading the body", async () => {
-    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeMock();
     const readBody = vi.fn(async () => JSON.stringify({ events: [{ type: "message" }] }));
     const handler = createLineNodeWebhookHandler({
@@ -434,7 +435,7 @@ describe("createLineNodeWebhookHandler", () => {
 
   it("uses strict pre-auth limits for signed POST requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const bot = { handleWebhook: vi.fn(async () => "durable" as const) };
     const runtime = createRuntimeMock();
     const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number, timeoutMs?: number) => {
       expect(maxBytes).toBe(64 * 1024);
@@ -491,8 +492,8 @@ describe("createLineNodeWebhookHandler", () => {
     const bot = {
       handleWebhook: vi.fn(
         async () =>
-          await new Promise<void>((resolve) => {
-            releaseAuthenticated = resolve;
+          await new Promise<"durable">((resolve) => {
+            releaseAuthenticated = () => resolve("durable");
           }),
       ),
     };

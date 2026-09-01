@@ -1184,7 +1184,7 @@ describe("firecrawl tools", () => {
         query: "web search",
         count: 6.5,
       }),
-    ).rejects.toThrow("count must be an integer from 1 to 10");
+    ).rejects.toThrow(/^count must be an integer from 1 to 100$/);
     await expect(
       searchTool.execute("call-search-timeout", {
         query: "web search",

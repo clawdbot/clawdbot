@@ -116,6 +116,62 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
   throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
 
+async function expectCommandTimeoutAfterReady(
+  start: () => Promise<string>,
+  ready: () => Promise<void>,
+  timeoutMs = 500,
+): Promise<void> {
+  const realSetTimeout = globalThis.setTimeout;
+  const deadlines: Array<() => void> = [];
+  const expire = () => {
+    for (const deadline of deadlines.splice(0)) {
+      deadline();
+    }
+  };
+  // Hold only the command deadline until the real child has installed its handlers.
+  // Restore scheduling before readiness polling and all real termination/grace work.
+  const timerSpy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, milliseconds, ...args) => {
+      if (milliseconds !== timeoutMs) {
+        return realSetTimeout(callback, milliseconds, ...args);
+      }
+      const timer = realSetTimeout(() => {}, milliseconds);
+      deadlines.push(() => {
+        clearTimeout(timer);
+        callback(...args);
+      });
+      return timer;
+    });
+  try {
+    let runPromise: Promise<string>;
+    try {
+      runPromise = start();
+    } finally {
+      timerSpy.mockRestore();
+    }
+    // Observe rejection before the first await, and join both outcomes before cleanup.
+    const results = await Promise.allSettled([
+      expect(runPromise).rejects.toThrow(`timed out after ${timeoutMs}ms`),
+      (async () => {
+        try {
+          expect(deadlines).toHaveLength(1);
+          await ready();
+        } finally {
+          expire();
+        }
+      })(),
+    ]);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
+  } finally {
+    expire();
+  }
+}
+
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -292,13 +348,17 @@ describe("package-openclaw-for-docker", () => {
 
       let childPid = 0;
       try {
-        const runPromise = runCommandForTest("pnpm", ["probe"], tempDir, {
-          env,
-          killAfterMs: 25,
-          timeoutMs: 500,
-        });
-        childPid = await readPid(childPidPath, 2_000);
-        await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+        await expectCommandTimeoutAfterReady(
+          () =>
+            runCommandForTest("pnpm", ["probe"], tempDir, {
+              env,
+              killAfterMs: 25,
+              timeoutMs: 500,
+            }),
+          async () => {
+            childPid = await readPid(childPidPath, 2_000);
+          },
+        );
         await waitForDead(childPid, 2_000);
       } finally {
         if (childPid && isProcessAlive(childPid)) {
@@ -1595,28 +1655,32 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-timeout-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid;
+    let childPid = 0;
     try {
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(process.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
         "process.on('SIGTERM', () => {});",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
 
-      const runPromise = runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
-        env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-        killAfterMs: 25,
-        timeoutMs: 500,
-      });
-      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
-      childPid = await readPid(childPidPath, 2000);
-      await timeoutAssertion;
+      await expectCommandTimeoutAfterReady(
+        () =>
+          runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
+            env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+            killAfterMs: 25,
+            timeoutMs: 500,
+          }),
+        async () => {
+          childPid = await readPid(childPidPath, 2000);
+        },
+      );
       await waitForDead(childPid, 2000);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
@@ -1634,24 +1698,27 @@ describe("package-openclaw-for-docker", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-grace-"));
     const donePath = path.join(tempDir, "done");
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid;
+    let childPid = 0;
     try {
       const script = [
         "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "process.on('SIGTERM', () => {",
         `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
         "});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
 
-      const runPromise = runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
-        killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
-        timeoutMs: 500,
-      });
-      childPid = await readPid(childPidPath, 2000);
-
-      await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+      await expectCommandTimeoutAfterReady(
+        () =>
+          runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+            killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
+            timeoutMs: 500,
+          }),
+        async () => {
+          childPid = await readPid(childPidPath, 2000);
+        },
+      );
       expect(fs.readFileSync(donePath, "utf8")).toBe("done");
     } finally {
       if (childPid && isProcessAlive(childPid)) {
@@ -1668,28 +1735,31 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-descendant-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid;
+    let childPid = 0;
     try {
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(process.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
 
-      await expect(
-        runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
-          env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-          killAfterMs: 25,
-          timeoutMs: 500,
-        }),
-      ).rejects.toThrow(/timed out after 500ms/u);
-
-      childPid = await readPid(childPidPath, 2000);
+      await expectCommandTimeoutAfterReady(
+        () =>
+          runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
+            env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+            killAfterMs: 25,
+            timeoutMs: 500,
+          }),
+        async () => {
+          childPid = await readPid(childPidPath, 2000);
+        },
+      );
       await waitForDead(childPid, 2000);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
@@ -1704,19 +1774,29 @@ describe("package-openclaw-for-docker", () => {
       return;
     }
 
+    const tempDir = tempDirs.make("openclaw-package-grace-exit-");
+    const childPidPath = path.join(tempDir, "child.pid");
+    let childPid = 0;
     const killSpy = vi.spyOn(process, "kill");
     try {
       const script = [
+        "const fs = require('node:fs');",
         "process.on('SIGTERM', () => process.exit(0));",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
 
-      await expect(
-        runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
-          killAfterMs: 100,
-          timeoutMs: 25,
-        }),
-      ).rejects.toThrow(/timed out after 25ms/u);
+      await expectCommandTimeoutAfterReady(
+        () =>
+          runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+            killAfterMs: 100,
+            timeoutMs: 25,
+          }),
+        async () => {
+          childPid = await readPid(childPidPath, 2000);
+        },
+        25,
+      );
 
       const sigkillCallsAfterExit = killSpy.mock.calls.filter(
         ([, signal]) => signal === "SIGKILL",
@@ -1727,6 +1807,9 @@ describe("package-openclaw-for-docker", () => {
       );
     } finally {
       killSpy.mockRestore();
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
     }
   });
 

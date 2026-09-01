@@ -22,7 +22,7 @@ export function createLazyCodexAppServerBindingStore(
   >,
   managedThreadState?: Pick<
     PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-    "entries" | "registerIfAbsent"
+    "entries" | "lookup" | "registerIfAbsent"
   >,
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;

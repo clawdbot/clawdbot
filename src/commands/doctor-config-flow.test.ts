@@ -7,10 +7,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import {
-  buildPluginCapabilityConsentReview,
-  type PluginCapabilityConsentHandler,
-} from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";

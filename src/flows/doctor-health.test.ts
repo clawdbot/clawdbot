@@ -1,12 +1,18 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import {
+  maybeStopManagedServiceBeforeMutableUpdate,
+  resolvePreparedGatewayUpdatePolicy,
+} from "../cli/update-cli/update-command-service-maintenance.js";
+import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
@@ -16,7 +22,9 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "../infra/state-migrations.workspace-setup.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import {
+  assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
@@ -60,6 +68,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
+  note: vi.fn(),
   outro: mocks.outro,
 }));
 
@@ -172,6 +181,8 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 describe("runDoctorHealthFlow", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
@@ -186,33 +197,48 @@ describe("runDoctorHealthFlow", () => {
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
 
-  it.each([
-    "inspection-failed",
-    "runtime-only",
-    "owned-unknown",
-    "foreign-running",
-    "foreign-unknown",
-    "foreign-stopped",
-    "foreign-stopped-loaded",
-    "foreign-stopped-loaded-disabled",
-    "foreign-stopped-loaded-unknown",
-    "foreign-respawning",
-    "unresolved-running",
-    "unresolved-unknown",
-    "unresolved-stopped",
-    "unresolved-stopped-loaded",
-    "unresolved-respawning",
-    "absent",
-    "absent-unknown",
-    "windows-ready",
-    "windows-disabled",
-    "windows-queued",
-    "windows-running",
-    "windows-startup-stopped",
-    "windows-startup-unknown",
-  ] as const)(
-    "admits offline state repair only after safe service inspection: %s",
-    async (kind) => {
+  it.each(
+    [
+      "inspection-failed",
+      "runtime-only",
+      "owned-unknown",
+      "foreign-running",
+      "foreign-unknown",
+      "foreign-stopped",
+      "foreign-stopped-loaded",
+      "foreign-stopped-loaded-disabled",
+      "foreign-stopped-loaded-unknown",
+      "foreign-respawning",
+      "unresolved-running",
+      "unresolved-unknown",
+      "unresolved-stopped",
+      "unresolved-stopped-loaded",
+      "unresolved-respawning",
+      "absent",
+      "absent-unknown",
+      "windows-ready",
+      "windows-disabled",
+      "windows-queued",
+      "windows-running",
+      "windows-startup-stopped",
+      "windows-startup-unknown",
+    ].flatMap((kind) => [
+      { kind, updateParent: false },
+      { kind, updateParent: true },
+    ]),
+  )(
+    "admits offline state repair only after safe service inspection: $kind (update=$updateParent)",
+    async ({ kind, updateParent }) => {
+      if (updateParent) {
+        for (const [key, value] of Object.entries(
+          buildUpdateDoctorEnv({
+            allowGatewayServiceRepair: true,
+            allowGatewayActivation: false,
+          }),
+        )) {
+          vi.stubEnv(key, value);
+        }
+      }
       const windows = kind.startsWith("windows");
       mocks.emulateNativeInstall = kind !== "runtime-only";
       mocks.servicePlatform = windows ? "win32" : undefined;
@@ -375,7 +401,12 @@ describe("runDoctorHealthFlow", () => {
     "ready",
     "clean-repair",
     "clean-inspect",
+    "update-no-restart",
+    "update-no-restart-stopped",
+    "update-parent-stopped",
+    "update-legacy",
     "repair-failed",
+    "store-close-failed",
     "config-refused",
     "workspace-cleanup-failed",
     "restart-unhealthy",
@@ -384,7 +415,7 @@ describe("runDoctorHealthFlow", () => {
     "coordinates the matching managed writer through multi-agent repair: %s",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const clean = outcome.startsWith("clean-");
+        const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
@@ -433,7 +464,7 @@ describe("runDoctorHealthFlow", () => {
         });
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
-        let running = true;
+        let running = outcome !== "update-no-restart-stopped";
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);
         const command = {
@@ -450,6 +481,14 @@ describe("runDoctorHealthFlow", () => {
         });
         const restart = vi.fn(async () => {
           events.push("restart");
+          if (outcome === "ready") {
+            expect(() =>
+              assertNoOpenClawAgentDatabaseLeases("main", { env: state.env }),
+            ).not.toThrow();
+            expect(() =>
+              assertNoOpenClawAgentDatabaseLeases("research", { env: state.env }),
+            ).not.toThrow();
+          }
           const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
             OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -488,6 +527,16 @@ describe("runDoctorHealthFlow", () => {
           }
           const result = await migrateLegacyMediaPersistence();
           expect(result.warnings).toEqual([]);
+          if (outcome === "ready" || outcome === "store-close-failed") {
+            // Later diagnostics reopen runtime handles after the migration closes its own.
+            const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+            openOpenClawAgentDatabase({ agentId: "research", env: state.env });
+            if (outcome === "store-close-failed") {
+              vi.spyOn(reopened.db, "close").mockImplementationOnce(() => {
+                throw new Error("synthetic database close failure");
+              });
+            }
+          }
           if (outcome === "workspace-cleanup-failed") {
             const migration = await migrateLegacyWorkspaceState({
               stateDir: state.stateDir,
@@ -510,27 +559,65 @@ describe("runDoctorHealthFlow", () => {
           }
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        if (outcome === "config-refused") {
-          runtime.exit.mockImplementation(() => {
-            const coordinatorPath = resolveStateDatabaseCoordinatorPath({
-              databasePath: resolveOpenClawStateSqlitePath(state.env),
-              runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-              uid: process.getuid?.(),
-            });
-            const peer = spawnSync(process.execPath, [
-              "-e",
-              "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
-              coordinatorPath,
-            ]);
-            expect(peer.status).toBe(0);
+        const expectCoordinatorReleased = () => {
+          const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+            databasePath: resolveOpenClawStateSqlitePath(state.env),
+            runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+            uid: process.getuid?.(),
           });
+          const peer = spawnSync(process.execPath, [
+            "-e",
+            "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.argv[1]);db.exec('BEGIN EXCLUSIVE');db.close();",
+            coordinatorPath,
+          ]);
+          expect(peer.status).toBe(0);
+        };
+        if (outcome === "config-refused") {
+          runtime.exit.mockImplementation(expectCoordinatorReleased);
         }
         try {
+          const modernUpdate = outcome.startsWith("update-") && outcome !== "update-legacy";
+          if (modernUpdate) {
+            if (!running) {
+              releaseOpenClawAgentDatabaseLease(leaseId, { env: state.env });
+            }
+            const parentRestarts = outcome === "update-parent-stopped";
+            const prepared = await maybeStopManagedServiceBeforeMutableUpdate({
+              updateInstallKind: "package",
+              root: packageRoot,
+              shouldRestart: parentRestarts,
+              jsonMode: true,
+            });
+            expect(prepared.stopped).toBe(parentRestarts);
+            expect(running).toBe(outcome === "update-no-restart");
+            expect(events).toEqual(parentRestarts ? ["stop"] : []);
+            events.length = 0;
+            stop.mockClear();
+            const policy = resolvePreparedGatewayUpdatePolicy(prepared, parentRestarts);
+            expect(policy).toEqual({
+              allowGatewayServiceRepair: true,
+              allowGatewayActivation: parentRestarts,
+            });
+            for (const [key, value] of Object.entries(buildUpdateDoctorEnv(policy))) {
+              vi.stubEnv(key, value);
+            }
+          } else if (outcome === "update-legacy") {
+            vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+          }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
           const run = runDoctorHealthFlow(runtime, {
             ...(outcome === "clean-inspect" ? {} : { repair: true }),
             nonInteractive: true,
           });
+          if (outcome === "update-no-restart") {
+            await expect(run).rejects.toThrow("update parent");
+            expect(events).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           if (outcome === "ancestor-blocked") {
             await expect(run).rejects.toThrow("openclaw doctor --fix");
             await expect(run).rejects.toThrow("from a shell outside the gateway service");
@@ -543,6 +630,9 @@ describe("runDoctorHealthFlow", () => {
           }
           if (outcome === "repair-failed") {
             await expect(run).rejects.toThrow("synthetic migration failure");
+          } else if (outcome === "store-close-failed") {
+            await expect(run).rejects.toThrow("synthetic database close failure");
+            expectCoordinatorReleased();
           } else if (outcome === "workspace-cleanup-failed") {
             await expect(run).rejects.toThrow(/workspace.*requires migration/);
           } else if (outcome === "restart-unhealthy") {
@@ -550,8 +640,19 @@ describe("runDoctorHealthFlow", () => {
           } else {
             await run;
           }
+          if (modernUpdate) {
+            expect(events.filter((event) => event !== "repair")).toEqual([]);
+            expect(stop).not.toHaveBeenCalled();
+            expect(restart).not.toHaveBeenCalled();
+            expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+            expect(fs.readFileSync(initial.path)).toEqual(agentBefore);
+            return;
+          }
           const shouldRestart =
-            outcome === "ready" || outcome === "restart-unhealthy" || outcome === "clean-repair";
+            outcome === "ready" ||
+            outcome === "restart-unhealthy" ||
+            outcome === "clean-repair" ||
+            outcome === "update-legacy";
           expect(events).toEqual(
             outcome === "clean-inspect"
               ? ["repair"]
@@ -753,6 +854,79 @@ describe("runDoctorHealthFlow", () => {
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(fs.readFileSync(archive, "utf8")).toBe("invalid JSON\n");
+    });
+  });
+
+  it.each(["default", "configured"] as const)(
+    "fails repair when a startup-blocking %s legacy session store remains",
+    async (layout) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath =
+          layout === "configured"
+            ? state.path("custom", "sessions.json")
+            : state.statePath("agents", "main", "sessions", "sessions.json");
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, '{"agent:main:legacy":');
+        mocks.config.mockReturnValue(
+          layout === "configured" ? { session: { store: storePath } } : {},
+        );
+        const before = fs.readFileSync(storePath);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Legacy session store requires migration"),
+        );
+        expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+        expect(fs.readFileSync(storePath)).toEqual(before);
+      });
+    },
+  );
+
+  it("fails public repair after the Gateway lock skips session import", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = await state.writeText(
+        "agents/main/sessions/sessions.json",
+        JSON.stringify({
+          "agent:main:legacy": { sessionId: "legacy-session", updatedAt: 1 },
+        }),
+      );
+      const before = fs.readFileSync(storePath);
+      const gatewayLock = await acquireGatewayLock({
+        allowInTests: true,
+        env: state.env,
+        port: 19566,
+      });
+      if (!gatewayLock) {
+        throw new Error("expected Gateway lock");
+      }
+      mocks.runContributions.mockImplementation(async (ctx) => {
+        await noteSessionTranscriptHealth({
+          cfg: ctx.cfg,
+          env: state.env,
+          shouldRepair: true,
+        });
+      });
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      try {
+        await runCommandWithRuntime(runtime, () =>
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        );
+      } finally {
+        await gatewayLock.release();
+      }
+
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Legacy session store requires migration"),
+      );
+      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+      expect(fs.readFileSync(storePath)).toEqual(before);
     });
   });
 

@@ -980,6 +980,7 @@ export function installSessionToolResultGuard(
           callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       sourceAppend,
+      message,
     );
     if (sessionTarget) {
       const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);

@@ -42,8 +42,15 @@ identically-named `exec`/`wait` tools.
 In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
 async tool global from guest JavaScript. Recognizable shell
-commands are rejected before the QuickJS worker starts with actionable
+commands are rejected before guest execution with actionable
 `invalid_input` guidance.
+
+Source validation, TypeScript compilation, and guest execution run in a bounded
+pool of worker threads that scales with available CPU cores. Workers stay warm
+between calls; each execution or resume gets an isolated QuickJS VM. Tool
+permissions, approvals, and session ownership remain with the Gateway. Queued
+work shares the execution deadline, and cancellation stops an active worker
+before the call settles.
 
 ## What it does
 

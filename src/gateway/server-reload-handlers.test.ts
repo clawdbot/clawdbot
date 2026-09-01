@@ -64,6 +64,7 @@ import {
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -5780,6 +5781,7 @@ describe("gateway Gmail hot reload handlers", () => {
     );
     expect(await restartOutcome).toEqual({ status: "started" });
     expect(restartSignal?.aborted).toBe(false);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["reload:config"]);
 
     await reloader.stop();
 

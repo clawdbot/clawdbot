@@ -359,8 +359,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       sessionOperations.add(parsed.id);
       // Release the frame queue while retaining shutdown admission. Desktop input
       // belongs to this socket; durable session work survives response-transport loss.
-      void runWithGatewayIndependentRootWorkContinuation(() =>
-        dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+      void runWithGatewayIndependentRootWorkContinuation(
+        () => dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+        "worker:dispatch",
       )
         .catch(() => {
           respond(false, undefined, workerProtocolError("gateway-unavailable"));
@@ -399,7 +400,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
         if (disposed || params.isClosed()) {
           return;
         }
-        const admission = tryBeginGatewayRootWorkAdmission();
+        const admission = tryBeginGatewayRootWorkAdmission("ws:worker-frame");
         if (!admission) {
           const client = params.getClient();
           const identity = client?.worker;

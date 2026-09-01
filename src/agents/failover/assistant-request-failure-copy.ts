@@ -33,7 +33,11 @@ export function renderAssistantRequestFailureCopy(
   const provider = facts.provider?.trim();
   const model = facts.model?.trim();
   const target = provider && model ? `${provider}/${model}` : provider || model;
-  const reason = facts.reason ? ASSISTANT_REQUEST_FAILURE_REASON[facts.reason] : undefined;
+  const normalizedReason =
+    facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
+      ? "server_error"
+      : facts.reason;
+  const reason = normalizedReason ? ASSISTANT_REQUEST_FAILURE_REASON[normalizedReason] : undefined;
   const httpStatus = facts.status;
   const status =
     typeof httpStatus === "number" &&
@@ -48,10 +52,10 @@ export function renderAssistantRequestFailureCopy(
   const details = [reason, status].filter(Boolean);
   const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;
   if (
-    facts.reason === "overloaded" ||
-    facts.reason === "server_error" ||
-    facts.reason === "timeout" ||
-    facts.reason === "rate_limit"
+    normalizedReason === "overloaded" ||
+    normalizedReason === "server_error" ||
+    normalizedReason === "timeout" ||
+    normalizedReason === "rate_limit"
   ) {
     return `${summary} This is usually temporary — try again shortly.`;
   }
