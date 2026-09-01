@@ -56,6 +56,15 @@ This maintenance window also applies when repair ultimately finds no changes.
 Diagnostic runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
 
+<Warning>
+  `doctor --fix` follows explicitly configured workspace and store paths, including
+  paths outside `OPENCLAW_STATE_DIR`. Setting `OPENCLAW_STATE_DIR` and
+  `OPENCLAW_CONFIG_PATH` to a copy does not redirect those paths. Before rehearsing
+  repairs on copied state, copy the external workspaces and stores too, then rewrite
+  their paths in the copied config to point to the copies. Otherwise, Doctor can
+  modify the originals.
+</Warning>
+
 When an updater supplies an explicit Gateway activation policy, Doctor leaves
 stop and restart ownership with that updater. The native manager must confirm
 the service is already offline before repair. If `openclaw update --no-restart`
