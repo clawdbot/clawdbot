@@ -65,6 +65,27 @@ describe("managed Codex app-server binary", () => {
     ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
+  it.each([true, false])(
+    "uses embedded vendor binaries only when the platform package is absent (present=%s)",
+    (platformPackagePresent) => {
+      const packageRoot = "/repo/node_modules/@openai/codex";
+      const embedded = `${packageRoot}/vendor/aarch64-apple-darwin/bin/codex`;
+      expect(
+        resolveManagedCodexNativeCommand(`${packageRoot}/bin/codex.js`, {
+          platform: "darwin",
+          arch: "arm64",
+          resolvePackageJson: (name) =>
+            name === "@openai/codex"
+              ? `${packageRoot}/package.json`
+              : platformPackagePresent
+                ? "/repo/node_modules/@openai/codex-darwin-arm64/package.json"
+                : undefined,
+          pathExists: (candidate) => candidate === embedded,
+        }),
+      ).toBe(platformPackagePresent ? undefined : embedded);
+    },
+  );
+
   it("leaves explicit command overrides unchanged without probing managed paths", async () => {
     const explicitOptions = startOptions("config");
     const pathExists = vi.fn(async () => false);

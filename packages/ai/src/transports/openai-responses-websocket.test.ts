@@ -300,10 +300,10 @@ describe("native OpenAI Responses WebSocket transport", () => {
 
   it.each([
     {
-      name: "tool schema change",
+      name: "tool choice change",
       mutate: (request: Record<string, unknown>) => ({
         ...request,
-        tools: [{ type: "function", name: "write", parameters: { type: "object" } }],
+        tool_choice: "none",
       }),
     },
     {

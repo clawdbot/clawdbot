@@ -16,6 +16,7 @@ import {
 import { getActivePluginHttpRouteRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
+  getPluginRuntimeGatewayNodeAuthorities,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -650,12 +651,7 @@ export async function runWithGatewayRequestEnvelope<T>(
           client,
           isWebchatConnect: options.isWebchatConnect,
           // Only an owner-bound in-process stream may retain admitted Full authority.
-          ...(client?.internal?.nodeInvokeStream
-            ? {
-                invokeWithSessionNodeAuthority:
-                  getPluginRuntimeGatewayRequestScope()?.invokeWithSessionNodeAuthority,
-              }
-            : {}),
+          ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
           ...(pluginRegistry ? { pluginRegistry } : {}),
         },
         fn,

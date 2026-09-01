@@ -21,9 +21,9 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
-const invocationCwd = process.cwd();
 // The supervisor must not retain a cwd inside a worktree the operation may
-// delete; only the child keeps the caller's original cwd.
+// delete. Start the child in this same owner so early Git/gh reads use the
+// repository selected by the wrapper, before any PR worktree is entered.
 process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
 const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
@@ -208,7 +208,7 @@ const gitConfigParameters = [
   .join(" ");
 
 const child = spawn(script, args, {
-  cwd: invocationCwd,
+  cwd: repoRoot,
   detached: true,
   env: {
     ...process.env,

@@ -99,18 +99,6 @@ function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, { code: "internal_error", message });
 }
 
-async function syncImportedSourcesIfNeeded(
-  config: ResolvedMemoryWikiConfig,
-  appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
-) {
-  await syncMemoryWikiImportedSources({
-    config,
-    appConfig,
-    ...(signal ? { signal } : {}),
-  });
-}
-
 export function registerMemoryWikiGatewayMethods(params: {
   api: OpenClawPluginApi;
   config: ResolvedMemoryWikiConfig;
@@ -189,7 +177,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         respond(
           true,
           await resolveMemoryWikiStatus(config, {
@@ -266,7 +254,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         const status = await resolveMemoryWikiStatus(config, {
           appConfig,
         });
@@ -283,7 +271,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         respond(true, await compileMemoryWikiVault(config, signal ? { signal } : undefined));
       } catch (error) {
         respondError(respond, error);
@@ -320,7 +308,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         respond(true, await lintMemoryWikiVault(config, signal ? { signal } : undefined));
       } catch (error) {
         respondError(respond, error);
@@ -377,7 +365,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         const query = readStringParam(requestParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(requestParams, "maxResults");
         const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
@@ -410,7 +398,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         const { appConfig, config, signal } = resolveRequestContext(requestParams);
         // Source sync can write imported pages and indexes, so validate first.
         const mutation = normalizeMemoryWikiMutationInput(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         respond(
           true,
           await applyMemoryWikiMutation({
@@ -431,7 +419,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
-        await syncImportedSourcesIfNeeded(config, appConfig, signal);
+        await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
         const lookup = readStringParam(requestParams, "lookup", { required: true });
         const fromLine = readPositiveIntegerParam(requestParams, "fromLine");
         const lineCount = readPositiveIntegerParam(requestParams, "lineCount");

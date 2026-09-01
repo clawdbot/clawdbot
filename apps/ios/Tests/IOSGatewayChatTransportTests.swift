@@ -167,7 +167,7 @@ struct IOSGatewayChatTransportTests {
               "type":"hello-ok",
               "protocol":4,
               "server":{"version":"test","connId":"test"},
-              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-unread-ack-contract"]},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-scoped-chat-metadata","session-unread-ack-contract"]},
               "snapshot":{
                 "presence":[],
                 "health":{},
@@ -180,6 +180,7 @@ struct IOSGatewayChatTransportTests {
             """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
+        #expect(hello.supportsServerCapability(.sessionScopedChatMetadata))
         #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsCAS))
@@ -214,7 +215,9 @@ struct IOSGatewayChatTransportTests {
         #expect(requests.map(\.method) == Array(
             repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
             count: 3).flatMap(\.self))
-        #expect(requests.map(\.timeoutMs) == Array(repeating: 15000, count: 9))
+        #expect(requests.map(\.timeoutMs) == Array(
+            repeating: [15000, 600_000, 15000],
+            count: 3).flatMap(\.self))
 
         for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
             (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),

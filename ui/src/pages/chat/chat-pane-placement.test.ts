@@ -91,9 +91,11 @@ describe("chat pane placement", () => {
       }),
     ).toEqual({
       moving: false,
+      restarting: false,
       moveDisabledReason: undefined,
       reclaimDisabledReason:
         "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
+      restartDisabledReason: "This Gateway does not support this session action.",
     });
     expect(
       resolveChatPanePlacement({
@@ -104,8 +106,10 @@ describe("chat pane placement", () => {
       }),
     ).toEqual({
       moving: false,
+      restarting: false,
       moveDisabledReason: undefined,
       reclaimDisabledReason: undefined,
+      restartDisabledReason: "This Gateway does not support this session action.",
     });
   });
 
@@ -158,8 +162,10 @@ describe("chat pane placement", () => {
 
     expect(placement).toEqual({
       moving: false,
+      restarting: false,
       moveDisabledReason: "This Gateway does not support this session action.",
       reclaimDisabledReason: undefined,
+      restartDisabledReason: "This Gateway does not support this session action.",
     });
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",

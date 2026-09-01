@@ -29,6 +29,8 @@ openclaw channels logs --channel all
 openclaw channels dead-letters list --channel telegram --account default
 ```
 
+`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of stale probe success. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
+
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
@@ -166,6 +168,8 @@ Routing behavior stays consistent:
 If your config was already in a mixed state (named accounts present and top-level single-account values still set), run `openclaw doctor --fix` to move account-scoped values into the promoted account chosen for that channel.
 
 ## Login and logout (interactive)
+
+Before `channels add` or `channels login` writes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
 ```bash
 openclaw channels login --channel whatsapp

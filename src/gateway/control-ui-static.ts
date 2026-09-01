@@ -56,9 +56,9 @@ export function isControlUiPrecompressedAssetExtension(extension: string): boole
 }
 
 type ControlUiContentEncoding = "br" | "gzip";
-type ControlUiEncodingSelection = ControlUiContentEncoding | "identity" | "not-acceptable";
+type ControlUiRepresentationEncoding = ControlUiContentEncoding | "identity";
+type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";
 
-const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const CONTROL_UI_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
 
@@ -104,12 +104,16 @@ function normalizedAcceptEncoding(req: IncomingMessage): string {
   return Array.isArray(value) ? value.join(",") : (value ?? "");
 }
 
-function resolveControlUiContentEncoding(
+function resolveControlUiContentEncodings(
   req: IncomingMessage,
-  availableEncodings: ReadonlySet<ControlUiContentEncoding>,
-): ControlUiEncodingSelection {
+  includeCompressed: boolean,
+): ControlUiRepresentationEncoding[] {
+  const acceptEncoding = normalizedAcceptEncoding(req);
+  if (!acceptEncoding.trim()) {
+    return ["identity"];
+  }
   const qualities = new Map<string, number>();
-  for (const entry of normalizedAcceptEncoding(req).split(",")) {
+  for (const entry of acceptEncoding.split(",")) {
     const [rawName, ...rawParams] = entry.split(";");
     const name = rawName?.trim().toLowerCase();
     if (!name) {
@@ -130,38 +134,24 @@ function resolveControlUiContentEncoding(
     qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
   }
 
-  const hasAcceptEncoding = normalizedAcceptEncoding(req).trim().length > 0;
-  if (!hasAcceptEncoding) {
-    return "identity";
-  }
-
   const wildcardQuality = qualities.get("*");
-  const qualityFor = (name: ControlUiContentEncoding) =>
-    qualities.has(name) ? (qualities.get(name) ?? 0) : (wildcardQuality ?? 0);
   // RFC 9110 keeps identity acceptable unless identity or a rejecting wildcard
   // explicitly disables it. This distinction is required to return 406 rather
   // than silently violate identity;q=0.
-  const identityQuality = qualities.has("identity")
-    ? (qualities.get("identity") ?? 0)
-    : wildcardQuality === 0
-      ? 0
-      : 1;
-  const candidates: Array<{ encoding: ControlUiEncodingSelection; quality: number; rank: number }> =
-    [{ encoding: "identity", quality: identityQuality, rank: 0 }];
-  if (availableEncodings.has("gzip")) {
-    candidates.push({ encoding: "gzip", quality: qualityFor("gzip"), rank: 1 });
-  }
-  if (availableEncodings.has("br")) {
-    candidates.push({ encoding: "br", quality: qualityFor("br"), rank: 2 });
-  }
-  const selected = candidates
-    .filter((candidate) => candidate.quality > 0)
-    .toSorted((left, right) => right.quality - left.quality || right.rank - left.rank)[0];
-  return selected?.encoding ?? "not-acceptable";
+  const identityQuality = qualities.get("identity") ?? (wildcardQuality === 0 ? 0 : 1);
+  const qualityFor = (name: ControlUiRepresentationEncoding) =>
+    name === "identity" ? identityQuality : (qualities.get(name) ?? wildcardQuality ?? 0);
+  // Stable sorting preserves the server's br/gzip/identity preference for equal quality.
+  const encodings: ControlUiRepresentationEncoding[] = includeCompressed
+    ? ["br", "gzip", "identity"]
+    : ["identity"];
+  return encodings
+    .filter((encoding) => qualityFor(encoding) > 0)
+    .toSorted((left, right) => qualityFor(right) - qualityFor(left));
 }
 
 export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEncodingSelection {
-  return resolveControlUiContentEncoding(req, CONTROL_UI_DYNAMIC_ENCODINGS);
+  return resolveControlUiContentEncodings(req, true)[0] ?? "not-acceptable";
 }
 
 type OpenedControlUiRepresentation = {
@@ -178,16 +168,12 @@ export function resolveOpenedControlUiRepresentation(params: {
 }): OpenedControlUiRepresentation | null {
   const { req, sourceFile, precompressed, openPrecompressedFile } = params;
   const extension = path.extname(sourceFile.path).toLowerCase();
-  const availableEncodings =
-    precompressed && isControlUiCompressibleExtension(extension)
-      ? new Set(CONTROL_UI_DYNAMIC_ENCODINGS)
-      : new Set<ControlUiContentEncoding>();
-  for (;;) {
-    const selected = resolveControlUiContentEncoding(req, availableEncodings);
-    if (selected === "not-acceptable") {
-      fs.closeSync(sourceFile.fd);
-      return null;
-    }
+  const encodings = resolveControlUiContentEncodings(
+    req,
+    precompressed && isControlUiCompressibleExtension(extension),
+  );
+  // A missing sidecar changes availability, not this request's encoding preferences.
+  for (const selected of encodings) {
     if (selected === "identity") {
       return { bodyFile: sourceFile, contentPath: sourceFile.path };
     }
@@ -204,17 +190,15 @@ export function resolveOpenedControlUiRepresentation(params: {
       fs.closeSync(sourceFile.fd);
       return { bodyFile: compressedFile, contentPath: sourceFile.path, encoding: selected };
     }
-
-    // Generated builds have both variants, but a stale or partial local build
-    // can miss one. Retry the remaining representation before identity/406.
-    availableEncodings.delete(selected);
   }
+  fs.closeSync(sourceFile.fd);
+  return null;
 }
 
 function setControlUiEncodingHeaders(
   res: ServerResponse,
   extension: string,
-  encoding: ControlUiContentEncoding | "identity",
+  encoding: ControlUiRepresentationEncoding,
 ) {
   res.setHeader("Vary", "Accept-Encoding");
   if (!CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)) {

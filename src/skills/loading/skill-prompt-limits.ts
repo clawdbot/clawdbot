@@ -61,14 +61,24 @@ function buildRenderedSkillsPrompt(params: {
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
-/** Render a deterministic skills catalog within the shared model-context budget. */
-export function formatSkillsForPromptBounded(params: {
+type SkillsPromptParams = {
   skills: Skill[];
   maxSkillsInPrompt?: number;
   maxSkillsPromptChars?: number;
   remoteNote?: string;
   preserveOrder?: boolean;
-}): string {
+};
+
+/** Render a deterministic skills catalog within the shared model-context budget. */
+export function formatSkillsForPromptBounded(params: SkillsPromptParams): string {
+  return prepareSkillsForPrompt(params).prompt;
+}
+
+/** Keep resource selection tied to the exact catalog admitted by the prompt budget. */
+export function prepareSkillsForPrompt(params: SkillsPromptParams): {
+  prompt: string;
+  skills: Skill[];
+} {
   const maxSkillsInPrompt = params.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT;
   const maxSkillsPromptChars = params.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS;
   const orderedSkills = params.preserveOrder
@@ -110,7 +120,10 @@ export function formatSkillsForPromptBounded(params: {
     undefined;
 
   if (fitsFull(skillsForPrompt)) {
-    return renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "";
+    return {
+      prompt: renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "",
+      skills: skillsForPrompt,
+    };
   }
 
   if (!fitsCompact(skillsForPrompt, 0)) {
@@ -130,7 +143,7 @@ export function formatSkillsForPromptBounded(params: {
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
     const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
     if (fullWithoutNotice !== undefined) {
-      return fullWithoutNotice;
+      return { prompt: fullWithoutNotice, skills: byCount };
     }
     let lo = 0;
     let hi = byCount.length;
@@ -165,11 +178,11 @@ export function formatSkillsForPromptBounded(params: {
     }
     descriptionMaxChars = lo;
   }
-  return (
+  const prompt =
     renderWithinLimit(
       skillsForPrompt,
       { kind: "compact", descriptionMaxChars },
       includeLimitNote,
-    ) ?? ""
-  );
+    ) ?? "";
+  return { prompt, skills: prompt ? skillsForPrompt : [] };
 }

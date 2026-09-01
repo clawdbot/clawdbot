@@ -5,7 +5,6 @@ import path from "node:path";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -1078,7 +1077,7 @@ describe("config io write", () => {
         params: { transport: "sse", openaiWsWarmup: false },
       });
       expect(persisted.agents?.entries).toEqual({
-        main: { workspace: resolveDefaultAgentWorkspaceDir() },
+        main: { workspace: path.join(home, ".openclaw", "workspace") },
         ops: {},
       });
     },

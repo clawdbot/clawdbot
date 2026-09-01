@@ -409,9 +409,10 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectSessionBindingByConversation(...)` from
-`openclaw/plugin-sdk/session-binding-runtime` when the resolver needs this
-available/unavailable distinction.
+Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
+available/unavailable distinction. This public inspection helper is synchronous,
+read-only, and does not refresh binding liveness.
 
 ### Account-scoped conversation binding support
 
@@ -557,6 +558,13 @@ subscription, and routed-elsewhere notices.
   handler stop cancels the delivery before `bindPending` runs, or when
   `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
+
+Native approval runtimes can receive three approval kinds: `exec`, `plugin`,
+and `system-agent`. A `system-agent` request asks an operator to approve a
+Gateway-side persistent change, such as a config write or Gateway restart.
+The runtime must render the typed approval actions and then render the final
+application result. An allowed request can finish as applied or not applied;
+do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 

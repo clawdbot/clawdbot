@@ -8,13 +8,14 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
 type EmbeddedRunnerFastRunMockOptions = {
-  runEmbeddedAttempt: (params: unknown) => unknown;
+  runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => unknown;
   prepareProviderRuntimeAuth?: (params: {
     provider: string;
     context: { apiKey: string };
@@ -211,7 +212,8 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     selectAgentHarness: vi.fn(createMockAgentHarness),
     selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
-    runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
+      options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
@@ -362,7 +364,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     ),
   }));
   vi.doMock("../embedded-agent-runner/run/attempt.js", () => ({
-    runEmbeddedAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../../plugins/provider-external-auth.js", () => ({
     resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),

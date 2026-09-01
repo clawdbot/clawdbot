@@ -63,7 +63,7 @@ function createMainRefreshTemplate(directory: string) {
   writeFileSync(join(canonical, "package.json"), '{"type":"module"}\n');
   cpSync(join(process.cwd(), "tsconfig.json"), join(canonical, "tsconfig.json"));
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
-  mkdirSync(join(canonical, "src"));
+  mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
@@ -219,6 +219,15 @@ export function createMainRefreshFixture(directory: string) {
       | "scheduled-failure"
       | "api-error",
     requiredChecks: "pass" as "pass" | "fail" | "pending" | "api-error",
+    reviewComments: [
+      {
+        id: 1,
+        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
+
+<!-- clawsweeper-review item=42 -->`,
+        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+      },
+    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -384,8 +393,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
-  } else if (endpoint === 'repos/fixture/repo/issues/42/comments' && args.includes('POST')) {
-    value = { html_url: 'https://example.invalid/pr/42#completion' };
+  } else if (endpoint.startsWith('repos/fixture/repo/issues/42/comments')) {
+    if (args.includes('POST')) {
+      value = { html_url: 'https://example.invalid/pr/42#completion' };
+    } else {
+      event({ kind: 'review-comments' });
+      value = [control.reviewComments];
+    }
   } else if (endpoint === 'repos/fixture/repo/pulls/42') {
     let baseSha = control.metadata.baseRefOid;
     if (control.remoteOnlyBase) {

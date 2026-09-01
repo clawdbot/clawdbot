@@ -365,6 +365,81 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([commentary, final]);
   });
 
+  it.each([
+    { name: "matching run and item", itemId: "item-1", runId: "run-1", adopts: true },
+    { name: "same prose from another item", itemId: "item-2", runId: "run-1", adopts: false },
+    { name: "reused item from another run", itemId: "item-1", runId: "run-2", adopts: false },
+    { name: "item with unknown run", itemId: "item-1", runId: undefined, adopts: false },
+    { name: "unkeyed prose", itemId: undefined, runId: "run-1", adopts: false },
+    {
+      name: "another durable row",
+      itemId: "item-1",
+      runId: "run-1",
+      id: "other-row",
+      adopts: false,
+    },
+    { name: "another sequenced row", itemId: "item-1", runId: "run-1", seq: 2, adopts: false },
+    {
+      name: "imported provider row",
+      itemId: "item-1",
+      runId: "run-1",
+      importedFrom: "external",
+      adopts: false,
+    },
+  ])(
+    "reconciles commentary by identity: $name",
+    ({ itemId, runId, id, seq, importedFrom, adopts }) => {
+      const local = {
+        ...createMessage("assistant", "Repeated progress.", { id, seq, importedFrom }),
+        openclawStreamFallback: { itemId, runId, source: "segment" },
+      };
+      const durable = {
+        ...createMessage("assistant", "Repeated progress.", {
+          id: "persisted",
+          seq: 3,
+          runId: "run-1",
+          mirrorOrigin: "codex-app-server",
+        }),
+        openclawStreamFallback: { itemId: "item-1", source: "segment" },
+      };
+      const final = createMessage("assistant", "Finished.", {
+        id: "final",
+        seq: 4,
+        runId: "run-1",
+      });
+      let state = createSessionProjection(primaryScope, [local, final]);
+
+      state = projectLiveSessionMessage(state, durable);
+
+      expect(state.messages).toEqual(adopts ? [durable, final] : [local, durable, final]);
+      state = reduceSessionProjection(state, { type: "transportGap" });
+      state = reduceSessionProjection(state, { type: "reconnected" });
+      state = projectLiveSessionMessage(state, durable);
+      expect(state.messages).toEqual(adopts ? [durable, final] : [local, durable, final]);
+    },
+  );
+
+  it("keeps authoritative commentary when its provisional item replays with different text", () => {
+    const durable = {
+      ...createMessage("assistant", "Authoritative progress.", {
+        id: "persisted",
+        seq: 3,
+        runId: "run-1",
+      }),
+      openclawStreamFallback: { itemId: "item-1", source: "segment" },
+    };
+    const local = {
+      ...createMessage("assistant", "Partial progress."),
+      openclawStreamFallback: { itemId: "item-1", runId: "run-1", source: "segment" },
+    };
+    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), durable);
+
+    expect(projectLiveSessionMessage(state, local).messages).toEqual([durable]);
+    expect(reconcileSessionProjectionSnapshot(state, [durable], primaryScope).messages).toEqual([
+      durable,
+    ]);
+  });
+
   it("keeps the durable assistant identity when its run's terminal projection replays", () => {
     const persisted = createMessage("assistant", "persisted final", {
       id: "assistant-final",

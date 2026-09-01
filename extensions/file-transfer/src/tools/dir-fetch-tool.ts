@@ -41,13 +41,8 @@ const TAR_UNPACK_MAX_ENTRIES = 5000;
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
 
-function filterDirFetchArchiveEntry(entry: {
-  path: string;
-  kind: ArchiveEntryKind;
-}): "extract" | "skip" {
-  return (entry.kind === "file" || entry.kind === "directory") && !entry.path.includes("\\")
-    ? "extract"
-    : "skip";
+function filterDirFetchArchiveEntry(entry: { kind: ArchiveEntryKind }): "extract" | "skip" {
+  return entry.kind === "file" || entry.kind === "directory" ? "extract" : "skip";
 }
 
 function classifyArchiveFailure(error: unknown): {

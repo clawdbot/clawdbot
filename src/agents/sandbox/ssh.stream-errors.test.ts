@@ -1,10 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -32,22 +31,19 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let localDir: string;
 
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
-  vi.clearAllMocks();
   ({ uploadDirectoryToSshTarget } = await import("./ssh.js"));
+  localDir = tempDirs.make("openclaw-ssh-stream-test-");
 });
 
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
+beforeEach(() => {
+  spawnMock.mockReset();
 });
 
 function fakeSession(): import("./ssh.js").SshSandboxSession {
@@ -62,13 +58,13 @@ describe("SSH sandbox stream errors", () => {
   it.each(["tar.stdout", "tar.stderr", "ssh.stdin", "ssh.stdout", "ssh.stderr"] as const)(
     "rejects and terminates both upload children once when %s fails",
     async (stream) => {
-      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-stream-test-"));
-      tempDirs.push(localDir);
       const tar = createMockChildProcess();
       const ssh = createMockChildProcess();
-      spawnMock
-        .mockReturnValueOnce(tar as unknown as ChildProcess)
-        .mockReturnValueOnce(ssh as unknown as ChildProcess);
+      const childrenSpawned = createDeferred();
+      spawnMock.mockReturnValueOnce(tar as unknown as ChildProcess).mockImplementationOnce(() => {
+        childrenSpawned.resolve();
+        return ssh as unknown as ChildProcess;
+      });
       const expected = `${stream} failed`;
       const result = uploadDirectoryToSshTarget({
         session: fakeSession(),
@@ -83,7 +79,12 @@ describe("SSH sandbox stream errors", () => {
           expect(error).toEqual(expect.objectContaining({ message: expected }));
         },
       );
-      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+      await withTestTimeout(
+        childrenSpawned.promise,
+        10_000,
+        "tar/ssh upload children did not spawn",
+      );
+      expect(spawnMock).toHaveBeenCalledTimes(2);
       const [childName, streamName] = stream.split(".") as ["tar" | "ssh", keyof MockChildProcess];
       const failedStream = { tar, ssh }[childName][streamName] as PassThrough;
 

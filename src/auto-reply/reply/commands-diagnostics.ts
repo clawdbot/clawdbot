@@ -4,6 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
@@ -105,13 +106,30 @@ async function handleDiagnosticsCommandWithDeps(
   if (nonOwner) {
     return nonOwner;
   }
+  // Inventory belongs to this authorized command, not every reply's retained
+  // session view. Metadata preserves Codex target discovery without prompt snapshots.
+  const commandParams = params.storePath
+    ? {
+        ...params,
+        sessionStore: {
+          ...Object.fromEntries(
+            listSessionEntriesReadOnly({
+              agentId: params.agentId,
+              storePath: params.storePath,
+              projection: "list",
+            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          ...params.sessionStore,
+        },
+      }
+    : params;
   if (isCodexDiagnosticsConfirmationAction(args)) {
-    const codexResult = await executeCodexDiagnosticsAddon(params, args);
+    const codexResult = await executeCodexDiagnosticsAddon(commandParams, args);
     const reply = codexResult
       ? rewriteCodexDiagnosticsResult(codexResult)
       : { text: "No Codex diagnostics confirmation handler is available for this session." };
-    if (params.isGroup) {
-      return await deliverGroupDiagnosticsReplyPrivately(deps, params, reply);
+    if (commandParams.isGroup) {
+      return await deliverGroupDiagnosticsReplyPrivately(deps, commandParams, reply);
     }
     return {
       shouldContinue: false,
@@ -119,15 +137,15 @@ async function handleDiagnosticsCommandWithDeps(
     };
   }
 
-  if (params.isGroup) {
-    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (commandParams.isGroup) {
+    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(commandParams))[0];
     if (!privateTarget) {
       return {
         shouldContinue: false,
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
       };
     }
-    const privateReply = await buildDiagnosticsReply(deps, params, args, {
+    const privateReply = await buildDiagnosticsReply(deps, commandParams, args, {
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: privateTarget,
     });
@@ -137,10 +155,15 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
       };
     }
-    return await deliverGroupDiagnosticsReplyPrivately(deps, params, privateReply, privateTarget);
+    return await deliverGroupDiagnosticsReplyPrivately(
+      deps,
+      commandParams,
+      privateReply,
+      privateTarget,
+    );
   }
 
-  const reply = await buildDiagnosticsReply(deps, params, args);
+  const reply = await buildDiagnosticsReply(deps, commandParams, args);
   return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
 }
 

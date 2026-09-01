@@ -282,16 +282,21 @@ export class NewSessionComposerTextareaController {
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
    */
-  insertTranscript(transcript: string): string | null {
+  insertTranscript(transcript: string, late?: true): string | null {
     const target = this.textarea;
     if (!target) {
       return null;
     }
-    const selection = this.capturedSelection ?? {
-      start: target.value.length,
-      end: target.value.length,
-      value: target.value,
-    };
+    const captured = this.capturedSelection;
+    // Delayed finals must not replace edits made after Stop unlocked this draft.
+    const selection =
+      captured && (!late || captured.value === target.value)
+        ? captured
+        : {
+            start: late ? target.selectionStart : target.value.length,
+            end: late ? target.selectionEnd : target.value.length,
+            value: target.value,
+          };
     this.capturedSelection = null;
     const insertion = insertComposerDictation(
       selection.value,

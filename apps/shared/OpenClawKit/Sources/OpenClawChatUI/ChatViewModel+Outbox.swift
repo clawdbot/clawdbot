@@ -883,12 +883,11 @@ extension OpenClawChatViewModel {
             agentID: command.agentID,
             sessionRoutingContract: command.routingContract)
         {
-            _ = await outbox.markCommandFailedIfPresent(
-                id: command.id,
-                attemptVersion: command.attemptVersion,
+            _ = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
                 retryCount: command.retryCount,
-                lastError: settingsError)
-            self.setOutboxState(.failed(reason: settingsError), forCommandID: command.id)
+                reason: settingsError)
             self.errorText = settingsError
             return .stop
         }
@@ -897,28 +896,26 @@ extension OpenClawChatViewModel {
         {
             let reason = OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError
             let message = OpenClawChatSQLiteTranscriptCache.outboxDisplayError(reason)
-            _ = await outbox.markCommandFailedIfPresent(
-                id: command.id,
-                attemptVersion: command.attemptVersion,
+            let update = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
                 retryCount: command.retryCount,
-                lastError: reason)
-            self.setOutboxState(.failed(reason: message), forCommandID: command.id)
+                reason: reason)
             self.errorText = message
-            return .continueFlush
+            return update == .unavailable ? .stop : .continueFlush
         }
         if routeLease.supportsSessionSettingsCAS,
            command.expectedSessionSettings == nil
         {
             let reason = OpenClawChatSQLiteTranscriptCache.outboxSettingsReviewRequiredError
             let message = OpenClawChatSQLiteTranscriptCache.outboxDisplayError(reason)
-            _ = await outbox.markCommandFailedIfPresent(
-                id: command.id,
-                attemptVersion: command.attemptVersion,
+            let update = await self.failOutboxCommand(
+                command,
+                outbox: outbox,
                 retryCount: command.retryCount,
-                lastError: reason)
-            self.setOutboxState(.failed(reason: message), forCommandID: command.id)
+                reason: reason)
             self.errorText = message
-            return .continueFlush
+            return update == .unavailable ? .stop : .continueFlush
         }
         self.setOutboxState(.sending, forCommandID: command.id)
         do {
@@ -1103,23 +1100,11 @@ extension OpenClawChatViewModel {
         _ command: OpenClawChatOutboxCommand,
         outbox: any OpenClawChatCommandOutbox) async -> Bool
     {
-        let storedReason = OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError
-        let reason = OpenClawChatSQLiteTranscriptCache.outboxDisplayError(storedReason)
-        let update = await outbox.markCommandFailedIfPresent(
-            id: command.id,
-            attemptVersion: command.attemptVersion,
+        await self.failOutboxCommand(
+            command,
+            outbox: outbox,
             retryCount: command.retryCount,
-            lastError: storedReason)
-        guard update != .unavailable else {
-            self.applyTransportHealth(false)
-            return false
-        }
-        if update == .updated {
-            self.setOutboxState(.failed(reason: reason), forCommandID: command.id)
-        } else {
-            self.clearOutboxState(forCommandID: command.id)
-        }
-        return true
+            reason: OpenClawChatSQLiteTranscriptCache.outboxSettingsChangedError) != .unavailable
     }
 
     /// Gateway rejections ("error"/"timeout" send acks) burn a retry attempt

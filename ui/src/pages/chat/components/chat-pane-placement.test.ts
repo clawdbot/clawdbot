@@ -82,4 +82,58 @@ describe("chat pane device placement", () => {
       expect(reclaim?.hasAttribute("disabled")).toBe(false);
     }
   });
+
+  it("offers restart without a redundant stop action after a failed worker is gone", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const session: GatewaySessionRow = {
+      key: "agent:main:failed-worker",
+      kind: "direct",
+      updatedAt: 0,
+      placement: {
+        state: "failed",
+        generation: 2,
+        createdAtMs: 100_000,
+        updatedAtMs: 300_000,
+        stateChangedAtMs: 300_000,
+        recoveryError: "worker disappeared",
+        recoveryAction: "restart",
+      },
+    };
+
+    render(renderChatPanePlacement({ session }), container);
+
+    expect(container.querySelector(".chat-pane__placement-restart")?.textContent?.trim()).toBe(
+      "Restart session…",
+    );
+    expect(container.querySelector(".chat-pane__placement-reclaim")).toBeNull();
+  });
+
+  it("requires stop before restart while the failed worker environment may remain", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const session: GatewaySessionRow = {
+      key: "agent:main:failed-worker",
+      kind: "direct",
+      updatedAt: 0,
+      placement: {
+        state: "failed",
+        generation: 2,
+        createdAtMs: 100_000,
+        updatedAtMs: 300_000,
+        stateChangedAtMs: 300_000,
+        recoveryError: "worker disappeared",
+        recoveryAction: "stop-first",
+      },
+    };
+
+    render(renderChatPanePlacement({ session }), container);
+
+    expect(container.querySelector(".chat-pane__placement-restart")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(
+      "Stop cloud worker…",
+    );
+  });
 });

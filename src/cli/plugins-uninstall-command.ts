@@ -26,6 +26,8 @@ type PluginUninstallOptions = {
   invalidateRuntimeCache?: boolean;
   /** True when a Claw lifecycle caller already owns the package lease. */
   clawManaged?: boolean;
+  /** Synchronous authority guard at each final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
 
 function isPromptInputClosedError(
@@ -65,6 +67,8 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
+  const { createInstalledPluginIndexScopeLookup } =
+    await import("../plugins/installed-plugin-index-scope-lookup.js");
   const { resolveInstalledPluginLifecycleOwnership } =
     await import("../plugins/installed-plugin-package-ownership.js");
   const {
@@ -142,7 +146,7 @@ async function runPluginUninstallCommandUnlocked(
   let channelIds: string[] | undefined;
   if (ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId) {
     channelIds = plugin?.channelIds;
-  } else if (ownedPluginIds.length > 1) {
+  } else if (ownedPluginIds.length > 0) {
     channelIds = [
       ...new Set(
         ownedPluginIds.flatMap(
@@ -150,6 +154,11 @@ async function runPluginUninstallCommandUnlocked(
         ),
       ),
     ];
+  } else if (
+    createInstalledPluginIndexScopeLookup(installedIndex).hasChannelContributionOwners([pluginId])
+  ) {
+    // An orphan's owner-key fallback cannot remove another discovered plugin's channel policy.
+    channelIds = [];
   }
   const initialPlan = planPluginUninstall(
     recordPluginPackageUninstallPlan(
@@ -275,6 +284,16 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const uninstall = async () => {
+    const guardedWriteOptions = (writeOptions: typeof mutationWriteOptions) =>
+      opts.beforePersistentApply
+        ? {
+            ...writeOptions,
+            assertConfigPathForWrite: () => {
+              writeOptions.assertConfigPathForWrite?.();
+              opts.beforePersistentApply?.();
+            },
+          }
+        : writeOptions;
     let finalBaseHash = snapshot.hash;
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
@@ -290,13 +309,14 @@ async function runPluginUninstallCommandUnlocked(
             nextConfig: disabledConfig,
             ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
             writeOptions: {
-              ...mutationWriteOptions,
+              ...guardedWriteOptions(mutationWriteOptions),
               afterWrite: { mode: "auto" },
             },
           }),
         { command: "uninstall" },
       );
       finalBaseHash = disabledCommit?.persistedHash ?? snapshot.hash;
+      opts.beforePersistentApply?.();
       directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
       for (const warning of directoryResult.warnings) {
         runtime.log(theme.warn(warning));
@@ -350,7 +370,7 @@ async function runPluginUninstallCommandUnlocked(
           nextConfig,
           ...(finalBaseHash !== undefined ? { baseHash: finalBaseHash } : {}),
           writeOptions: {
-            ...finalWriteOptions,
+            ...guardedWriteOptions(finalWriteOptions),
             allowConfigSizeDrop: true,
             afterWrite: { mode: "restart", reason: "plugin source changed" },
           },

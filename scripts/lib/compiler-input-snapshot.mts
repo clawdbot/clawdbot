@@ -114,9 +114,11 @@ export class CompilerInputSnapshot {
           const file = path.join(directory, entry.name);
           const canonicalFile = path.join(realDirectory, entry.name);
           const id = portableRelativePath(this.rootDir, file);
-          // Native PR checkouts are separate roots; aliases retain their own paths.
+          // Helper checkouts and package stores are separate roots; aliases retain their paths.
           if (
+            id === ".ci-harness" ||
             id === ".worktrees" ||
+            id === ".cache/openclaw-pnpm-store" ||
             (!installed &&
               [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name))
           ) {

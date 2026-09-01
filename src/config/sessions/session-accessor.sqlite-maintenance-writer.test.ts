@@ -9,6 +9,7 @@ import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifactsCore,
   loadSessionEntry,
+  loadTranscriptEventsSync,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -34,6 +35,7 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   archiveMaterializationHook.beforeMaterialize = undefined;
   closeOpenClawAgentDatabasesForTest();
 });
@@ -57,6 +59,45 @@ function createPlannerStore(entryCount: number) {
   database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
   return { database, storePath };
 }
+
+it.each([false, true])(
+  "does not rescan unrelated rows when no lifecycle removal matches (requested: %s)",
+  async (requestRemoval) => {
+    const { storePath } = createPlannerStore(2);
+    const retained = { sessionKey: "agent:main:planner-1", sessionId: "planner-1", storePath };
+    const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
+    replaceTranscriptEventsSync(retained, transcript);
+    const parseSpy = vi.spyOn(JSON, "parse");
+    await expect(
+      applySessionEntryLifecycleMutation({
+        storePath,
+        skipMaintenance: true,
+        removals: requestRemoval ? [{ sessionKey: "agent:main:missing" }] : [],
+        upserts: [
+          {
+            sessionKey: "agent:main:planner-0",
+            buildEntry: async ({ currentEntry }) => ({ ...currentEntry!, label: "updated" }),
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      afterCount: 2,
+      removedEntries: 0,
+      archivedTranscriptDirectories: [],
+    });
+
+    // Allow the builder snapshot and before/after counts, but no unused deletion scans.
+    expect(
+      parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
+    ).toBeLessThanOrEqual(3);
+    parseSpy.mockRestore();
+    expect(loadSessionEntry({ sessionKey: "agent:main:planner-0", storePath })?.label).toBe(
+      "updated",
+    );
+    expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
+    expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
+  },
+);
 
 it("releases the store writer before maintenance archive sizing completes", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");

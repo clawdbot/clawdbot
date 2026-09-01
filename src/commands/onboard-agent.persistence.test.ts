@@ -35,62 +35,87 @@ describe("onboarding authored config persistence", () => {
     resetConfigRuntimeState();
   });
 
-  it("retains env references and includes through the real snapshot writer", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      const configPath = path.join(configDir, "openclaw.json");
-      const includePath = path.join(configDir, "channels.json");
-      const includeRaw = JSON.stringify({ channels: { telegram: { enabled: true } } });
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(includePath, includeRaw);
-      await fs.writeFile(
-        configPath,
-        `{
+  it.each(["sourceConfig", "config"] as const)(
+    "creates a named first agent from %s while retaining authored env references and includes",
+    async (configShape) => {
+      await withTempHome(async (rawHome) => {
+        const home = await fs.realpath(rawHome);
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const includePath = path.join(configDir, "channels.json");
+        const includeRaw = JSON.stringify({ channels: { telegram: { enabled: true } } });
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(includePath, includeRaw);
+        await fs.writeFile(
+          configPath,
+          `{
           $include: "./channels.json",
           gateway: { auth: { mode: "token", token: "\${OPENCLAW_TOKEN}" } }
         }`,
-      );
-      setTestEnvValue("OPENCLAW_TOKEN", "plaintext-secret");
-      resetConfigRuntimeState();
+        );
+        setTestEnvValue("OPENCLAW_TOKEN", "plaintext-secret");
+        resetConfigRuntimeState();
 
-      const snapshot = await readConfigFileSnapshot();
-      const candidate = {
-        ...snapshot.config,
-        gateway: { ...snapshot.config.gateway, mode: "local" as const },
-      };
-      const result = await ensureOnboardingAgent({
-        config: candidate,
-        workspace: path.join(home, "workspace"),
-        baseConfig: snapshot.config,
+        const snapshot = await readConfigFileSnapshot();
+        const baseConfig = snapshot[configShape];
+        const candidate = {
+          ...baseConfig,
+          gateway: { ...baseConfig.gateway, mode: "local" as const },
+        };
+        const result = await ensureOnboardingAgent({
+          config: candidate,
+          workspace: path.join(home, "workspace"),
+          baseConfig,
+          firstAgent: { name: "roster-proof" },
+        });
+        await replaceConfigFile({ nextConfig: result.config, afterWrite: { mode: "auto" } });
+
+        const persistedRaw = await fs.readFile(configPath, "utf8");
+        expect(result).toMatchObject({ agentId: "roster-proof", createdAgent: true });
+        expect(JSON.parse(persistedRaw).agents.entries).toEqual({
+          "roster-proof": expect.objectContaining({
+            name: "roster-proof",
+            workspace: path.join(home, "workspace"),
+          }),
+        });
+        expect(persistedRaw).toContain("${OPENCLAW_TOKEN}");
+        expect(persistedRaw).not.toContain("plaintext-secret");
+        expect(persistedRaw).toContain("./channels.json");
+        expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
       });
-      await replaceConfigFile({ nextConfig: result.config, afterWrite: { mode: "auto" } });
+    },
+  );
 
-      const persistedRaw = await fs.readFile(configPath, "utf8");
-      expect(persistedRaw).toContain("${OPENCLAW_TOKEN}");
-      expect(persistedRaw).not.toContain("plaintext-secret");
-      expect(persistedRaw).toContain("./channels.json");
-      expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-    });
-  });
-
-  it("leaves an existing roster config byte-identical", async () => {
+  it.each([
+    { entries: { existing: { name: "Existing" } } },
+    { entries: { main: {} } },
+    { list: [{ id: "main", default: true }] },
+    {
+      list: [
+        { id: "alpha", default: true, model: "fixture/alpha" },
+        { id: "beta", model: "fixture/beta" },
+      ],
+    },
+  ])("leaves an existing roster config byte-identical: %j", async (agents) => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
-      const raw = `{
-  agents: { entries: { existing: { name: "Existing" } } },
-}\n`;
+      const raw = `${JSON.stringify({ agents }, null, 2)}\n`;
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(configPath, raw);
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
 
-      await ensureOnboardingAgent({
+      const result = await ensureOnboardingAgent({
         config: snapshot.config,
         workspace: path.join(home, "workspace"),
         firstAgent: { name: "ignored" },
       });
 
+      expect(result.createdAgent).toBe(false);
+      expect(result.config.agents?.entries).toEqual(snapshot.config.agents?.entries);
+      expect(snapshot.sourceConfigBeforeMigrations?.agents).toEqual(agents);
+      expect(snapshot.sourceConfig.agents?.list).toBeUndefined();
       expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });

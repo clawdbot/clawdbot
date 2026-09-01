@@ -153,6 +153,7 @@ export type ExecToolDetails = {
       startedAt: number;
       cwd?: string;
       tail?: string;
+      followUp?: string;
     }
   | {
       status: "completed" | "failed";
@@ -172,6 +173,7 @@ export type ExecToolDetails = {
       timedOut?: boolean;
       noOutputTimedOut?: boolean;
       cwd?: string;
+      nodeId?: string;
     }
   | {
       status: "approval-pending";

@@ -165,6 +165,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     toolBindings: params.run.toolBindings,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
+    skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),

@@ -168,17 +168,24 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("rejects backslash-containing entry names", async () => {
-    const tarBuffer = await createTarBuffer({
-      entries: ["dir\\escape.txt"],
-      setup: async (sourceDir) => {
-        await fs.writeFile(path.join(sourceDir, "dir\\escape.txt"), "blocked");
-      },
-    });
-    const { module } = await importTool(tarBuffer);
+  it.runIf(process.platform !== "win32")(
+    "extracts canonical paths from backslash-separated archive names",
+    async () => {
+      const tarBuffer = await createTarBuffer({
+        entries: ["dir\\note.txt"],
+        setup: async (sourceDir) => {
+          await fs.writeFile(path.join(sourceDir, "dir\\note.txt"), "canonical content");
+        },
+      });
+      const { module } = await importTool(tarBuffer);
 
-    await expect(executeDirFetch(module)).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:.*filter/iu);
-  });
+      const result = await executeDirFetch(module);
+      const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
+        .files;
+      expect(files).toMatchObject([{ relPath: path.join("dir", "note.txt") }]);
+      await expect(fs.readFile(files[0]!.localPath, "utf8")).resolves.toBe("canonical content");
+    },
+  );
 
   it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
     const tarBuffer = await createTarBuffer({

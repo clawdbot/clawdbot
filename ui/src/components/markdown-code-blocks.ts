@@ -208,6 +208,26 @@ class MarkdownCodeBlocksDirective extends AsyncDirective {
   }
 
   private scan(root: Element): void {
+    if (root.querySelector(".markdown-mermaid pre code")) {
+      void import("./markdown-mermaid.ts").then(
+        ({ mountMermaidBlocks }) => {
+          if (
+            this.isConnected &&
+            this.root === root &&
+            root.isConnected &&
+            mountMermaidBlocks(root)
+          ) {
+            this.scheduleScan();
+          }
+        },
+        () => {
+          for (const block of root.querySelectorAll(".markdown-mermaid")) {
+            block.classList.remove("markdown-mermaid");
+            block.prepend(t("chat.mermaid.error"));
+          }
+        },
+      );
+    }
     for (const node of this.observedNodes) {
       if (!root.contains(node)) {
         this.resizeObserver?.unobserve(node);

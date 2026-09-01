@@ -161,6 +161,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       defaultTopLevelPlacement: "current",
     },
     agentPrompt: {
+      // LINE always renders native buttons; it has no capability opt-in setting.
+      messageToolCapabilities: () => ["inlineButtons"],
       messageToolHints: () => [
         "",
         "### LINE structured output",

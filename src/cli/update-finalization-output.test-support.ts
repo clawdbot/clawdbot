@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
+// Keep real install discovery inside the fixture; no entrypoint means no completion write.
+await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [scenario, ...args] = process.argv.slice(2);
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
@@ -47,32 +49,12 @@ const stubs = new Map<string, string>([
     "export const withPluginLifecycleLease = async (_options, run) => await run();",
   ],
   [
-    sourceUrl("../state/openclaw-state-db.paths.ts"),
-    "export const resolveOpenClawStateSqlitePath = () => '';",
-  ],
-  [
-    sourceUrl("../state/openclaw-state-ownership.ts"),
-    "export const assertOpenClawStateWriteAllowedAtPath = async () => {};",
-  ],
-  [
-    sourceUrl("./update-cli/shared.ts"),
-    `export const parseTimeoutMsOrExit = () => 9000; export const resolveUpdateRoot = async () => ${JSON.stringify(root)}; export const tryWriteCompletionCache = async () => 'skipped'; export const resolveNodeRunner = () => process.execPath;`,
-  ],
-  [
     sourceUrl("./update-cli/update-command-config.ts"),
     "export const createUpdateConfigSnapshot = async () => {}; export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
-    `export const updatePluginsAfterCoreUpdate = async ({opts}) => { if (opts.restart !== false) throw new Error('Unexpected restart'); return {status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false}; };`,
-  ],
-  [
-    sourceUrl("./update-cli/update-command-result.ts"),
-    "export const reportPreMutationUpdateFailure = async () => { throw new Error('Unexpected channel'); };",
-  ],
-  [
-    sourceUrl("./update-cli/update-command-service-env.ts"),
-    "export const stripGatewayServiceMarkerEnv = env => ({...env}); export const disableUpdatedPackageCompileCacheEnv = env => ({...env});",
+    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),
@@ -100,7 +82,7 @@ const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
-process.argv = [process.execPath, "openclaw", ...args];
+process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
 await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
   const program = new Command().name("openclaw");

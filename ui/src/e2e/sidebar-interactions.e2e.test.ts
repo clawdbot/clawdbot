@@ -107,7 +107,7 @@ suite.define(() => {
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".shell-chrome-controls__nav-toggle").click();
+          await page.locator(".sidebar-brand__collapse").click();
         }
         if (action.section) {
           await page
