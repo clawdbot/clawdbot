@@ -466,6 +466,14 @@ describe("gateway chat metadata lifecycle composition", () => {
                 metadataSnapshot: owner.metadataSnapshot,
                 preparedAuthStore: { version: 1, profiles: {} },
                 preparedRuntimeAuthModes: owner.authModes,
+                pluginRegistry: owner.pluginRegistry,
+                isCurrent: () =>
+                  getPreparedModelCatalogOwnerSnapshot({
+                    agentId: "main",
+                    config: nativeConfig,
+                    readOnly: true,
+                    allowGatewaySubagentBinding: true,
+                  })?.pluginRegistry === owner.pluginRegistry,
               }),
             }),
           ).resolves.toMatchObject(expected);
@@ -535,9 +543,9 @@ describe("gateway chat metadata lifecycle composition", () => {
           setActivePluginRegistry(createEmptyPluginRegistry());
         }
         await expect(racingRead).resolves.toMatchObject({
-          models: expectedModels(false),
+          models: expectedModels(invalidate === "registry"),
         });
-        await expectNativeAvailable(false);
+        await expectNativeAvailable(invalidate === "registry");
         expect(loadModelCatalog).toHaveBeenCalledTimes(2);
         expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(builds);
       } finally {
