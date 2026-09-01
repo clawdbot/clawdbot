@@ -1,6 +1,10 @@
 import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
@@ -172,6 +176,49 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       }
     },
   );
+
+  it("resolves a configured provider auth-profile before sending embeddings", async () => {
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-"));
+    const profileId = "tenant-embeddings:default";
+    try {
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "tenant-embeddings",
+              key: "synthetic-profile-key",
+            },
+          },
+        },
+        agentDir,
+      );
+      const result = await openAICompatibleEmbeddingProviderAdapter.create({
+        config: {
+          auth: { profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } } },
+          models: {
+            providers: {
+              "tenant-embeddings": {
+                api: "openai-completions",
+                baseUrl,
+                apiKey: profileId,
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+        provider: "tenant-embeddings",
+        model: "tenant-embeddings/fixture-model",
+      });
+
+      await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
+      expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-profile-key");
+    } finally {
+      await rm(agentDir, { force: true, recursive: true });
+    }
+  });
 
   it.each(["apiKey", "header"])("rejects an unresolved remote %s before egress", async (field) => {
     const ref = { source: "env" as const, provider: "default", id: "MISSING_EMBEDDING_SECRET" };

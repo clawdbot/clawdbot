@@ -188,6 +188,25 @@ function resolveRemoteApiKey(value: unknown): string | undefined {
   });
 }
 
+async function resolveConfiguredProviderApiKey(params: {
+  providerId: string;
+  options: EmbeddingProviderCreateOptions;
+  configuredApiKey: unknown;
+}): Promise<string | undefined> {
+  if (params.configuredApiKey === undefined) {
+    return undefined;
+  }
+  // Provider entries may bind apiKey to an auth-profile id. Keep that binding on
+  // the model-auth path instead of treating the profile id as a bearer token.
+  const { resolveApiKeyForProvider } = await import("../plugin-sdk/provider-auth-runtime.js");
+  const auth = await resolveApiKeyForProvider({
+    provider: params.providerId,
+    cfg: params.options.config,
+    agentDir: params.options.agentDir,
+  });
+  return auth.apiKey;
+}
+
 function isOpenAICompatibleProviderConfig(
   id: string,
   provider: ConfiguredEmbeddingProvider,
@@ -350,9 +369,10 @@ async function createOpenAICompatibleEmbeddingClient(
     remote: options.remote?.headers,
   });
   if (providerOwnsDestination && !headers.authorization) {
-    const providerApiKey = resolveSecretString({
-      value: configuredProvider?.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
+    const providerApiKey = await resolveConfiguredProviderApiKey({
+      providerId,
+      options,
+      configuredApiKey: configuredProvider?.apiKey,
     });
     if (providerApiKey) {
       headers.authorization = `Bearer ${providerApiKey}`;
