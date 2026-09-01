@@ -1463,6 +1463,8 @@ In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw a
 
 While a delegated OpenClaw run is active, new Discord voice transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
 
+When OpenClaw cancels a delegated consult, Discord records cancellation rather than a failure and does not play the generic error fallback. Matching late provider tool calls receive the same terminal cancellation instead of restarting the work. The voice session remains available for the next request; timeouts and genuine failures keep their normal error handling.
+
 Useful target forms:
 
 - `target: "channel:123456789012345678"` routes through a Discord text channel session.
