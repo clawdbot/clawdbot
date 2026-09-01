@@ -22,6 +22,10 @@ import {
   preserveResolvedSecretBackedCredentials,
 } from "./auth-profiles/store.js";
 import {
+  assertPreparedModelCatalogWorkerCoverage,
+  resolveModelCatalogPluginScope,
+} from "./prepared-model-catalog-plugin-scope.js";
+import {
   fingerprintPreparedModelCatalogGeneration,
   type PreparedModelCatalogWorkerInput,
   type PreparedModelWorkerRequest,
@@ -210,6 +214,12 @@ export async function runPreparedModelCatalogWorkerRequest(
       "live",
       source,
     );
+    const scope = resolveModelCatalogPluginScope(prepared.pluginGeneration.pluginMetadataSnapshot);
+    assertPreparedModelCatalogWorkerCoverage({
+      scope,
+      snapshot: facts.modelCatalog,
+      activeProviderIds: exactAgentFacts.providerIds,
+    });
     return {
       status: "ok",
       requestId: request.requestId,

@@ -17,7 +17,7 @@
  *      surface keeps the plugin. We are optimising away `beads`, `slack`, `discord` and
  *      `browser` — plugins with no provider signal whatsoever — not shaving the set to a
  *      minimum. A false *include* costs milliseconds; a false *exclude* loses a model.
- *   2. **Fail crashing, never silently.** {@link assertModelCatalogCoversExpectedProviders}
+ *   2. **Fail crashing, never silently.** {@link assertPreparedModelCatalogWorkerCoverage}
  *      compares what the catalog actually produced against what the manifests said to expect
  *      and THROWS on any shortfall. A wrong scope becomes a loud, attributable error naming
  *      the missing providers instead of a quietly shorter model list.
@@ -28,11 +28,12 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const log = createSubsystemLogger("agents/prepared-model-catalog-scope");
 
 /** Why a plugin was kept. Recorded per plugin so the log explains itself. */
-export type ModelScopeReason =
+type ModelScopeReason =
   | "providers"
   | "model-catalog"
   | "model-support"
@@ -64,6 +65,7 @@ function nonEmpty(value: unknown): boolean {
     return value.length > 0;
   }
   if (value && typeof value === "object") {
+    // SAFETY: the runtime object guard above is sufficient because Object.keys reads keys only.
     return Object.keys(value as Record<string, unknown>).length > 0;
   }
   return Boolean(value);
@@ -164,17 +166,24 @@ export function resolveModelCatalogPluginScope(
   // Getting that direction backwards would silently produce a nonsense set, so we union the
   // values in rather than trusting the manifest sweep alone.
   const owners = metadataSnapshot.owners;
-  for (const map of [
-    owners?.providers,
-    owners?.modelCatalogProviders,
-    owners?.cliBackends,
-    owners?.setupProviders,
-  ]) {
+  for (const map of [owners?.providers, owners?.modelCatalogProviders, owners?.setupProviders]) {
     if (!map) {
       continue;
     }
     for (const [surfaceId, ownerIds] of map.entries()) {
       expectedProviderIds.add(surfaceId);
+      for (const ownerId of ownerIds) {
+        if (!keptReasons.has(ownerId)) {
+          keptReasons.set(ownerId, ["owner-map"]);
+        }
+      }
+    }
+  }
+  // CLI backend ids are harness/runtime surfaces, not necessarily model provider ids. Their
+  // owners must survive the worker narrowing, but requiring those surface ids to appear as
+  // catalog providers would make the result guard reject valid harness-only plugins.
+  if (owners?.cliBackends) {
+    for (const ownerIds of owners.cliBackends.values()) {
       for (const ownerId of ownerIds) {
         if (!keptReasons.has(ownerId)) {
           keptReasons.set(ownerId, ["owner-map"]);
@@ -241,7 +250,7 @@ export function logModelCatalogPluginScope(scope: ModelCatalogPluginScope): void
  * disabled or unconfigured; callers pass the ids they already know are inactive. Anything
  * missing beyond that set is a scope defect and must crash.
  */
-export function assertModelCatalogCoversExpectedProviders(params: {
+function assertModelCatalogCoversExpectedProviders(params: {
   scope: ModelCatalogPluginScope;
   producedProviderIds: Iterable<string>;
   allowMissingProviderIds?: Iterable<string>;
@@ -269,4 +278,31 @@ export function assertModelCatalogCoversExpectedProviders(params: {
       `This means the model-contributing plugin scope is wrong — do NOT relax this check; ` +
       `add the missing signal to scoreRecord() in prepared-model-catalog-plugin-scope.ts.`,
   );
+}
+
+/** Validate the catalog the worker is about to return, not a reconstructed proxy catalog. */
+export function assertPreparedModelCatalogWorkerCoverage(params: {
+  scope: ModelCatalogPluginScope;
+  snapshot: ModelCatalogSnapshot;
+  activeProviderIds: Iterable<string>;
+}): void {
+  const producedProviderIds = new Set<string>();
+  for (const entry of [
+    ...params.snapshot.entries,
+    ...params.snapshot.routeVariants,
+    ...(params.snapshot.staticEntries ?? []),
+  ]) {
+    producedProviderIds.add(entry.provider);
+  }
+  for (const outcome of params.snapshot.providerOutcomes ?? []) {
+    producedProviderIds.add(outcome.provider);
+  }
+  const activeProviderIds = new Set(params.activeProviderIds);
+  assertModelCatalogCoversExpectedProviders({
+    scope: params.scope,
+    producedProviderIds,
+    allowMissingProviderIds: params.scope.expectedProviderIds.filter(
+      (providerId) => !activeProviderIds.has(providerId),
+    ),
+  });
 }

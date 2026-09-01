@@ -3,7 +3,7 @@
  *
  * What is REAL here (no vitest, no mocks of the seam under test):
  *   - `resolveModelCatalogPluginScope()` — the exact production function the worker calls.
- *   - `assertModelCatalogCoversExpectedProviders()` — the production fail-crash guard.
+ *   - `assertPreparedModelCatalogWorkerCoverage()` — the production fail-crash guard.
  *   - The real bundled plugin manifests read off disk via the real metadata-snapshot builder,
  *     so the scope is computed against every plugin actually installed on this machine.
  *
@@ -20,7 +20,7 @@ type ScopeModule = typeof import("../src/agents/prepared-model-catalog-plugin-sc
 type SnapshotModule = typeof import("../src/plugins/plugin-metadata-snapshot.js");
 
 async function main(): Promise<void> {
-  const { resolveModelCatalogPluginScope, assertModelCatalogCoversExpectedProviders } =
+  const { resolveModelCatalogPluginScope, assertPreparedModelCatalogWorkerCoverage } =
     (await import("../src/agents/prepared-model-catalog-plugin-scope.js")) as ScopeModule;
   const snapshotModule =
     (await import("../src/plugins/plugin-metadata-snapshot.js")) as SnapshotModule;
@@ -79,9 +79,13 @@ async function main(): Promise<void> {
     }
   }
   // Production guard, unmodified. Throws naming the missing ids if the scope lost anything.
-  assertModelCatalogCoversExpectedProviders({
+  assertPreparedModelCatalogWorkerCoverage({
     scope,
-    producedProviderIds: producedByScope,
+    snapshot: {
+      entries: [...producedByScope].map((provider) => ({ provider, id: "proof", name: provider })),
+      routeVariants: [],
+    },
+    activeProviderIds: scope.expectedProviderIds,
   });
   console.log(`   ✓ all ${scope.expectedProviderIds.length} expected providers still produced`);
 
@@ -92,7 +96,15 @@ async function main(): Promise<void> {
   const truncated = new Set(producedByScope);
   truncated.delete(victim);
   assert.throws(
-    () => assertModelCatalogCoversExpectedProviders({ scope, producedProviderIds: truncated }),
+    () =>
+      assertPreparedModelCatalogWorkerCoverage({
+        scope,
+        snapshot: {
+          entries: [...truncated].map((provider) => ({ provider, id: "proof", name: provider })),
+          routeVariants: [],
+        },
+        activeProviderIds: scope.expectedProviderIds,
+      }),
     /dropped 1 expected provider/,
     "guard did NOT throw on a dropped provider — the safety net is inert",
   );

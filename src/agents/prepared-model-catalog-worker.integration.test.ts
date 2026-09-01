@@ -42,6 +42,9 @@ import {
   DURABLE_AUTH_KEY,
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
+  UNRELATED_PLUGIN_ID,
+  UNRELATED_PLUGIN_WORKER_MARKER_ENV,
+  writeUnrelatedFixturePlugin,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import {
@@ -102,9 +105,11 @@ function createCatalogFixture(
   const workspaceDir = path.join(root, "workspace");
   const marker = path.join(root, "worker-marker.txt");
   const externalAuthPath = path.join(root, "external-auth.txt");
+  const unrelatedWorkerMarker = path.join(root, "unrelated-worker-plugin.txt");
   fs.mkdirSync(agentDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const pluginFile = writeFixturePlugin({ root, spinMs });
+  const unrelatedPluginFile = writeUnrelatedFixturePlugin(root);
   fs.writeFileSync(externalAuthPath, "A", "utf8");
   const env = {
     ...process.env,
@@ -112,6 +117,7 @@ function createCatalogFixture(
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
     [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
+    [UNRELATED_PLUGIN_WORKER_MARKER_ENV]: unrelatedWorkerMarker,
     ...envOverride,
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
@@ -126,9 +132,12 @@ function createCatalogFixture(
       },
     },
     plugins: {
-      allow: [PLUGIN_ID],
-      load: { paths: [pluginFile] },
-      entries: { [PLUGIN_ID]: { enabled: true } },
+      allow: [PLUGIN_ID, UNRELATED_PLUGIN_ID],
+      load: { paths: [pluginFile, unrelatedPluginFile] },
+      entries: {
+        [PLUGIN_ID]: { enabled: true },
+        [UNRELATED_PLUGIN_ID]: { enabled: true },
+      },
     },
   } satisfies OpenClawConfig;
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -179,7 +188,17 @@ function createCatalogFixture(
       }),
     },
   });
-  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
+  return {
+    agentDir,
+    config,
+    env,
+    marker,
+    externalAuthPath,
+    unrelatedWorkerMarker,
+    hydratedAuthStore,
+    root,
+    workspaceDir,
+  };
 }
 
 async function createStaticSnapshot(
@@ -481,6 +500,17 @@ describe("prepared model catalog worker boundary", () => {
         id: "account-scoped-model",
       }),
     );
+  });
+
+  it("returns the actual scoped worker catalog without importing an unrelated plugin", async () => {
+    const fixture = await createStaticSnapshot(0);
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+    expect(fs.existsSync(fixture.unrelatedWorkerMarker)).toBe(false);
   });
 
   it("preserves exact configured native auth across a full catalog refresh", async () => {
