@@ -6,6 +6,7 @@ import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
+import { executeToolSearchBatch } from "./tool-search-batch.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -35,9 +36,11 @@ import {
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  MAX_TOOL_SEARCH_BATCH_QUERIES,
   type ToolSearchCatalogRef,
   type ToolSearchMode,
   type ToolSearchToolContext,
@@ -64,6 +67,7 @@ export {
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search-types.js";
@@ -81,6 +85,7 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   }
   if (
     name === TOOL_SEARCH_RAW_TOOL_NAME ||
+    name === TOOL_SEARCH_BATCH_TOOL_NAME ||
     name === TOOL_DESCRIBE_RAW_TOOL_NAME ||
     name === TOOL_CALL_RAW_TOOL_NAME
   ) {
@@ -258,6 +263,38 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
         }
       },
+    },
+    {
+      name: TOOL_SEARCH_BATCH_TOOL_NAME,
+      label: "Tool Search Batch",
+      description: `Search the effective Tool Search catalog with up to ${MAX_TOOL_SEARCH_BATCH_QUERIES} independent English queries in one call. Each result group preserves its query and candidate order. Use this when one planning step needs several distinct capabilities.`,
+      parameters: Type.Object(
+        {
+          queries: Type.Array(
+            Type.Object(
+              {
+                query: Type.String({
+                  description: "Search query, in English. Describe one capability you need.",
+                }),
+                limit: Type.Optional(
+                  Type.Integer({
+                    minimum: 1,
+                    maximum: config.maxSearchLimit,
+                    description: `Maximum results. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                  }),
+                ),
+              },
+              { additionalProperties: false },
+            ),
+            {
+              description: `One to ${MAX_TOOL_SEARCH_BATCH_QUERIES} independent search requests.`,
+            },
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
+        await executeToolSearchBatch(runtime, args, config),
     },
   ];
 }

@@ -43,6 +43,7 @@ import {
   resolveToolSearchCatalogTool as resolveRunToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
@@ -188,6 +189,10 @@ describe("Tool Search", () => {
     createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
     "tool_search test invariant",
   );
+  const batchSearchTool = expectDefined(
+    createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME),
+    "tool_search_batch test invariant",
+  );
 
   it.each([
     { limit: undefined, valid: true },
@@ -273,6 +278,78 @@ describe("Tool Search", () => {
         queries: [{ query: "calendar", limit: 1 }],
       }),
     ).rejects.toThrow("query must be a string");
+  });
+
+  it("advertises a separate provider-portable batch request shape", () => {
+    const input = {
+      queries: [{ query: "calendar", limit: 3 }, { query: "messages" }],
+    };
+    expect(Value.Check(batchSearchTool.parameters, input)).toBe(true);
+    expect(batchSearchTool.parameters).toMatchObject({
+      additionalProperties: false,
+      required: ["queries"],
+      properties: {
+        queries: {
+          type: "array",
+          items: {
+            additionalProperties: false,
+            required: ["query"],
+          },
+        },
+      },
+    });
+    expect(Value.Check(batchSearchTool.parameters, {})).toBe(false);
+    expect(Value.Check(batchSearchTool.parameters, { query: "calendar" })).toBe(false);
+    expect(Value.Check(batchSearchTool.parameters, { queries: [] })).toBe(true);
+    const schemaJson = JSON.stringify(batchSearchTool.parameters);
+    for (const keyword of [
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+      "minContains",
+      "maxContains",
+      "anyOf",
+      "oneOf",
+    ]) {
+      expect(schemaJson).not.toContain(`"${keyword}"`);
+    }
+  });
+
+  it("executes bounded multi-query discovery through the separate batch tool", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        pluginTool("fake_calendar", "calendar scheduling"),
+        pluginTool("fake_messages", "messages needing attention"),
+      ],
+    });
+    const searchTool = expectDefined(
+      createToolSearchTools({ catalogRef }).find(
+        (tool) => tool.name === TOOL_SEARCH_BATCH_TOOL_NAME,
+      ),
+      "catalog-backed tool_search_batch test invariant",
+    );
+
+    await expect(
+      searchTool.execute("call-batch", {
+        queries: [
+          { query: "calendar", limit: 1 },
+          { query: "messages", limit: 1 },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        results: [
+          { query: "calendar", candidates: [{ name: "fake_calendar" }] },
+          { query: "messages", candidates: [{ name: "fake_messages" }] },
+        ],
+      },
+    });
+    await expect(searchTool.execute("call-empty-batch", { queries: [] })).rejects.toThrow(
+      "queries must be a non-empty array",
+    );
   });
 
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
