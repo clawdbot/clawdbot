@@ -190,6 +190,11 @@ plugins.
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
+    HTML conversation cards omit messages marked hidden. The sidebar's **All**
+    filter includes these records with a **[hidden]** label for debugging.
+    Message counts describe the raw archive. The HTML file and its JSONL download
+    still contain hidden records; hiding a message does not redact the export.
+
     <Note>
       Control UI intercepts typed `/new` to create and switch to a fresh
       dashboard session, except when `session.dmScope: "main"` is configured
