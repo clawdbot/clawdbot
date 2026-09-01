@@ -4,6 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { isProgressCardRendererClient } from "../utils/message-channel.js";
+import { clearBootstrapIdentityBinding } from "./device-bootstrap-pairing-approval.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   cloneDevicePairingTokens,
@@ -521,6 +522,7 @@ export async function rejectDevicePairing(
   requestId: string,
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
+  clearBootstrapIdentityBinding(requestId);
   return await withLock(async () => {
     const state = await loadDevicePairingState(baseDir);
     const pending = state.pendingById[requestId];

@@ -9,6 +9,8 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
+import { takeApprovedBootstrapIdentityBinding } from "./device-bootstrap-pairing-approval.js";
+import { verifyDeviceBootstrapTokenContext } from "./device-bootstrap.js";
 import {
   loadDevicePairingState,
   mergeDevicePairingRoles,
@@ -281,7 +283,7 @@ async function approveDevicePairingWithOptions(
     | undefined,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  return await withDevicePairingLock(async () => {
+  const result = await withDevicePairingLock(async (): Promise<ApproveDevicePairingResult> => {
     const state = await loadDevicePairingState(baseDir);
     const pendingRecord = state.pendingById[requestId];
     if (!pendingRecord) {
@@ -394,6 +396,18 @@ async function approveDevicePairingWithOptions(
     });
     return commitApprovedDevicePairing({ state, requestId, device, baseDir });
   });
+  if (result?.status !== "approved") {
+    return result;
+  }
+  const binding = takeApprovedBootstrapIdentityBinding({
+    requestId,
+    deviceId: result.device.deviceId,
+    publicKey: result.device.publicKey,
+  });
+  if (binding) {
+    await verifyDeviceBootstrapTokenContext({ ...binding, bindIdentity: true, baseDir });
+  }
+  return result;
 }
 
 /** Approve a pending request through a bounded bootstrap profile handoff. */

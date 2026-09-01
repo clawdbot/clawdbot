@@ -425,8 +425,10 @@ export function registerControlUiMobileBootstrapSuite(): void {
 
   test("cleartext limited qr setup requires owner approval", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
     const { PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startProxiedControlUiServer("secret");
@@ -440,6 +442,19 @@ export function registerControlUiMobileBootstrapSuite(): void {
       deviceFamily: "iPhone",
     };
     const issued = await issueDeviceBootstrapToken({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE });
+    const attackerSeed = await requestDevicePairing({
+      deviceId: attacker.identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(attacker.identity.publicKeyPem),
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: client.id,
+      clientMode: client.mode,
+      platform: client.platform,
+      deviceFamily: client.deviceFamily,
+    });
+    await approveDevicePairing(attackerSeed.request.requestId, {
+      callerScopes: ["operator.admin"],
+    });
     const connectWithSetupCode = async (identityPath: string) => {
       const ws = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       try {
@@ -462,11 +477,11 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(attackerInitial.error?.message ?? "").toContain("pairing required");
       expect(attackerInitial.error?.details).toMatchObject({
         code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-        pauseReconnect: false,
-        recommendedNextStep: "wait_then_retry",
-        retryable: true,
       });
-      expect(await getPairedDevice(attacker.identity.deviceId)).toBeNull();
+      expect(await getPairedDevice(attacker.identity.deviceId)).toMatchObject({
+        roles: ["operator"],
+        approvedScopes: ["operator.read"],
+      });
 
       const victimInitial = await connectWithSetupCode(victim.identityPath);
       expect(victimInitial.ok).toBe(false);
@@ -512,7 +527,10 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(attackerRetry.error?.details).toMatchObject({
         code: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
       });
-      expect(await getPairedDevice(attacker.identity.deviceId)).toBeNull();
+      expect(await getPairedDevice(attacker.identity.deviceId)).toMatchObject({
+        roles: ["operator"],
+        approvedScopes: ["operator.read"],
+      });
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

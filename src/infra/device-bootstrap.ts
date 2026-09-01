@@ -527,6 +527,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
 type VerifiedDeviceBootstrapContext = {
   profile: DeviceBootstrapProfile;
   setupId?: string;
+  identityBound: boolean;
 };
 
 type VerifyDeviceBootstrapTokenContextResult =
@@ -564,10 +565,12 @@ export async function verifyDeviceBootstrapTokenContext(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
-    const context = {
-      profile: allowedProfile,
-      ...(record.setupId ? { setupId: record.setupId } : {}),
-    } satisfies VerifiedDeviceBootstrapContext;
+    const buildContext = (identityBound: boolean) =>
+      ({
+        profile: allowedProfile,
+        ...(record.setupId ? { setupId: record.setupId } : {}),
+        identityBound,
+      }) satisfies VerifiedDeviceBootstrapContext;
     const requestedProfile = resolveRequestedBootstrapProfile({
       role,
       scopes: params.scopes,
@@ -610,14 +613,14 @@ export async function verifyDeviceBootstrapTokenContext(params: {
         lastUsedAtMs: Date.now(),
       };
       persistState(state, params.baseDir);
-      return { ok: true, context };
+      return { ok: true, context: buildContext(true) };
     }
 
     // On observable transports, an unapproved presenter must not consume the
-    // intended device's first-bind slot. Owner approval pins the device row;
-    // its successful retry consumes the still-unbound bearer.
+    // intended device's first-bind slot. The exact pending approval owns the
+    // later bind, so unrelated historical pairings cannot authorize it.
     if (!params.bindIdentity) {
-      return { ok: true, context };
+      return { ok: true, context: buildContext(false) };
     }
 
     state[tokenKey] = {
@@ -629,7 +632,7 @@ export async function verifyDeviceBootstrapTokenContext(params: {
       lastUsedAtMs: Date.now(),
     };
     persistState(state, params.baseDir);
-    return { ok: true, context };
+    return { ok: true, context: buildContext(true) };
   });
 }
 
@@ -646,7 +649,7 @@ export async function verifyDeviceBootstrapToken(params: {
   return result.ok ? { ok: true } : result;
 }
 
-type BoundDeviceBootstrapContext = VerifiedDeviceBootstrapContext;
+type BoundDeviceBootstrapContext = Omit<VerifiedDeviceBootstrapContext, "identityBound">;
 
 /**
  * Reads already-bound bootstrap context for a verified device identity.

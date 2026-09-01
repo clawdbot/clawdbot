@@ -6,7 +6,6 @@ import {
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceBootstrapTokenContext } from "../../../infra/device-bootstrap.js";
 import { verifyDeviceToken } from "../../../infra/device-pairing-tokens.js";
-import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
@@ -359,12 +358,8 @@ async function authenticateGatewayConnectCore(
     return undefined;
   }
 
-  const approvedBootstrapIdentity =
-    !context.confidentialTransport && bootstrapTokenCandidate && device
-      ? (await getPairedDevice(device.id))?.publicKey === deviceProof.devicePublicKey
-      : false;
   const verifiedBootstrap: {
-    context: { profile: DeviceBootstrapProfile; setupId?: string } | null;
+    context: { profile: DeviceBootstrapProfile; setupId?: string; identityBound: boolean } | null;
   } = { context: null };
   const authDecision = await resolveConnectAuthDecision({
     state: {
@@ -398,7 +393,7 @@ async function authenticateGatewayConnectCore(
         token,
         role: roleLocal,
         scopes: scopesLocal,
-        bindIdentity: context.confidentialTransport || approvedBootstrapIdentity,
+        bindIdentity: context.confidentialTransport,
       });
       if (result.ok) {
         verifiedBootstrap.context = result.context;
@@ -480,6 +475,7 @@ async function authenticateGatewayConnectCore(
   }
   advanceHandshakePhase("auth_validated");
   const issuedBootstrapProfile = boundBootstrapContext?.profile ?? null;
+  const bootstrapIdentityBound = boundBootstrapContext?.identityBound ?? false;
   const usesSharedGatewayAuth =
     authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
   const sharedGatewaySessionGeneration = usesSharedGatewayAuth
@@ -566,6 +562,7 @@ async function authenticateGatewayConnectCore(
     sessionUsesSharedGatewayAuth,
     sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
+    bootstrapIdentityBound,
     handoffBootstrapProfile,
     trustedProxyAuthOk,
     controlUiPairingKind,

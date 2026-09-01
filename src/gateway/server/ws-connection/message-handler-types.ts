@@ -148,6 +148,7 @@ export type AuthenticatedGatewayConnect = {
   sessionUsesSharedGatewayAuth: boolean;
   sessionSharedGatewaySessionGeneration?: string;
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
+  bootstrapIdentityBound: boolean;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
   controlUiPairingKind: ControlUiPairingKind;

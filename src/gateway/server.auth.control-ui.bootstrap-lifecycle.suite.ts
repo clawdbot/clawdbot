@@ -21,8 +21,8 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveBootstrapDevicePairing } = await import("../infra/device-pairing-approval.js");
-    const { requestDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startProxiedControlUiServer("secret");
@@ -55,29 +55,24 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
         profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
       const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-      const pending = await requestDevicePairing({
-        deviceId: identity.deviceId,
-        publicKey,
+      const wsInitial = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsInitial, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
         role: "node",
-        roles: ["node", "operator"],
-        scopes: [
-          "operator.admin",
-          "operator.approvals",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-        clientId: client.id,
-        clientMode: client.mode,
-        displayName: "Test iPhone",
-        platform: client.platform,
-        deviceFamily: client.deviceFamily,
-        silent: true,
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
       });
-      await approveBootstrapDevicePairing(
-        pending.request.requestId,
-        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      expect(initial.ok).toBe(false);
+      wsInitial.close();
+      const pending = (await listDevicePairing()).pending.find(
+        (entry) => entry.deviceId === identity.deviceId,
       );
+      if (!pending) {
+        throw new Error("expected bootstrap pairing request");
+      }
+      await approveDevicePairing(pending.requestId, { callerScopes: ["operator.admin"] });
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {
@@ -105,6 +100,7 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
       expect(operatorHandoff?.scopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",

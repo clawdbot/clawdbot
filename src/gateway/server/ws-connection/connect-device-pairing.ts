@@ -11,6 +11,10 @@ import {
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import {
+  clearBootstrapIdentityBinding,
+  registerBootstrapIdentityBinding,
+} from "../../../infra/device-bootstrap-pairing-approval.js";
+import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../../../infra/device-pairing-approval.js";
@@ -220,6 +224,20 @@ export async function authorizeGatewayConnectDevice(
           : {}),
         silent: plan.silent,
       });
+      if (
+        authMethod === "bootstrap-token" &&
+        state.bootstrapTokenCandidate &&
+        !context.confidentialTransport
+      ) {
+        registerBootstrapIdentityBinding(pairing.request.requestId, {
+          token: state.bootstrapTokenCandidate,
+          deviceId: device.id,
+          publicKey: devicePublicKey,
+          role,
+          scopes,
+          expiresAtMs: pairing.expiresAtMs,
+        });
+      }
       const trustedProxyApprovalScopes =
         pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
           ? plan.trustedProxyAutoApproveScopes
@@ -229,6 +247,7 @@ export async function authorizeGatewayConnectDevice(
       // UIs so they drop the stale prompts instead of stacking alerts forever.
       const supersededResolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
+        clearBootstrapIdentityBinding(superseded.requestId);
         requestContext.broadcast(
           "device.pair.resolved",
           {
