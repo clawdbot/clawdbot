@@ -185,6 +185,27 @@ describe("worker desktop tunnels", () => {
     await expect(access(identityDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes the short socket directory when tunnel startup fails", async () => {
+    let forward = "";
+    const runner: WorkerSshRunner = {
+      start(argv) {
+        forward = argv[argv.indexOf("-L") + 1] ?? "";
+        throw new Error("synthetic SSH startup failure");
+      },
+      async run() {
+        return success();
+      },
+    };
+    const manager = createWorkerDesktopTunnels({ runner, platform: "linux" });
+
+    await expect(acquire(manager)).rejects.toThrow("synthetic SSH startup failure");
+    const socketPath = forward.slice(0, forward.indexOf(":127.0.0.1:"));
+    expect(socketPath).toMatch(/^\/tmp\/oc-wd-.+\/desktop\.sock$/u);
+    await vi.waitFor(async () => {
+      await expect(access(path.dirname(socketPath))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("fences an older epoch before starting its replacement", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
