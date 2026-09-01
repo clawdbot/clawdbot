@@ -17,8 +17,15 @@ import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js"
 // Mock the persisted-registry loaders so direct metadata loads are observable.
 // Provider hot paths should reuse a compatible current snapshot and only fall
 // back to the loader when no compatible lifecycle-owned snapshot exists.
-const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
-const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
+const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
+  vi.hoisted(() => {
+    // Shared plugin workers must load this graph after this file's mocks are installed.
+    vi.resetModules();
+    return {
+      loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+      loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+    };
+  });
 
 vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
