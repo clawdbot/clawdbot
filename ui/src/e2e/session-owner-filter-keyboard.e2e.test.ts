@@ -26,6 +26,8 @@ suite.define(() => {
           owners: [
             { type: "human", id: "profile-ada", label: "Ada" },
             { type: "human", id: "profile-bob", label: "Bob" },
+            { type: "human", id: "profile-carol", label: "Carol" },
+            { type: "human", id: "profile-dave", label: "Dave" },
           ],
         },
       },
@@ -38,6 +40,23 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
       const ownerSubmenu = menu.getByRole("menuitem", { name: "Owners", exact: true });
+      const allOwnersLabel = menu.locator('[value="owner:"] .session-menu__text');
+      const ownersLabel = ownerSubmenu.locator(":scope > .session-menu__text");
+      const labelAlignment = await allOwnersLabel.evaluate(
+        (allOwners, owners) =>
+          Math.abs(allOwners.getBoundingClientRect().left - owners.getBoundingClientRect().left),
+        await ownersLabel.elementHandle(),
+      );
+      expect(labelAlignment).toBeLessThanOrEqual(0.5);
+      expect(await ownersLabel.evaluate((label) => getComputedStyle(label).color)).toBe(
+        await allOwnersLabel.evaluate((label) => getComputedStyle(label).color),
+      );
+      await expect
+        .poll(() => ownerSubmenu.locator(".sidebar-session-owner-preview .viewer-avatar").count())
+        .toBe(4);
+      await expect
+        .poll(() => ownerSubmenu.locator(".viewer-avatar--overflow").textContent())
+        .toBe("+2");
       const focusedTopLevelItem = menu.locator(
         ':scope > wa-dropdown-item:not([slot="submenu"]):focus',
       );
@@ -88,6 +107,15 @@ suite.define(() => {
         )
         .toBe(true);
       await expect.poll(() => menu.count()).toBe(0);
+      await trigger.click();
+      await expect
+        .poll(() =>
+          page
+            .getByRole("menuitem", { name: "Owners", exact: true })
+            .locator(".sidebar-session-owner-preview .viewer-avatar")
+            .count(),
+        )
+        .toBe(1);
     } finally {
       await context.close();
     }

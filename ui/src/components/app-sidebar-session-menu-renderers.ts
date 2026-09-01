@@ -12,7 +12,11 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderSessionOwnerChip, type SessionOwnerOption } from "./session-owner-chip.ts";
+import {
+  renderSessionOwnerAvatar,
+  renderSessionOwnerChip,
+  type SessionOwnerOption,
+} from "./session-owner-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -74,6 +78,9 @@ function renderSidebarOwnerFilter(
   if (owners.length === 0 && ownerFilterId === null && !involvingMe) {
     return nothing;
   }
+  const selectedOwner = owners.find((owner) => owner.id === ownerFilterId);
+  const previewOwners = selectedOwner ? [selectedOwner] : owners.slice(0, 3);
+  const previewOverflow = selectedOwner ? 0 : owners.length - previewOwners.length;
   return html`
     <div class="session-menu__separator" role="separator"></div>
     <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
@@ -88,8 +95,16 @@ function renderSidebarOwnerFilter(
       label: t("sessionsView.involvingMe"),
     })}
     ${owners.length > 0
-      ? html`<wa-dropdown-item class="session-menu__item sidebar-session-sort-menu__item">
+      ? html`<wa-dropdown-item
+          class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
+        >
           <span class="session-menu__text">${t("sessionsView.owners")}</span>
+          <span slot="details" class="sidebar-session-owner-preview" aria-hidden="true">
+            ${previewOwners.map((owner) => renderSessionOwnerAvatar(owner))}
+            ${previewOverflow > 0
+              ? html`<span class="viewer-avatar viewer-avatar--overflow">+${previewOverflow}</span>`
+              : nothing}
+          </span>
           ${owners.map((owner) =>
             renderSidebarMenuRadioItem({
               value: `owner:${owner.id}`,
