@@ -323,8 +323,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
   const doctorOnlyStateMigrations =
     ctx.options.repair === true ||
-    ctx.options.yes === true ||
-    ctx.options.acceptLegacyWorkspaceState === true;
+    ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),

@@ -59,7 +59,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
       "--accept-legacy-workspace-state",
-      "Use the legacy workspace setup state when it conflicts with SQLite",
+      "Use the legacy workspace setup state during --repair/--fix when it conflicts with SQLite",
       false,
     )
     .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
@@ -128,6 +128,16 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
         );
       }
+      if (
+        opts.acceptLegacyWorkspaceState === true &&
+        opts.repair !== true &&
+        opts.fix !== true
+      ) {
+        return exitDoctorError(
+          "doctor --accept-legacy-workspace-state requires --repair or --fix.",
+          opts.json === true || !process.stdout.isTTY,
+        );
+      }
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
@@ -138,15 +148,13 @@ export function registerMaintenanceCommands(program: Command) {
       const mutationOption =
         opts.repair === true || opts.fix === true || opts.force === true
           ? "--repair, --fix, or --force"
-          : opts.acceptLegacyWorkspaceState === true
-            ? "--accept-legacy-workspace-state"
-            : opts.yes === true
-              ? "--yes"
-              : opts.generateGatewayToken === true
-                ? "--generate-gateway-token"
-                : typeof opts.sessionSqlite === "string"
-                  ? `--session-sqlite ${opts.sessionSqlite}`
-                  : undefined;
+          : opts.yes === true
+            ? "--yes"
+            : opts.generateGatewayToken === true
+              ? "--generate-gateway-token"
+              : typeof opts.sessionSqlite === "string"
+                ? `--session-sqlite ${opts.sessionSqlite}`
+                : undefined;
       if (lintMode && mutationOption) {
         return exitDoctorError(
           `doctor ${lintMode} runs read-only lint checks and cannot be combined with ${mutationOption}.`,

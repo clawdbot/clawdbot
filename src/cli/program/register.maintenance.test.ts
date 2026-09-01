@@ -180,6 +180,28 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("requires repair mode before accepting legacy workspace state", async () => {
+    await runMaintenanceCli(["doctor", "--accept-legacy-workspace-state"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      jsonFailure("doctor --accept-legacy-workspace-state requires --repair or --fix."),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("passes legacy workspace acceptance only with repair mode", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--accept-legacy-workspace-state", "--repair"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.acceptLegacyWorkspaceState).toBe(true);
+    expect(options.repair).toBe(true);
+  });
+
   it("passes session sqlite options to doctor command", async () => {
     doctorCommand.mockResolvedValue(undefined);
 
