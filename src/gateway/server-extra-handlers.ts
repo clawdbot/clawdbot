@@ -1,19 +1,37 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayServerOptions } from "./server-public.js";
 
-const attachedGatewayExtraHandlers = new WeakMap<GatewayServerOptions, GatewayRequestHandlers>();
+export type GatewayServerExtraHttpRoute = {
+  path: string;
+  handler: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
+};
 
-/** Attach process-local methods without adding them to the public Gateway options contract. */
+type GatewayServerExtras = {
+  handlers: GatewayRequestHandlers;
+  httpRoutes: readonly GatewayServerExtraHttpRoute[];
+};
+
+const attachedGatewayExtras = new WeakMap<GatewayServerOptions, GatewayServerExtras>();
+
+/** Attach process-local surfaces without adding them to the public Gateway options contract. */
 export function withGatewayServerExtraHandlers(
   options: GatewayServerOptions,
   handlers: GatewayRequestHandlers,
+  httpRoutes: readonly GatewayServerExtraHttpRoute[] = [],
 ): GatewayServerOptions {
-  attachedGatewayExtraHandlers.set(options, handlers);
+  attachedGatewayExtras.set(options, { handlers, httpRoutes });
   return options;
 }
 
 export function readGatewayServerExtraHandlers(
   options: GatewayServerOptions,
 ): GatewayRequestHandlers {
-  return attachedGatewayExtraHandlers.get(options) ?? {};
+  return attachedGatewayExtras.get(options)?.handlers ?? {};
+}
+
+export function readGatewayServerExtraHttpRoutes(
+  options: GatewayServerOptions,
+): readonly GatewayServerExtraHttpRoute[] {
+  return attachedGatewayExtras.get(options)?.httpRoutes ?? [];
 }

@@ -22,6 +22,7 @@ import type {
   ReturnCovenantGatewayRestart,
 } from "./gateway-generation.js";
 import { parseReturnCovenantPhaseRequest, sha256ReturnCovenant } from "./protocol.js";
+import { buildReturnCovenantRetentionRequest } from "./retention.js";
 import { ReturnCovenantFixtureRun } from "./run.js";
 import {
   createReturnCovenantTestAttestation,
@@ -151,6 +152,7 @@ describe("product return-covenant fixture run", () => {
       const capturedGenerations: string[] = [];
       const forbiddenCurrentGenerations: string[] = [];
       const observations: Record<string, unknown>[] = [];
+      const caseForms: Parameters<typeof buildReturnCovenantRetentionRequest>[0]["caseForms"] = [];
       try {
         for (const casePlan of plan.cases) {
           for (const form of casePlan.forms) {
@@ -163,7 +165,7 @@ describe("product return-covenant fixture run", () => {
               }),
             );
             const caseHandle = stringField(prepared, "caseHandle");
-
+            caseForms.push({ caseId: casePlan.id, form, caseHandle });
             if (!checkedNegativeControls) {
               await expect(
                 invoke(
@@ -181,7 +183,6 @@ describe("product return-covenant fixture run", () => {
                 ),
               ).rejects.toThrow(/every planned case\/form handle/u);
             }
-
             const dispatchRequest = createReturnCovenantTestRequest({
               caseHandle,
               casePlan,
@@ -198,7 +199,6 @@ describe("product return-covenant fixture run", () => {
               resultMarker: stringField(acceptance, "resultMarker"),
             };
             capturedGenerations.push(acceptanceBinding.capturedAuthorityGeneration);
-
             if (!checkedNegativeControls) {
               await expect(invoke(dispatchRequest)).rejects.toThrow(/expected prepared/u);
               const validTransition = createReturnCovenantTestRequest({
@@ -374,6 +374,46 @@ describe("product return-covenant fixture run", () => {
           completed: true,
           ...cleanupBindings,
         });
+        const cleanupRun = record(cleanup.cleanupRun);
+        const retentionRequest = buildReturnCovenantRetentionRequest({
+          caseForms,
+          cleanupRun: {
+            receiptId: stringField(cleanupRun, "receiptId"),
+            observationSetSha256: stringField(cleanupRun, "observationSetSha256"),
+            phaseChainSha256: stringField(cleanupRun, "phaseChainSha256"),
+            driverAttestationSha256: stringField(cleanupRun, "driverAttestationSha256"),
+          },
+          plan,
+          requestNonce: sha256ReturnCovenant("return-covenant-test-retention-request"),
+        });
+        await expect(
+          run.inspectRetention(
+            {
+              ...retentionRequest,
+              candidateSha: "8".repeat(40),
+            },
+            gateway.current(),
+          ),
+        ).rejects.toThrow(/identity mismatch/u);
+        await expect(
+          run.inspectRetention(retentionRequest, gateway.current()),
+        ).resolves.toMatchObject({
+          schema: "openclaw.k6.return-covenant-retention-response.v1",
+          requestNonce: retentionRequest.requestNonce,
+          gateway: {
+            endpoint: gateway.current().endpoint,
+            namespacePid: gateway.current().pid,
+            namespaceStartFingerprint: gateway.current().startFingerprint,
+          },
+          resources: {
+            delegates: { complete: true, total: 0, nextCursor: null, items: [] },
+            queueItems: { complete: true, total: 0, nextCursor: null, items: [] },
+            temporarySessions: { complete: true, total: 0, nextCursor: null, items: [] },
+          },
+        });
+        await expect(run.inspectRetention(retentionRequest, gateway.current())).rejects.toThrow(
+          /already consumed/u,
+        );
         await invoke(
           createReturnCovenantTestRequest({
             casePlan: plan.cases[0]!,

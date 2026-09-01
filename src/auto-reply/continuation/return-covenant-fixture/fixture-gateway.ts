@@ -65,6 +65,7 @@ export async function runReturnCovenantFixtureGateway(): Promise<void> {
           startupConfigSnapshotRead: { snapshot },
         },
         service.handlers,
+        service.httpRoutes,
       ),
     );
     await server.startupSettled;

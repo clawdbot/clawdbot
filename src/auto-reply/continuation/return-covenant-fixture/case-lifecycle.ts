@@ -21,7 +21,6 @@ import {
   ackSessionDelivery,
   loadPendingSessionDeliveries,
   loadPendingSessionDelivery,
-  releaseSessionDeliveryClaim,
 } from "../../../infra/session-delivery-queue-storage.js";
 import { peekSystemEventEntries, removeSystemEvents } from "../../../infra/system-events.js";
 import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.message.js";
@@ -320,7 +319,8 @@ export async function releaseReturnCovenantCase(params: {
   const keepSilentEvent =
     state.casePlan.kind === "allowed" && state.casePlan.returnMode === "silent";
   if (!keepSilentEvent) {
-    await releaseSessionDeliveryClaim(state.deliveryId, stateDirectory(context));
+    // Keep the durable hold while this phase performs the sole bypass drain.
+    // Publishing it as due would let Gateway recovery redrive before adoption.
     await drainPendingSessionDelivery({
       id: state.deliveryId,
       logLabel: "Return-covenant held delivery",

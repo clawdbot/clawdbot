@@ -28,6 +28,7 @@ import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import { createGatewayPortalService, type GatewayPortalService } from "./portals/portal-service.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import type { GatewayServerExtraHttpRoute } from "./server-extra-handlers.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
@@ -129,6 +130,7 @@ export async function createGatewayHttpTransport(params: {
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
+  serverExtraHttpRoutes?: readonly GatewayServerExtraHttpRoute[];
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
@@ -211,12 +213,21 @@ export async function createGatewayHttpTransport(params: {
 
   let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
   let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
+  const findServerExtraHttpRoute = (pathContext: PluginRoutePathContext | undefined) =>
+    params.serverExtraHttpRoutes?.find((route) => route.path === pathContext?.pathname);
   const handlePluginRequest: GatewayPluginRequestHandler = async (
     req,
     res,
     pathContext,
     dispatchContext,
   ) => {
+    const serverExtraHttpRoute = findServerExtraHttpRoute(pathContext);
+    if (serverExtraHttpRoute) {
+      if (dispatchContext?.gatewayAuthSatisfied !== true) {
+        return false;
+      }
+      return await serverExtraHttpRoute.handler(req, res);
+    }
     if (loadedPluginRequestHandler) {
       return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
     }
@@ -259,9 +270,15 @@ export async function createGatewayHttpTransport(params: {
     return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
   };
   const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
+    if (findServerExtraHttpRoute(pathContext)) {
+      return true;
+    }
     return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
   };
   const isPluginAuthenticatedRoute = (pathContext: PluginRoutePathContext): boolean => {
+    if (findServerExtraHttpRoute(pathContext)) {
+      return true;
+    }
     return isPluginAuthenticatedRoutePath(resolvePluginRouteRegistry(), pathContext);
   };
   const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) => {

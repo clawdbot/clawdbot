@@ -44,6 +44,7 @@ import {
   type ReturnCovenantPhaseRequest,
   type ReturnCovenantPlan,
 } from "./protocol.js";
+import { ReturnCovenantRetentionInspector } from "./retention.js";
 import {
   RETURN_COVENANT_RUN_SNAPSHOT_SCHEMA,
   restoreReturnCovenantActiveState,
@@ -59,6 +60,7 @@ export class ReturnCovenantFixtureRun {
   readonly #completed = new Map<string, CompletedReturnCovenantCase>();
   readonly #context: ReturnCovenantFixtureContext;
   readonly #disposeHeartbeatHandler: () => void;
+  readonly #retentionInspector = new ReturnCovenantRetentionInspector();
   readonly #states = new Map<string, ReturnCovenantCaseState>();
   readonly #statesByHandle = new Map<string, ReturnCovenantCaseState>();
   #cleanupRun: ReturnCovenantRunCleanupReceipt | undefined;
@@ -267,6 +269,20 @@ export class ReturnCovenantFixtureRun {
       driverAttestationSha256: cleanupRun.driverAttestationSha256,
       runCleanupReceiptId: cleanupRun.receiptId,
     };
+  }
+
+  async inspectRetention(
+    requestValue: unknown,
+    gateway: ReturnCovenantGatewayInvocation["gateway"],
+  ): Promise<Record<string, unknown>> {
+    return await this.#retentionInspector.inspect({
+      activeCaseCount: this.#states.size,
+      cleanupRun: this.#cleanupRun,
+      completed: this.#completed,
+      context: this.#context,
+      gateway,
+      requestValue,
+    });
   }
 
   async #prepare(

@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readJsonBodyOrError, sendJson } from "../../../gateway/http-common.js";
+import type { GatewayServerExtraHttpRoute } from "../../../gateway/server-extra-handlers.js";
 import type { GatewayRequestHandlers } from "../../../gateway/server-methods/types.js";
 import type { ReturnCovenantFixtureFaults, ReturnCovenantGatewayInvocation } from "./case-state.js";
 import {
@@ -15,6 +17,7 @@ import {
   parseReturnCovenantPlan,
   ReturnCovenantProtocolError,
 } from "./protocol.js";
+import { RETURN_COVENANT_RETENTION_PATH } from "./retention.js";
 import { parseReturnCovenantRunSnapshot } from "./run-snapshot.js";
 import { ReturnCovenantFixtureRun } from "./run.js";
 
@@ -26,6 +29,7 @@ type ReturnCovenantGatewayService = {
   beginClose: () => void;
   close: () => Promise<void>;
   handlers: GatewayRequestHandlers;
+  httpRoutes: readonly GatewayServerExtraHttpRoute[];
 };
 
 function readOperation(value: unknown): ReturnCovenantGatewayOperation {
@@ -169,6 +173,51 @@ export function createReturnCovenantGatewayService(params: {
       }
     },
   };
+  const httpRoutes: readonly GatewayServerExtraHttpRoute[] = [
+    {
+      path: RETURN_COVENANT_RETENTION_PATH,
+      handler: async (request, response) => {
+        if (request.method !== "POST") {
+          sendJson(response, 405, {
+            error: {
+              code: "method-not-allowed",
+              message: "return-covenant resource inspection requires POST",
+            },
+          });
+          return true;
+        }
+        const body = await readJsonBodyOrError(request, response, 1024 * 1024);
+        if (body === undefined) {
+          return true;
+        }
+        try {
+          assertActive();
+          if (!run) {
+            throw new ReturnCovenantProtocolError(
+              "uninitialized-gateway-run",
+              "return-covenant gateway run is not initialized",
+              409,
+            );
+          }
+          const result = await run.inspectRetention(body, params.binding);
+          assertActive();
+          sendJson(response, 200, result);
+        } catch (error) {
+          const protocolError = error instanceof ReturnCovenantProtocolError ? error : undefined;
+          sendJson(response, protocolError?.statusCode ?? 500, {
+            error: {
+              code: protocolError?.code ?? "resource-inspection-failed",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "return-covenant resource inspection failed",
+            },
+          });
+        }
+        return true;
+      },
+    },
+  ];
   return {
     beginClose: () => {
       active = false;
@@ -179,5 +228,6 @@ export function createReturnCovenantGatewayService(params: {
       run = undefined;
     },
     handlers,
+    httpRoutes,
   };
 }
