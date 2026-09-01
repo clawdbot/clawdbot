@@ -148,6 +148,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: input.runParams.terminalReplyExpectation,
+    inputProvenance: input.runParams.inputProvenance,
     onlyExplicitSilentReply: false,
     payloadCount,
     aborted: terminalAborted,
@@ -260,6 +261,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: runParams.terminalReplyExpectation,
+    inputProvenance: runParams.inputProvenance,
     onlyExplicitSilentReply: settledTurnFinalizationAttempted,
     payloadCount,
     aborted: terminalAborted,

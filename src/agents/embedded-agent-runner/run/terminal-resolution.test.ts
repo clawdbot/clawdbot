@@ -375,6 +375,31 @@ describe("terminal resolution", () => {
     expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("completes a clean empty inter-session handoff without forcing a visible retry", async () => {
+    const activateInternalPrompt = vi.fn();
+    const input = makeTerminalInput({
+      runParams: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+          sourceSessionKey: "agent:main:telegram:direct:123",
+        },
+        terminalReplyExpectation: "required",
+      },
+      activateInternalPrompt,
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+    expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
+    expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
   it("retries an empty final turn after Anthropic server compaction", async () => {
     const assistant = emptyAssistant({
       providerReplay: {
