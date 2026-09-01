@@ -257,6 +257,8 @@ Once DMs work, you can turn your server into a full workspace where each channel
 
     If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
 
+    Session-busy notices also respect this reply policy. For ambient events and message-tool replies, Discord records the failure and suppressed notice in Gateway logs without posting to the room.
+
     <Tabs>
       <Tab title="Ask your agent">
         > "Allow my agent to respond on this server without having to be @mentioned"
