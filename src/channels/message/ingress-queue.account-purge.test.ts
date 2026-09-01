@@ -90,9 +90,12 @@ describe("channel ingress queue account purge", () => {
       // library contract rather than a path that command reaches.
       expect(purgeChannelIngressQueueAccount({ channelId: "line", stateDir })).toEqual({
         discarded: 4,
-        // Completed and dead-lettered rows are already settled; only the pending and
-        // claimed rows were inbound work that now has no account left to answer it.
+        // Only the pending and claimed rows were inbound work still waiting for an
+        // answer; the completed one is settled.
         undelivered: 2,
+        // The dead letter is reported apart from both: it was settled, but until this
+        // deletion `channels dead-letters resubmit` could still have replayed it.
+        recoverable: 1,
       });
 
       expect(readStoredRows(stateDir)).toEqual([
@@ -114,14 +117,14 @@ describe("channel ingress queue account purge", () => {
 
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "default", stateDir }),
-      ).toEqual({ discarded: 0, undelivered: 0 });
+      ).toEqual({ discarded: 0, undelivered: 0, recoverable: 0 });
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "work", stateDir }),
-      ).toEqual({ discarded: 1, undelivered: 1 });
+      ).toEqual({ discarded: 1, undelivered: 1, recoverable: 0 });
       // A second removal of the same account is a no-op rather than a repeated report.
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "work", stateDir }),
-      ).toEqual({ discarded: 0, undelivered: 0 });
+      ).toEqual({ discarded: 0, undelivered: 0, recoverable: 0 });
       expect(readStoredRows(stateDir)).toEqual([]);
     });
   });
@@ -153,7 +156,7 @@ describe("channel ingress queue account purge", () => {
       // queued an inbound event has nothing to discard.
       expect(
         purgeChannelIngressQueueAccount({ channelId: "line", accountId: "default", stateDir }),
-      ).toEqual({ discarded: 0, undelivered: 0 });
+      ).toEqual({ discarded: 0, undelivered: 0, recoverable: 0 });
 
       await expect(fs.access(sqlitePath)).rejects.toThrow();
     });

@@ -11,11 +11,7 @@ import {
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listChatChannels } from "./chat-meta.js";
 import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
-import {
-  formatChannelSelectionLine,
-  findRegisteredChannelOwner,
-  normalizeAnyChannelId,
-} from "./registry.js";
+import { formatChannelSelectionLine, normalizeAnyChannelId } from "./registry.js";
 
 describe("channel registry helpers", () => {
   afterEach(() => {
@@ -115,56 +111,5 @@ describe("channel registry helpers", () => {
 
     expect(normalizeAnyChannelId("a")).toBe("alpha");
     expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
-  });
-
-  it("reports the owning plugin id of a channel whose plugin id is not its channel id", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "@tencent-weixin/openclaw-weixin",
-          plugin: { id: "openclaw-weixin", meta: { aliases: ["wechat"] } },
-          source: "test",
-        },
-      ]),
-    );
-
-    expect(findRegisteredChannelOwner("openclaw-weixin")).toEqual({
-      pluginId: "@tencent-weixin/openclaw-weixin",
-      channelCount: 1,
-    });
-    // Operators type what the docs call the channel, so an alias has to resolve too.
-    expect(findRegisteredChannelOwner("wechat")).toEqual({
-      pluginId: "@tencent-weixin/openclaw-weixin",
-      channelCount: 1,
-    });
-    expect(findRegisteredChannelOwner("not-registered")).toBeNull();
-  });
-
-  it("counts every channel a plugin registers, so a caller can tell a shared store", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/two-channel-plugin",
-          plugin: { id: "alpha-chat", meta: { aliases: [] } },
-          source: "test",
-        },
-        {
-          pluginId: "@vendor/two-channel-plugin",
-          plugin: { id: "beta-chat", meta: { aliases: [] } },
-          source: "test",
-        },
-      ]),
-    );
-
-    // Both channels report the same owner and the same count: neither of them owns the
-    // plugin's durable state alone.
-    expect(findRegisteredChannelOwner("alpha-chat")).toEqual({
-      pluginId: "@vendor/two-channel-plugin",
-      channelCount: 2,
-    });
-    expect(findRegisteredChannelOwner("beta-chat")).toEqual({
-      pluginId: "@vendor/two-channel-plugin",
-      channelCount: 2,
-    });
   });
 });

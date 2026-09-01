@@ -635,6 +635,8 @@ export type ChannelIngressQueueAccountPurge = {
   discarded: number;
   /** Removed rows that were still awaiting an answer, so the removal dropped inbound work. */
   undelivered: number;
+  /** Removed dead letters, which an operator could have resubmitted until now. */
+  recoverable: number;
 };
 
 /**
@@ -642,7 +644,11 @@ export type ChannelIngressQueueAccountPurge = {
  *
  * Retention prunes on admission, so an account that never admits again keeps its rows
  * forever; removal is the last point that can dispose of them. Callers report
- * `undelivered` because those rows are inbound events no one will ever answer.
+ * `undelivered` and `recoverable` because those rows are inbound work, not residue.
+ *
+ * Selection is an exact match on the queue name, so a caller that cannot reproduce the
+ * name a plugin composed removes nothing rather than something else: the failure
+ * direction here is always "too few".
  */
 export function purgeChannelIngressQueueAccount(params: {
   channelId: string;
@@ -659,28 +665,33 @@ export function purgeChannelIngressQueueAccount(params: {
   // takes the non-creating path.
   const env = params.stateDir ? createStateDirEnv(params.stateDir) : process.env;
   if (!existsSync(resolveDatabasePath({ env }))) {
-    return { discarded: 0, undelivered: 0 };
+    return { discarded: 0, undelivered: 0, recoverable: 0 };
   }
   const database = openChannelIngressDatabase(params.stateDir);
   return runOpenClawStateWriteTransaction(
     (tx) => {
       const kysely = getChannelIngressKysely(tx.db);
-      const undelivered =
+      const countByStatus = (statuses: ["pending", "claimed"] | ["failed"]): number =>
         executeSqliteQueryTakeFirstSync(
           tx.db,
           kysely
             .selectFrom("channel_ingress_events")
             .select((eb) => eb.fn.countAll<number>().as("count"))
             .where("queue_name", "=", queueName)
-            .where("status", "in", ["pending", "claimed"]),
+            .where("status", "in", statuses),
         )?.count ?? 0;
+      const undelivered = countByStatus(["pending", "claimed"]);
+      // Dead letters are work too: `channels dead-letters resubmit` can replay them until
+      // this deletion drops them, so reporting them only as part of `discarded` would
+      // describe recoverable inbound events as routine cleanup.
+      const recoverable = countByStatus(["failed"]);
       const discarded = affectedRows(
         executeSqliteQuerySync(
           tx.db,
           kysely.deleteFrom("channel_ingress_events").where("queue_name", "=", queueName),
         ),
       );
-      return { discarded, undelivered };
+      return { discarded, undelivered, recoverable };
     },
     { path: database.path },
   );

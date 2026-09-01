@@ -39,6 +39,16 @@ const ingressMocks = vi.hoisted(() => ({
   onPurge: null as (() => void) | null,
 }));
 
+// The command maps a channel to the plugin whose queue holds its rows by reading plugin
+// manifests. Driving that list here pins all three shapes: a channel served by its own
+// plugin, one served by a plugin under a different id, and one plugin serving several.
+const manifestMocks = vi.hoisted(() => ({
+  plugins: [{ id: "external-chat", channels: ["external-chat"] }] as Array<{
+    id: string;
+    channels: string[];
+  }>,
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({ stopped: true })),
 }));
@@ -65,6 +75,16 @@ vi.mock("../channels/plugins/bundled.js", async () => {
   return {
     ...actual,
     getBundledChannelPlugin: vi.fn(() => undefined),
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/plugin-registry.js")>(
+    "../plugins/plugin-registry.js",
+  );
+  return {
+    ...actual,
+    loadPluginManifestRegistryForPluginRegistry: () => ({ plugins: manifestMocks.plugins }),
   };
 });
 
@@ -137,6 +157,7 @@ describe("channelsRemoveCommand", () => {
       layout: "state-only",
     });
     resetPluginRuntimeStateForTest();
+    manifestMocks.plugins = [{ id: "external-chat", channels: ["external-chat"] }];
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
@@ -298,7 +319,9 @@ describe("channelsRemoveCommand", () => {
       accountId: "default",
     });
     expect(defaultAccountId).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "default".');
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Discarded no stored ingress events.',
+    );
   });
 
   it("stops an active gateway channel runtime before deleting a runtime-backed account", async () => {
@@ -473,7 +496,7 @@ describe("channelsRemoveCommand", () => {
     // The runtime opens the queue under the plugin id, not the channel id it serves,
     // so an external plugin's rows are only found when removal resolves that owner.
     const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "@vendor/external-chat-plugin",
+      channelId: "external-chat",
       accountId: "default",
     });
     await queue.enqueue("inbound-1", { text: "never answered" });
@@ -500,64 +523,17 @@ describe("channelsRemoveCommand", () => {
     );
 
     expect(runtime.log).toHaveBeenCalledWith(
-      'Deleted external-chat account "default". Discarded 2 stored ingress events, 1 of which had not been answered yet.',
+      'Deleted external-chat account "default". Discarded 2 stored ingress events, including 1 never answered.',
     );
     // Discarding after the config write means a failed write cannot drop inbound work
     // for an account that is still configured.
     expect(callOrder).toEqual(["persist", "discard", "output"]);
     expect(
       purgeChannelIngressQueueAccount({
-        channelId: "@vendor/external-chat-plugin",
+        channelId: "external-chat",
         accountId: "default",
       }),
-    ).toEqual({ discarded: 0, undelivered: 0 });
-  });
-
-  it("discards the ingress rows under the plugin id the loaded registration owns", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
-      }),
-    );
-    // The plugin that is loaded now is the one that opened the queue, so its
-    // registration outranks catalog metadata that has drifted to another id.
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      { ...createExternalChatCatalogEntry(), pluginId: "@vendor/external-chat-plugin-stale" },
-    ]);
-    const loadedPlugin = createExternalChatDeletePlugin();
-    const registry = createTestRegistry([
-      {
-        pluginId: "@vendor/external-chat-plugin",
-        plugin: loadedPlugin,
-        source: "test",
-      },
-    ]);
-    setActivePluginRegistry(registry);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(registry);
-    const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "@vendor/external-chat-plugin",
-      accountId: "default",
-    });
-    await queue.enqueue("inbound-1", { text: "never answered" });
-
-    await channelsRemoveCommand(
-      {
-        channel: "external-chat",
-        account: "default",
-        delete: true,
-      },
-      runtime,
-      { hasFlags: true },
-    );
-
-    expect(runtime.log).toHaveBeenCalledWith(
-      'Deleted External Chat account "default". Discarded 1 stored ingress event, 1 of which had not been answered yet.',
-    );
+    ).toEqual({ discarded: 0, undelivered: 0, recoverable: 0 });
   });
 
   it("keeps the ingress rows of a disabled account so re-enabling it drains them", async () => {
@@ -595,7 +571,7 @@ describe("channelsRemoveCommand", () => {
     // control: seeding under the channel id would survive even if the disable path
     // started discarding.
     const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "@vendor/external-chat-plugin",
+      channelId: "external-chat",
       accountId: "default",
     });
     await queue.enqueue("inbound-1", { text: "waiting for the account to come back" });
@@ -614,10 +590,10 @@ describe("channelsRemoveCommand", () => {
     // back through the purge both proves it survived and leaves the worker state clean.
     expect(
       purgeChannelIngressQueueAccount({
-        channelId: "@vendor/external-chat-plugin",
+        channelId: "external-chat",
         accountId: "default",
       }),
-    ).toEqual({ discarded: 1, undelivered: 1 });
+    ).toEqual({ discarded: 1, undelivered: 1, recoverable: 0 });
   });
 
   it("keeps the ingress rows when the config write fails, so nothing is dropped for a still-configured account", async () => {
@@ -644,7 +620,7 @@ describe("channelsRemoveCommand", () => {
       ]),
     );
     const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "@vendor/external-chat-plugin",
+      channelId: "external-chat",
       accountId: "default",
     });
     await queue.enqueue("inbound-1", { text: "account is still configured" });
@@ -661,10 +637,10 @@ describe("channelsRemoveCommand", () => {
     // The account is still in config, so its queued work must still be there to drain.
     expect(
       purgeChannelIngressQueueAccount({
-        channelId: "@vendor/external-chat-plugin",
+        channelId: "external-chat",
         accountId: "default",
       }),
-    ).toEqual({ discarded: 1, undelivered: 1 });
+    ).toEqual({ discarded: 1, undelivered: 1, recoverable: 0 });
   });
 
   it("still reports the deletion when the ingress discard fails", async () => {
@@ -730,7 +706,7 @@ describe("channelsRemoveCommand", () => {
       ]),
     );
     const queue = createChannelIngressQueue<{ text: string }>({
-      channelId: "@vendor/external-chat-plugin",
+      channelId: "external-chat",
       accountId: "default",
     });
     await queue.enqueue("inbound-1", { text: "answered before removal" });
@@ -748,52 +724,81 @@ describe("channelsRemoveCommand", () => {
     );
   });
 
-  it("keeps the ingress rows when one plugin serves several channels", async () => {
+  it("discards the rows under the plugin id when that is not the channel id", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
-        channels: {
-          "external-chat": {
-            enabled: true,
-            token: "token-1",
-          },
-        },
+        channels: { "external-chat": { enabled: true, token: "token-1" } },
       }),
     );
-    // One plugin, two channels, one queue between them: the rows record no channel of
-    // their own, so this account's removal cannot tell its rows from its sibling's.
-    const loadedPlugin = createExternalChatDeletePlugin();
-    const registry = createTestRegistry([
-      {
-        pluginId: "@vendor/external-chat-plugin",
-        plugin: loadedPlugin,
-        source: "test",
-      },
-      {
-        pluginId: "@vendor/external-chat-plugin",
-        plugin: { id: "external-chat-voice", meta: { aliases: [] } },
-        source: "test",
-      },
+    // An installed plugin whose package id is not the channel it serves: the runtime
+    // stored its rows under the package id, so addressing the channel id finds nothing.
+    manifestMocks.plugins = [{ id: "@vendor/external-chat-plugin", channels: ["external-chat"] }];
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
     ]);
-    setActivePluginRegistry(registry);
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(registry);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "@vendor/external-chat-plugin",
       accountId: "default",
     });
-    await queue.enqueue("inbound-1", { text: "belongs to a sibling channel" });
+    await queue.enqueue("inbound-1", { text: "never answered" });
 
     await channelsRemoveCommand(
-      {
-        channel: "external-chat",
-        account: "default",
-        delete: true,
-      },
+      { channel: "external-chat", account: "default", delete: true },
       runtime,
       { hasFlags: true },
     );
 
     expect(runtime.log).toHaveBeenCalledWith(
-      'Deleted External Chat account "default". Kept its stored ingress events: plugin "@vendor/external-chat-plugin" serves more than one channel and its stored events do not record which.',
+      'Deleted external-chat account "default". Discarded 1 stored ingress event, including 1 never answered.',
+    );
+  });
+
+  it("keeps the ingress rows when one plugin serves several channels", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: { "external-chat": { enabled: true, token: "token-1" } },
+      }),
+    );
+    // One plugin, two channels, one queue between them: the rows record no channel of
+    // their own, so this account's removal cannot tell its rows from its sibling's.
+    manifestMocks.plugins = [
+      { id: "@vendor/external-chat-plugin", channels: ["external-chat", "external-chat-voice"] },
+    ];
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "@vendor/external-chat-plugin",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "belongs to a sibling channel too" });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Kept its stored ingress events: plugin "@vendor/external-chat-plugin" serves more than one channel and its stored events do not record which.',
     );
     // The sibling's unanswered event is still claimable, which is the whole point.
     await expect(queue.claimNext({ ownerId: "worker" })).resolves.toMatchObject({
