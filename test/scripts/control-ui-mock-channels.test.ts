@@ -5,7 +5,7 @@ describe("buildChannelWizardMocks", () => {
   it("starts a selected channel without showing the generic Telegram-first picker", () => {
     const mocks = buildChannelWizardMocks();
     const slack = mocks.start.cases.find(
-      (candidate) => candidate.match.channel === "slack",
+      (candidate) => "channel" in candidate.match && candidate.match.channel === "slack",
     )?.response;
 
     expect(slack).toMatchObject({
