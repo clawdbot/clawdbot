@@ -1,13 +1,11 @@
 // Server chat agent-event tests protect event fanout, heartbeat visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
@@ -41,6 +39,7 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
@@ -126,7 +125,6 @@ function waitForFast<T>(
 }
 
 describe("agent event handler", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
@@ -1506,8 +1504,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-flush", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-flush", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitLifecycleEnd(handler, "run-flush");
 
@@ -1538,8 +1537,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1573,8 +1573,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1605,8 +1606,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1969,7 +1971,7 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-tool-flush", "assistant", { text: "Before tool" });
 
-    // Throttled assistant update (within 150ms window).
+    // Keep the second update inside the live-text pacing window.
     now = 12_050;
     emitAgentEvent(
       handler,
@@ -2000,8 +2002,15 @@ describe("agent event handler", () => {
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
-    const toolCallOrder = broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const flushCallIndex = broadcast.mock.calls.findIndex((call) => call === chatCalls[1]);
+    const flushCallOrder = expectDefined(
+      broadcast.mock.invocationCallOrder[flushCallIndex],
+      "flushed chat delta invocation",
+    );
+    const toolCallOrder = expectDefined(
+      broadcastToConnIds.mock.invocationCallOrder[0],
+      "tool start invocation",
+    );
     expect(flushCallOrder).toBeLessThan(toolCallOrder);
     nowSpy.mockRestore();
   });
@@ -4279,77 +4288,83 @@ describe("agent event handler", () => {
       },
       status: "timeout",
     },
-  ])("persists $name without waiting for retry grace", async ({ terminal, status }) => {
-    const sessionKey = "session-terminal-error";
-    const storePath = path.join(tempDirs.make("openclaw-terminal-projection-"), "sessions.json");
-    const target = { storePath, sessionKey };
-    const read = () => loadStoredSessionEntry({ ...target, readConsistency: "latest" });
-    await replaceSessionEntry(target, {
-      sessionId: "session-terminal",
-      updatedAt: 1_000,
-      status: "running",
-      startedAt: 1_000,
-    });
-    vi.mocked(loadSessionEntry).mockImplementation(() => ({
-      cfg: {},
-      agentId: "main",
-      storePath,
-      store: {},
-      entry: read(),
-      canonicalKey: sessionKey,
-      storeKeys: [sessionKey],
-      legacyKey: undefined,
-    }));
-    loadGatewaySessionRow.mockImplementation(() => ({
-      ...OWNED_SESSION_ROW,
-      ...read(),
-      key: sessionKey,
-    }));
-    persistGatewaySessionLifecycleEventMock.mockImplementation(persistGatewaySessionLifecycleEvent);
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
-    const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
-      resolveSessionKeyForRun: () => sessionKey,
-    });
-    sessionEventSubscribers.subscribe("conn-session");
-    registerAgentRunContext("run-terminal-final-failure", {
-      sessionKey,
-    });
+  ])("persists $name without waiting for retry grace", ({ terminal, status }) =>
+    withOpenClawTestState({ label: "terminal-projection" }, async (state) => {
+      const sessionKey = "session-terminal-error";
+      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+      const target = { storePath, sessionKey };
+      const read = () => loadStoredSessionEntry({ ...target, readConsistency: "latest" });
+      await replaceSessionEntry(target, {
+        sessionId: "session-terminal",
+        updatedAt: 1_000,
+        status: "running",
+        startedAt: 1_000,
+      });
+      vi.mocked(loadSessionEntry).mockImplementation(() => ({
+        cfg: {},
+        agentId: "main",
+        storePath,
+        store: {},
+        entry: read(),
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+        legacyKey: undefined,
+      }));
+      loadGatewaySessionRow.mockImplementation(() => ({
+        ...OWNED_SESSION_ROW,
+        ...read(),
+        key: sessionKey,
+      }));
+      persistGatewaySessionLifecycleEventMock.mockImplementation(
+        persistGatewaySessionLifecycleEvent,
+      );
+      const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+        resolveSessionKeyForRun: () => sessionKey,
+      });
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(2_000);
+        sessionEventSubscribers.subscribe("conn-session");
+        registerAgentRunContext("run-terminal-final-failure", { sessionKey });
 
-    emitAgentEvents(handler, "run-terminal-final-failure", [
-      ["lifecycle", { phase: "error", error: "Retryable provider failure." }],
-      ["tool", { phase: "result", name: "read", isError: true, result: "An earlier tool failed." }],
-      ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
-    ]);
-    await Promise.all(
-      persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
-    );
+        emitAgentEvents(handler, "run-terminal-final-failure", [
+          ["lifecycle", { phase: "error", error: "Retryable provider failure." }],
+          [
+            "tool",
+            { phase: "result", name: "read", isError: true, result: "An earlier tool failed." },
+          ],
+          ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
+        ]);
+        await Promise.all(
+          persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+        );
 
-    expect(read()).toMatchObject({ status, lastRunError: terminal.error, endedAt: 2_000 });
-    expect(
-      broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
-    ).toMatchObject({
-      status,
-      lastRunError: terminal.error,
-    });
+        expect(read()).toMatchObject({ status, lastRunError: terminal.error, endedAt: 2_000 });
+        expect(
+          broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
+        ).toMatchObject({ status, lastRunError: terminal.error });
 
-    vi.setSystemTime(3_000);
-    emitAgentEvents(handler, "run-recovered", [
-      ["lifecycle", { phase: "start", startedAt: 3_000 }],
-      ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
-    ]);
-    await Promise.all(
-      persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
-    );
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(read()).toMatchObject({ status: "done", startedAt: 3_000, endedAt: 4_000 });
-    expect(read()?.lastRunError).toBeUndefined();
-    expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
-      "error",
-      "final",
-    ]);
-    handler.dispose();
-  });
+        vi.setSystemTime(3_000);
+        emitAgentEvents(handler, "run-recovered", [
+          ["lifecycle", { phase: "start", startedAt: 3_000 }],
+          ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
+        ]);
+        await Promise.all(
+          persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+        );
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(read()).toMatchObject({ status: "done", startedAt: 3_000, endedAt: 4_000 });
+        expect(read()?.lastRunError).toBeUndefined();
+        expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
+          "error",
+          "final",
+        ]);
+      } finally {
+        handler.dispose();
+        vi.useRealTimers();
+      }
+    }),
+  );
 
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
     vi.useFakeTimers();

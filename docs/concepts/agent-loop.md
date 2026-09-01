@@ -167,6 +167,12 @@ drain grace. Neither window resets on progress. These cleanup limits still
 apply when the execution budget is unlimited. See
 [Codex timeouts](/plugins/codex-harness-reference#timeouts).
 
+When a runtime reports a definitive timeout, the Gateway records its terminal
+status and error for the session sidebar immediately, without waiting for
+provider retry grace. Opening the failed session dismisses its sidebar attention
+as usual. A later successful turn clears the previous error and is not replaced
+by an older delayed failure.
+
 ### Stuck session diagnostics
 
 With diagnostics enabled, a built-in two-minute threshold classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
