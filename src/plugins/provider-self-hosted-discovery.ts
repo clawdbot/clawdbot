@@ -234,13 +234,27 @@ async function discoverOpenAICompatibleModelRows(params: {
       readBody: true,
       label: params.label,
     });
-    if (
-      modelsResult.kind !== "response" ||
-      modelsResult.status !== 404 ||
-      index === modelCandidates.length - 1
-    ) {
+    if (modelsResult.kind !== "response") {
       break;
     }
+    const isLastCandidate = index === modelCandidates.length - 1;
+    if (modelsResult.status === 404 && !isLastCandidate) {
+      continue;
+    }
+    if (!modelsResult.ok) {
+      break;
+    }
+    // A successful server-first root response may still be unusable (e.g.
+    // Unsloth's non-OpenAI /models shape). Fall back to /v1/models instead of
+    // failing discovery.
+    if (params.modelsPathOrder === "server-first" && !isLastCandidate) {
+      try {
+        readDiscoveryRows(modelsResult.body);
+      } catch {
+        continue;
+      }
+    }
+    break;
   }
   if (!modelsResult || modelsResult.kind === "unreachable") {
     return modelsResult ?? { kind: "unreachable", error: new Error("missing model response") };

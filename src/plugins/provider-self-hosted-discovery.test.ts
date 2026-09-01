@@ -57,6 +57,38 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     ]);
   });
 
+  it("falls back to /v1/models when the root /models response is unusable", async () => {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(
+        guarded(new Response(JSON.stringify({ llama: "server" }), { status: 200 })),
+      )
+      .mockResolvedValueOnce(
+        guarded(
+          new Response(JSON.stringify({ data: [{ id: "model", object: "model" }] }), {
+            status: 200,
+          }),
+        ),
+      );
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        baseUrl: "http://127.0.0.1:8080/v1",
+        serverBaseUrl: "http://127.0.0.1:8080",
+        label: "llama-server",
+        modelsPathOrder: "server-first",
+        discoverRuntimeContext: false,
+        rawResult: true,
+      }),
+    ).resolves.toMatchObject({
+      kind: "success",
+      rows: [{ model: { id: "model" } }],
+    });
+    expect(fetchWithSsrFGuardMock.mock.calls.map(([call]) => call.url)).toEqual([
+      "http://127.0.0.1:8080/models",
+      "http://127.0.0.1:8080/v1/models",
+    ]);
+  });
+
   it("separates transport, HTTP, and invalid model-list responses", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
