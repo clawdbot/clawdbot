@@ -294,6 +294,49 @@ describe("nextcloud-talk inbound behavior", () => {
     );
   });
 
+  it("uses structured Talk message text for slash commands while preserving the raw body", async () => {
+    const structuredBody = JSON.stringify({ message: "/help", parameters: [] });
+    const coreRuntime = createPluginRuntimeMock();
+    vi.mocked(coreRuntime.channel.commands.shouldHandleTextCommands).mockReturnValue(true);
+    vi.mocked(coreRuntime.channel.text.hasControlCommand).mockImplementation(
+      (body) => body === "/help",
+    );
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({ text: structuredBody }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.text.hasControlCommand).toHaveBeenCalledWith(
+      "/help",
+      expect.anything(),
+    );
+    const request = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as { ctxPayload?: unknown };
+    expect(request.ctxPayload).toMatchObject({
+      BodyForAgent: structuredBody,
+      CommandAuthorized: true,
+      CommandBody: "/help",
+      RawBody: structuredBody,
+    });
+  });
+
   it("passes the shared reply pipeline for dispatched replies", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);

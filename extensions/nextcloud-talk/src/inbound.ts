@@ -9,6 +9,7 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -46,6 +47,24 @@ type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
 
 function hasAllowEntries(entries: string[]): boolean {
   return normalizeNextcloudTalkAllowlist(entries).length > 0;
+}
+
+function resolveNextcloudTalkSlashCommandBody(rawBody: string): string {
+  // Talk wraps user text in a structured payload. Decode only slash commands so
+  // agent/history text keeps the authoritative payload and its rich-object metadata.
+  if (!rawBody.startsWith("{")) {
+    return rawBody;
+  }
+  try {
+    const structuredBody: unknown = JSON.parse(rawBody);
+    if (!isRecord(structuredBody) || !Object.hasOwn(structuredBody, "parameters")) {
+      return rawBody;
+    }
+    const message = typeof structuredBody.message === "string" ? structuredBody.message.trim() : "";
+    return message.startsWith("/") ? message : rawBody;
+  } catch {
+    return rawBody;
+  }
 }
 
 function roomRoutes(params: {
@@ -168,7 +187,11 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const commandBody = resolveNextcloudTalkSlashCommandBody(rawBody);
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    commandBody,
+    config as OpenClawConfig,
+  );
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkGroupRequireMention({
         cfg: config as OpenClawConfig,
@@ -367,7 +390,7 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    message: { body, bodyForAgent: rawBody, rawBody, commandBody },
     access: {
       commands: { authorized: commandAuthorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },
