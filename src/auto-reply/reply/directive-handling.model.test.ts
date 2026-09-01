@@ -1705,9 +1705,9 @@ describe("/model chat UX", () => {
     expect(sessionEntry).toEqual(initialSessionEntry);
   });
 
-  it("preserves harness selection for an existing ACP session", async () => {
+  it("preserves harness selection when an ACP backend owns the session", async () => {
     acpSessionMetaMock.readForEntry.mockReturnValue({
-      backend: "codex",
+      backend: "acpx",
       agent: "main",
       runtimeSessionName: "agent:main:dm:1",
       mode: "persistent",

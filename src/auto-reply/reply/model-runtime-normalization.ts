@@ -121,6 +121,8 @@ export async function prepareModelSelectionRuntime(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
   });
+  // Existing ACP metadata owns this session's concrete backend. Model selection may update
+  // policy, but it must not require a separate plugin harness while that binding is active.
   if (
     missingHarnessRuntime &&
     !readAcpSessionMetaForEntry({

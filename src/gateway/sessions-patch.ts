@@ -522,6 +522,7 @@ export async function projectSessionsPatchEntry(params: {
       const missingHarnessRuntime = readAcpSessionMetaForEntry({
         sessionKey: storeKey,
         agentId: sessionAgentId,
+        cfg,
         entry: next,
       })
         ? undefined
