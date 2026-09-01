@@ -19,6 +19,41 @@ describe("attachmentClassFromMime", () => {
 });
 
 describe("classifyAttachmentBytes", () => {
+  const completeUtf8 = Buffer.from("验证".repeat(700), "utf8");
+
+  it.each([
+    {
+      name: "complete 4,092-byte UTF-8 text",
+      buffer: completeUtf8.subarray(0, 4092),
+      expectedClass: "text",
+    },
+    {
+      name: "complete 4,200-byte UTF-8 text with a split sniff prefix",
+      buffer: completeUtf8,
+      expectedClass: "text",
+    },
+    {
+      name: "a complete input truncated mid-character at 4,096 bytes",
+      buffer: completeUtf8.subarray(0, 4096),
+      expectedClass: "binary",
+    },
+    {
+      name: "an invalid byte before the sniff boundary",
+      buffer: Buffer.concat([
+        completeUtf8.subarray(0, 1200),
+        Buffer.from([0xff]),
+        completeUtf8.subarray(1200),
+      ]),
+      expectedClass: "binary",
+    },
+    { name: "empty input", buffer: Buffer.alloc(0), expectedClass: "binary" },
+  ] as const)("classifies $name", async ({ buffer, expectedClass }) => {
+    await expect(classifyAttachmentBytes({ buffer, name: "notes" })).resolves.toEqual({
+      mime: expectedClass === "text" ? "text/plain" : undefined,
+      class: expectedClass,
+    });
+  });
+
   it("infers delimited text from otherwise untyped bytes", async () => {
     await expect(
       classifyAttachmentBytes({ buffer: Buffer.from("name,value\nopenclaw,1"), name: "data.bin" }),

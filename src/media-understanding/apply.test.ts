@@ -2107,6 +2107,23 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("hello from utf16 text");
   });
 
+  it("extracts untyped UTF-8 attachments across the sniff boundary", async () => {
+    const text = "验证".repeat(700);
+    const mediaPath = await createTempMediaFile({
+      fileName: "notes.bin",
+      content: text,
+    });
+
+    const { ctx } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath,
+      selfServeLocalPaths: false,
+    });
+
+    expect(ctx.agentText).toContain(text);
+    expect(ctx.Body).toContain('<file name="notes.bin" mime="text/plain">');
+  });
+
   it("extracts inbound files above the 5MB OpenResponses default up to the managed-media cap", async () => {
     // #90096: inbound extraction sizes to the agent media cap (default 20MB),
     // not the OpenResponses input_file default (5MB). A ~6MB managed document

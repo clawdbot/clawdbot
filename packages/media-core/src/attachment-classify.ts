@@ -100,12 +100,12 @@ function textRatios(text: string, includeWordish: boolean): [printable: number, 
 }
 
 function looksLikeText(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return false;
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  const sample = buffer.subarray(0, 4096);
+  const stream = sample.length < buffer.length;
   try {
-    return textRatios(new TextDecoder("utf-8", { fatal: true }).decode(sample), false)[0] > 0.85;
+    // Only a bounded prefix may leave an incomplete UTF-8 code point buffered.
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(sample, { stream });
+    return textRatios(text, false)[0] > 0.85;
   } catch {
     const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample), true);
     return printable > 0.95 && wordish > 0.3;
