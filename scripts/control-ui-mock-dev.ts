@@ -3107,6 +3107,12 @@ function installControlUiStatefulMocks(
   custodianReplyDelayMs: number,
   chatReplyDelayMs: number,
 ): void {
+  // The WebSocket mock does not intercept HTTP. Bind startup to this preview
+  // before Vite's default Gateway URL can send synthetic avatars to port 18789.
+  const gatewayUrl = new URL(window.location.origin);
+  gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
+  window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = { gatewayUrl: gatewayUrl.origin };
+
   type MockGatewayControls = {
     deferNext: (method: string) => void;
     emit: (event: string, payload: unknown) => void;
