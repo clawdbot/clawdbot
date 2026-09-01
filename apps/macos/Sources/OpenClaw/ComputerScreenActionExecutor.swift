@@ -116,8 +116,7 @@ final class ComputerScreenActionExecutor {
             display: display,
             checkExecutionAllowed: checkExecutionAllowed)
         try checkExecutionAllowed()
-        let cursor = self.automation.currentMouseLocation() ?? CGPoint.zero
-        return OpenClawComputerActResult(ok: true, cursorX: cursor.x, cursorY: cursor.y)
+        return OpenClawComputerActResult(ok: true)
     }
 
     // MARK: - Dispatch

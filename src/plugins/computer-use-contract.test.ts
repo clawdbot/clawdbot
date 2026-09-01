@@ -250,6 +250,12 @@ describe("Computer Use wire contract", () => {
     ).toThrow("COMPUTER_CONTRACT_MISMATCH");
   });
 
+  it("rejects the legacy cursor-only action result", () => {
+    expect(() => parseComputerActResult({ ok: true, cursorX: 12, cursorY: 34 })).toThrow(
+      "COMPUTER_CONTRACT_MISMATCH",
+    );
+  });
+
   it("validates the bounded node capability descriptor", () => {
     expect(
       parseComputerUseCapabilityDescriptor({
