@@ -1535,6 +1535,7 @@ describe("ci workflow guards", () => {
       );
       expect(checkout.with.ref).toBe("${{ github.sha }}");
       expect(checkout.with["persist-credentials"]).toBe(false);
+      expect(checkout.with.filter).toBe("blob:none");
       const fetchDepth = checkout.with["fetch-depth"];
       expect(
         typeof fetchDepth === "string"
