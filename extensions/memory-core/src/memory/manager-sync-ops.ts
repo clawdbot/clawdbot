@@ -252,15 +252,14 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
       const canRunRetryFullReindex =
         indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
-      needsFullReindex = Boolean(
+      needsFullReindex =
         (params?.force && !hasTargetArchiveFiles) ||
         needsInitialIndex ||
         needsMissingIdentityReindex ||
         needsExplicitIdentityReindex ||
         needsChunkingVersionReindex ||
         (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
-        (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex),
-      );
+        (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
       const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
       if (indexIdentity.status !== "valid" && !needsFullReindex) {
         this.dirty = true;
