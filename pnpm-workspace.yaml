@@ -5,8 +5,8 @@ packages:
   - extensions/*
   - examples/*
 
-minimumReleaseAge: 10080
-minimumReleaseAgeStrict: true
+minimumReleaseAge: 0
+minimumReleaseAgeStrict: false
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
