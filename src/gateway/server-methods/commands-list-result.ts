@@ -157,7 +157,8 @@ function mapCommand(
     ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
     ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
     description: clampDescription(cmd.description),
-    ...(cmd.category ? { category: cmd.category } : {}),
+    // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
+    ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
     source,
     scope: cmd.scope,
     acceptsArgs: Boolean(cmd.acceptsArgs),

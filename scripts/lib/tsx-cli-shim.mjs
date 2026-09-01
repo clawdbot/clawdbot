@@ -41,7 +41,9 @@ function resolveTsxImport(checkoutRoot) {
   ].filter(Boolean)) {
     try {
       const require = createRequire(path.join(candidateRoot, "package.json"));
-      const importUrl = pathToFileURL(require.resolve("tsx")).href;
+      // Keep compiled ESM native: tsx's CJS hook rewrites its import-only
+      // dependency edges into require() calls with incompatible export conditions.
+      const importUrl = pathToFileURL(require.resolve("tsx/esm")).href;
       const selectedModulesDir =
         candidateRoot === hydratedTsxRoot
           ? path.dirname(candidateRoot)
