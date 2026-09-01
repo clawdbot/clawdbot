@@ -12,6 +12,7 @@ import {
 import { listAppServerRuntimeModelBackendBindings } from "../../agents/app-server-runtime-bindings.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { resolveAgentHarnessOwnerPluginIds } from "../../agents/harness/runtime-plugin.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
 import {
@@ -393,11 +394,21 @@ async function buildPreparedDataForConfig(
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeBindings = [
-    ...listAppServerRuntimeModelBackendBindings().map((binding) => ({
-      provider: binding.provider,
-      runtime: binding.runtime,
-      cli: false,
-    })),
+    ...listAppServerRuntimeModelBackendBindings()
+      .filter(
+        (binding) =>
+          resolveAgentHarnessOwnerPluginIds({
+            runtime: binding.runtime,
+            provider: binding.provider,
+            config: cfg,
+            workspaceDir,
+          }).length > 0,
+      )
+      .map((binding) => ({
+        provider: binding.provider,
+        runtime: binding.runtime,
+        cli: false,
+      })),
     ...listCliRuntimeModelBackendBindings().map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,

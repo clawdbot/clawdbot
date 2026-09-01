@@ -2,7 +2,8 @@
  * Real-behavior proof for the app-server runtime-chooser bindings fix.
  *
  * What is REAL here (no vitest, no mocks of the seam under test):
- *   - `buildModelsProviderData()` from src/auto-reply/reply/commands-models.ts —
+ *   - `buildPreparedModelsProviderData()` from
+ *     src/auto-reply/reply/commands-models.ts —
  *     the exact production function that builds `/models` provider data.
  *   - The real plugin registry (`setActivePluginRegistry` with a real empty
  *     registry), so no CLI runtime backends are registered. Every runtime choice
@@ -25,7 +26,9 @@
  *   2. openai — regression guard. The pre-existing Codex chooser still works.
  *   3. A provider served by no app-server harness — stays absent from the
  *      chooser map, proving the fix did not blanket-add choosers everywhere.
- *   4. Binding coverage — every agent harness declared by a real bundled
+ *   4. Disabled owner — a runtime whose bundled plugin is disabled is hidden
+ *      instead of leaving a chooser entry that can only fail.
+ *   5. Binding coverage — every agent harness declared by a real bundled
  *      manifest on disk has a binding row.
  *
  * Run: pnpm tsx scripts/proof-app-server-runtime-chooser-bindings.ts
@@ -45,7 +48,7 @@ const repoRoot = process.env.PROOF_REPO_ROOT ?? process.cwd();
 const importSource = async (relativePath: string) =>
   import(pathToFileURL(path.join(repoRoot, relativePath)).href);
 
-const { buildModelsProviderData } = (await importSource(
+const { buildPreparedModelsProviderData } = (await importSource(
   "src/auto-reply/reply/commands-models.ts",
 )) as CommandsModelsModule;
 const { listAppServerRuntimeModelBackendBindings } = (await importSource(
@@ -67,7 +70,7 @@ setActivePluginRegistry(createEmptyPluginRegistry());
 
 /** Mirrors the Discord picker's runtime selection: 1-based index -> runtime id. */
 function selectRuntimeChoiceId(params: {
-  data: Awaited<ReturnType<typeof buildModelsProviderData>>;
+  data: Awaited<ReturnType<typeof buildPreparedModelsProviderData>>;
   provider: string;
   runtimeIndex: number;
 }): string | undefined {
@@ -98,7 +101,7 @@ const config = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
 } as unknown as OpenClawConfig;
 
-const data = await buildModelsProviderData(config);
+const data = await buildPreparedModelsProviderData(config);
 
 function runtimeIdsFor(provider: string): string[] {
   return (data.runtimeChoicesByProvider?.get(provider) ?? []).map((choice) => choice.id);
@@ -145,7 +148,19 @@ assert.equal(
 );
 console.log("[3] proof-standalone runtime choices: absent (as expected)");
 
-// --- Scenario 4: every bundled app-server harness has a binding. ------------
+// --- Scenario 4: disabled harness owners are not advertised. ----------------
+const disabledCopilotData = await buildPreparedModelsProviderData({
+  ...config,
+  plugins: { entries: { copilot: { enabled: false } } },
+});
+assert.equal(
+  disabledCopilotData.runtimeChoicesByProvider?.get("github-copilot"),
+  undefined,
+  "disabled Copilot owner plugin must not leave an unusable runtime choice",
+);
+console.log("[4] disabled Copilot runtime choices: absent (as expected)");
+
+// --- Scenario 5: every bundled app-server harness has a binding. ------------
 const boundRuntimes = new Set(
   listAppServerRuntimeModelBackendBindings().map((binding) => binding.runtime),
 );
@@ -166,7 +181,7 @@ assert.deepEqual(
   `bundled agent harness(es) ${unbound.join(", ")} ship with no model-provider binding`,
 );
 console.log(
-  `[4] bundled app-server harnesses ${JSON.stringify([...bundledHarnessIds].toSorted())} all bound`,
+  `[5] bundled app-server harnesses ${JSON.stringify([...bundledHarnessIds].toSorted())} all bound`,
 );
 
 console.log("All runtime assertions passed.");

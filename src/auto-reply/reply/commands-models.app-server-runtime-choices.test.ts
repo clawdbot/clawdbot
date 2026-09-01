@@ -90,6 +90,15 @@ describe("buildPreparedModelsProviderData app-server runtime choices", () => {
     ]);
   });
 
+  it("hides the Copilot runtime when its owner plugin is disabled", async () => {
+    const data = await buildPreparedModelsProviderData({
+      ...CONFIG,
+      plugins: { entries: { copilot: { enabled: false } } },
+    });
+
+    expect(data.runtimeChoicesByProvider?.get("github-copilot")).toBeUndefined();
+  });
+
   it("keeps offering the Codex runtime for openai models", async () => {
     const data = await buildPreparedModelsProviderData(CONFIG);
 
