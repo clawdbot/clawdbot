@@ -865,6 +865,43 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("omits an absolute workspace-root symlink under the state directory", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-workspace-root-symlink-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const realWorkspace = state.path("real-workspace");
+        const lexicalWorkspace = state.statePath("workspace");
+        await fs.mkdir(realWorkspace, { recursive: true });
+        await fs.writeFile(path.join(realWorkspace, "notes.md"), "workspace notes\n", "utf8");
+        await fs.symlink(realWorkspace, lexicalWorkspace, "dir");
+        await state.writeConfig({
+          agents: {
+            defaults: { workspace: lexicalWorkspace },
+          },
+        });
+
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 8, 1, 12, 0, 0),
+        });
+        const entries = await listArchiveEntries(archive.archivePath);
+
+        expect(archive.assets.map((asset) => asset.kind)).not.toContain("workspace");
+        expect(entries.some((entry) => entry.includes("/workspace"))).toBe(false);
+        expect(entries.some((entry) => entry.endsWith("/notes.md"))).toBe(false);
+      },
+    );
+  });
+
   it("includes a configured external agent directory when workspaces are excluded", async () => {
     await withOpenClawTestState(
       {

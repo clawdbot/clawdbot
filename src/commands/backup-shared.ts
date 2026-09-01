@@ -204,9 +204,17 @@ async function resolveBackupPlanFromPaths(params: {
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
-    excludedWorkspaceDirs: await Promise.all(
-      excludedWorkspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
-    ),
+    // Walker sees lexical state-tree names. A workspace-root symlink's
+    // canonical target does not contain that entry; keep both so
+    // --no-include-workspace still excludes it before the symlink guard.
+    excludedWorkspaceDirs: (
+      await Promise.all(
+        excludedWorkspaceDirs.map(async (workspaceDir) => [
+          path.resolve(workspaceDir),
+          await canonicalizePathForContainment(workspaceDir),
+        ]),
+      )
+    ).flat(),
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
