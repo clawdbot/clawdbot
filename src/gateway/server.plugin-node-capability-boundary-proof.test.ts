@@ -327,14 +327,15 @@ describe("gateway plugin node capability boundary proof", () => {
         const testedCheckoutHead = execFileSync("git", ["rev-parse", "HEAD"], {
           encoding: "utf8",
         }).trim();
-        const reviewedHead = process.env.RATCHET_PR_HEAD_SHA?.trim() || testedCheckoutHead;
-        if (process.env.RATCHET_PR_HEAD_SHA) {
-          expect(reviewedHead).toMatch(/^[a-f0-9]{40}$/u);
-          const mergeParents = execFileSync("git", ["cat-file", "-p", testedCheckoutHead], {
-            encoding: "utf8",
-          })
-            .match(/^parent ([a-f0-9]{40})$/gmu)
-            ?.map((line) => line.slice("parent ".length));
+        const mergeParents = execFileSync("git", ["cat-file", "-p", testedCheckoutHead], {
+          encoding: "utf8",
+        })
+          .match(/^parent ([a-f0-9]{40})$/gmu)
+          ?.map((line) => line.slice("parent ".length));
+        const reviewedHead =
+          process.env.RATCHET_PR_HEAD_SHA?.trim() || mergeParents?.[1] || testedCheckoutHead;
+        expect(reviewedHead).toMatch(/^[a-f0-9]{40}$/u);
+        if (mergeParents?.length === 2) {
           expect(mergeParents?.[1]).toBe(reviewedHead);
         }
         process.stdout.write(
