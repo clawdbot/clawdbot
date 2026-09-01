@@ -265,6 +265,28 @@ describe("outbound policy helpers", () => {
     },
   );
 
+  // The Slack dispatcher reads `op` through readStringParam, which trims by
+  // default, so a padded mutation value reaches the mutation branch. The guard
+  // must trim with the same canonical form or the untrimmed value classifies as
+  // a read-only list and bypasses cross-context policy.
+  it.each([" add ", "\tadd\n", " edit ", " remove "])(
+    "blocks cross-provider bookmark mutations with padded op %j",
+    (op) => {
+      expect(() =>
+        enforceCrossContextPolicy({
+          cfg: workspaceConfig,
+          channel: "slack",
+          action: "bookmark",
+          args: { op, channelId: "C-forum-1" },
+          toolContext: {
+            currentChannelId: "C12345678",
+            currentChannelProvider: "workspace",
+          },
+        }),
+      ).toThrow(/target provider "slack" while bound to "workspace"/);
+    },
+  );
+
   it.each([
     { op: "list", label: "explicit list op" },
     { op: undefined, label: "default op (list)" },

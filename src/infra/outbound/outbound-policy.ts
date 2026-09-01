@@ -74,7 +74,12 @@ function isContextGuardedAction(
     return false;
   }
   if (action === "bookmark") {
-    const op = typeof params.op === "string" ? params.op : "list";
+    // The Slack dispatcher reads `op` through readStringParam, which trims by
+    // default, so a padded mutation (e.g. " add ") reaches the mutation branch.
+    // Trim here with the same canonical form before the guard decision, or the
+    // untrimmed value would classify as a read-only list and bypass cross-context
+    // policy while the dispatcher still performs the mutation.
+    const op = typeof params.op === "string" ? params.op.trim() : "list";
     return op === "add" || op === "edit" || op === "remove";
   }
   return true;
