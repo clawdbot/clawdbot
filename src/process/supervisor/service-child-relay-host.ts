@@ -133,6 +133,7 @@ export async function createServiceChildRelayAdapter(params: {
   secretInput?: SpawnSecretInput;
   oomScoreWrapperSelected: boolean;
   windowsShellCommand?: string;
+  argv0?: string;
 }): Promise<ServiceChildRelayAdapter> {
   const generation = randomUUID();
   const useWindowsJobAnchor =
@@ -420,6 +421,7 @@ export async function createServiceChildRelayAdapter(params: {
     generation,
     command: params.command,
     args: params.args,
+    ...(params.argv0 ? { argv0: params.argv0 } : {}),
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,

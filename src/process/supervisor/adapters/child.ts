@@ -139,6 +139,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       input: params.input,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
+      ...(params.argv0 ? { argv0: params.argv0 } : {}),
     });
   }
 

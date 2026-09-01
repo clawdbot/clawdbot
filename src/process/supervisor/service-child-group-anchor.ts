@@ -216,6 +216,7 @@ export function runServiceChildGroupAnchor(): void {
         stdio,
         detached: false,
         windowsHide: true,
+        ...(start.argv0 ? { argv0: start.argv0 } : {}),
       });
     } catch (error) {
       await reportStartupFailure(error instanceof Error ? error.message : String(error));
