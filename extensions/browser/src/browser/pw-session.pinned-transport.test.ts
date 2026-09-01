@@ -291,7 +291,7 @@ describe("pw-session Playwright CDP transport", () => {
     });
   });
 
-  it("closes a root contextless target that has no session id", async () => {
+  it("suppresses a root contextless target that has no session id without closing", async () => {
     const commands: object[] = [];
     const closeWire = vi.fn();
     const wire: import("playwright-core").ConnectOverCDPTransport = {
@@ -302,12 +302,9 @@ describe("pw-session Playwright CDP transport", () => {
     connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
       const transport = value as import("playwright-core").ConnectOverCDPTransport;
       const delivered: object[] = [];
-      let closed = false;
       Object.assign(transport, {
         onmessage: (message: object) => delivered.push(message),
-        onclose: () => {
-          closed = true;
-        },
+        onclose: vi.fn(),
       });
       wire.onmessage?.({
         method: "Target.attachedToTarget",
@@ -316,12 +313,11 @@ describe("pw-session Playwright CDP transport", () => {
           waitingForDebugger: true,
         },
       });
+      const followup = { id: 42, result: { ok: true } };
+      wire.onmessage?.(followup);
       expect(commands).toEqual([]);
-      expect(delivered).toEqual([]);
-      expect(closeWire).toHaveBeenCalledOnce();
-      expect(closed).toBe(false);
-      wire.onclose?.("cleanup acknowledged");
-      await vi.waitFor(() => expect(closed).toBe(true));
+      await vi.waitFor(() => expect(delivered).toEqual([followup]));
+      expect(closeWire).not.toHaveBeenCalled();
       return browser.browser;
     }) as never);
     await connectOverCdpTransport("http://127.0.0.1:18799", {

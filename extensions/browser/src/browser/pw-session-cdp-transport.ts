@@ -147,9 +147,9 @@ export async function connectOverCdpTransport(
     const releaseContextlessTarget = (params: Record<string, unknown>) => {
       const sessionId = readStringField(params, "sessionId");
       if (!sessionId) {
-        // A root attach without a session cannot be resumed or detached. Forwarding
-        // it would reach Playwright's browserContextId assertion, so fail closed.
-        closeTransportSocket();
+        // A root attach without a session cannot be resumed or detached. Consume
+        // only the malformed event so Playwright never reaches its browserContextId
+        // assertion while the shared browser transport remains usable.
         return;
       }
       // Chrome dispatches session and root commands independently. Wait for the
