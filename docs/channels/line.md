@@ -291,8 +291,9 @@ as untrusted.
   every image, ordered by the index LINE reports; a sender whose client omits
   that index - LINE 11.15 and earlier for Android - keeps the order the images
   were delivered in. A set that never completes is delivered with whatever
-  arrived a few seconds after its most recent part rather than being held
-  indefinitely. Anything else arriving meanwhile - a message, or another set of
+  arrived rather than being held indefinitely, a few seconds after its most
+  recent part - or after the chat's queue reaches it, if it is still waiting its
+  turn. Anything else arriving meanwhile - a message, or another set of
   images - waits behind it, so replies keep the order the chat was sent in; in a
   group that queue is the whole room, because LINE conversations are ordered per
   chat rather than per member. A model without native vision reads only the

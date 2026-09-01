@@ -152,13 +152,11 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
         forming.release();
         return null;
       }
-      // Every arrival restarts the wait, so the delay bounds the gap between
-      // parts rather than the whole upload. Without this a part slower than the
-      // delay misses the set and opens a second one, answering the send twice.
-      //
-      // Only once the holder's wait exists: until it takes the lane there is no
-      // wait to extend, and starting one here would spend the set's delay on
-      // queued time the holder deliberately does not count.
+      // Restart the wait, once there is one, so the delay bounds the gap between
+      // parts rather than the whole upload: a slower part would otherwise miss
+      // the set and open a second one, answering the send twice. Before the
+      // holder takes the lane it has no wait, and starting one here would spend
+      // the delay on the queued time the holder deliberately does not count.
       if (forming.timer) {
         clearTimeout(forming.timer);
         forming.timer = setTimeout(forming.release, forming.flushDelayMs);
