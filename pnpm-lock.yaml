@@ -2431,6 +2431,22 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  packages/mermaid-renderer:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+      dompurify:
+        specifier: 3.4.14
+        version: 3.4.14
+      mermaid:
+        specifier: 11.17.1
+        version: 11.17.1
+    devDependencies:
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+
   packages/model-catalog-core:
     dependencies:
       '@openclaw/normalization-core':
@@ -2561,6 +2577,9 @@ importers:
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
+      '@openclaw/mermaid-renderer':
+        specifier: workspace:*
+        version: link:../packages/mermaid-renderer
       '@openclaw/model-catalog-core':
         specifier: workspace:*
         version: link:../packages/model-catalog-core
@@ -2609,9 +2628,6 @@ importers:
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
-      mermaid:
-        specifier: 11.17.1
-        version: 11.17.1
       remend:
         specifier: 1.3.0
         version: 1.3.0

@@ -61,6 +61,9 @@ const IOS_SCREENSHOT_APP_SCOPE_RE =
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
+// Native bundling reads the root aliases and this shared coercion dependency.
+const MERMAID_ASSET_INPUT_RE =
+  /^(?:packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)|tsconfig\.json$)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
@@ -223,7 +226,10 @@ export function detectChangedScope(changedPaths) {
       runIosBuild = true;
     }
 
-    if (!NATIVE_PROTOCOL_GEN_RE.test(path) && ANDROID_NATIVE_RE.test(path)) {
+    if (
+      !NATIVE_PROTOCOL_GEN_RE.test(path) &&
+      (ANDROID_NATIVE_RE.test(path) || MERMAID_ASSET_INPUT_RE.test(path))
+    ) {
       runAndroid = true;
     }
 
@@ -267,7 +273,7 @@ export function detectChangedScope(changedPaths) {
       runControlUiI18n = true;
     }
 
-    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path)) {
+    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path) || MERMAID_ASSET_INPUT_RE.test(path)) {
       runUiTests = true;
     }
 

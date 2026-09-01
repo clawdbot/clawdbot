@@ -1,5 +1,5 @@
 // A classic script is required here: opaque sandbox frames cannot import
-// same-origin ES modules without relaxing the Gateway's asset CORS policy.
+// same-origin ES modules without relaxing the host's asset CORS policy.
 (() => {
   const mermaid = globalThis.mermaid;
   const properties = [

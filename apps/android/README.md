@@ -46,7 +46,12 @@ cd apps/android
 
 ## Build / Run
 
+Install the repository's Node.js and pnpm dependencies before building. Gradle
+builds the shared Mermaid renderer automatically and packages its local assets
+with the app; no CDN or Gateway renderer is needed.
+
 ```bash
+pnpm install
 cd apps/android
 ./gradlew :app:assemblePlayDebug
 ./gradlew :app:installPlayDebug
@@ -63,6 +68,20 @@ cd apps/android
 ./gradlew :app:installThirdPartyDebug
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
+
+## Mermaid diagrams
+
+Chat renders completed `mermaid` code blocks inline. Tap a diagram for a
+full-screen view with pinch-to-zoom and panning. The corner menu switches to
+source or retries a temporary failure, and the copy button copies the original
+Mermaid source. Incomplete streaming blocks remain readable code.
+
+The renderer shares its pinned Mermaid version, sandbox, and SVG sanitizer with
+the Control UI. Android keeps bounded bitmap previews in memory and retains the
+sanitized SVG for zooming. Math and diagrams share the render queue and lifecycle
+owner, with separate lazy WebViews and resource limits. See
+[`packages/mermaid-renderer`](../../packages/mermaid-renderer/README.md) for the
+shared runtime and build contract.
 
 Repository-backed debug Gradle invocations, including `pnpm android:run` and
 `pnpm android:screenshots`, stamp the full checkout commit and capture one UTC
