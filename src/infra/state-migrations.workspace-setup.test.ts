@@ -675,6 +675,40 @@ describe("legacy workspace Doctor migration", () => {
     ).toBeUndefined();
   });
 
+  it("restores an empty reserved hashed attestation that changes before claim", async () => {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const attestationPath = path.join(
+      context.stateDir,
+      "workspace-attestations",
+      `${identity.workspaceKey}.attested`,
+    );
+    await fsp.mkdir(path.dirname(attestationPath), { recursive: true });
+    await fsp.writeFile(attestationPath, "", "utf8");
+    const replacementPath = path.join(context.homeDir, "empty-attestation-replacement");
+    await fsp.writeFile(replacementPath, "", "utf8");
+    const replacementInode = fs.statSync(replacementPath).ino;
+    const originalInode = fs.statSync(attestationPath).ino;
+
+    const result = await migrateLegacyWorkspaceState({
+      detected: detect(context),
+      env: context.env,
+      stateDir: context.stateDir,
+      beforeClaim: (source) => {
+        if (source.sourcePath === attestationPath) {
+          fs.renameSync(replacementPath, attestationPath);
+        }
+      },
+    });
+
+    expect(result.warnings[0]).toContain(attestationPath);
+    expect(result.warnings[0]).toMatch(/changed before Doctor could claim/i);
+    expect(fs.existsSync(`${attestationPath}.doctor-importing`)).toBe(false);
+    expect(fs.existsSync(attestationPath)).toBe(true);
+    expect(fs.statSync(attestationPath).ino).toBe(replacementInode);
+    expect(fs.statSync(attestationPath).ino).not.toBe(originalInode);
+  });
+
   it("discards an empty reserved hashed attestation claim left by an interrupted import", async () => {
     const context = setup();
     const identity = resolveWorkspaceStateIdentity(context.workspaceDir);

@@ -386,15 +386,25 @@ async function discardEmptyReservedAttestation(params: {
   try {
     let snapshot = params.snapshot;
     if (params.hasSource) {
-      snapshot = await params.sourceClaim.claim({
-        snapshot,
-        beforeClaim: () => {
-          params.beforeClaim?.(params.source);
-          assertConfiguredWorkspaceIdentity(params.source);
-        },
-        mismatchMessage: "legacy workspace source changed before Doctor could claim it",
-      });
-      claimedByThisRun = true;
+      try {
+        snapshot = await params.sourceClaim.claim({
+          snapshot,
+          beforeClaim: () => {
+            params.beforeClaim?.(params.source);
+            assertConfiguredWorkspaceIdentity(params.source);
+          },
+          mismatchMessage: "legacy workspace source changed before Doctor could claim it",
+        });
+        claimedByThisRun = true;
+      } catch (error) {
+        const restoreError = await params.sourceClaim.restore();
+        return {
+          changes: [],
+          warnings: [
+            `Failed discarding empty reserved workspace attestation at ${params.source.sourcePath}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+          ],
+        };
+      }
       if (snapshot.size !== 0) {
         throw new Error("legacy workspace source changed before Doctor could discard it");
       }
