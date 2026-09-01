@@ -2569,6 +2569,55 @@ EOF
     },
   );
 
+  it("does not advertise an installer log path that cleanup has removed", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-log-path-"));
+    const bin = join(tmp, "bin");
+    const calls = join(tmp, "calls");
+    const npmRoot = join(tmp, "lib", "node_modules");
+    mkdirSync(bin, { recursive: true });
+    linkNodeExecutable(bin);
+    writeNpmInstallRetryFixture(join(bin, "npm"));
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "OPENCLAW_VERSION=latest",
+          "USE_BETA=0",
+          "NPM_LOGLEVEL=error",
+          `npm_global_bin_dir() { printf '%s\\n' ${JSON.stringify(bin)}; }`,
+          "set +e",
+          "install_openclaw",
+          "exit $?",
+        ].join("\n"),
+        {
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_ERROR: "EACCES permission denied",
+          NPM_FAKE_OUTCOME: "persistent",
+          NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw"),
+          NPM_FAKE_ROOT: npmRoot,
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+
+      // The failure diagnostics may name a log file, but any path they print
+      // must still be readable once the installer has exited. Asserting the
+      // invariant rather than the absence of the line keeps this valid whether
+      // the breadcrumb is dropped or the log is retained.
+      const output = `${result.stdout}\n${result.stderr}`;
+      const advertised = [...output.matchAll(/^\s*Installer log:\s*(\S+)\s*$/gm)].map(
+        (match) => match[1],
+      );
+
+      expect(advertised.filter((path) => !existsSync(path))).toEqual([]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("fails after retrying the exact npm spec when npm exits zero without installing OpenClaw", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-empty-success-"));
     const bin = join(tmp, "bin");

@@ -1188,7 +1188,10 @@ print_npm_failure_diagnostics() {
     if [[ -n "${LAST_NPM_INSTALL_CMD}" ]]; then
         echo "  Command: ${LAST_NPM_INSTALL_CMD}"
     fi
-    echo "  Installer log: ${log}"
+    # No "Installer log:" breadcrumb here: "$log" is registered in TMPFILES and
+    # the EXIT trap removes it before the shell returns, so the advertised path
+    # never resolves for the user. The tail below and the conditional
+    # "npm debug log:" line carry the diagnostics instead.
 
     error_code="$(extract_npm_error_code "$log")"
     if [[ -n "$error_code" ]]; then
