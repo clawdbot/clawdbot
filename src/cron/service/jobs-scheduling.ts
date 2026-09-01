@@ -743,7 +743,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
   let nextWake: number | undefined;
   let jobCount = 0;
   let enabledCount = 0;
-  let runnableCount = 0;
   for (const job of jobs) {
     jobCount += 1;
     const nextRun = job.state.nextRunAtMs;
@@ -754,9 +753,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     if (rawEnabled) {
       enabledCount += 1;
     }
-    if (rawEnabled ?? true) {
-      runnableCount += 1;
-    }
     if ((rawEnabled ?? true) && hasNextRun) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
@@ -764,7 +760,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
   return {
     jobCount,
     enabledCount,
-    runnableCount,
     nextWakeAtMs: nextWake,
   };
 }
