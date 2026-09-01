@@ -493,7 +493,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim(),
       );
       expect(fileURLToPath(generation)).toBe(
-        path.join(root, "src/infra/runtime-process-entrypoints.ts"),
+        path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
       );
     }));
 
