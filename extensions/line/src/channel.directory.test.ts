@@ -1,95 +1,79 @@
-// Line tests cover directory adapter plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { linePlugin } from "./channel.js";
+import { linePlugin } from "../channel-plugin-api.js";
 
 const directory = linePlugin.directory;
 if (!directory?.listPeers || !directory.listGroups) {
-  throw new Error("expected the LINE plugin to expose directory listPeers/listGroups");
+  throw new Error("LINE directory callbacks are missing");
 }
 const { listPeers, listGroups } = directory;
 const runtime = createRuntimeEnv();
-
-const alice = `U${"a".repeat(32)}`;
-const bob = `U${"b".repeat(32)}`;
-const carol = `U${"c".repeat(32)}`;
-const dave = `U${"d".repeat(32)}`;
-const erin = `U${"e".repeat(32)}`;
-const group1 = `C${"1".repeat(32)}`;
-const room1 = `R${"2".repeat(32)}`;
-const group2 = `C${"3".repeat(32)}`;
-
-const cfg = {
-  accessGroups: { oncall: { type: "message.senders", members: { line: [carol] } } },
+const user = `U${"1".repeat(32)}`;
+const groupSender = `U${"2".repeat(32)}`;
+const roomSender = `U${"3".repeat(32)}`;
+const accountUser = `U${"4".repeat(32)}`;
+const group = `C${"5".repeat(32)}`;
+const room = `R${"6".repeat(32)}`;
+const accountGroup = `C${"7".repeat(32)}`;
+const cfg: OpenClawConfig = {
   channels: {
     line: {
-      enabled: true,
-      allowFrom: [alice, `line:user:${bob}`, "*", "accessGroup:oncall"],
-      groupAllowFrom: [carol, alice],
+      allowFrom: [user, `line:user:${user}`, "*", "accessGroup:operators"],
+      groupAllowFrom: [groupSender, user],
       groups: {
-        [group1]: { allowFrom: [dave] },
-        [`room:${room1}`]: {},
+        [`group:${group}`]: { allowFrom: [roomSender] },
+        [group]: {},
+        [`room:${room}`]: {},
         "*": { requireMention: false },
       },
-      accounts: {
-        support: {
-          allowFrom: [erin],
-          groups: { [group2]: {} },
-        },
-      },
+      accounts: { support: { allowFrom: [accountUser], groups: { [accountGroup]: {} } } },
     },
   },
-} as unknown as OpenClawConfig;
+};
 
-describe("line directory adapter", () => {
-  it("lists every sender the allowlists name", async () => {
+describe("LINE configured directory", () => {
+  it("lists unique sendable users from all configured sender scopes", async () => {
     expect(await listPeers({ cfg, accountId: "default", runtime })).toEqual([
-      { kind: "user", id: alice },
-      { kind: "user", id: bob },
-      { kind: "user", id: carol },
-      { kind: "user", id: dave },
+      { kind: "user", id: user },
+      { kind: "user", id: groupSender },
+      { kind: "user", id: roomSender },
     ]);
   });
 
-  // `*` and `accessGroup:<name>` authorize senders without naming a conversation, so
-  // an exact match on either would hand outbound resolution an unsendable target.
-  it("leaves out allowlist entries that are not addresses", async () => {
-    const peers = await listPeers({ cfg, accountId: "default", runtime });
-    expect(peers.map((entry) => entry.id)).not.toContain("*");
-    expect(peers.map((entry) => entry.id)).not.toContain("accessGroup:oncall");
-    expect(await listPeers({ cfg, accountId: "default", query: "accessGroup", runtime })).toEqual(
-      [],
-    );
-  });
-
-  it("lists a configured conversation under the id its messages carry", async () => {
+  it("lists group and room IDs after config-key normalization", async () => {
     expect(await listGroups({ cfg, accountId: "default", runtime })).toEqual([
-      { kind: "group", id: group1 },
-      { kind: "group", id: room1 },
+      { kind: "group", id: group },
+      { kind: "group", id: room },
     ]);
   });
 
-  // The listing has to agree with the ingress gate, which reads the same resolved
-  // account: a key the account sets replaces the base one, a key it omits inherits.
-  it("resolves an account the way the ingress gate does", async () => {
+  it("uses account overrides and inherits omitted sender scopes", async () => {
     expect(await listPeers({ cfg, accountId: "support", runtime })).toEqual([
-      { kind: "user", id: erin },
-      { kind: "user", id: carol },
-      { kind: "user", id: alice },
+      { kind: "user", id: accountUser },
+      { kind: "user", id: groupSender },
+      { kind: "user", id: user },
     ]);
     expect(await listGroups({ cfg, accountId: "support", runtime })).toEqual([
-      { kind: "group", id: group2 },
+      { kind: "group", id: accountGroup },
     ]);
   });
 
-  it("filters and limits like the other channel directories", async () => {
-    expect(await listPeers({ cfg, accountId: "default", query: "cccc", runtime })).toEqual([
-      { kind: "user", id: carol },
+  it("filters normalized IDs before applying the directory limit", async () => {
+    expect(
+      await listPeers({ cfg, accountId: "default", query: "U2222", limit: 1, runtime }),
+    ).toEqual([{ kind: "user", id: groupSender }]);
+    expect(await listPeers({ cfg, accountId: "default", limit: 1, runtime })).toEqual([
+      { kind: "user", id: user },
     ]);
-    expect(await listPeers({ cfg, accountId: "default", limit: 2, runtime })).toEqual([
-      { kind: "user", id: alice },
-      { kind: "user", id: bob },
+    expect(await listGroups({ cfg, accountId: "default", query: "R6666", runtime })).toEqual([
+      { kind: "group", id: room },
     ]);
+  });
+
+  it("leaves an unconfigured directory empty and self identity unavailable", async () => {
+    expect(await listPeers({ cfg: {}, runtime })).toEqual([]);
+    expect(await listGroups({ cfg: {}, runtime })).toEqual([]);
+    expect(await directory.self?.({ cfg, runtime })).toBeNull();
   });
 });

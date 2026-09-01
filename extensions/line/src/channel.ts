@@ -10,17 +10,17 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createChannelDirectoryAdapter,
+  createResolvedDirectoryEntriesLister,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
-import {
-  listLineDirectoryGroupsFromConfig,
-  listLineDirectoryPeersFromConfig,
-} from "./directory-config.js";
 import { lineGatewayAdapter } from "./gateway.js";
+import { resolveLineGroupLookupIds } from "./group-keys.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
@@ -48,6 +48,12 @@ const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAcc
   approveHint: "openclaw pairing approve line <code>",
   normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
+
+function normalizeLineDirectoryId(entry: string, kind: "direct" | "group"): string | null {
+  const id = normalizeLineMessagingTarget(entry);
+  // Authorization symbols are not sendable addresses; reuse the outbound classifier.
+  return id && inferLineTargetChatType(id) === kind ? id : null;
+}
 
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelPlugin({
   base: {
@@ -114,8 +120,25 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       },
     },
     directory: createChannelDirectoryAdapter({
-      listPeers: async (params) => await listLineDirectoryPeersFromConfig(params),
-      listGroups: async (params) => await listLineDirectoryGroupsFromConfig(params),
+      listPeers: createResolvedDirectoryEntriesLister({
+        kind: "user",
+        resolveAccount: (cfg, accountId) =>
+          resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+        resolveSources: ({ config }) => [
+          config.allowFrom ?? [],
+          config.groupAllowFrom ?? [],
+          ...Object.values(config.groups ?? {}).map((group) => group?.allowFrom ?? []),
+        ],
+        normalizeId: (entry) => normalizeLineDirectoryId(entry, "direct"),
+      }),
+      listGroups: createResolvedDirectoryEntriesLister({
+        kind: "group",
+        resolveAccount: (cfg, accountId) =>
+          resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+        resolveSources: ({ config }) => [Object.keys(config.groups ?? {})],
+        normalizeId: (entry) =>
+          normalizeLineDirectoryId(resolveLineGroupLookupIds(entry)[0] ?? "", "group"),
+      }),
     }),
     setupContract: lineSetupContract,
     status: lineStatusAdapter,
