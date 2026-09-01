@@ -1938,8 +1938,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [1200, 800, "desktop"],
-    [900, 500, "landscape-900"],
-    [640, 900, "responsive-640"],
+    [900, 500, "mobile-landscape-900"],
+    [640, 900, "mobile-responsive-640"],
     [320, 568, "mobile-320"],
     [375, 812, "mobile-375"],
     [430, 932, "mobile-430"],

@@ -1330,7 +1330,7 @@ openclaw-settings-save-indicator:empty {
     var(--scrollbar-size) 100% no-repeat;
 }
 
-.sidebar-shell__body:dir(rtl) {
+:root[dir="rtl"] .sidebar-shell__body {
   --sidebar-scrollbar-edge: left;
 }
 
