@@ -231,11 +231,27 @@ openclaw memory index --agent <agent-id> --force --verbose
 openclaw memory status --agent <agent-id> --deep
 ```
 
-The index shares `openclaw-agent.sqlite` with session history and other durable
-agent state. A full reindex replaces only the memory tables; it does not
-replace the agent database file. Deleting that database, its WAL, or its
-journal can remove conversation history and other state that memory indexing
-cannot reconstruct. Do not treat the agent database as a disposable cache.
+<Warning>
+The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+and other durable agent state. Never delete that database or its `-wal`, `-shm`,
+or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
+conversation history lost this way.
+</Warning>
+
+To discard the derived index and embedding cache before rebuilding, use
+[`memory reset`](/cli/memory#memory-reset):
+
+```bash
+openclaw memory reset --agent <agent-id>
+openclaw memory index --agent <agent-id>
+```
+
+Reset asks for confirmation; add `--yes` for non-interactive use. It clears only
+memory-owned derived tables, preserving all other database tables and files,
+including sessions, transcripts, and memory source files. It coordinates with
+existing memory maintenance without restarting the Gateway, which can reindex
+retained sources afterward. Reset does not shrink the database file or recover
+already deleted data.
 
 If indexing fails or the database grows unexpectedly, keep the database and
 its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)

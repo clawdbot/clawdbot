@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
+summary: "CLI reference for `openclaw memory` (status/index/reset/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -69,11 +69,45 @@ reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
 <Warning>
-The default `openclaw-agent.sqlite` database also contains session history and
-other durable agent state. Do not delete it or its `-wal`, `-shm`, or `-journal`
-sidecars to reset memory. Use `memory index --force` to rebuild the index; see
+The default `openclaw-agent.sqlite` database also contains canonical sessions,
+transcripts, and other durable agent state. Never delete it or its `-wal`,
+`-shm`, or `-journal` sidecars to reset a memory index. Use `memory index --force`
+to rebuild, or [`memory reset`](/cli/memory#memory-reset) to clear the derived index and
+embedding cache; see
 [Safe index recovery](/concepts/memory-builtin#safe-index-recovery).
 </Warning>
+
+## `memory reset`
+
+Clear the builtin memory index and embedding cache without deleting sessions,
+transcripts, or memory files.
+
+```bash
+openclaw memory reset [--agent <id>] [--yes]
+```
+
+Same per-agent scoping as `status` and `index`: without `--agent`, reset runs for
+every configured agent, falling back to the default agent when no list is
+configured. The command asks for confirmation. `--yes` skips the prompt and is
+required in a non-interactive terminal.
+
+Reset atomically drops and recreates only memory-owned derived tables in
+`agents/<agentId>/agent/openclaw-agent.sqlite`, clearing indexed content and
+cached embeddings while retaining required revision bookkeeping. All other
+tables and files remain untouched. An agent with no index is a successful
+no-op. Reset coordinates with existing memory maintenance and does not restart
+the Gateway; a running Gateway can reindex retained sources afterward.
+
+Rebuild from retained sources afterward:
+
+```bash
+openclaw memory reset --agent main --yes
+openclaw memory index --agent main
+```
+
+Reset does not shrink the database file or restore data already lost by deleting
+it. It is not a privacy purge: use [`memory forget`](/cli/memory#memory-forget) to remove
+tracked memory derived from selected sessions and prevent re-ingestion.
 
 ## `memory search`
 

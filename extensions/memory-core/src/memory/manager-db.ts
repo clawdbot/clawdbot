@@ -13,14 +13,20 @@ import {
   loadSqliteVecExtension,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_STATE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   ensureOpenClawAgentDatabaseSchema,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
   tryAcquireMemoryReindexLock,
+  waitForMemoryReindexLock,
   type MemoryReindexLockHandle,
 } from "./manager-reindex-lock.js";
 
@@ -93,6 +99,79 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
     throw new Error("Memory index revision is missing or invalid");
   }
   return row.revision;
+}
+
+/** Reset derived content without replacing the shared agent database or its schema. */
+export async function resetMemoryDatabase(params: {
+  targetDb: DatabaseSync;
+  dbPath: string;
+  workspaceDir: string;
+  vectorExtensionPath?: string;
+}): Promise<boolean> {
+  const db = params.targetDb;
+  const lock = await waitForMemoryReindexLock(params.dbPath);
+  try {
+    return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
+      withMemoryIndexPublishGeneration(params.dbPath, async () => {
+        if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
+          const loaded = await loadSqliteVecExtension({
+            db,
+            extensionPath: params.vectorExtensionPath,
+          });
+          if (!loaded.ok) {
+            throw new Error(
+              `Memory reset requires sqlite-vec to clear the vector index: ${loaded.error}`,
+            );
+          }
+        }
+        return runSqliteImmediateTransactionSync(db, () => {
+          const tables = MEMORY_INDEX_DERIVED_TABLES.filter((table) =>
+            tableExists(db, "main", table),
+          );
+          if (
+            !tables.some(
+              (table) =>
+                table !== MEMORY_INDEX_STATE_TABLE &&
+                db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get(),
+            )
+          ) {
+            return false;
+          }
+          const revision = readMemoryDatabaseRevision(db);
+          const schema = tables.flatMap(
+            (table) =>
+              db
+                .prepare(
+                  "SELECT type, name, sql FROM main.sqlite_schema WHERE tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+                )
+                // SAFETY: SQLite's catalog has text type/name/sql; the query excludes null SQL.
+                .all(table) as Array<{ type: string; name: string; sql: string }>,
+          );
+          // Drop triggers before their targets; recreate every table before its indexes/triggers.
+          // Keeping exact FTS/vector definitions also protects already-open manager handles.
+          for (const entry of schema.filter((candidate) => candidate.type === "trigger")) {
+            db.exec(`DROP TRIGGER "${entry.name.replaceAll('"', '""')}"`);
+          }
+          for (const table of tables) {
+            db.exec(`DROP TABLE main.${table}`);
+          }
+          for (const type of ["table", "index", "trigger"]) {
+            for (const entry of schema.filter((candidate) => candidate.type === type)) {
+              db.exec(entry.sql);
+            }
+          }
+          // Missing metadata requests a rebuild; never reuse an old revision (ABA).
+          db.prepare(`INSERT INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (?, ?)`).run(
+            MEMORY_INDEX_STATE_ID,
+            revision + 1,
+          );
+          return true;
+        });
+      }),
+    );
+  } finally {
+    lock.release();
+  }
 }
 
 function replaceVirtualTable(params: {
