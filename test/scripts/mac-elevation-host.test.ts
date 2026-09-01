@@ -31,9 +31,16 @@ function commandFixturesPath(binDir: string): string {
   return path.join(binDir, "command-fixtures.bash");
 }
 
-function writeCommandFixture(binDir: string, command: string, contents: string): void {
+function writeCommandFixture(
+  binDir: string,
+  command: string,
+  contents: string,
+  preserveChildBoundary = false,
+): void {
   writeExecutable(path.join(binDir, command), contents);
-  appendFileSync(commandFixturesPath(binDir), [`${command}() (`, contents, ")", ""].join("\n"));
+  if (!preserveChildBoundary) {
+    appendFileSync(commandFixturesPath(binDir), [`${command}() (`, contents, ")", ""].join("\n"));
+  }
 }
 
 function writeLipoFixture(binDir: string): void {
@@ -1041,15 +1048,10 @@ function createInstallRollbackHarness(
   } = {},
 ) {
   const artifact = createArtifactVerificationHarness(mac);
-  // Signal regressions depend on a real child-to-installer process boundary so Bash can
-  // finish the child's wait and EXIT cleanup before replaying the signal.
-  const exercisesProcessSignalBoundary = Boolean(
+  // macOS Bash subshell functions report the terminating signal inside an EXIT trap.
+  // Keep real commands for cooperative signal cleanup; SIGKILL has no EXIT cleanup.
+  const exercisesSignalCleanup = Boolean(
     options.hupDuringCustody ||
-    options.killDuringMigrationRestoreBootstrapOnce ||
-    options.killAfterMigrationRestoreBootstrapOnce ||
-    options.killAfterInitialMigrationCustody ||
-    options.killAfterPendingReceipt ||
-    options.killAfterRollbackAppCustody ||
     options.signalDuringCustody ||
     options.signalDuringRecoveryAppMove ||
     options.signalDuringReceiptCommit ||
@@ -1357,6 +1359,11 @@ function createInstallRollbackHarness(
       "exit 0",
       "",
     ].join("\n"),
+    // This shim sends SIGKILL to its actual installer parent.
+    Boolean(
+      options.killDuringMigrationRestoreBootstrapOnce ||
+      options.killAfterMigrationRestoreBootstrapOnce,
+    ),
   );
   writeCommandFixture(
     binDir,
@@ -1404,7 +1411,7 @@ function createInstallRollbackHarness(
     stateDir,
     env: {
       ...artifact.env,
-      BASH_ENV: exercisesProcessSignalBoundary ? "" : artifact.env.BASH_ENV,
+      BASH_ENV: exercisesSignalCleanup ? "" : artifact.env.BASH_ENV,
       TEST_DANGLING_ROLLBACK_DURING_MOVE: options.danglingRollbackDuringMove ? "1" : "0",
       TEST_CORRUPT_ROLLBACK_PLIST_BACKUP_ON_SYNC: options.corruptRollbackPlistBackupOnSync
         ? "1"

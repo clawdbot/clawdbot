@@ -28,7 +28,7 @@ inputs:
     required: false
     default: "off"
   dependency-cache:
-    description: Whether to restore workspace node_modules and its local pnpm store from the exact semantic dependency cache.
+    description: Whether to restore workspace node_modules and its pnpm store from the exact semantic dependency cache.
     required: false
     default: "false"
   vitest-fs-cache:
@@ -75,6 +75,9 @@ outputs:
   dependency-cache-key:
     description: Exact semantic dependency cache key.
     value: ${{ steps.dependency-cache-key.outputs.key }}
+  dependency-cache-paths:
+    description: Workspace-relative importer and store paths for the exact archive.
+    value: ${{ steps.dependency-cache-store.outputs.paths }}
   pnpm-store-cache-hit:
     description: Whether the pnpm store restored an exact key.
     value: ${{ steps.setup-pnpm.outputs.store-cache-hit }}
@@ -165,15 +168,32 @@ runs:
         fi
 
     - name: Configure dependency cache store
+      id: dependency-cache-store
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
         set -euo pipefail
-        # Keep both sides of pnpm's hard links below the workspace so one tar
-        # archive preserves them without relying on runner-home path depth.
+        store_dir="$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
+        if [ "${RUNNER_OS:-}" = "macOS" ]; then
+          # Only disposable hosted Macs grant cleanup authority over the HOME store.
+          # Keep the coarse cache's existing native path and archive version.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::The macOS exact dependency cache requires a GitHub-hosted runner"
+            exit 1
+          fi
+          store_dir="${HOME:?}/Library/pnpm/store"
+        fi
+        echo "PNPM_CONFIG_STORE_DIR=$store_dir" >> "$GITHUB_ENV"
         # Pnpm also needs registry metadata for offline supply-chain checks.
-        echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store" >> "$GITHUB_ENV"
-        echo "PNPM_CONFIG_CACHE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store/cache" >> "$GITHUB_ENV"
+        echo "PNPM_CONFIG_CACHE_DIR=$store_dir/cache" >> "$GITHUB_ENV"
+        # Relative HOME depth participates in the Actions archive version. Both
+        # publication and restore must use this same importer/store path list.
+        {
+          echo 'paths<<EOF'
+          printf '%s\n' node_modules ui/node_modules 'packages/*/node_modules' 'extensions/*/node_modules' 'examples/*/node_modules'
+          node -e 'console.log(require("node:path").relative(process.argv[1], process.argv[2]))' "$GITHUB_WORKSPACE" "$store_dir"
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
 
     - name: Resolve dependency cache key
       id: dependency-cache-key
@@ -192,7 +212,7 @@ runs:
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
       shell: bash
       run: |
-        rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
+        rm -rf "$GITHUB_WORKSPACE/node_modules" "${PNPM_CONFIG_STORE_DIR:?}"
         find \
           "$GITHUB_WORKSPACE/ui" \
           "$GITHUB_WORKSPACE/packages" \
@@ -207,13 +227,7 @@ runs:
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: |
-          node_modules
-          ui/node_modules
-          packages/*/node_modules
-          extensions/*/node_modules
-          examples/*/node_modules
-          .cache/openclaw-pnpm-store
+        path: ${{ steps.dependency-cache-store.outputs.paths }}
         key: ${{ steps.dependency-cache-key.outputs.key }}
 
     - name: Prepare dependency cache miss fallback
@@ -222,7 +236,7 @@ runs:
       run: |
         # actions/cache treats service, download, and extraction failures as
         # misses. Clear any partial extraction before restoring the pnpm store.
-        rm -rf "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
+        rm -rf "$GITHUB_WORKSPACE/node_modules" "${PNPM_CONFIG_STORE_DIR:?}"
         find \
           "$GITHUB_WORKSPACE/ui" \
           "$GITHUB_WORKSPACE/packages" \
@@ -246,20 +260,29 @@ runs:
       shell: bash
       run: bash scripts/install-trufflehog.sh
 
+    # Embedded step env is evaluated before its condition. Keep this scan in a
+    # guarded script and share its result across cache restore and configuration.
+    - name: Resolve Vitest transform cache generation
+      id: vitest-cache-generation
+      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
+
     - name: Restore Vitest transform cache
       id: vitest-cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
+          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
-        CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}
+        CACHE_GENERATION: ${{ steps.vitest-cache-generation.outputs.value }}
         CACHE_WRITER: "0"
       shell: bash
       run: |
@@ -376,9 +399,8 @@ runs:
           --config.side-effects-cache=true
         )
         if [ "$DEPENDENCY_CACHE" = "true" ]; then
-          # Both trees live below the workspace. Prefer real hard links so the
-          # single cache archive can preserve store/package identity; pnpm
-          # safely falls back to copies for files it cannot hard-link.
+          # Prefer real hard links so one archive preserves store/package identity.
+          # Pnpm safely falls back to copies for files it cannot hard-link.
           export PNPM_CONFIG_PACKAGE_IMPORT_METHOD=hardlink
         fi
         if [ -n "$LOCKFILE_FLAG" ]; then

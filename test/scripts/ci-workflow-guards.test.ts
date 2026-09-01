@@ -4,10 +4,12 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  globSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -4197,8 +4199,7 @@ NODE
     const setupPnpm = step("Setup pnpm");
     const install = step("Install dependencies");
     const installScript = expectDefined(install.run, "Install dependencies script");
-    const cachePaths =
-      "node_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
+    const cachePaths = "${{ steps.dependency-cache-store.outputs.paths }}";
 
     expect(action.inputs["cache-mode"].default).toBe("off");
     expect(action.inputs["dependency-cache"].default).toBe("false");
@@ -4212,9 +4213,10 @@ NODE
     expect(configureStore.if).toBe(
       "inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'",
     );
-    expect(configureStore.run).toContain(
-      'echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"',
-    );
+    expect(configureStore.id).toBe("dependency-cache-store");
+    expect(action.outputs["dependency-cache-paths"].value).toBe(cachePaths);
+    expect(configureStore["continue-on-error"]).not.toBe(true);
+    expect(actionSteps.indexOf(configureStore)).toBeLessThan(actionSteps.indexOf(prepare));
     expect(resolve.if).toBe("inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'");
     expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
     expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v3");
@@ -4224,7 +4226,7 @@ NODE
     expect(actionSteps.indexOf(resolve)).toBeLessThan(actionSteps.indexOf(restore));
     for (const cleanup of [prepare, prepareFallback]) {
       expect(cleanup.run).toContain('rm -rf "$GITHUB_WORKSPACE/node_modules"');
-      expect(cleanup.run).toContain('"$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"');
+      expect(cleanup.run).toContain('"${PNPM_CONFIG_STORE_DIR:?}"');
       expect(cleanup.run).toContain('"$GITHUB_WORKSPACE/packages"');
       expect(cleanup.run).toContain("-name node_modules");
     }
@@ -4316,6 +4318,7 @@ NODE
       "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "docker-seed-e2e",
+      "macos-node",
       "native-i18n",
       "qa-smoke-ci-profile",
       "sqlite-session-lifecycle",
@@ -4350,6 +4353,7 @@ NODE
           trusted: false,
         },
         { eventName: "workflow_dispatch", trusted: false },
+        { eventName: "workflow_dispatch", frozenTarget: true, trusted: false },
         { eventName: "push", repository: "contributor/openclaw", trusted: false },
       ] as const;
       for (const runnerBackend of ["", "blacksmith", "github", "hybrid"] as const) {
@@ -4367,13 +4371,17 @@ NODE
                 runnerEnvironment: selfHosted ? "self-hosted" : "github-hosted",
               }),
               `${jobName} ${JSON.stringify(context)} on ${routedRunner}`,
-            ).toBe(trusted && selfHosted ? "true" : "false");
+            ).toBe(
+              trusted && (jobName === "macos-node" ? !selfHosted && runAttempt === 1 : selfHosted)
+                ? "true"
+                : "false",
+            );
           }
         }
       }
-      // The actual runner must fence restores even when the configured backend
-      // still names Blacksmith or hybrid (including hosted retry routing).
-      for (const runnerEnvironment of ["", "github-hosted"] as const) {
+      // Actual hosting owns cleanup authority. Mac HOME trees are disposable
+      // only on hosted runners; Linux exact archives remain self-hosted only.
+      for (const runnerEnvironment of ["", "github-hosted", "self-hosted"] as const) {
         expect(
           evaluateWorkflowExpression(consumer.with?.["dependency-cache"], {
             ...canonical,
@@ -4381,7 +4389,11 @@ NODE
             runnerEnvironment,
           }),
           `${jobName} actual runner ${runnerEnvironment}`,
-        ).toBe("false");
+        ).toBe(
+          runnerEnvironment === (jobName === "macos-node" ? "github-hosted" : "self-hosted")
+            ? "true"
+            : "false",
+        );
       }
       if (jobName === "checks-node-core-test-nondist-shard") {
         expect(
@@ -4422,15 +4434,51 @@ NODE
       uses: "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
       with: {
         key: "${{ steps.setup-node-env.outputs.dependency-cache-key }}",
-        path: cachePaths,
+        path: "${{ steps.setup-node-env.outputs.dependency-cache-paths }}",
       },
     });
     expect(dependencySave.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
   });
 
-  it.skipIf(process.platform === "win32")(
-    "preserves pnpm hard links and validates cached importers and supply-chain policy offline",
-    async ({ onTestFinished, signal }) => {
+  it.skipIf(process.platform === "win32").each(["", "self-hosted"])(
+    "rejects macOS HOME-store cleanup authority on runner environment %j",
+    (runnerEnvironment) => {
+      const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+      const configure = expectDefined(
+        action.runs.steps.find(
+          (step: WorkflowStep) => step.name === "Configure dependency cache store",
+        )?.run,
+        "Configure dependency cache store script",
+      );
+      const root = tempDirs.make("openclaw-dependency-cache-authority-");
+      const home = path.join(root, "home");
+      const store = path.join(home, "Library", "pnpm", "store");
+      mkdirSync(store, { recursive: true });
+      writeFileSync(path.join(store, "retained"), "not owned by this job");
+      const envFile = path.join(root, "env");
+      const outputFile = path.join(root, "outputs");
+      const result = runWorkflowShellScript(configure, {
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          RUNNER_OS: "macOS",
+          RUNNER_ENVIRONMENT: runnerEnvironment,
+          GITHUB_WORKSPACE: path.join(root, "workspace"),
+          GITHUB_ENV: envFile,
+          GITHUB_OUTPUT: outputFile,
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("requires a GitHub-hosted runner");
+      expect(existsSync(envFile)).toBe(false);
+      expect(existsSync(outputFile)).toBe(false);
+      expect(readFileSync(path.join(store, "retained"), "utf8")).toBe("not owned by this job");
+    },
+  );
+
+  it.skipIf(process.platform === "win32").for(["Linux", "macOS"] as const)(
+    "preserves pnpm hard links and validates cached importers and supply-chain policy offline on %s",
+    async (runnerOs, { onTestFinished, signal }) => {
       const fixtureDirs = createTempDirTracker();
       // oxlint-disable-next-line prefer-const -- Failure cleanup can run before the registry is started.
       let stopRegistry: (() => Promise<void>) | undefined;
@@ -4442,13 +4490,21 @@ NODE
         await stopRegistry?.();
         fixtureDirs.cleanup();
       });
-      const root = fixtureDirs.make("openclaw-dependency-cache-");
+      const root = realpathSync(fixtureDirs.make("openclaw-dependency-cache-"));
       const source = path.join(root, "source");
       const registry = path.join(root, "registry");
-      const workspace = path.join(root, "workspace");
-      const consumer = path.join(workspace, "packages", "consumer");
-      const store = path.join(workspace, ".cache", "openclaw-pnpm-store");
       let userHome = path.join(root, "producer-home");
+      let workspace =
+        runnerOs === "macOS"
+          ? path.join(userHome, "work", "openclaw", "openclaw")
+          : path.join(root, "workspace");
+      let consumer = path.join(workspace, "packages", "consumer");
+      let store =
+        runnerOs === "macOS"
+          ? path.join(userHome, "Library", "pnpm", "store")
+          : path.join(workspace, ".cache", "openclaw-pnpm-store");
+      const seedHome = path.join(root, "seed-home");
+      mkdirSync(seedHome, { recursive: true });
       mkdirSync(userHome, { recursive: true });
       mkdirSync(source, { recursive: true });
       mkdirSync(registry, { recursive: true });
@@ -4470,7 +4526,11 @@ NODE
       const npmExecPath = execFileSync(
         bootstrap.command,
         [...bootstrap.args, "--silent", "run", "pnpm-path"],
-        { cwd: source, encoding: "utf8", env: { ...process.env, CI: "true" } },
+        {
+          cwd: source,
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: seedHome, CI: "true" },
+        },
       ).trim();
       const pnpm = resolvePnpmRunner({ npmExecPath });
       const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
@@ -4481,26 +4541,47 @@ NODE
         "Configure dependency cache store script",
       );
       const envFile = path.join(root, "dependency-cache.env");
-      execFileSync("bash", ["-c", configureCache], {
-        env: { ...process.env, GITHUB_WORKSPACE: workspace, GITHUB_ENV: envFile },
-      });
-      const dependencyEnvironment = Object.fromEntries(
-        readFileSync(envFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
+      const outputFile = path.join(root, "dependency-cache.outputs");
+      const configureStore = () => {
+        writeFileSync(envFile, "");
+        writeFileSync(outputFile, "");
+        execFileSync("bash", ["-c", configureCache], {
+          env: {
+            PATH: process.env.PATH,
+            HOME: userHome,
+            RUNNER_OS: runnerOs,
+            RUNNER_ENVIRONMENT: "github-hosted",
+            GITHUB_WORKSPACE: workspace,
+            GITHUB_ENV: envFile,
+            GITHUB_OUTPUT: outputFile,
+          },
+        });
+        const environment = Object.fromEntries(
+          readFileSync(envFile, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => {
+              const separator = line.indexOf("=");
+              return [line.slice(0, separator), line.slice(separator + 1)];
+            }),
+        );
+        expect(environment.PNPM_CONFIG_STORE_DIR).toBe(store);
+        expect(environment.PNPM_CONFIG_CACHE_DIR).toBe(path.join(store, "cache"));
+        return environment;
+      };
+      let dependencyEnvironment = configureStore();
+      const cachePaths = readFileSync(outputFile, "utf8");
+      expect(cachePaths).toBe(
+        `paths<<EOF\nnode_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n${path.relative(workspace, store)}\nEOF\n`,
       );
-      const runPnpm = (args: string[], cwd: string) =>
+      const runPnpm = (args: string[], cwd: string, home = userHome) =>
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
           cwd,
           encoding: "utf8",
           env: {
             PATH: process.env.PATH,
-            HOME: userHome,
-            XDG_CACHE_HOME: path.join(userHome, ".cache"),
+            HOME: home,
+            XDG_CACHE_HOME: path.join(home, ".cache"),
             CI: "true",
             PNPM_CONFIG_PACKAGE_IMPORT_METHOD: "hardlink",
             ...dependencyEnvironment,
@@ -4509,7 +4590,16 @@ NODE
       const version = runPnpm(["--version"], source);
       expect(version.status, version.stderr).toBe(0);
       expect(`pnpm@${version.stdout.trim()}`).toBe(rootPackageManager.split("+")[0]);
-      const packed = runPnpm(["pack", "--pack-destination", registry], source);
+      if (process.platform === "darwin" && runnerOs === "macOS") {
+        const nativeStore = spawnSync(pnpm.command, [...pnpm.args, "store", "path", "--silent"], {
+          cwd: workspace,
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: userHome, CI: "true" },
+        });
+        expect(nativeStore.status, nativeStore.stderr).toBe(0);
+        expect(nativeStore.stdout.trim()).toBe(path.join(store, "v11"));
+      }
+      const packed = runPnpm(["pack", "--pack-destination", registry], source, seedHome);
       expect(packed.status, `${packed.stdout}${packed.stderr}`).toBe(0);
       const tarball = path.join(registry, "cache-proof-dep-1.0.0.tgz");
       const registryScript = String.raw`
@@ -4605,7 +4695,8 @@ server.listen(0, "127.0.0.1", () => {
           }),
         );
         const workspaceConfig =
-          "packages:\n  - packages/*\nminimumReleaseAge: 10080\nminimumReleaseAgeStrict: true\n";
+          "packages:\n  - packages/*\nminimumReleaseAge: 10080\nminimumReleaseAgeStrict: true\n" +
+          (runnerOs === "macOS" ? "nodeLinker: hoisted\n" : "");
         writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), workspaceConfig);
         const writeConsumerManifest = (dependencyVersion: string) =>
           writeFileSync(
@@ -4624,10 +4715,10 @@ server.listen(0, "127.0.0.1", () => {
         }
         const installArgs = ["install", "--ignore-scripts", "--config.engine-strict=false"];
         const onlineArgs = [...installArgs, `--registry=${registryUrl}`];
-        const seeded = runPnpm([...onlineArgs, "--lockfile-only"], workspace);
+        const seeded = runPnpm([...onlineArgs, "--lockfile-only"], workspace, seedHome);
         expect(seeded.status, `${seeded.stdout}${seeded.stderr}`).toBe(0);
         // CI publishes a frozen install, without the lockfile generator's caches.
-        rmSync(userHome, { force: true, recursive: true });
+        rmSync(seedHome, { force: true, recursive: true });
         rmSync(store, { force: true, recursive: true });
         mkdirSync(userHome, { recursive: true });
         const installed = runPnpm([...onlineArgs, "--frozen-lockfile"], workspace);
@@ -4655,27 +4746,47 @@ server.listen(0, "127.0.0.1", () => {
         expect(findSameFile(store, rootPackageFile)).toBeDefined();
 
         const archive = path.join(root, "dependency-cache.tar");
+        const manifest = path.join(root, "dependency-cache.manifest");
+        writeFileSync(
+          manifest,
+          globSync(cachePaths.split("\n").slice(1, -2), { cwd: workspace }).join("\n"),
+        );
+        // Actions uses GNU tar's POSIX format and -P for workspace-relative
+        // HOME entries. Keep importer/store hard links in that same archive.
         execFileSync(
           "tar",
-          [
-            "-cf",
-            archive,
-            "-C",
-            workspace,
-            "node_modules",
-            "packages/consumer/node_modules",
-            ".cache/openclaw-pnpm-store",
-          ],
+          ["--format=pax", "-cf", archive, "-P", "-C", workspace, "--files-from", manifest],
           { stdio: "pipe" },
         );
 
         rmSync(path.join(workspace, "node_modules"), { force: true, recursive: true });
         rmSync(path.join(consumer, "node_modules"), { force: true, recursive: true });
         rmSync(store, { force: true, recursive: true });
-        rmSync(userHome, { force: true, recursive: true });
+        const producerHome = userHome;
         userHome = path.join(root, "consumer-home");
         mkdirSync(userHome, { recursive: true });
-        execFileSync("tar", ["-xf", archive, "-C", workspace], { stdio: "pipe" });
+        if (runnerOs === "macOS") {
+          const producerWorkspace = workspace;
+          workspace = path.join(userHome, "work", "openclaw", "openclaw");
+          consumer = path.join(workspace, "packages", "consumer");
+          store = path.join(userHome, "Library", "pnpm", "store");
+          mkdirSync(consumer, { recursive: true });
+          for (const file of [
+            "package.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "packages/consumer/package.json",
+          ]) {
+            writeFileSync(
+              path.join(workspace, file),
+              readFileSync(path.join(producerWorkspace, file)),
+            );
+          }
+          dependencyEnvironment = configureStore();
+          expect(readFileSync(outputFile, "utf8")).toBe(cachePaths);
+        }
+        rmSync(producerHome, { force: true, recursive: true });
+        execFileSync("tar", ["-xf", archive, "-P", "-C", workspace], { stdio: "pipe" });
 
         const restoredPackageFile = path.join(
           workspace,
@@ -4684,9 +4795,20 @@ server.listen(0, "127.0.0.1", () => {
           "index.js",
         );
         expect(findSameFile(store, restoredPackageFile)).toBeDefined();
-        expect(
-          readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
-        ).toBe('module.exports = "cache-proof-v1";\n');
+        const readConsumerPackage = () =>
+          execFileSync(
+            process.execPath,
+            [
+              "-e",
+              'process.stdout.write(require("node:fs").readFileSync(require.resolve("cache-proof-dep")));',
+            ],
+            {
+              cwd: consumer,
+              encoding: "utf8",
+              env: { PATH: process.env.PATH, HOME: userHome },
+            },
+          );
+        expect(readConsumerPackage()).toBe('module.exports = "cache-proof-v1";\n');
 
         await stopRegistry();
         signal.throwIfAborted();
@@ -4710,14 +4832,15 @@ server.listen(0, "127.0.0.1", () => {
         const offlineArgs = [...onlineArgs, "--offline", "--frozen-lockfile"];
         const reconciliation = runPnpm(offlineArgs, workspace);
         expect(reconciliation.status, `${reconciliation.stdout}${reconciliation.stderr}`).toBe(0);
-        expect(statSync(restoredPackageFile)).toMatchObject({
-          dev: cachedIdentity.dev,
-          ino: cachedIdentity.ino,
-        });
+        if (runnerOs === "Linux") {
+          expect(statSync(restoredPackageFile)).toMatchObject({
+            dev: cachedIdentity.dev,
+            ino: cachedIdentity.ino,
+          });
+        }
+        expect(findSameFile(store, restoredPackageFile)).toBeDefined();
         expect(readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8")).toBe(cachedLockfile);
-        expect(
-          readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
-        ).toBe('module.exports = "cache-proof-v1";\n');
+        expect(readConsumerPackage()).toBe('module.exports = "cache-proof-v1";\n');
         // A stricter policy invalidates pnpm's saved verification and reads the
         // restored registry metadata. A 14-day-old release fails a 21-day gate.
         writeFileSync(
@@ -5106,6 +5229,125 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("hashes transform inputs once per enabled setup and never for skipped caches", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const transformSteps = (action.runs.steps as WorkflowStep[]).filter((step) =>
+      step.name?.includes("Vitest transform cache"),
+    );
+    const output = path.join(tempDirs.make("openclaw-transform-generation-"), "output");
+    for (const os of ["Linux", "macOS", "Windows"]) {
+      for (const mode of ["off", "restore", "read-write"]) {
+        for (const flags of [
+          ["false", "false"],
+          ["true", "false"],
+          ["false", "true"],
+          ["true", "true"],
+        ]) {
+          for (const generation of ["a".repeat(64), "b".repeat(64)]) {
+            const hashes: string[][] = [];
+            const steps: Record<string, { outputs: Record<string, string> }> = {};
+            const context = {
+              github: { repository: "openclaw/openclaw", run_id: 10, run_attempt: 2 },
+              inputs: {
+                "cache-mode": mode,
+                "vitest-fs-cache": flags[0],
+                "restore-test-caches": flags[1],
+                "node-version": "24.x",
+              },
+              runner: { os, arch: "X64" },
+              steps,
+              hashFiles: (...patterns: string[]) => {
+                hashes.push(patterns);
+                return generation;
+              },
+            };
+            const evaluate = (expression: string): unknown =>
+              runInNewContext(
+                expression.replace(/(inputs|steps)\.([a-z-]+)/gu, '$1["$2"]'),
+                context,
+              );
+            const render = (value: unknown) =>
+              String(value).replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) => {
+                const result = evaluate(expression);
+                if (result == null) {
+                  return "";
+                }
+                if (
+                  typeof result === "string" ||
+                  typeof result === "number" ||
+                  typeof result === "boolean"
+                ) {
+                  return String(result);
+                }
+                throw new TypeError(`non-scalar workflow interpolation: ${expression}`);
+              });
+            let cacheInputs: Record<string, string> | undefined;
+            let configuredGeneration: string | undefined;
+            for (const step of transformSteps) {
+              // Runner v2.336.0 evaluates embedded env before if; run/with inputs
+              // are evaluated only after admission (CompositeActionHandler/ActionRunner).
+              const env = Object.fromEntries(
+                Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value)]),
+              );
+              if (!evaluate(step.if ?? "true")) {
+                if (step.id) {
+                  steps[step.id] = { outputs: {} };
+                }
+                continue;
+              }
+              if (step.name === "Resolve Vitest transform cache generation") {
+                writeFileSync(output, "");
+                execFileSync("bash", ["-e", "-c", render(step.run)], {
+                  env: { ...process.env, GITHUB_OUTPUT: output },
+                });
+                steps[expectDefined(step.id, "transform generation step id")] = {
+                  outputs: Object.fromEntries(
+                    readFileSync(output, "utf8")
+                      .trim()
+                      .split("\n")
+                      .map((line) => line.split("=")),
+                  ),
+                };
+              } else if (step.uses) {
+                cacheInputs = Object.fromEntries(
+                  Object.entries(step.with ?? {}).map(([key, value]) => [key, render(value)]),
+                );
+              } else {
+                configuredGeneration = env.CACHE_GENERATION;
+              }
+            }
+            const enabled = os !== "Windows" && mode !== "off" && flags.includes("true");
+            expect(hashes, JSON.stringify({ os, mode, flags, generation })).toHaveLength(
+              enabled ? 1 : 0,
+            );
+            if (enabled) {
+              expect(hashes[0]).toEqual([
+                "pnpm-lock.yaml",
+                "pnpm-workspace.yaml",
+                "**/package.json",
+                "**/tsconfig*.json",
+                "vitest.config.*",
+                "test/vitest/**",
+                "src/state/*.sql",
+                "!**/node_modules/**",
+              ]);
+              const prefix = `openclaw/openclaw-vitest-fs-v3-protected-${os}-X64-node-24.x-${generation}-`;
+              expect(cacheInputs).toEqual({
+                path: "/var/tmp/openclaw-vitest-fs-cache",
+                key: `${prefix}10-2`,
+                "restore-keys": `${prefix}\n`,
+              });
+              expect(configuredGeneration).toBe(generation);
+            } else {
+              expect(cacheInputs).toBeUndefined();
+              expect(configuredGeneration).toBeUndefined();
+            }
+          }
+        }
+      }
+    }
+  });
+
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -5176,11 +5418,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(readerStep.with.key).toContain("vitest-fs-v3-protected-");
     expect(readerStep.with.key).toContain("github.run_id");
     expect(readerStep.with.key).toContain("github.run_attempt");
-    expect(readerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
-    expect(readerStep.with.key).toContain("!**/node_modules/**");
-    expect(readerStep.with.key).toContain("src/state/*.sql");
-    expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
-    expect(configureStep.env.CACHE_GENERATION).toContain("src/state/*.sql");
     expect(configureStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
@@ -5360,7 +5597,7 @@ server.listen(0, "127.0.0.1", () => {
           expect(setupInputs).toMatchObject({
             "build-all-cache-scope": full ? "full" : "",
             "cache-mode": "read-write",
-            "dependency-cache": String(full),
+            "dependency-cache": "true",
             "install-bun": "false",
             "node-compile-cache-scope": "test",
             "node-compile-cache": String(full),
