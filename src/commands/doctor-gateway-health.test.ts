@@ -1,5 +1,5 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -65,6 +65,41 @@ describe("checkGatewayHealth", () => {
     note.mockReset();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reports a live state-directory mismatch and continues Doctor", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/doctor-cli-state");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/doctor-cli-state/openclaw.json");
+    callGateway.mockImplementation(
+      async (options: {
+        method?: string;
+        onHelloOk?: (hello: { snapshot: { stateDir: string; configPath: string } }) => void;
+      }) => {
+        if (options.method === "status") {
+          options.onHelloOk?.({
+            snapshot: {
+              stateDir: "/tmp/doctor-gateway-state",
+              configPath: "/tmp/doctor-gateway-state/openclaw.json",
+            },
+          });
+        }
+        return {};
+      },
+    );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg: {} as OpenClawConfig }),
+    ).resolves.toMatchObject({ authenticated: true, healthOk: true });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("CLI and live Gateway use different"),
+      "Gateway state directory mismatch",
+    );
+  });
+
   it("uses a lightweight status RPC for the restart liveness gate", async () => {
     callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -73,12 +108,15 @@ describe("checkGatewayHealth", () => {
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
     ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
 
-    expect(callGateway).toHaveBeenNthCalledWith(1, {
-      method: "status",
-      params: { includeChannelSummary: false },
-      timeoutMs: 3000,
-      config: cfg,
-    });
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "status",
+        params: { includeChannelSummary: false },
+        timeoutMs: 3000,
+        config: cfg,
+      }),
+    );
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "channels.status",
       params: { probe: true, timeoutMs: 5000 },

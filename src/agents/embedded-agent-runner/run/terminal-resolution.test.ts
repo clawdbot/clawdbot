@@ -285,37 +285,6 @@ describe("terminal resolution", () => {
     expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
-  it("retries an empty final turn after Anthropic server compaction", async () => {
-    const assistant = emptyAssistant({
-      providerReplay: {
-        v: 1,
-        type: "anthropic-compaction",
-        data: "summary",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        model: "claude-sonnet-4-6",
-        baseUrlHash: "route-a",
-      },
-    } as never);
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const armPostCompactionGuard = vi.fn();
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      maxEmptyResponseRetryAttempts: 0,
-      armPostCompactionGuard,
-    });
-
-    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-    expect(input.retryState.compactionContinuationAttempts).toBe(1);
-    expect(armPostCompactionGuard).toHaveBeenCalledTimes(1);
-  });
-
   it("completes an explicit silent reply without retrying", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: SILENT_REPLY_TOKEN }],

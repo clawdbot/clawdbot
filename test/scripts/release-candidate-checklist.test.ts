@@ -60,6 +60,68 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("runs plugin planners from trusted tooling while retaining candidate inputs", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+    const owner = source.match(/^function collectPluginPlan\([\s\S]*?^\}/mu)?.[0];
+    expect(owner).toBeDefined();
+    const runPlanner = vi.fn((_command, args, options) => JSON.stringify({ args, options }));
+    const result = runInNewContext(
+      stripTypeScriptTypes(`${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`),
+      {
+        TOOLING_ROOT: "/trusted/tooling",
+        join,
+        pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
+        run: runPlanner,
+      },
+    );
+    expect(result.args).toEqual([
+      "--import",
+      "tsx",
+      "/trusted/tooling/scripts/plugin-npm-release-plan.ts",
+      "--selection-mode",
+      "all-publishable",
+    ]);
+    expect(result.options).not.toHaveProperty("cwd");
+  });
+
+  it("routes a repaired publisher independently from immutable preflight evidence", () => {
+    const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
+    const options = parseArgs([
+      "--tag",
+      "v2026.8.2-beta.1",
+      "--publish-workflow-ref",
+      publishWorkflowRef,
+    ]);
+    const producer = {
+      status: "passed",
+      headSha: "a".repeat(40),
+      workflowRef: "release-publish/aaaaaaaaaaaa-122",
+    };
+    const command = buildPublishCommand(options, producer);
+    expect(command).toContain(`'--ref' '${publishWorkflowRef}'`);
+    expect(producer.headSha).toBe("a".repeat(40));
+    const saved = buildReleaseCandidateState(options, {
+      targetSha: "c".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+    expect(saved.publishWorkflowRef).toBe(publishWorkflowRef);
+    expect(() =>
+      reconcileReleaseCandidateState(saved, {
+        ...saved,
+        publishWorkflowRef: "release-publish/bbbbbbbbbbbb-124",
+      }),
+    ).toThrow("state mismatch for publishWorkflowRef");
+  });
+
+  it.each(["main", "refs/tags/release-publish/bbbbbbbbbbbb-123", "release-publish/bbbbbbbbbbbb-0"])(
+    "rejects an unprotected publisher selector %s",
+    (ref) => {
+      expect(() => parseArgs(["--tag", "v2026.8.2-beta.1", "--publish-workflow-ref", ref])).toThrow(
+        "protected release-publish tag",
+      );
+    },
+  );
+
   it("recognizes direct execution through a symlinked temporary root", () => {
     const realpath = vi.fn((value: string) => value.replace(/^\/tmp\//u, "/private/tmp/"));
 

@@ -2085,19 +2085,29 @@ describe("package acceptance workflow", () => {
 
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
-    const checkout = workflowStep(job, "Checkout trusted preflight tooling");
+    const checkout = workflowStep(job, "Checkout trusted planning tooling");
     const identity = workflowStep(job, "Verify trusted preflight tooling identity");
     const target = workflowStep(job, "Validate ref is on a trusted publish branch");
 
-    expect(checkout.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
+    expect(checkout.if).toBeUndefined();
     expect(checkout.with).toMatchObject({
       "fetch-depth": 1,
       path: ".release-tooling",
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
-      "sparse-checkout": "scripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\n",
-      "sparse-checkout-cone-mode": false,
     });
+    expect(checkout.with?.["sparse-checkout"]).toBeUndefined();
+    for (const [name, script] of [
+      ["Validate publishable plugin metadata", "plugin-npm-release-check.ts"],
+      ["Resolve plugin release plan", "plugin-npm-release-plan.ts"],
+    ] as const) {
+      const planner = workflowStep(job, name);
+      expect(planner.run).toContain(`node --import tsx .release-tooling/scripts/${script}`);
+      expect(planner.env?.TSX_TSCONFIG_PATH).toBe(
+        "${{ github.workspace }}/.release-tooling/tsconfig.json",
+      );
+      expect(planner["working-directory"]).toBeUndefined();
+    }
     expect(identity.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
@@ -2295,13 +2305,21 @@ describe("package acceptance workflow", () => {
       OPENCLAW_RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
       OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:
         "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
-      OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true",
       OPENCLAW_RELEASE_TOOLING_FULL_REF: "${{ github.ref }}",
-      OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true",
       OPENCLAW_RELEASE_TOOLING_REF: "${{ github.ref_name }}",
       OPENCLAW_RELEASE_TOOLING_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_RELEASE_TOOLING_SHA: "${{ github.workflow_sha }}",
     });
+
+    expect(oidcPublish.env).toMatchObject({
+      TARBALL_PATH: "${{ steps.publication_evidence.outputs.tarball_path }}",
+      PUBLISH_TAG: "${{ steps.publication_evidence.outputs.publish_tag }}",
+    });
+    expect(oidcPublish.run).toContain("node scripts/release-tooling-identity.mjs verify");
+    expect(oidcPublish.run).toContain(
+      '--release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY"',
+    );
+    expect(oidcPublish.run).not.toContain("plugin-npm-publish.sh");
 
     const bootstrapPublish = workflowStep(pluginPublishJob, "Publish approved bootstrap tarball");
     expect(bootstrapPublish.env).toMatchObject({
@@ -2466,10 +2484,14 @@ describe("package acceptance workflow", () => {
       const script = releasePublishOrchestration(
         workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
       ).run;
-      if (!script) throw new Error("Missing publish orchestration");
+      if (!script) {
+        throw new Error("Missing publish orchestration");
+      }
       const start = script.indexOf('openclaw_result=""');
       const end = script.indexOf('if [[ ( -n "${openclaw_npm_run_id}"', start);
-      if (start < 0 || end < start) throw new Error("Missing native publication stage");
+      if (start < 0 || end < start) {
+        throw new Error("Missing native publication stage");
+      }
       const root = tempDirs.make("android-detached-publish-");
       const result = spawnSync(
         "bash",
@@ -2528,7 +2550,9 @@ printf 'core_failed=%s\n' "$failed"
         expect(summary).toContain("completion not awaited");
         expect(summary).toContain("https://github.com/openclaw/openclaw/actions/runs/456");
       }
-      if (!assetsVerified) expect(summary).not.toContain("releases/download");
+      if (!assetsVerified) {
+        expect(summary).not.toContain("releases/download");
+      }
     },
   );
 
@@ -6774,7 +6798,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           jobName === "run_slack_desktop",
         );
       }
-      if (jobName === "run_web_ui_chat") continue;
+      if (jobName === "run_web_ui_chat") {
+        continue;
+      }
       const install = workflowStep(job, "Install Crabbox CLI").run ?? "";
       const gitCalls = install
         .split("\n")

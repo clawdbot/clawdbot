@@ -8,7 +8,6 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { renderTriagePrompt } from "./triage-prompt.js";
 import { triageCommand } from "./triage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -99,104 +98,6 @@ async function withInteractiveTerminal(run: () => Promise<void>): Promise<void> 
   }
 }
 
-describe("renderTriagePrompt", () => {
-  const homeDir = "/home/triage-test";
-  const redaction = {
-    env: { HOME: homeDir },
-    stateDir: `${homeDir}/.openclaw`,
-  };
-
-  it("orders sanitized findings by severity and includes repair hints and bundle details", () => {
-    const findings: HealthFinding[] = [
-      { checkId: "core/info", severity: "info", message: "informational" },
-      { checkId: "core/warning", severity: "warning", message: "needs attention" },
-      {
-        checkId: "core/error",
-        severity: "error",
-        message: "model routing failed",
-        fixHint: "Run `openclaw doctor --fix`.",
-      },
-    ];
-
-    const prompt = renderTriagePrompt({
-      findings,
-      bundle: { kind: "available", path: `${redaction.stateDir}/diagnostics.zip` },
-      redaction,
-    });
-
-    expect(prompt.indexOf("[error]")).toBeLessThan(prompt.indexOf("[warning]"));
-    expect(prompt.indexOf("[warning]")).toBeLessThan(prompt.indexOf("[info]"));
-    expect(prompt).toContain("Fix: Run `openclaw doctor --fix`.");
-    expect(prompt).toContain("Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip");
-    expect(prompt).toContain("Secrets, tokens, raw chat payloads, and raw logs are excluded");
-  });
-
-  it("redacts home and state paths across finding fields and diagnostics handoffs", () => {
-    const prompt = renderTriagePrompt({
-      findings: [
-        {
-          checkId: `${homeDir}/checks/config`,
-          severity: "error",
-          message: `Config: ${redaction.stateDir}/openclaw.json\nneeds repair`,
-          fixHint: `Inspect ${homeDir}/logs/gateway.log`,
-        },
-      ],
-      bundle: { kind: "available", path: `${homeDir}/Downloads/diagnostics.zip` },
-      redaction,
-    });
-
-    expect(prompt).toContain(
-      "[error] ~/checks/config: Config: $OPENCLAW_STATE_DIR/openclaw.json needs repair",
-    );
-    expect(prompt).toContain("Fix: Inspect ~/logs/gateway.log");
-    expect(prompt).toContain("Sanitized ZIP: ~/Downloads/diagnostics.zip");
-    expect(prompt).not.toContain(homeDir);
-  });
-
-  it("hard-bounds multibyte findings and explicitly reports omitted findings", () => {
-    const findings: HealthFinding[] = Array.from({ length: 25 }, (_, index) => ({
-      checkId: `core/check-${index}`,
-      severity: "warning",
-      message: "🦞".repeat(4_000),
-      fixHint: "修".repeat(4_000),
-    }));
-
-    const prompt = renderTriagePrompt({ findings, bundle: { kind: "skipped" }, redaction });
-
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(8 * 1024);
-    // Every finding is either rendered or explicitly counted as omitted, and the
-    // trailing sections survive because findings are fitted to the byte budget.
-    const rendered = prompt.match(/^- \[warning\]/gmu)?.length ?? 0;
-    expect(rendered).toBeGreaterThan(0);
-    expect(prompt).toContain(
-      `${findings.length - rendered} more findings omitted; run \`openclaw doctor\` for the full list.`,
-    );
-    expect(prompt).toContain("## Privacy");
-    expect(prompt).not.toContain("\uFFFD");
-    expect(prompt).toContain("...");
-  });
-
-  it.each([
-    {
-      bundle: { kind: "unavailable" as const, reason: "Gateway unreachable" },
-      text: "Diagnostics export unavailable: Gateway unreachable",
-    },
-    {
-      bundle: {
-        kind: "unavailable" as const,
-        reason: `Gateway config: ${redaction.stateDir}/openclaw.json`,
-      },
-      text: "Diagnostics export unavailable: Gateway config: $OPENCLAW_STATE_DIR/openclaw.json",
-    },
-    {
-      bundle: { kind: "skipped" as const },
-      text: "Diagnostics export skipped with `--no-export`.",
-    },
-  ])("explains absent diagnostics archives: $text", ({ bundle, text }) => {
-    expect(renderTriagePrompt({ findings: [], bundle, redaction })).toContain(text);
-  });
-});
-
 describe("triageCommand", () => {
   let stateDir: string;
 
@@ -242,11 +143,18 @@ describe("triageCommand", () => {
       bundleError: null,
       findings: { error: 1, warning: 1, info: 1 },
       detectedAgents: [],
-      suggestedCommands: [
-        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' claude "$(cat '${promptPath}')"`,
-        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' codex exec --skip-git-repo-check - < '${promptPath}'`,
-        `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' openclaw triage --run`,
-      ],
+      suggestedCommands:
+        process.platform === "win32"
+          ? [
+              expect.stringContaining("| & claude -p"),
+              expect.stringContaining("| & codex exec --skip-git-repo-check -"),
+              expect.stringContaining("& openclaw triage --run"),
+            ]
+          : [
+              `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' claude -p < '${promptPath}'`,
+              `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' codex exec --skip-git-repo-check - < '${promptPath}'`,
+              `env OPENCLAW_STATE_DIR='${stateDir}' OPENCLAW_CONFIG_PATH='${path.join(stateDir, "openclaw.json")}' OPENCLAW_WORKSPACE_DIR='${path.join(stateDir, "workspace")}' openclaw triage --run`,
+            ],
     });
     expect(await fs.readFile(promptPath, "utf8")).toContain("[error] core/error: broken");
     expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
@@ -281,7 +189,7 @@ describe("triageCommand", () => {
       for (const command of ["claude", "codex", "openclaw"]) {
         await fs.writeFile(
           path.join(bin, command),
-          '#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n',
+          `#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n${command === "openclaw" ? "" : "cat\n"}`,
           { mode: 0o700 },
         );
       }
@@ -291,12 +199,15 @@ describe("triageCommand", () => {
         promptPath: string;
         suggestedCommands: string[];
       };
-      for (const command of report.suggestedCommands) {
+      const prompt = await fs.readFile(report.promptPath, "utf8");
+      for (const [index, command] of report.suggestedCommands.entries()) {
         const { stdout } = await promisify(execFile)("/bin/sh", ["-c", command], {
           env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
           timeout: 10_000,
         });
-        expect(stdout).toBe(`${originalState}\n${configPath}\n${defaultWorkspaceDir}\n`);
+        expect(stdout).toBe(
+          `${originalState}\n${configPath}\n${defaultWorkspaceDir}\n${index < 2 ? prompt : ""}`,
+        );
       }
       expect(await fs.readFile(report.promptPath, "utf8")).not.toContain(home);
       expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
@@ -342,6 +253,76 @@ describe("triageCommand", () => {
     expect(prompt).toContain("Diagnostics export unavailable: Gateway unreachable");
     expect(prompt).toContain("Config: $OPENCLAW_STATE_DIR/openclaw.json");
     expect(prompt).not.toContain(stateDir);
+  });
+
+  it.each(["json", "nonInteractive"] as const)(
+    "preserves a failed update when Doctor and export fail in %s mode on a terminal",
+    async (mode) => {
+      const secret = "sk-test-update-triage-secret-1234567890";
+      mocks.collectDoctorFindings.mockRejectedValue(
+        new Error(`Doctor unavailable token=${secret}`),
+      );
+      mocks.writeDiagnosticSupportExport.mockRejectedValue(
+        new Error(`Export unavailable token=${secret}`),
+      );
+      const runtime = createRuntime();
+      const updateResult = path.join(stateDir, "failed-update.json");
+      await fs.writeFile(
+        updateResult,
+        JSON.stringify({ error: `Original update failed at ${stateDir}; token=${secret}` }),
+      );
+
+      await withInteractiveTerminal(async () => {
+        await triageCommand(runtime, {
+          [mode]: true,
+          updateResult,
+        });
+      });
+
+      const promptPath =
+        mode === "json"
+          ? runtime.writeJson.mock.calls[0]?.[0]?.promptPath
+          : String(runtime.log.mock.calls[0]?.[0]).replace("Debugging prompt: ", "");
+      const prompt = await fs.readFile(promptPath, "utf8");
+      expect(prompt).toContain("Original update failed at $OPENCLAW_STATE_DIR");
+      expect(prompt).toContain("Doctor checks unavailable:");
+      expect(prompt).toContain("Diagnostics export unavailable:");
+      expect(prompt).not.toContain(secret);
+      expect(prompt).not.toContain(stateDir);
+      const output = mode === "json" ? runtime.writeJson.mock.calls : runtime.log.mock.calls;
+      expect(JSON.stringify(output)).toContain("--update-result");
+      expect(JSON.stringify(output)).not.toContain(secret);
+      expect(mocks.select).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.verifySetupInference).not.toHaveBeenCalled();
+      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the saved failed-update handoff usable after its temporary input is removed", async () => {
+    const inputPath = path.join(stateDir, "temporary-update-result.json");
+    const secret = "sk-test-update-triage-secret-1234567890";
+    await fs.writeFile(
+      inputPath,
+      JSON.stringify({ error: `Original update failed token=${secret}` }),
+    );
+    const runtime = createRuntime();
+    await triageCommand(runtime, { json: true, noExport: true, updateResult: inputPath });
+    const report = runtime.writeJson.mock.calls[0]?.[0] as { suggestedCommands: string[] };
+    const savedArgument = report.suggestedCommands[2]?.match(
+      / --update-result (?:'([^']+)'|(\S+))/u,
+    );
+    const savedPath = savedArgument?.[1] ?? savedArgument?.[2];
+    if (!savedPath) {
+      throw new Error("Saved triage command is missing its failed update input");
+    }
+    expect(savedPath.startsWith(path.join(stateDir, "logs", "support"))).toBe(true);
+    expect(await fs.readFile(savedPath, "utf8")).not.toContain(secret);
+    await fs.unlink(inputPath);
+
+    await triageCommand(runtime, { json: true, noExport: true, updateResult: savedPath });
+    const nextPromptPath = runtime.writeJson.mock.calls[1]?.[0]?.promptPath as string;
+    expect(await fs.readFile(nextPromptPath, "utf8")).toContain("Original update failed");
   });
 
   it("preserves local diagnostics and redacted snapshot failures while the Gateway is offline", async () => {
@@ -545,8 +526,10 @@ describe("triageCommand", () => {
     { agent: "claude", executablePath: "C:\\tools\\claude.cmd" },
     { agent: "codex", executablePath: "C:\\tools\\codex.BAT" },
   ])(
-    "keeps Windows $agent command shims as manual-only handoffs",
+    "keeps Windows $agent command shims as executable PowerShell manual handoffs",
     async ({ agent, executablePath }) => {
+      const configPath = path.join(stateDir, "operator's $config`file.json");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mocks.resolveExecutablePath.mockImplementation((binary: string) =>
         binary === agent ? executablePath : undefined,
@@ -564,9 +547,18 @@ describe("triageCommand", () => {
       expect(mocks.select.mock.calls[0]?.[0]?.options).toEqual([
         { value: { kind: "print" }, label: "Just print the commands" },
       ]);
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringMatching(new RegExp(`^  env .* ${agent} `, "u")),
-      );
+      const commands = runtime.log.mock.calls
+        .map(([line]) => String(line))
+        .filter((line) => line.startsWith("  "));
+      expect(commands).toHaveLength(3);
+      for (const command of commands) {
+        expect(command).not.toMatch(/^ {2}env /u);
+        expect(command).toContain(`'${configPath.replaceAll("'", "''")}'`);
+      }
+      expect(commands[0]).toContain("| & claude -p");
+      expect(commands[1]).toContain("| & codex exec --skip-git-repo-check -");
+      expect(commands[1]).toContain("Get-Content -Raw -Encoding UTF8 -LiteralPath ");
+      expect(commands[2]).toContain("& openclaw triage --run");
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
@@ -642,7 +634,11 @@ describe("triageCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith("Failed to launch claude: permission denied");
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringMatching(/^Run manually: env .* claude /u),
+      expect.stringMatching(
+        process.platform === "win32"
+          ? /Run manually: .*\| & claude -p/u
+          : /^Run manually: env .* claude /u,
+      ),
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });

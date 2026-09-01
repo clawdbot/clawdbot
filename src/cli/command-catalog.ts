@@ -43,6 +43,7 @@ type CliRoutedCommandId =
 
 export type CliCommandPathPolicy = {
   configGuard: CliConfigGuardPolicy;
+  stateStoreGuard: "run" | "skip";
   loadPlugins: CliCommandPluginLoadPolicy;
   pluginRegistry: CliPluginRegistryPolicy;
   ownsProtocolStdout: boolean;
@@ -186,7 +187,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
   },
-  { commandPath: ["configure"], policy: { configGuard: "skip", loadPlugins: "never" } },
+  {
+    commandPath: ["configure"],
+    policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },
+  },
   {
     commandPath: ["config"],
     exact: true,
@@ -346,6 +350,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "models-status" },
   },
+  { commandPath: ["models", "auth"], policy: { stateStoreGuard: "run" } },
   {
     commandPath: ["models", "list"],
     exact: true,
@@ -643,8 +648,9 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "add"],
     exact: true,
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { stateStoreGuard: "run", loadPlugins: "never", networkProxy: "bypass" },
   },
+  { commandPath: ["channels", "login"], exact: true, policy: { stateStoreGuard: "run" } },
   {
     commandPath: ["channels", "logs"],
     exact: true,

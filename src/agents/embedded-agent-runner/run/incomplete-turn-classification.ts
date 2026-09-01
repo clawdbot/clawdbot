@@ -8,6 +8,7 @@ import {
 } from "../../execution-contract.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { assessLastAssistantMessage } from "../thinking.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export type IncompleteTurnAttempt = Pick<
@@ -15,6 +16,7 @@ export type IncompleteTurnAttempt = Pick<
   | "assistantTexts"
   | "clientToolCalls"
   | "currentAttemptAssistant"
+  | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "heartbeatToolResponse"
@@ -29,7 +31,6 @@ export type IncompleteTurnAttempt = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "lastToolError"
-  | "lastAssistant"
   | "itemLifecycle"
   | "messagesSnapshot"
   | "replayMetadata"
@@ -134,7 +135,7 @@ export function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
   >;
 }): boolean {
   if (params.payloadCount !== 0) {
@@ -143,7 +144,7 @@ export function isEmptyResponseAssistantTurn(params: {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   if (!assistant) {
     return true;
   }
@@ -166,7 +167,7 @@ export function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
   >;
 }): boolean {
   if (isEmptyResponseAssistantTurn(params)) {
@@ -178,7 +179,7 @@ export function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return false;
   }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   if (!assistant || assistant.stopReason === "error") {
     return false;
   }
@@ -239,10 +240,10 @@ export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "lastAssistant"
+    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
   >;
 }) {
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   return {
     assistant,
     visibleText: joinAssistantTexts(params.attempt.assistantTexts),
