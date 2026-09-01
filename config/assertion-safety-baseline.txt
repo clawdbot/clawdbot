@@ -2546,8 +2546,8 @@ src/commands/export-trajectory.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
-src/commands/message-format.ts	20
-src/commands/message.ts	4
+src/commands/message-format.ts	17
+src/commands/message.ts	2
 src/commands/models/fallbacks-shared.ts	2
 src/commands/models/list.model-projection.ts	1
 src/commands/models/list.persisted-catalog.ts	2
