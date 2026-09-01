@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -30,6 +31,7 @@ import {
 
 const PASSWORD_READ_TIMEOUT_MS = 20_000;
 const APP_LAUNCH_TIMEOUT_MS = 30_000;
+const WORKER_DESKTOP_SOCKET_ROOT = "/tmp";
 
 const REMOTE_DESKTOP_READY_SCRIPT = String.raw`set -eu
 printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
@@ -120,6 +122,7 @@ export function createWorkerDesktopTunnels(deps: {
     let prepared: PreparedWorkerSsh | undefined;
     let child: WorkerSshProcess | undefined;
     let stoppedChild: WorkerSshProcess | undefined;
+    let socketDirectory: string | undefined;
     let startSettled = false;
 
     const start = async (isCurrent: () => boolean): Promise<DesktopAcquireResult> => {
@@ -135,7 +138,9 @@ export function createWorkerDesktopTunnels(deps: {
           prepared = undefined;
           throw new Error("Worker desktop tunnel stopped before connecting");
         }
-        const localSocketPath = path.join(path.dirname(prepared.knownHostsPath), "desktop.sock");
+        socketDirectory = await fs.mkdtemp(path.join(WORKER_DESKTOP_SOCKET_ROOT, "oc-wd-"));
+        await fs.chmod(socketDirectory, 0o700);
+        const localSocketPath = path.join(socketDirectory, "desktop.sock");
         child = deps.runner.start(
           [
             "ssh",
@@ -219,6 +224,10 @@ export function createWorkerDesktopTunnels(deps: {
       if (child && child !== stoppedChild) {
         stoppedChild = child;
         await child?.stop().catch(() => undefined);
+      }
+      if (socketDirectory) {
+        await fs.rm(socketDirectory, { recursive: true, force: true }).catch(() => undefined);
+        socketDirectory = undefined;
       }
       await prepared?.dispose().catch(() => undefined);
       prepared = undefined;

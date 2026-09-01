@@ -142,9 +142,10 @@ describe("worker desktop tunnels", () => {
     expect(start.argv).toContain("StreamLocalBindMask=0177");
     expect(start.argv).toContain("ServerAliveInterval=15");
     expect(start.argv).toContain("ServerAliveCountMax=3");
-    expect(start.argv[start.argv.indexOf("-L") + 1]).toMatch(
-      /openclaw-worker-desktop-.+\/desktop\.sock:127\.0\.0\.1:5900$/u,
-    );
+    const forward = start.argv[start.argv.indexOf("-L") + 1]!;
+    expect(forward).toMatch(/^\/tmp\/oc-wd-.+\/desktop\.sock:127\.0\.0\.1:5900$/u);
+    const socketPath = forward.slice(0, forward.indexOf(":127.0.0.1:"));
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(104);
     expect(start.options.input).toContain("OPENCLAW_WORKER_TUNNEL_READY");
     start.process.becomeReady();
     const result = await starting;
