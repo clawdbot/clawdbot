@@ -4,6 +4,7 @@ import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-target
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
+  readSourceConfigBestEffort,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
@@ -26,7 +27,7 @@ export async function loadModelsConfigWithSource(params: {
     params.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
   const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
-  const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
+  const sourceConfig = pinnedSourceConfig ?? (await readSourceConfigBestEffort());
   const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
     config: runtimeConfig,
     commandName: params.commandName,
