@@ -34,7 +34,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Talk agent ownership:** keep consult history, cancellation, and Android/Wear relay results bound to the acknowledged agent session, including bare and global keys and results racing Stop or startup. (#135031) Thanks @astra-openclaw.
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
 
 - **macOS AI setup:** show confirmed capability-review cancellation and retry guidance directly instead of a misleading Gateway failure headline. (#134573)
