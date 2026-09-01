@@ -450,7 +450,17 @@ jobs:
       - name: Verify release contents
         env:
           OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR: ${{ steps.core_package_tarballs.outputs.dir }}
-        run: pnpm release:generated:check && node --import tsx scripts/release-check.ts
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          pnpm release:generated:check
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted release-check tooling does not match the workflow SHA." >&2
+            exit 1
+          fi
+          TSX_TSCONFIG_PATH="$tooling_dir/tsconfig.json" \
+            node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/release-check.ts"
 
       - name: Exercise all extended-stable plugin npm packages
         id: plugin_npm_preflight

@@ -514,7 +514,10 @@ export async function handleSendChat(
     !intent && !isInlineEditSubmission && !userMessage.startsWith("/")
       ? host.getWorkContext?.()
       : undefined;
-  const effectiveMessage = workContext ? `${workContext}\n\n${quotedMessage}` : quotedMessage;
+  // The person's words lead. Session titles are derived from the first user
+  // message, so a leading reference block would title the conversation after
+  // the snapshot instead of what was actually asked.
+  const effectiveMessage = workContext ? `${quotedMessage}\n\n${workContext}` : quotedMessage;
 
   const refreshSessions = Boolean(intent) || isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.

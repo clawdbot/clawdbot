@@ -4,6 +4,7 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -50,6 +51,7 @@ import {
 import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
+  sessionEntryMetadataJson,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -226,10 +228,10 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
-  ).rows;
+  );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
     // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
@@ -244,22 +246,32 @@ export function readSessionEntryStore(
 
 export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select("entry_json"),
-  ).rows;
-  return rows.reduce((count, row) => count + (parseSessionEntryRow(row) ? 1 : 0), 0);
+    db.selectFrom("session_nodes").select(sessionEntryMetadataJson),
+  );
+  let count = 0;
+  for (const row of rows) {
+    count += parseSessionEntryRow(row) ? 1 : 0;
+  }
+  return count;
 }
 
 export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
   const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
+  const keys: string[] = [];
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["entry_json", "session_key"])
+      .select([sessionEntryMetadataJson, "session_key"])
       .orderBy("session_key", "asc"),
-  ).rows.flatMap((row) => (parseSessionEntryRow(row) ? [row.session_key] : []));
+  )) {
+    if (parseSessionEntryRow(row)) {
+      keys.push(row.session_key);
+    }
+  }
+  return keys;
 }
 
 export function resolveLifecyclePrimaryEntry(

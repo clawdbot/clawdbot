@@ -80,11 +80,19 @@ const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs
 const rootPackageExcludedExtensionPrefixes = [...rootPackageExcludedExtensionDirs].map(
   (extensionId) => `dist/extensions/${extensionId}/`,
 );
+// Trusted tooling can validate an older release checkout. Its SDK inventory
+// belongs to that target, including release-only compatibility entrypoints.
+const targetPluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-entrypoints.json"), "utf8"),
+) as string[];
+const targetPrivatePluginSdkEntries = JSON.parse(
+  readFileSync(resolve("scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "utf8"),
+) as string[];
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
-  ...listPluginSdkDistArtifacts(),
+  ...listPluginSdkDistArtifacts(targetPluginSdkEntries, targetPrivatePluginSdkEntries),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -141,7 +149,10 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/compat.",
   "dist/plugin-sdk/root-alias.",
   "dist/extensionAPI.",
-  ...listUnpackagedPrivatePluginSdkDistArtifacts(),
+  ...listUnpackagedPrivatePluginSdkDistArtifacts(
+    targetPluginSdkEntries,
+    targetPrivatePluginSdkEntries,
+  ),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -860,7 +871,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
           },
         },
         channels: {
-          matrix: {
+          telegram: {
             enabled: true,
           },
         },
@@ -876,7 +887,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
         plugins: {
           enabled: true,
           entries: {
-            matrix: {
+            telegram: {
               enabled: true,
             },
           },

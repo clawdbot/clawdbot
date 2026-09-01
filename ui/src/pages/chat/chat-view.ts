@@ -189,8 +189,6 @@ export function renderChat(props: ChatProps) {
         : undefined,
       onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
       onDiscardQueuedMessage: props.onQueueRemove,
-      onCompanionQuestion:
-        props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
       onCompanionPrefill:
         props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,

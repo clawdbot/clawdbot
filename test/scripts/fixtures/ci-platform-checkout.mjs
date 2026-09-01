@@ -10,6 +10,7 @@ const linux = policyScenario.startsWith("linux:");
 const scenario = linux ? policyScenario.slice("linux:".length) : policyScenario;
 const fixture = fileURLToPath(import.meta.url);
 const instance = randomUUID();
+let ownWindowsCreationTime;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -79,8 +80,54 @@ function stall(attempt) {
   }
 }
 
+function readWindowsProcessCensus(pids) {
+  const result = spawnSync(
+    "python",
+    ["-I", "-S", fileURLToPath(new URL("./ci-windows-process-census.py", import.meta.url))],
+    { input: JSON.stringify(pids), encoding: "utf8", timeout: 1_000, killSignal: "SIGKILL" },
+  );
+  if (result.error || result.status !== 0 || result.stderr !== "") {
+    throw new Error(
+      "Fixture Windows process census failed (" +
+        (result.error?.code ?? result.status) +
+        "): " +
+        result.stderr,
+    );
+  }
+  const observations = JSON.parse(result.stdout);
+  if (
+    !Array.isArray(observations) ||
+    observations.length !== pids.length ||
+    observations.some(
+      (entry, index) =>
+        entry?.pid !== pids[index] ||
+        typeof entry.alive !== "boolean" ||
+        (!(typeof entry.creationTime === "string" && /^\d+$/.test(entry.creationTime)) &&
+          !(entry.alive === false && entry.creationTime === null)),
+    )
+  ) {
+    throw new Error("Fixture Windows process census returned invalid identities");
+  }
+  return new Map(observations.map((entry) => [entry.pid, entry]));
+}
+
 function record(pid, role, attempt = 0) {
-  publish(`pids/${pid}.json`, { pid, role, attempt, instance: `${instance}-${pid}` });
+  if (process.platform === "win32" && pid === process.pid && !ownWindowsCreationTime) {
+    const identity = readWindowsProcessCensus([pid]).get(pid);
+    if (!identity.alive || !identity.creationTime) {
+      throw new Error("Fixture actor could not capture its own Windows birth");
+    }
+    ownWindowsCreationTime = identity.creationTime;
+  }
+  publish(`pids/${pid}.json`, {
+    pid,
+    role,
+    attempt,
+    instance: `${instance}-${pid}`,
+    ...(process.platform === "win32" && pid === process.pid
+      ? { creationTime: ownWindowsCreationTime }
+      : {}),
+  });
 }
 
 function records() {
@@ -94,25 +141,26 @@ function records() {
 
 function liveRecords() {
   const owned = records().filter(
-    (entry) => !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)),
+    (entry) =>
+      !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
+      // The creator owns this shell through track(close), not a later PID lookup.
+      !(process.platform === "win32" && entry.role === "shell"),
   );
   if (owned.length === 0) {
     return [];
   }
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
-  if (process.platform === "win32") {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 0);
-        alive.add(pid);
-      } catch (error) {
-        if (error.code === "EPERM") {
-          alive.add(pid);
-        } else if (error.code !== "ESRCH") {
-          throw error;
-        }
+  const windowsCensus =
+    process.platform === "win32" ? readWindowsProcessCensus([...pids]) : undefined;
+  if (windowsCensus) {
+    for (const entry of owned) {
+      if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
+        throw new Error("Fixture Windows actor is missing its registered birth");
       }
+    }
+    for (const identity of windowsCensus.values()) {
+      if (identity.alive) alive.add(identity.pid);
     }
   } else {
     // Apple ps uses KERN_PROC_ALL for multiple PIDs, including an observer anchor.
@@ -150,7 +198,10 @@ function liveRecords() {
     }
   }
   return owned.filter((entry) => {
-    if (alive.has(entry.pid)) {
+    if (
+      alive.has(entry.pid) &&
+      (!windowsCensus || windowsCensus.get(entry.pid).creationTime === entry.creationTime)
+    ) {
       return true;
     }
     // Separate command processes share this observed-dead fact. PID reuse cannot

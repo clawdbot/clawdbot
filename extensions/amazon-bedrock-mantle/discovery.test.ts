@@ -1,7 +1,5 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const SONNET_5_PROMOTIONAL_PRICING_NOW_MS = Date.UTC(2026, 7, 31);
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const discoveryDebugSpy = vi.hoisted(() => vi.fn());
 const discoveryLoggerState = vi.hoisted(() => ({ debugEnabled: true }));
@@ -729,7 +727,9 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(SONNET_5_PROMOTIONAL_PRICING_NOW_MS);
+    // This catalog includes the promotional contract before the September pricing cutover.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+    onTestFinished(() => clock.mockRestore());
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],

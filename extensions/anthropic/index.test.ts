@@ -82,7 +82,6 @@ type Claude5ContractCase = {
 };
 
 const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
-const SONNET_5_PROMOTIONAL_PRICING_NOW_MS = Date.UTC(2026, 7, 31);
 
 describe("anthropic provider replay hooks", () => {
   it("registers the claude-cli backend", () => {
@@ -720,10 +719,9 @@ describe("anthropic provider replay hooks", () => {
       restoresMissingCost,
       checksCliPolicy,
     }) => {
-      if (modelId === "claude-sonnet-5") {
-        const now = vi.spyOn(Date, "now").mockReturnValue(SONNET_5_PROMOTIONAL_PRICING_NOW_MS);
-        onTestFinished(() => now.mockRestore());
-      }
+      // This table describes the promotional contract before the September pricing cutover.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+      onTestFinished(() => clock.mockRestore());
       const provider = await registerSingleProviderPlugin(anthropicPlugin);
       const resolved = provider.resolveDynamicModel?.({
         provider: "anthropic",

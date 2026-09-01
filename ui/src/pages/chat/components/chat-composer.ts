@@ -11,6 +11,7 @@ import { t } from "../../../i18n/index.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
@@ -293,6 +294,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     !(state.skillMenuOpen && state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
     (props.connected || !draft.trimStart().startsWith("/"));
+  const renderedDraftCanSubmit = canSubmitDraft(visibleDraft);
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
@@ -330,12 +332,20 @@ export function renderChatComposer(props: ChatComposerProps) {
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
+    target.dir = detectTextDirection(target.value);
     commitComposerDraft(props, target.value);
     if (!goalComposer.active) {
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
       updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
     }
-    requestUpdate();
+    // The textarea owns ordinary edits; only redraw the pane when surrounding
+    // controls change. Slash and skill menus invalidate their own presentation.
+    if (
+      Boolean(target.value.trim()) !== Boolean(visibleDraft.trim()) ||
+      canSubmitDraft(target.value) !== renderedDraftCanSubmit
+    ) {
+      requestUpdate();
+    }
   };
   const handleBeforeInput = (event: InputEvent) => {
     const target = event.target;

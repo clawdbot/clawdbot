@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -301,7 +301,7 @@ function hasStaleSqliteSessionEntryCandidate(
   }
   const cutoffMs = Date.now() - maxAgeMs;
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
@@ -309,14 +309,14 @@ function hasStaleSqliteSessionEntryCandidate(
       .where("updated_at", "<", cutoffMs)
       .where("archived_at", "is", null)
       .orderBy("updated_at", "asc"),
-  ).rows;
-  return rows.some((row) => {
+  );
+  for (const row of rows) {
     const entry = parseSessionEntryRow(row);
-    if (!entry) {
-      return false;
+    if (entry && isCandidate(normalizeStoreSessionKey(row.session_key), entry)) {
+      return true;
     }
-    return isCandidate(normalizeStoreSessionKey(row.session_key), entry);
-  });
+  }
+  return false;
 }
 
 async function readSessionTranscriptJsonlBytes(
@@ -392,8 +392,8 @@ export function applySessionEntryMaintenance(
     };
   }
 
-  // Count all rows before loading their payloads. Protection controls eviction candidates, not
-  // whether a row consumes maxEntries; the full snapshot is needed only when maintenance runs.
+  // Count readable rows without retaining their payloads. Protection controls eviction candidates,
+  // not whether a row consumes maxEntries; retain a full snapshot only when maintenance runs.
   const entryCount = readSessionEntryCount(database);
   const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
   const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
@@ -461,7 +461,9 @@ export function applySessionEntryMaintenance(
     ) =>
     (removed: { key: string; entry: SessionEntry }) => {
       removals.set(removed.key, {
-        expectedEntry: cloneSessionEntry(removed.entry),
+        // The prune/cap owner removes this fresh entry from the private store immediately.
+        // Transfer it to the deletion fence instead of copying its saved prompt again.
+        expectedEntry: removed.entry,
         maintenanceReason,
         sessionKey: removed.key,
       });

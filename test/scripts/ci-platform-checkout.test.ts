@@ -769,7 +769,7 @@ it.skipIf(process.platform === "win32")(
   55_000,
 );
 
-it("does not revive an observed-dead fixture instance when its PID is reused", () => {
+it("does not revive a terminated fixture instance when its PID is reused", () => {
   const result = spawnSync(
     process.platform === "win32" ? "python" : "python3",
     [
@@ -777,7 +777,7 @@ it("does not revive an observed-dead fixture instance when its PID is reused", (
       "-S",
       "-c",
       String.raw`
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, runpy, subprocess, sys, tempfile
 
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
@@ -810,17 +810,28 @@ cp.spawnSync = (command, args, options) => {
 };
 require("node:module").syncBuiltinESMExports();
 ''')
-    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"]) as child:
-        child.wait(timeout=10)
+    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
+                          stdin=subprocess.PIPE) as child:
         retired = dict(pid=child.pid, role="grandchild", attempt=1, instance="retired")
         current = dict(pid=os.getpid(), role="grandchild", attempt=2, instance="current")
+        if os.name == "nt":
+            read_processes = runpy.run_path(sys.argv[3])["read_processes"]
+            identities = read_processes([child.pid, os.getpid()])
+            assert all(identity["alive"] for identity in identities)
+            retired["creationTime"], current["creationTime"] = (
+                identity["creationTime"] for identity in identities)
+        child.communicate(timeout=10)
         (records / "retired.json").write_text(json.dumps(retired))
         (records / "current.json").write_text(json.dumps(current))
+        (records / "sentinel.json").write_text(json.dumps(
+            dict(current, role="sentinel", attempt=0, instance="sentinel")))
 
         def observe():
             subprocess.run([sys.argv[1], "--require", str(guard), sys.argv[2], "git", str(root), "early-leader-exit",
                             "-C", str(workspace), "checkout"], cwd=workspace, check=True)
-            return json.loads((root / "events.jsonl").read_text().splitlines()[-1])["alive"]
+            observed = json.loads((root / "events.jsonl").read_text().splitlines()[-1])
+            assert observed["sentinelAlive"], "unrelated live sentinel was lost"
+            return observed["alive"]
 
         assert observe() == [current], "first boundary must observe real child termination"
         # Fault-inject PID reuse only after actual death was observed. The fresh
@@ -828,10 +839,17 @@ require("node:module").syncBuiltinESMExports();
         retired["pid"] = current["pid"]
         (records / "retired.json").write_text(json.dumps(retired))
         assert observe() == [current], "a retired instance was revived by a reused PID"
+        if os.name == "nt":
+            # No death receipt exists for this instance: birth identity must
+            # reject reuse even when no census observed the PID between lives.
+            (records / "unobserved.json").write_text(json.dumps(
+                dict(retired, instance="unobserved")))
+            assert observe() == [current], "an unobserved retired birth was revived by PID reuse"
 print("fixture lifetime contract passed")
 `,
       process.execPath,
       ciCheckoutFixture,
+      fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );

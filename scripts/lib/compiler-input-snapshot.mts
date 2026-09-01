@@ -114,9 +114,11 @@ export class CompilerInputSnapshot {
           const file = path.join(directory, entry.name);
           const canonicalFile = path.join(realDirectory, entry.name);
           const id = portableRelativePath(this.rootDir, file);
+          // Native PR checkouts are separate roots; aliases retain their own paths.
           if (
-            !installed &&
-            [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name)
+            id === ".worktrees" ||
+            (!installed &&
+              [".git", ".artifacts", ".claude", ".agents", ".local", "dist"].includes(entry.name))
           ) {
             continue;
           }

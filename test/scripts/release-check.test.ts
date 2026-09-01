@@ -1,8 +1,14 @@
 // Release Check tests cover release check script behavior.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  collectRootPackageExcludedExtensionDirs,
+  listBundledPluginPackArtifacts,
+} from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   createPackedTarballInstallArgs,
   prepareReleaseCheckLocalPackageTarballs,
@@ -20,6 +26,43 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
+  it("checks target SDK inventory when release tooling lives in another checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
+    try {
+      mkdirSync(join(root, "scripts", "lib"), { recursive: true });
+      mkdirSync(join(root, "extensions"));
+      writeFileSync(join(root, "package.json"), JSON.stringify({ files: ["dist"] }));
+      writeFileSync(
+        join(root, "scripts/lib/plugin-sdk-entrypoints.json"),
+        JSON.stringify(["target-private", "target-public"]),
+      );
+      writeFileSync(
+        join(root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
+        JSON.stringify(["target-private"]),
+      );
+      const moduleUrl = pathToFileURL(resolve("scripts/release-check.ts")).href;
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          resolve("scripts/tsx.mjs"),
+          "--input-type=module",
+          "--eval",
+          `const { collectForbiddenPackPaths } = await import(${JSON.stringify(moduleUrl)});\n` +
+            `console.log(JSON.stringify(collectForbiddenPackPaths(["dist/plugin-sdk/target-private.d.ts", "dist/plugin-sdk/target-public.d.ts"])));`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, TSX_TSCONFIG_PATH: resolve("tsconfig.json") },
+        },
+      );
+      expect(JSON.parse(output)).toEqual(["dist/plugin-sdk/target-private.d.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("installs the packed core and local sibling package tarballs together", () => {
     expect(createPackedTarballInstallArgs("/tmp/prefix")).toEqual([
       "install",
@@ -204,11 +247,20 @@ describe("release-check", () => {
         plugins?: { entries?: Record<string, unknown> };
       };
 
-      expect(config.channels).toHaveProperty("matrix");
       const pluginEntries = requirePluginEntries(config);
-      expect(pluginEntries).toHaveProperty("matrix");
-      expect(config.channels).not.toHaveProperty("feishu");
-      expect(pluginEntries).not.toHaveProperty("feishu");
+      const channels = Object.keys(config.channels ?? {});
+      expect(channels.length).toBeGreaterThan(0);
+      const excluded = collectRootPackageExcludedExtensionDirs();
+      const artifacts = listBundledPluginPackArtifacts();
+      for (const channel of channels) {
+        expect(pluginEntries).toHaveProperty(channel);
+        expect(excluded.has(channel)).toBe(false);
+        const manifest = JSON.parse(
+          readFileSync(join("extensions", channel, "openclaw.plugin.json"), "utf8"),
+        ) as { channels: string[] };
+        expect(manifest.channels).toContain(channel);
+        expect(artifacts).toContain(`dist/extensions/${channel}/openclaw.plugin.json`);
+      }
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }

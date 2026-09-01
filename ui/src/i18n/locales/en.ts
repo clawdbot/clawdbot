@@ -6019,7 +6019,6 @@ export const en: TranslationMap = {
       currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
-      moreDetails: "More details",
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
@@ -6820,15 +6819,16 @@ export const en: TranslationMap = {
     },
     actions: {
       runNow: "Run now",
+      runNowJob: "Run now: {name}",
       runIfDue: "Run if due",
-      pause: "Pause",
-      resume: "Resume",
+      pauseJob: "Pause: {name}",
+      resumeJob: "Resume: {name}",
       clone: "Clone",
       remove: "Remove",
       removeConfirmTitle: 'Remove "{name}"?',
       removeConfirmMessage:
         "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
-      more: "More actions",
+      moreJob: "More actions for {name}",
     },
     runNotStarted: {
       notDue: "This automation is not due yet.",

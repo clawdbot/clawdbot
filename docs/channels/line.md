@@ -238,6 +238,18 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Group: `C` + 32 hex chars
 - Room: `R` + 32 hex chars
 
+## Directory
+
+`openclaw directory peers list --channel line` lists user IDs from the selected
+account's `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` entries.
+`openclaw directory groups list --channel line` lists configured group and room
+IDs. Prefixes normalize to sendable IDs, duplicates appear once, and `*` and
+`accessGroup:<name>` entries are omitted. Use `--account`, `--query`, `--limit`,
+and `--json` as described in [Directory](/cli/directory).
+
+These lists read configuration; they do not fetch a live LINE contact roster or
+include approvals stored through pairing.
+
 ## Group join introductions
 
 When the bot joins an allowed group or multi-person room, it posts one

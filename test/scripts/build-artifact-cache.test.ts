@@ -304,6 +304,41 @@ describe("native owner content records", () => {
     expect(matches()).toBe(false);
   });
 
+  it("ignores native PR checkout churn while retaining aliased resolution candidates", () => {
+    const f = fixture(true);
+    const dependency = ".worktrees/pr-source/package";
+    f.write(`${dependency}/package.json`, '{"type":"module"}');
+    f.write(`${dependency}/value.d.ts`, "export declare const value: 1;");
+    fs.mkdirSync(path.join(f.root, "node_modules"));
+    fs.symlinkSync(`../${dependency}`, path.join(f.root, "node_modules/fixture-package"), "dir");
+    f.write(
+      "src/api.ts",
+      'import { value } from "fixture-package/value.js"; const expected: 1 = value;',
+    );
+    const run = f.prepare();
+    f.write(".worktrees/pr-unrelated/src/new.ts", "export const unrelated = 1;");
+    const record = f.seal(run);
+    const matches = () =>
+      new BoundaryInputSnapshot(f.root).matches(
+        record,
+        f.config,
+        f.args,
+        Object.keys(record.outputs),
+      );
+    expect(matches()).toBe(true);
+    fs.rmSync(path.join(f.root, ".worktrees/pr-unrelated"), { recursive: true });
+    expect(matches()).toBe(true);
+    f.write("nested/.worktrees/candidate.ts", "export {};");
+    expect(matches()).toBe(false);
+    fs.rmSync(path.join(f.root, "nested/.worktrees"), { recursive: true });
+    expect(matches()).toBe(true);
+    f.write(`${dependency}/value.ts`, 'export const value = "changed";');
+    expect(matches()).toBe(false);
+    const compiled = spawnSync(native, f.args, { encoding: "utf8" });
+    expect(compiled.status, compiled.stdout + compiled.stderr).toBe(1);
+    expect(compiled.stdout).toContain("TS2322");
+  });
+
   it("propagates non-ENOENT link resolution errors", () => {
     const f = fixture(true);
     fs.symlinkSync("loop", path.join(f.root, "loop"));
