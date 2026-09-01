@@ -120,14 +120,24 @@ function escapePowerShellSingleQuotedString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+function formatSingleQuotedCompletionPath(shell: CompletionShell, value: string): string {
+  const escaped =
+    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
+}
+
 function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(cachePath)}'`;
   }
+  // Keep existing ordinary profile bytes; single quotes also prevent interactive bang expansion.
+  const literalCachePath = (shell === "fish" ? /["\\$]/u : /[!"\\$`]/u).test(cachePath)
+    ? formatSingleQuotedCompletionPath(shell, cachePath)
+    : `"${cachePath}"`;
   if (shell === "fish") {
-    return `test -f "${cachePath}"; and source "${cachePath}"`;
+    return `test -f ${literalCachePath}; and source ${literalCachePath}`;
   }
-  return `[ -f "${cachePath}" ] && source "${cachePath}"`;
+  return `[ -f ${literalCachePath} ] && source ${literalCachePath}`;
 }
 
 function appendCompletionProfilePath(
@@ -151,9 +161,7 @@ export function formatCompletionReloadCommand(shell: CompletionShell, profilePat
   }
   const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
   const value = profilePath.slice(homePrefix.length);
-  const escapedPath =
-    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
-  return `source ${homePrefix}'${escapedPath}'`;
+  return `source ${homePrefix}${formatSingleQuotedCompletionPath(shell, value)}`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -179,13 +187,16 @@ function isPreviousCompletionSourceLine(line: string, currentCachePath: string |
     return false;
   }
   const trimmed = line.trim();
+  // Older generated guards left quotes in paths unescaped; their matching guards prove ownership.
   const guarded =
-    /^(?:\[\s+-f|test\s+-f)\s+"([^"]+)"\s*(?:\]\s*&&|;\s*and)\s+source\s+"([^"]+)"$/u.exec(trimmed);
+    /^(?:\[\s+-f|test\s+-f)\s+(["'])(.+)\1\s*(?:\]\s*&&|;\s*and)\s+source\s+(["'])(.+)\3$/u.exec(
+      trimmed,
+    );
   const direct = /^source\s+"([^"]+)"$/u.exec(trimmed);
   const powershell = /^\.\s+'((?:[^']|'')+)'$/u.exec(trimmed);
   let sourcePath: string | undefined;
-  if (guarded && guarded[1] === guarded[2]) {
-    sourcePath = guarded[1];
+  if (guarded && guarded[2] === guarded[4]) {
+    sourcePath = guarded[2];
   } else if (direct) {
     sourcePath = direct[1];
   } else if (powershell) {
