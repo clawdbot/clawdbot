@@ -395,6 +395,8 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:

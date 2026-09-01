@@ -9665,7 +9665,6 @@ esac
         "resolve_target",
         "Checkout selected ref for reachability fallback",
       ],
-      [RELEASE_CHECKS_WORKFLOW, "prepare_release_package", "Checkout trusted workflow ref"],
       [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Checkout package workflow ref"],
       [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Checkout"],
       [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Checkout"],

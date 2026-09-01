@@ -444,6 +444,33 @@ describe("Vercel Container Registry publishing", () => {
     ).toBe(false);
   });
 
+  it("allows a first VCR alias publication when the exact target ref is absent", () => {
+    const calls: string[][] = [];
+    const execute = successfulExecutor(calls);
+    let created = false;
+    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
+      if (args[2] === "create") {
+        created = true;
+      } else if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@") && !created) {
+        const error = new Error("docker inspect failed");
+        Object.assign(error, { stderr: `ERROR: ${args[3]}: not found` });
+        throw error;
+      }
+      return execute(command, args);
+    });
+
+    promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: false,
+        targetImage,
+        version: "2026.7.2",
+      },
+      { execFileSyncImpl, log: () => {} },
+    );
+
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(2);
+  });
+
   it("transports only secret-safe digests across the VCR workflow boundary", () => {
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");

@@ -119,8 +119,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             probe(mode, mode, mode === "off" ? "fallback" : "native"),
           ),
         ]);
-        for (const nativePackage of nativePackages)
+        for (const nativePackage of nativePackages) {
           fs.rmSync(nativePackage.root, { recursive: true });
+        }
         await joinProbes([
           probe("missing-require", "require", "missing"),
           ...["off", "auto"].map((mode) => probe(`missing-${mode}`, mode, "fallback")),
@@ -546,18 +547,20 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
-  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", ({
-    workerArtifacts,
-  }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const owner = createVitestWorkerRun();
-      try {
-        const manifest = await prepareWorkers(owner);
-        console.log(
-          JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
-        );
-        for (const mode of ["source", "compiled"] as const) {
+  it.for(["source", "compiled"] as const)(
+    "preserves scoped and prepared provider hooks in %s TUI payloads",
+    (mode, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
+        // Each mode owns its cold-process budget; source probes need no compiled generation.
+        const owner = mode === "compiled" ? createVitestWorkerRun() : undefined;
+        try {
+          if (owner) {
+            const manifest = await prepareWorkers(owner);
+            console.log(
+              JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
+            );
+          }
           for (const scope of ["scoped", "prepared"] as const) {
             const directory = workerArtifacts.fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
@@ -682,24 +685,21 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           `,
             );
             const url = pathToFileURL(
-              mode === "source"
-                ? path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts")
-                : path.join(
+              owner
+                ? path.join(
                     owner.descriptor.directory,
                     "dist/agents/embedded-agent-runner/run/payloads.js",
-                  ),
+                  )
+                : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
               [
                 ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
-                  mode === "source"
-                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
-                    : path.join(
-                        owner.descriptor.directory,
-                        "dist/plugins/provider-hook-runtime.js",
-                      ),
+                  owner
+                    ? path.join(owner.descriptor.directory, "dist/plugins/provider-hook-runtime.js")
+                    : path.join(root, "src/plugins/provider-hook-runtime.ts"),
                 ).href,
               ],
               root,
@@ -712,12 +712,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             console.log(result.stdout);
             expect(result.code, result.stderr + result.stdout).toBe(0);
           }
+        } finally {
+          await owner?.dispose();
         }
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
+        if (owner) {
+          expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+        }
+      }),
+  );
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },

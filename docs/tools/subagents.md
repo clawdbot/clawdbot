@@ -462,6 +462,9 @@ remain spawnable while inheriting defaults.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
+The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
+loading failures are logged and do not abort sub-agent cleanup.
+
 ## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents

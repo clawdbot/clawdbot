@@ -3101,6 +3101,7 @@ jobs:
             scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
+            scripts/lib/numeric-options.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -4161,9 +4162,16 @@ jobs:
   macos-swift:
     permissions:
       contents: read
-    name: "macos-swift"
+    name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
+    # Release products are not inputs to the debug/coverage test graph. Keep
+    # both cold builds mandatory without charging one worker their combined time.
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        phase: [release, tests]
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     # Hosted paths include untrusted first-attempt PRs, so their timeout must
     # follow the runner rather than inheriting Blacksmith's tighter budget.
@@ -4183,6 +4191,7 @@ jobs:
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
+        if: matrix.phase == 'release'
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
@@ -4259,10 +4268,10 @@ jobs:
         with:
           path: apps/macos/.build
           # SwiftPM retains old dependency traits while resolving cached checkouts.
-          # Reuse compiled products across source edits only within the same package graph.
-          key: ${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
+          # Phase-owned products must never race to populate the same archive key.
+          key: ${{ runner.os }}-swift-build-v6-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
+            ${{ runner.os }}-swift-build-v6-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
@@ -4288,6 +4297,7 @@ jobs:
           swift --version
 
       - name: Native state schema version contract
+        if: matrix.phase == 'release'
         run: |
           if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
             node scripts/check-native-state-schema-version.mjs
@@ -4299,6 +4309,7 @@ jobs:
           fi
 
       - name: Swift lint
+        if: matrix.phase == 'release'
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh macos
@@ -4313,6 +4324,7 @@ jobs:
           fi
 
       - name: Swift build (release)
+        if: matrix.phase == 'release'
         run: |
           set -euo pipefail
           # The macOS lane validates the desktop app build; the CLI product is
@@ -4329,6 +4341,7 @@ jobs:
           swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # Guard: chat-only consumers build OpenClawKit with the Talk trait
@@ -4345,7 +4358,7 @@ jobs:
 
       # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
-        if: needs.preflight.outputs.run_openclawkit_tests == 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.run_openclawkit_tests == 'true'
         run: |
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
@@ -4363,6 +4376,7 @@ jobs:
 
       - name: Swift test
         id: swift-test
+        if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
@@ -4413,13 +4427,13 @@ jobs:
           retention-days: 7
 
       - name: Save SwiftPM cache
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        if: matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
-      # Builds/tests are serial and leave the source inputs unchanged. Record
+      # Each phase leaves its source inputs unchanged. Record
       # their actual metadata with the successful products immediately before save.
       - name: Record Swift build input timestamps
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && env.HISTORICAL_TARGET != 'true'

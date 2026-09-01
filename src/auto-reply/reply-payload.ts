@@ -356,6 +356,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** The warning owner observed this tool failure; presentation text is not evidence. */
+  toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */

@@ -14,7 +14,8 @@ import {
   runPersistenceChild,
 } from "./persistence.test-support.js";
 
-const PERSISTENCE_BASE_SHA = "5835fbeac7d6be65612fb666f47f10b6bc4ca30c";
+// Use pre-feature main after its documented pending-input schema-19 compatibility change.
+const PERSISTENCE_BASE_SHA = "6a11089d4b0ed7df871650b806f71d96ad25908c";
 
 type BaselineProvenance = {
   sourceCommit: string;
@@ -79,7 +80,7 @@ async function main() {
   const evidencePath = process.argv[3];
   assert.ok(
     artifactDirectory && evidencePath,
-    "Usage: node --import ./scripts/tsx.mjs src/skills/library/persistence-downgrade.test-support.ts <exact-baseline-artifact-dir> <new-evidence.json>; provide reader.mjs and provenance.json from 5835fbeac7d6be65612fb666f47f10b6bc4ca30c, not candidate code configured with old SQL.",
+    `Usage: node --import ./scripts/tsx.mjs src/skills/library/persistence-downgrade.test-support.ts <exact-baseline-artifact-dir> <new-evidence.json>; provide reader.mjs and provenance.json from ${PERSISTENCE_BASE_SHA}, not candidate code configured with old SQL.`,
   );
   const baseline = await verifyBaselineArtifact(path.resolve(artifactDirectory));
   const temps = createTempDirTracker();

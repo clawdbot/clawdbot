@@ -392,7 +392,8 @@
     "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs",
-    "!dist/plugin-sdk/model-catalog-pricing.d.ts"
+    "!dist/plugin-sdk/model-catalog-pricing.d.ts",
+    "!dist/plugin-sdk/blob-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -478,6 +479,9 @@
     "./plugin-sdk/archive": {
       "types": "./dist/plugin-sdk/archive.d.ts",
       "default": "./dist/plugin-sdk/archive.js"
+    },
+    "./plugin-sdk/blob-runtime": {
+      "default": "./dist/plugin-sdk/blob-runtime.js"
     },
     "./plugin-sdk/root-walk": {
       "types": "./dist/plugin-sdk/root-walk.d.ts",

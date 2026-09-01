@@ -49,6 +49,16 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
   ),
 );
 const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+const resolveCronDeliveryPreview = vi.hoisted(() =>
+  vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
+);
+const resolveCronDeliveryPreviews = vi.hoisted(() =>
+  vi.fn(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
+    Object.fromEntries(
+      jobs.map((job) => [job.id, { label: "not requested", detail: "not requested" }]),
+    ),
+  ),
+);
 
 vi.mock("../../cron/task-run-history.js", async () => {
   const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
@@ -73,6 +83,11 @@ vi.mock("../../config/config.js", async () => {
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: loadGatewaySessionEntry,
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
+}));
+
+vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryPreview,
+  resolveCronDeliveryPreviews,
 }));
 
 import { cronHandlers } from "./cron.js";
@@ -609,6 +624,16 @@ describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
+    resolveCronDeliveryPreview
+      .mockReset()
+      .mockResolvedValue({ label: "not requested", detail: "not requested" });
+    resolveCronDeliveryPreviews
+      .mockReset()
+      .mockImplementation(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
+        Object.fromEntries(
+          jobs.map((job) => [job.id, { label: "not requested", detail: "not requested" }]),
+        ),
+      );
     loadGatewaySessionEntry
       .mockReset()
       .mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey, entry: undefined }));
@@ -2245,6 +2270,7 @@ describe("cron method validation", () => {
         created: false,
         updated: false,
         job: expect.objectContaining({ id: "cron-1", declarationKey: "daily-report" }),
+        deliveryPreview: { label: "not requested", detail: "not requested" },
       },
       undefined,
     );
