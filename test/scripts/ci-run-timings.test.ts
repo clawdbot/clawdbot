@@ -491,65 +491,57 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
       rmSync(fixtureDir, { force: true, recursive: true });
     }
   });
-
-  it("runs --recent with a push-only GitHub CLI query and output", () => {
+  it("excludes manual, failed, and unfinished runs from recent main timings", () => {
     const fixtureDir = mkdtempSync(path.join(tmpdir(), "openclaw-ci-timings-recent-"));
     const fakeGhPath = path.join(fixtureDir, "gh");
-    const queryArgsPath = path.join(fixtureDir, "query-args.json");
-    const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const callsPath = path.join(fixtureDir, "calls.jsonl");
     writeFileSync(
       fakeGhPath,
       `#!/usr/bin/env node
-const { writeFileSync } = require("node:fs");
+const { appendFileSync } = require("node:fs");
 const args = process.argv.slice(2);
+appendFileSync(process.env.FIXTURE_CALLS_PATH, JSON.stringify(args) + "\\n");
 if (args[0] === "run" && args[1] === "list") {
-  writeFileSync(process.env.QUERY_ARGS_PATH, JSON.stringify(args));
   console.log(JSON.stringify([
-    { databaseId: 201, event: "workflow_dispatch", headSha: "dispatch", status: "completed", conclusion: "success" },
-    { databaseId: 202, event: "push", headSha: "push", status: "completed", conclusion: "success" }
+    { databaseId: 201, event: "workflow_dispatch", headSha: "manual", status: "completed", conclusion: "success" },
+    { databaseId: 202, event: "push", headSha: "failed", status: "completed", conclusion: "failure" },
+    { databaseId: 203, event: "push", headSha: "running", status: "in_progress", conclusion: "" },
+    { databaseId: 204, event: "push", headSha: "first", status: "completed", conclusion: "success" },
+    { databaseId: 205, event: "push", headSha: "second", status: "completed", conclusion: "success" }
   ]));
-} else if (args[0] === "run" && args[1] === "view" && args[2] === "202") {
+} else if (args[0] === "run" && args[1] === "view") {
   console.log(JSON.stringify({ status: "completed", conclusion: "success", createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:01:00Z" }));
-} else if (args.join(" ").includes("actions/runs/202/jobs?")) {
-  console.log(JSON.stringify({ total_count: 1, jobs: [
-    { id: 1, name: "checks-node-compact-small-1", status: "completed", conclusion: "success", created_at: "2026-08-31T00:00:05Z", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }
-  ] }));
+} else if (args[0] === "api" && args.some((arg) => arg.includes("/jobs?"))) {
+  console.log(JSON.stringify({ total_count: 1, jobs: [{ id: 1, name: "checks", status: "completed", conclusion: "success", started_at: "2026-08-31T00:00:10Z", completed_at: "2026-08-31T00:00:40Z" }] }));
 } else {
-  console.error("unexpected gh invocation", args.join(" "));
   process.exit(2);
 }
 `,
     );
     chmodSync(fakeGhPath, 0o755);
-
     try {
       const result = spawnSync(process.execPath, ["scripts/ci-run-timings.mjs", "--recent", "2"], {
-        cwd: repositoryRoot,
+        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
         encoding: "utf8",
         env: {
           ...process.env,
+          GH_TOKEN: "fixture-token",
           OPENCLAW_GH_BIN: fakeGhPath,
-          QUERY_ARGS_PATH: queryArgsPath,
+          FIXTURE_CALLS_PATH: callsPath,
         },
       });
-
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("CI run 202");
-      expect(result.stdout).not.toContain("CI run 201");
-      expect(JSON.parse(readFileSync(queryArgsPath, "utf8"))).toEqual([
-        "run",
-        "list",
-        "--branch",
-        "main",
-        "--event",
-        "push",
-        "--workflow",
-        "CI",
-        "--limit",
-        "8",
-        "--json",
-        "databaseId,headSha,event,status,conclusion",
-      ]);
+      expect(result.stdout.match(/CI run \d+/gu)).toEqual(["CI run 204", "CI run 205"]);
+      const calls: string[][] = readFileSync(callsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(calls[0]?.slice(calls[0].indexOf("--event"), calls[0].indexOf("--event") + 2)).toEqual(
+        ["--event", "push"],
+      );
+      expect(
+        calls.filter((args) => args[0] === "run" && args[1] === "view").map((args) => args[2]),
+      ).toEqual(["204", "205"]);
     } finally {
       rmSync(fixtureDir, { force: true, recursive: true });
     }

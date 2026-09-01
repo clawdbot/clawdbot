@@ -294,14 +294,6 @@ function getLatestMainPushCiRunId() {
   return String(databaseId);
 }
 
-function selectRecentMainPushCiRuns(runs, limit) {
-  return runs
-    .filter(
-      (run) => run.event === "push" && run.status === "completed" && run.conclusion === "success",
-    )
-    .slice(0, limit);
-}
-
 function listRecentSuccessfulCiRuns(limit) {
   const raw = execPlainGh(
     [
@@ -320,7 +312,11 @@ function listRecentSuccessfulCiRuns(limit) {
     ],
     { encoding: "utf8" },
   );
-  return selectRecentMainPushCiRuns(JSON.parse(raw), limit);
+  return JSON.parse(raw)
+    .filter(
+      (run) => run.event === "push" && run.status === "completed" && run.conclusion === "success",
+    )
+    .slice(0, limit);
 }
 
 /**
