@@ -7,6 +7,7 @@ import {
   errorShape,
   type SessionsForkResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEvent,
@@ -15,6 +16,7 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sqliteSessionScope from "../../config/sessions/session-accessor.sqlite-scope.js";
@@ -133,9 +135,12 @@ it.each(mutationMethods)(
   },
 );
 
-async function seedMessageCutSource(incognito = false) {
+async function seedMessageCutSource(
+  incognito = false,
+  identity?: { sessionKey: string; sessionId: string },
+) {
   const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}source`;
-  const scope = { agentId: "main", sessionKey, sessionId: "message-fork-source" };
+  const scope = { agentId: "main", sessionKey, sessionId: "message-fork-source", ...identity };
   const created = await createSessionEntryWithTranscript(scope, () => ({
     ok: true,
     entry: {
@@ -177,6 +182,62 @@ function context(): GatewayRequestContext {
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
 }
+
+it.each([
+  { kind: "visible", hidden: false },
+  { kind: "hidden internal-effects", hidden: true },
+])("lists $kind session branches without decoding unrelated metadata", async ({ hidden }) => {
+  await withOpenClawTestState({ label: "branch-list-bounded-read" }, async (state) => {
+    await state.writeConfig(cfg);
+    const identity = hidden
+      ? resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "branch-list-hidden" })
+      : undefined;
+    const scope = await seedMessageCutSource(false, identity);
+    const unrelatedPrompt = "unrelated-session-skill-prompt".repeat(128);
+    for (let index = 0; index < 3; index += 1) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+        {
+          sessionId: `unrelated-${index}`,
+          updatedAt: index + 1,
+          skillsSnapshot: { prompt: unrelatedPrompt, skills: [] },
+        },
+      );
+    }
+    const method = "sessions.branches.list";
+    const params = { sessionKey: scope.sessionKey };
+    const respond = vi.fn<RespondFn>();
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      await expectDefined(
+        sessionRewindHandlers[method],
+        method,
+      )({
+        req: { type: "req", id: "branch-list-bounded-read", method, params },
+        params,
+        respond,
+        context: context(),
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          branches: hidden
+            ? []
+            : expect.arrayContaining([
+                expect.objectContaining({ leafEntryId: "user-2", active: true }),
+                expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
+              ]),
+        },
+        undefined,
+      );
+      expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+});
 
 function mutationParams(method: MutationMethod, sessionKey: string) {
   return {
