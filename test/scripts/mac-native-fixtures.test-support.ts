@@ -101,9 +101,19 @@ export async function compiledMacNativeFixtures(
 }
 
 function prepareMacNativeFixtures(root: string, mac: MacScriptFixture) {
-  // The first case owns and joins preparation; borrowers receive only complete
-  // in-memory bytes. Cancellation rejects all borrowers instead of publishing partial state.
-  return (nativeFixtures ??= mac.lifetime.run(() => compileMacNativeFixtures(root, mac)));
+  if (nativeFixtures) {
+    return nativeFixtures;
+  }
+  // The first case owns preparation; only complete in-memory bytes are shared.
+  // A failed flight rejects its borrowers, but must not poison later case lifetimes.
+  const preparation = mac.lifetime.run(() => compileMacNativeFixtures(root, mac));
+  nativeFixtures = preparation;
+  void preparation.catch(() => {
+    if (nativeFixtures === preparation) {
+      nativeFixtures = undefined;
+    }
+  });
+  return preparation;
 }
 
 async function compileMacNativeFixtures(

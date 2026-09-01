@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdir, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
 import {
   addon,
   artifactFixture,
@@ -14,6 +14,7 @@ import {
   write,
 } from "./mac-elevation-artifact.test-support.js";
 import {
+  compiledMacNativeFixtures,
   macFatContainerFixture,
   macObjectFixture,
   runMacFixtureTool,
@@ -71,6 +72,36 @@ function withMachResourceKind(
 describe.skipIf(process.platform !== "darwin")(
   "portable elevation native artifact verification",
   () => {
+    // The following archive case owns a new lifetime and must prepare successfully
+    // after this failed flight; keep the failure probe ahead of the concurrent cases.
+    it("rejects all borrowers of a failed native preparation", ({ mac }) =>
+      mac.lifetime.run(async () => {
+        const root = mac.createTempDir("openclaw-native-preparation-failure-");
+        const tool = vi.spyOn(mac, "run").mockResolvedValueOnce({
+          status: 1,
+          signal: null,
+          error: undefined,
+          stdout: "",
+          stderr: "injected native preparation failure",
+        });
+        try {
+          const results = await Promise.allSettled([
+            compiledMacNativeFixtures(root, mac),
+            macObjectFixture(root, "arm64", mac),
+          ]);
+          const rejected = {
+            status: "rejected",
+            reason: expect.objectContaining({
+              message: expect.stringContaining("injected native preparation failure"),
+            }),
+          };
+          expect(results).toEqual([rejected, rejected]);
+          expect(tool).toHaveBeenCalledTimes(1);
+        } finally {
+          tool.mockRestore();
+        }
+      }));
+
     it.concurrent("accepts a real archive with a complete native worker pair outside the checkout", async ({
       mac,
     }) =>
