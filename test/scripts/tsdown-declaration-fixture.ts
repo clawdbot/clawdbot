@@ -13,7 +13,6 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 const sourceRoot = process.cwd();
 export const loader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
-const writer = path.resolve("scripts/write-plugin-sdk-entry-dts.ts");
 export const declarationInputs = [
   { file: "src/contract.d.ts", name: "SourceOnly" },
   { file: "root.d.mts", name: "RootOnly" },
@@ -124,8 +123,11 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
   fs.mkdirSync(path.join(root, "extensions"));
   fs.mkdirSync(path.join(root, "scripts/lib"));
   for (const script of [
+    "build-all.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
+    "windows-cmd-helpers.mjs",
+    "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",
     "tsx.mjs",
   ]) {
@@ -134,20 +136,10 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
       fs.copyFileSync(source, path.join(root, "scripts", script));
     }
   }
-  for (const entry of fs.readdirSync(path.join(sourceRoot, "scripts/lib"), {
-    withFileTypes: true,
-  })) {
-    const source = path.join(sourceRoot, "scripts/lib", entry.name);
-    const target = path.join(root, "scripts/lib", entry.name);
-    if (
-      entry.name === "runtime-process-build-entries.mts" ||
-      entry.name === "runtime-process-core-build-entries.mts"
-    ) {
-      fs.copyFileSync(source, target);
-    } else {
-      fs.symlinkSync(source, target, entry.isDirectory() ? "junction" : "file");
-    }
-  }
+  // Generator imports must resolve inside the same tree whose bytes are cached.
+  fs.cpSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), {
+    recursive: true,
+  });
   // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
   const runtimeEntryOwners = new Set([
     "src/infra/runtime-process-entrypoints.ts",
@@ -278,7 +270,12 @@ export function createFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_
 }
 
 export function runWriter(root: string, privateQa = false, env: NodeJS.ProcessEnv = {}) {
-  return runFixture(root, ["--import", loader, writer], privateQa, env);
+  return runFixture(
+    root,
+    ["--import", loader, path.join(root, "scripts/write-plugin-sdk-entry-dts.ts")],
+    privateQa,
+    env,
+  );
 }
 
 export function runUnifiedBuild(root: string) {
@@ -288,8 +285,8 @@ export function runUnifiedBuild(root: string) {
     "--input-type=module",
     "--eval",
     `
-import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/build-all.mts")).href)};
-import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts")).href)};
+import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
+import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
 await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
     ["tsdown-unified", "write-unified-entry-dts"].includes(step.label));
@@ -303,7 +300,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
 export function runUnifiedWriter(root: string, env: NodeJS.ProcessEnv = {}) {
   return runFixture(
     root,
-    ["--import", loader, path.join(sourceRoot, "scripts/write-unified-entry-dts.ts")],
+    ["--import", loader, path.join(root, "scripts/write-unified-entry-dts.ts")],
     false,
     env,
   );
