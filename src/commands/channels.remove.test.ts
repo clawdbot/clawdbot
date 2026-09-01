@@ -804,6 +804,50 @@ describe("channelsRemoveCommand", () => {
     );
   });
 
+  it("keeps the ingress rows when the channel is the multi-channel plugin's own id", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: { "external-chat": { enabled: true, token: "token-1" } },
+      }),
+    );
+    // `channelPluginIdBelongsToManifest` accepts a channel whose id IS the plugin id even
+    // when `channels` does not list it, so this shape is absent from the declared list and
+    // must not be read as "no manifest claims this channel" - the queue is still shared.
+    manifestMocks.plugins = [
+      { id: "external-chat", channels: ["external-chat-text", "external-chat-voice"] },
+    ];
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "external-chat",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "external-chat",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "belongs to a sibling channel too" });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Kept its stored ingress events: plugin "external-chat" serves more than one channel and its stored events do not record which.',
+    );
+    await expect(queue.claimNext({ ownerId: "worker" })).resolves.toMatchObject({
+      id: "inbound-1",
+    });
+  });
+
   it("keeps the ingress rows when one plugin serves several channels", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({

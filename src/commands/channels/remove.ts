@@ -66,12 +66,19 @@ type IngressDiscardOutcome =
 function resolveIngressQueueOwner(
   channelId: string,
 ): { pluginId: string } | { sharedWithPluginId: string } {
-  const owner = loadPluginManifestRegistryForPluginRegistry({
+  const id = channelId.toLowerCase();
+  const plugins = loadPluginManifestRegistryForPluginRegistry({
     includeDisabled: true,
     env: process.env,
-  }).plugins.find((plugin) =>
-    plugin.channels.some((channel) => channel.toLowerCase() === channelId.toLowerCase()),
-  );
+  }).plugins;
+  // A channel is registered under a declared channel id OR under the plugin's own id -
+  // `channelPluginIdBelongsToManifest` accepts either - so a channel named after the
+  // plugin is absent from `channels` and would fall through the first lookup into the
+  // no-manifest branch, purging a queue that may be shared. Match both, and let the
+  // same declared-channel count decide.
+  const owner =
+    plugins.find((plugin) => plugin.channels.some((channel) => channel.toLowerCase() === id)) ??
+    plugins.find((plugin) => plugin.id.toLowerCase() === id);
   if (!owner) {
     // No manifest claims this channel, so the only id available is the one the operator
     // typed, which is what a bundled channel's queue is keyed by anyway.
@@ -315,7 +322,7 @@ export async function channelsRemoveCommand(
   // re-enabling it drains them.
   const discard = deleteConfig
     ? discardRemovedAccountIngressRows({
-        channelId: plugin.id,
+        channelId: resolvedChannelId,
         accountId: preparedRemoval.accountKey,
       })
     : undefined;
