@@ -69,6 +69,8 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+For a [managed GitHub identity](/gateway/config-tools#toolsgithub), `gateway_exec` uses OpenClaw's private local process-launch credential binding. Native Codex shell instead receives only the non-secret `GH_CONFIG_DIR` and token-clearing overlay; a missing or tokenless profile can still let GitHub CLI fall back to the OS keyring. Status and Gateway-owned publication guarantees do not cover that native shell path. Use `gateway_exec` when launch-bound managed GitHub credentials are required.
+
 ## Recovery after a hard Gateway stop
 
 On POSIX systems, OpenClaw checks for registered orphaned Codex app-server

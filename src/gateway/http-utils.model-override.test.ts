@@ -54,4 +54,15 @@ describe("resolveOpenAiCompatModelOverride", () => {
       errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
     });
   });
+
+  it("reads the prepared catalog without requesting a full refresh", async () => {
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq({ "x-openclaw-model": "openai/gpt-5.4" }),
+        agentId: "main",
+        model: "openclaw",
+      }),
+    ).resolves.toEqual({ modelOverride: "openai/gpt-5.4" });
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledExactlyOnceWith();
+  });
 });

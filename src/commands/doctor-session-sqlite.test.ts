@@ -749,12 +749,15 @@ describe("runDoctorSessionSqlite", () => {
       await runDoctorSessionSqlite({ env: store.env, mode: "restore", store: store.storePath });
       const source = kind === "transcript" ? store.transcriptPath : store.storePath;
       const original = fs.readFileSync(source);
+      const token = "sk-abcdefghijklmnopqrstuv";
       const unlink = fs.unlinkSync;
       let injected = false;
       const spy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
         if (!injected && file === source) {
           injected = true;
-          throw new Error("injected interruption before source unlink");
+          throw new Error(
+            `injected interruption before source unlink: Authorization: Bearer ${token}`,
+          );
         }
         return unlink(file);
       });
@@ -773,6 +776,12 @@ describe("runDoctorSessionSqlite", () => {
       const move = readMigrationManifest(manifestPath).targets[0]!.plannedMoves.find(
         (item) => item.sourcePath === source,
       )!;
+      const issueCode =
+        kind === "transcript" ? "transcript_archive_failed" : "legacy_store_archive_failed";
+      const issue = interrupted.targets[0]?.issues.find((item) => item.code === issueCode);
+      expect(issue?.message).toContain("injected interruption before source unlink");
+      expect(issue?.message).not.toContain(token);
+      expect(fs.readFileSync(source)).toEqual(original);
       expect(fs.statSync(source).nlink).toBe(2);
       expect(fs.statSync(source).ino).toBe(fs.statSync(move.archivePath).ino);
       if (entry === "public") {

@@ -69,6 +69,17 @@ they share a session.
 
 Verify your setup with `openclaw security audit`.
 
+## Retired channel docking
+
+Channel docking and manual cross-channel reply focus have been removed. The
+`/dock-*` commands no longer move a session's reply destination to another
+channel.
+
+Use `session.identityLinks` to associate a person's identities for DM session
+routing, or [thread-bound sessions](/tools/subagents#thread-bound-sessions) to
+keep a supported conversation attached to a subagent. These are separate
+features; neither restores manual cross-channel docking.
+
 ## Group and room routing
 
 `session.groupScope` controls where non-direct peers store conversation

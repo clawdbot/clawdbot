@@ -1371,7 +1371,10 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
-          const nodeTestShards = rawNodeTestShards.map((shard) => ({
+          // The same capped matrix owns compact and plugin work; admit its longest rows first.
+          const nodeTestShards = rawNodeTestShards
+            .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
+            .map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -1500,7 +1503,16 @@ jobs:
             ),
             run_macos_node: runMacosNode,
             macos_node_matrix: createMatrix(
-              runMacosNode ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
+              runMacosNode
+                ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+                  ? [1, 2, 3].map((part) => ({
+                      check_name: `macos-node-${part}`,
+                      runtime: "node",
+                      task: `test-${part}`,
+                    }))
+                  // Historical targets keep their complete native suite in one job.
+                  : [{ check_name: "macos-node", runtime: "node", task: "test" }]
+                : [],
             ),
             run_macos_swift:
               runMacos && (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
@@ -2107,8 +2119,8 @@ jobs:
             wait_checks
           fi
 
-          # The dedicated Node shard owns the full built-CLI PTY suite. Keep
-          # only the local roundtrip and Gateway-connect artifact canaries here.
+          # These canaries verify the built CLI's local roundtrip and Gateway connection.
+          # Full plans retain the PTY descriptor, but CI consumes it only as this selection flag.
           if [ "$RUN_TUI_PTY" = "true" ]; then
             start_check "tui-pty" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -4053,6 +4065,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - *platform_checkout_step
@@ -4073,6 +4086,9 @@ jobs:
           set -euo pipefail
           node -e 'const os = require("node:os"); console.log("Native OS resources: " + JSON.stringify({ logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(), osTotalMemoryBytes: os.totalmem(), osFreeMemoryBytes: os.freemem() }));'
           case "$TASK" in
+            test-[123])
+              pnpm "test:macos:ci:${TASK#test-}"
+              ;;
             test)
               # Linux owns the full repo test suite. Keep macOS CI focused on
               # launchd/Homebrew/runtime path coverage and the process-group wrapper.

@@ -453,7 +453,7 @@ export async function prepareModelsListResult(
       loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
         readOnly: loadedReadOnly,
         refreshAuth: refresh && loadedReadOnly,
-        refreshFullCatalog: loadParams.refresh === true,
+        ...(!preparedOnly ? { refreshFullCatalog: true } : {}),
       });
       return loadedSnapshot;
     },
@@ -481,7 +481,7 @@ export async function prepareModelsListResult(
         fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
           readOnly,
           refreshAuth: refresh && readOnly,
-          refreshFullCatalog: refresh,
+          refreshFullCatalog: true,
         });
         return fullSnapshot;
       },

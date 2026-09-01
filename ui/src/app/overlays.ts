@@ -18,6 +18,7 @@ import {
   syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -47,9 +48,13 @@ function isGatewayEvent(value: unknown): value is GatewayEventFrame {
 
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
-  hooks: ApplicationUpdateOverlayHooks = {},
+  hooks: ApplicationUpdateOverlayHooks & {
+    connectionBootstrap?: ConnectionBootstrapCoordinator;
+  } = {},
 ): ApplicationOverlays {
   const updates = createApplicationUpdateOverlays(gateway, publish, hooks);
+  const runConnectionBootstrap = (key: string, task: () => Promise<unknown>) =>
+    hooks.connectionBootstrap?.run(key, task) ?? task();
   let snapshot: ApplicationOverlaySnapshot = {
     ...updates.snapshot,
     approvalQueue: [],
@@ -199,21 +204,28 @@ export function createApplicationOverlays(
       updates.synchronizeGateway(next);
       return;
     }
+    const connectedClient = next.client;
     updates.synchronizeGateway(next);
     if (
       accessTransition.pairingChanged &&
       devicePairSetupState.devicePairSetupOpen &&
       (operatorAccess.canAdmin || operatorAccess.canPair)
     ) {
-      void pairingPendingCount.refresh();
+      void runConnectionBootstrap("pairing-pending-count", () =>
+        pairingPendingCount.refresh(),
+      ).catch(() => undefined);
     }
     if (connectedSourceChanged) {
       connectedEpoch += 1;
       if (operatorAccess.canReviewApprovals) {
-        void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
+        void runConnectionBootstrap("approvals", () =>
+          refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
+        ).catch(() => undefined);
       }
     } else if (accessTransition.reviewChanged && operatorAccess.canReviewApprovals) {
-      void refreshApprovals(next.client, connectedEpoch, approvalAccessGeneration);
+      void runConnectionBootstrap("approvals", () =>
+        refreshApprovals(connectedClient, connectedEpoch, approvalAccessGeneration),
+      ).catch(() => undefined);
     }
   };
   const stopGateway = gateway.subscribe(synchronizeGateway);

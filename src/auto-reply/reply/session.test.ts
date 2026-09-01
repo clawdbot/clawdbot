@@ -3494,7 +3494,7 @@ describe("initSessionState reset authorization", () => {
 
   it.each<{
     name: string;
-    body?: "/new" | "/reset";
+    body?: string;
     source?: "text" | "native";
     feishuDirect?: boolean;
     admitted?: boolean;
@@ -3529,6 +3529,18 @@ describe("initSessionState reset authorization", () => {
       allowed: false,
     },
     { name: "non-admitted sender", admitted: false, allowed: false },
+    ...[
+      "/new Create a note",
+      "/reset",
+      "/reset Create a note",
+      "/reset soft",
+      "/reset soft Create a note",
+    ].map((body) => ({
+      name: `non-admitted sender stays silent for ${body}`,
+      body,
+      admitted: false,
+      allowed: false,
+    })),
     { name: "unrelated provider command policy", allowFrom: { telegram: [] }, allowed: true },
     { name: "explicit command deny", allowFrom: { buzz: ["other"] }, allowed: false },
     { name: "empty global command allowlist", allowFrom: { "*": [] }, allowed: false },
@@ -3727,14 +3739,17 @@ describe("initSessionState reset authorization", () => {
         if (allowed) {
           expect.soft(resets[0]).toMatchObject({ type: "reset", reason: body.slice(1) });
         }
-        expect.soft(acknowledgement).toEqual(
-          allowed
-            ? {
-                shouldContinue: false,
-                reply: { text: body === "/new" ? "✅ New session started." : "✅ Session reset." },
-              }
-            : { shouldContinue: false },
-        );
+        expect.soft(acknowledgement?.shouldContinue).toBe(false);
+        if (allowed) {
+          expect
+            .soft(acknowledgement?.reply?.text)
+            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+        } else if (scopes) {
+          expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
+          expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");
+        } else {
+          expect.soft(acknowledgement?.reply).toBeUndefined();
+        }
       } finally {
         resetPluginRuntimeStateForTest();
       }

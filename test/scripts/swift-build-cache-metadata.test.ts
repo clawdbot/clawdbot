@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -68,18 +69,32 @@ function fixture() {
 describe.skipIf(process.platform === "win32")("Swift build-cache input metadata", () => {
   it("restores original nanoseconds only for byte-identical current inputs", () => {
     const { root, source, metadata } = fixture();
+    const sharedFixture =
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayTLSStoreFixture.swift";
     const unchanged = [
       sourcePath,
       "apps/macos/Tests/FeatureTests.swift",
       "apps/shared/OpenClawKit/Sources/Shared.swift",
+      "apps/shared/OpenClawMLXTTSProtocol/Sources/OpenClawMLXTTSProtocol/MLXTTSProtocol.swift",
+      sharedFixture,
       "apps/swabble/Sources/Voice.swift",
       "apps/macos/.build/checkouts/dependency/Sources/Library.swift",
       "apps/macos/Package.swift",
       "apps/macos/Package.resolved",
       "apps/shared/OpenClawKit/Package.swift",
+      "apps/shared/OpenClawMLXTTSProtocol/Package.swift",
       "apps/swabble/Package.swift",
     ];
     setTime(originalTime, ...unchanged.slice(1).map((relative) => writeInput(root, relative)));
+    const sharedFixtureLink = path.join(
+      root,
+      "apps/macos/Tests/OpenClawIPCTests/GatewayTLSStoreFixture.swift",
+    );
+    mkdirSync(path.dirname(sharedFixtureLink), { recursive: true });
+    symlinkSync(
+      path.relative(path.dirname(sharedFixtureLink), path.join(root, sharedFixture)),
+      sharedFixtureLink,
+    );
     const changed = writeInput(root, "apps/macos/Sources/Changed.swift", "before\n");
     const modeChanged = writeInput(root, "apps/macos/Sources/ModeChanged.swift");
     chmodSync(modeChanged, 0o644);
@@ -89,7 +104,10 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     const inode = statSync(source, { bigint: true }).ino;
     for (const relative of unchanged) {
       const file = path.join(root, relative);
-      writeFileSync(`${file}.replacement`, readFileSync(file));
+      const mode = statSync(file).mode & 0o7777;
+      writeFileSync(`${file}.replacement`, readFileSync(file), { mode });
+      // File creation applies umask even when mode is explicit.
+      chmodSync(`${file}.replacement`, mode);
       renameSync(`${file}.replacement`, file);
     }
     expect(statSync(source, { bigint: true }).ino).not.toBe(inode);
@@ -106,10 +124,12 @@ describe.skipIf(process.platform === "win32")("Swift build-cache input metadata"
     );
     writeFileSync(metadata, archive);
 
-    expect(run(root, "restore")).toContain("9 verified input timestamps");
+    expect(run(root, "restore")).toContain("12 verified input timestamps");
     for (const relative of unchanged) {
       expect(statSync(path.join(root, relative), { bigint: true }).mtimeNs).toBe(originalTime);
     }
+    expect(lstatSync(sharedFixtureLink).isSymbolicLink()).toBe(true);
+    expect(statSync(sharedFixtureLink, { bigint: true }).mtimeNs).toBe(originalTime);
     for (const file of [changed, modeChanged, added]) {
       expect(statSync(file, { bigint: true }).mtimeNs).toBe(checkoutTime);
     }

@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   composeReleaseAttemptJobs,
@@ -18,12 +18,12 @@ import {
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
+  hydrateReusedPlan,
   readChild,
   releaseGhRetryDelayMs,
   releaseStateChildEvidence,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
-  validateChildBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseStateArtifact,
   verifyReleaseStateArtifacts,
@@ -916,35 +916,61 @@ describe("release decision policy", () => {
     });
   });
 
-  it("accepts a monotonically newer attempt for the exact child tuple", () => {
-    const result = validateChildBinding(
-      child("normalCi"),
-      {
-        actor: { login: "github-actions[bot]" },
-        conclusion: "",
-        created_at: "2026-08-21T00:00:00Z",
-        display_title: "normalCi",
-        event: "workflow_dispatch",
-        head_branch: "release-ci/tooling",
-        head_sha: SHA,
-        html_url: "https://example.invalid/runs/101",
-        id: 101,
-        path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
-        repository: { full_name: "openclaw/openclaw" },
-        run_attempt: 2,
-        status: "in_progress",
-        updated_at: "2026-08-21T00:01:00Z",
-        triggering_actor: { login: "release-operator" },
-      },
-      {
-        jobs: [],
+  it.each(["fresh", "reused"] as const)(
+    "accepts a human child rerun with retained earlier jobs in a %s plan",
+    async (source) => {
+      const original = child("normalCi");
+      const planned =
+        source === "reused"
+          ? hydrateReusedPlan([original], {
+              children: [
+                {
+                  ...reusedEvidenceChildren()[0],
+                  displayTitle: original.displayTitle,
+                  runAttempt: 2,
+                },
+              ],
+              manifest: { childEvidence: { normalCi: { plannedRunAttempt: 1 } } },
+            })[0]
+          : original;
+      assert(planned, "selected child remains present in the reused plan");
+      const result = await readChild(planned, undefined, undefined, {
+        readRun: async () => ({
+          actor: { login: "github-actions[bot]" },
+          conclusion: "success",
+          display_title: original.displayTitle,
+          event: "workflow_dispatch",
+          head_branch: original.workflowRef,
+          head_sha: SHA,
+          html_url: original.url,
+          id: 101,
+          path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
+          repository: { full_name: "openclaw/openclaw" },
+          run_attempt: 2,
+          status: "completed",
+          triggering_actor: { login: "release-operator" },
+        }),
+        readAttemptJobs: async (_runId, attempt) =>
+          attempt === 1
+            ? [
+                { name: "lint", status: "completed", conclusion: "success" },
+                { name: "test", status: "completed", conclusion: "failure" },
+              ]
+            : [{ name: "test", status: "completed", conclusion: "success" }],
+      });
+      expect(result.errors).toEqual([]);
+      expect(result).toMatchObject({
         observedRunAttempts: [1, 2],
-        sha256: "c".repeat(64),
-      },
-    );
-    expect(result.errors).toEqual([]);
-    expect(result).toMatchObject({ plannedRunAttempt: 1, runAttempt: 2 });
-  });
+        plannedRunAttempt: 1,
+        runAttempt: 2,
+        triggeringActor: "release-operator",
+      });
+      expect(result.jobs).toEqual([
+        expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
+        expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
+      ]);
+    },
+  );
 
   it.each([
     "HTTP 503: Server Error",

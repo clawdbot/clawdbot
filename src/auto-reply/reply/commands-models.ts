@@ -204,6 +204,7 @@ async function buildPreparedDataForConfig(
       preparedModelCatalog.loadPreparedModelCatalogSnapshot({
         config: cfg,
         readOnly,
+        refreshFullCatalog: true,
         ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
         ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
       }),
