@@ -2842,8 +2842,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     const assistantEntries = await readActiveAssistantTranscriptMessages();
-    expect(JSON.stringify(assistantEntries[0])).toContain('"type":"attachment_error"');
-    expect(JSON.stringify(assistantEntries[0])).toContain('"label":"report.7z"');
+    // The failure card stays on the live projection, not the durable mirror.
+    expect(JSON.stringify(assistantEntries[0])).not.toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantEntries[0])).not.toContain('"label":"report.7z"');
     expect(JSON.stringify(assistantEntries[0])).not.toContain("Media failed");
     expect(JSON.stringify(assistantEntries[0])).not.toContain("MEDIA:");
   });
