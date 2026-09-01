@@ -170,7 +170,9 @@ describe("automatic candidates during provenance repair", () => {
       initialization.resolve();
       await retryStarted.promise;
       // Give teardown a turn to finish while the admitted retry remains gated.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(closeSettled).toBe(false);
       retry.resolve();
       await closing;
