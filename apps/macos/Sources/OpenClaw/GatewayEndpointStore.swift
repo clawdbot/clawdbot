@@ -1,4 +1,5 @@
 import ConcurrencyExtras
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -934,6 +935,7 @@ extension GatewayEndpointStore {
                 AppStateStore.shared.gatewayRoutingGeneration == generation
             },
             profile: .current,
+            routeBindingKey: GatewayDiscoveryPreferences.defaultRouteBindingKey(),
             beforeConfigRead: {})
     }
 
@@ -954,6 +956,7 @@ extension GatewayEndpointStore {
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
         generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
         profile: AppProfile,
+        routeBindingKey: SymmetricKey?,
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         // Capture MainActor-owned selection facts before reading config. The
@@ -999,21 +1002,25 @@ extension GatewayEndpointStore {
         // Route identity is not credential authority for a discovery selection
         // until its persisted receipt verifies against this exact route.
         let deviceAuthGatewayID = GatewayDiscoveryPreferences
-            .authorizedDeviceAuthGatewayID(routeBinding)
+            .authorizedDeviceAuthGatewayID(routeBinding, key: routeBindingKey)
         // Ambient env credentials are process-wide, not proof for this newly
         // selected Gateway. A discovery route always resolves auth from config.
         let credentialEnv = isRemote && GatewayDiscoveryPreferences
-            .preferredGatewayOwnsRoute(routeBinding) ? [:] : env
+            .preferredGatewayOwnsRoute(routeBinding, key: routeBindingKey) ? [:] : env
+        // Legacy and malformed receipts are invalid without consulting Keychain.
+        // Keep their config intact for interactive repair, but never send its auth.
+        let configCredentialsAllowed = !isRemote ||
+            !GatewayDiscoveryPreferences.hasKnownInvalidPreferredRouteBindingReceipt()
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
             mode: SourceMode(mode),
-            token: mode == .unconfigured ? nil : self.resolveGatewayToken(
+            token: mode == .unconfigured || !configCredentialsAllowed ? nil : self.resolveGatewayToken(
                 isRemote: isRemote,
                 root: root,
                 env: credentialEnv,
                 launchdSnapshot: launchdSnapshot),
-            password: mode == .unconfigured ? nil : self.resolveGatewayPassword(
+            password: mode == .unconfigured || !configCredentialsAllowed ? nil : self.resolveGatewayPassword(
                 isRemote: isRemote,
                 root: root,
                 env: credentialEnv,
@@ -1272,6 +1279,7 @@ extension GatewayEndpointStore {
     static func _testLiveSourceSnapshot(
         state: AppState,
         profile: AppProfile = .current,
+        routeBindingKey: SymmetricKey? = GatewayDiscoveryPreferences.defaultRouteBindingKey(),
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         await self.liveSourceSnapshot(
@@ -1286,6 +1294,7 @@ extension GatewayEndpointStore {
                 state.gatewayRoutingGeneration == generation
             },
             profile: profile,
+            routeBindingKey: routeBindingKey,
             beforeConfigRead: beforeConfigRead)
     }
 

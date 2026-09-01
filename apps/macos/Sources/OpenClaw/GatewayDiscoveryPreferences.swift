@@ -13,6 +13,7 @@ enum GatewayDiscoveryPreferences {
         case noPreference
         case match
         case mismatch
+        case invalidReceipt
         case unverifiable
     }
 
@@ -28,14 +29,22 @@ enum GatewayDiscoveryPreferences {
     }()
 
     static func preferredGatewayOwnsRoute(_ routeBinding: String?) -> Bool {
-        switch self.preferredRouteBindingVerification(routeBinding) {
-        case .match, .unverifiable:
+        self.preferredGatewayOwnsRoute(routeBinding, key: self.routeBindingKey)
+    }
+
+    static func preferredGatewayOwnsRoute(_ routeBinding: String?, key: SymmetricKey?) -> Bool {
+        switch self.preferredRouteBindingVerification(routeBinding, key: key) {
+        case .match, .invalidReceipt, .unverifiable:
             // An unresolved discovery receipt must continue fencing ambient
             // credentials until a verified mismatch or explicit manual edit.
             true
         case .noPreference, .mismatch:
             false
         }
+    }
+
+    static func hasKnownInvalidPreferredRouteBindingReceipt() -> Bool {
+        self.preferredRouteBindingVerification(nil, key: nil) == .invalidReceipt
     }
 
     static func preferredGatewayVerifiedForRoute(_ routeBinding: String?) -> Bool {
@@ -60,7 +69,7 @@ enum GatewayDiscoveryPreferences {
         switch self.preferredRouteBindingVerification(routeBinding, key: key) {
         case .noPreference, .match:
             routeBinding
-        case .mismatch, .unverifiable:
+        case .mismatch, .invalidReceipt, .unverifiable:
             nil
         }
     }
@@ -126,10 +135,9 @@ enum GatewayDiscoveryPreferences {
     {
         guard self.preferredStableID() != nil else { return .noPreference }
         guard let storedVerifier = self.preferredRouteBindingVerifier(),
-              let routeBinding = self.normalized(routeBinding),
-              let key,
               let authenticationCode = self.authenticationCode(from: storedVerifier)
-        else { return .unverifiable }
+        else { return .invalidReceipt }
+        guard let routeBinding = self.normalized(routeBinding), let key else { return .unverifiable }
 
         let payload = self.routeBindingVerifierPayload(routeBinding)
         return HMAC<SHA256>.isValidAuthenticationCode(
@@ -168,6 +176,15 @@ enum GatewayDiscoveryPreferences {
     {
         let loadedRoot = OpenClawConfigFile.loadDict()
         guard !isPreview else {
+            return StartupConfig(
+                root: loadedRoot,
+                migrationChanged: false,
+                migrationPersisted: true)
+        }
+        guard ConnectionModeResolver.resolve(root: loadedRoot).mode == .remote else {
+            // An inactive remote block is stored configuration, not the active
+            // discovery route. Retire its stale owner without rewriting the block.
+            self.setPreferredStableID(nil)
             return StartupConfig(
                 root: loadedRoot,
                 migrationChanged: false,
@@ -220,6 +237,8 @@ enum GatewayDiscoveryPreferences {
             self.setPreferredStableID(nil)
             return (currentRoot, false, false)
         case .unverifiable:
+            return (currentRoot, false, false)
+        case .invalidReceipt:
             break
         }
 
@@ -227,9 +246,6 @@ enum GatewayDiscoveryPreferences {
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var remote = gateway["remote"] as? [String: Any] ?? [:]
         var changed = false
-
-        if remote.removeValue(forKey: "token") != nil { changed = true }
-        if remote.removeValue(forKey: "password") != nil { changed = true }
 
         if GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct,
            !self.isVerifiedTailscaleServeRoute(stableID: self.preferredStableID(), root: currentRoot)
@@ -242,7 +258,9 @@ enum GatewayDiscoveryPreferences {
 
         gateway["remote"] = remote
         root["gateway"] = gateway
-        return (root, changed, true)
+        // Invalid legacy receipts remain quarantined. Only a fresh discovery
+        // selection or manual route edit may establish new route ownership.
+        return (root, changed, false)
     }
 
     /// Discovery ids name one concrete Gateway. Persist the non-secret fallback
@@ -301,7 +319,7 @@ enum GatewayDiscoveryPreferences {
         case .noPreference:
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return false
-        case .match, .unverifiable:
+        case .match, .invalidReceipt, .unverifiable:
             return false
         case .mismatch:
             self.setPreferredStableID(nil, routeBinding: nil)
@@ -309,7 +327,7 @@ enum GatewayDiscoveryPreferences {
         }
     }
 
-    private static func routeBinding(root: [String: Any]) -> String? {
+    static func routeBinding(root: [String: Any]) -> String? {
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let remoteTarget = (remote?["sshTarget"] as? String) ?? ""

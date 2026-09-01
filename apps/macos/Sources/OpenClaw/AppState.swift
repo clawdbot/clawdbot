@@ -112,6 +112,7 @@ final class AppState {
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
     private var lastObservedGatewayConfig: GatewayConfigSnapshot = .empty
+    private var lastObservedGatewayRouteBinding: String?
     private var dirtyGatewayConfigFields: Set<GatewayConfigField> = []
     private var conflictedGatewayConfigFields: Set<GatewayConfigField> = []
     private var suppressVoiceWakeGlobalSync = false
@@ -575,6 +576,7 @@ final class AppState {
         let configRoot = startupConfig.root
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
+        self.lastObservedGatewayRouteBinding = GatewayDiscoveryPreferences.routeBinding(root: configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
@@ -1052,10 +1054,14 @@ extension AppState {
 
     private func applyConfigOverrides(_ root: [String: Any]) {
         advanceGatewayRoutingGeneration()
-        let previousRouteBinding = self.currentGatewayRouteBinding()
+        let previousRouteBinding = self.lastObservedGatewayRouteBinding
+        let routeBinding = GatewayDiscoveryPreferences.routeBinding(root: root)
         let priorConflicts = self.reconcileGatewayConfigOwnership(root)
+        self.lastObservedGatewayRouteBinding = routeBinding
         self.applyGatewayConfigView(root)
-        self.reconcileDiscoveryRouteOwnership(previousRouteBinding: previousRouteBinding)
+        self.reconcileDiscoveryRouteOwnership(
+            previousRouteBinding: previousRouteBinding,
+            routeBinding: routeBinding)
 
         let newConflicts = self.conflictedGatewayConfigFields.subtracting(priorConflicts)
         if !newConflicts.isEmpty {
@@ -1083,18 +1089,20 @@ extension AppState {
             remoteTarget: self.remoteTarget)
     }
 
-    private func reconcileDiscoveryRouteOwnership(previousRouteBinding: String?) {
-        let binding = self.currentGatewayRouteBinding()
-        if self.pendingDiscoveryCredentialReset?.routeBinding != binding {
+    private func reconcileDiscoveryRouteOwnership(
+        previousRouteBinding: String?,
+        routeBinding: String?)
+    {
+        if self.pendingDiscoveryCredentialReset?.routeBinding != self.currentGatewayRouteBinding() {
             self.pendingDiscoveryCredentialReset = nil
         }
-        // A watcher edit has no discovery selection event to transfer owner
-        // authority. Retire it only when the authoritative route actually moved.
-        guard previousRouteBinding == binding else {
+        // The authoritative config snapshot has no discovery selection event to
+        // transfer owner authority. Retire it only when that snapshot moved.
+        guard previousRouteBinding == routeBinding else {
             GatewayDiscoveryPreferences.setPreferredStableID(nil)
             return
         }
-        _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(binding)
+        _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(routeBinding)
     }
 
     private func updateRemoteTarget(host: String) {
@@ -1428,6 +1436,7 @@ extension AppState {
         self.dirtyGatewayConfigFields.subtract(persistedFields)
         self.conflictedGatewayConfigFields.subtract(persistedFields)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(root)
+        self.lastObservedGatewayRouteBinding = GatewayDiscoveryPreferences.routeBinding(root: root)
     }
 
     @discardableResult
@@ -1459,7 +1468,9 @@ extension AppState {
             self.setGatewayConfigSyncState(.failed)
             return false
         }
-        self.reconcileDiscoveryRouteOwnership(previousRouteBinding: previousRouteBinding)
+        self.reconcileDiscoveryRouteOwnership(
+            previousRouteBinding: previousRouteBinding,
+            routeBinding: self.currentGatewayRouteBinding())
         return true
     }
 
