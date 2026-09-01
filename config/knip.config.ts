@@ -109,6 +109,9 @@ const repositoryScriptEntries = [
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
+  // The Vitest shim and project delegator spawn these execution roots by path.
+  "scripts/run-vitest-child.mts!",
+  "scripts/test-projects-child.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
