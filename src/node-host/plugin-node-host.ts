@@ -46,6 +46,7 @@ export async function ensureNodeHostPluginRegistry(params: {
     config: params.config,
     activationSourceConfig: params.config,
     env: params.env,
+    registerNodeHostCommands: true,
   });
   // Resolve this registry's native readiness before publishing the first manifest.
   // No process-wide preparation cache: a replacement registry owns fresh resources.

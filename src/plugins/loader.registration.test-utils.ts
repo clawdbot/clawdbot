@@ -707,6 +707,48 @@ describe("loadOpenClawPlugins", () => {
     }
   });
 
+  it("registers node-host commands in non-activating node snapshots when requested", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "node-host-snapshot",
+      filename: "node-host-snapshot.cjs",
+      body: `module.exports = {
+          id: "node-host-snapshot",
+          nodeHostCommands: [{
+              command: "node-host.snapshot",
+              handle: async () => "{}",
+          }],
+          register() {},
+        };`,
+    });
+
+    const loadOptions = {
+      cache: true,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["node-host-snapshot"],
+          load: { paths: [plugin.file] },
+        },
+      },
+      onlyPluginIds: ["node-host-snapshot"],
+    };
+    const snapshotWithoutNodeHostCommands = loadOpenClawPlugins(loadOptions);
+    expect(snapshotWithoutNodeHostCommands.nodeHostCommands).toEqual([]);
+
+    const registry = loadOpenClawPlugins({
+      ...loadOptions,
+      registerNodeHostCommands: true,
+    });
+
+    expect(registry.nodeHostCommands.map((entry) => entry.command.command)).toEqual([
+      "node-host.snapshot",
+    ]);
+    expect(registry).not.toBe(snapshotWithoutNodeHostCommands);
+    expect(getActivePluginRegistry()).not.toBe(registry);
+  });
+
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryCorpusSupplement("memory-wiki", {

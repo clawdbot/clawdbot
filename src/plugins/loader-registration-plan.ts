@@ -15,6 +15,8 @@ export type PluginRegistrationPlan = {
   runRuntimeCapabilityPolicy: boolean;
   /** Register metadata that only belongs to live activation. */
   runFullActivationOnlyRegistrations: boolean;
+  /** Register node-host commands for a standalone node runtime snapshot. */
+  registerNodeHostCommands: boolean;
 };
 
 /** Converts loader intent into explicit entrypoint and activation behavior. */
@@ -31,6 +33,7 @@ export function resolvePluginRegistrationPlan(params: {
   env: NodeJS.ProcessEnv;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
   toolDiscovery: boolean;
+  registerNodeHostCommands?: boolean;
 }): PluginRegistrationPlan | null {
   if (params.canLoadScopedSetupOnlyChannelPlugin) {
     return {
@@ -39,6 +42,7 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: false,
       runRuntimeCapabilityPolicy: false,
       runFullActivationOnlyRegistrations: false,
+      registerNodeHostCommands: false,
     };
   }
   if (
@@ -57,6 +61,7 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: false,
       runRuntimeCapabilityPolicy: true,
       runFullActivationOnlyRegistrations: false,
+      registerNodeHostCommands: false,
     };
   }
   const loadSetupRuntimeEntry =
@@ -76,6 +81,7 @@ export function resolvePluginRegistrationPlan(params: {
       loadSetupRuntimeEntry: true,
       runRuntimeCapabilityPolicy: false,
       runFullActivationOnlyRegistrations: false,
+      registerNodeHostCommands: false,
     };
   }
   const mode = params.shouldActivate ? "full" : "discovery";
@@ -85,5 +91,6 @@ export function resolvePluginRegistrationPlan(params: {
     loadSetupRuntimeEntry: false,
     runRuntimeCapabilityPolicy: true,
     runFullActivationOnlyRegistrations: mode === "full",
+    registerNodeHostCommands: mode === "full" || params.registerNodeHostCommands === true,
   };
 }

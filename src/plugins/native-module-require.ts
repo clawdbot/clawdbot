@@ -57,6 +57,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
     code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
+    code === "ERR_PACKAGE_PATH_NOT_EXPORTED" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
