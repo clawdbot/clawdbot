@@ -7,7 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
-import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import { recordIMessageBridgeAlive, recordIMessageBridgeStall } from "./private-api-status.js";
 
 type IMessageRpcError = {
   code?: number;
@@ -273,7 +273,11 @@ export class IMessageRpcClient {
       this.failTransport(err, this.child);
     }
     try {
-      return await response;
+      const value = await response;
+      // First-hand evidence the bridge answered, which releases a recorded
+      // stall without waiting out its window.
+      recordIMessageBridgeAlive(this.configuredCliPath);
+      return value;
     } catch (err) {
       // Every private-API action funnels through here, so this is the one place
       // that learns the bridge went away. Without it the cached "available"
@@ -282,7 +286,7 @@ export class IMessageRpcClient {
       // "run imsg launch" guidance. Clearing the entry makes the next action
       // re-probe and report the real state.
       if (isIMessageBridgeStall(err)) {
-        invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        recordIMessageBridgeStall(this.configuredCliPath);
         throw describeIMessageBridgeStall(err);
       }
       throw err;

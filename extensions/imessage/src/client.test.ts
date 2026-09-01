@@ -578,6 +578,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
 
     child.emit("close", 0, null);
     await client.stop();
-    privateApiStatus.invalidateCachedIMessagePrivateApiStatus(cliPath);
+    privateApiStatus.recordIMessageBridgeStall(cliPath);
+    privateApiStatus.recordIMessageBridgeAlive(cliPath);
   });
 });

@@ -75,16 +75,45 @@ export function getCachedIMessagePrivateApiStatus(
   return entry.status;
 }
 
-// Drop a cached verdict so the next action re-probes.
+// How long an observed stall outranks imsg's own status claim.
 //
-// A successful probe is cached without expiry (see cacheProbeResult), which is
-// right for the hot path but leaves no way back once the bridge dies: the
-// helper dylib can stop answering while Messages.app stays alive and the
-// injection stays mapped, and nothing about that is observable from the cache.
-// The RPC client calls this when the bridge stops answering, so the stale
-// "available" verdict cannot outlive the bridge it describes.
-export function invalidateCachedIMessagePrivateApiStatus(cliPath?: string | null): void {
-  bridgeStatusCache.delete(normalizeCliPath(cliPath));
+// The probe decides availability from `imsg status --json`, but that reports
+// the injected helper as connected from a stale handshake and keeps saying so
+// while the helper is wedged. Evicting the cache alone therefore re-caches the
+// same false positive on the next probe. A stall is first-hand RPC evidence and
+// has to outrank the claim until either real traffic proves the bridge answers
+// again or this window lapses.
+const BRIDGE_STALL_TTL_MS = 60 * 1000;
+
+const bridgeStallUntil = new Map<string, number>();
+
+// Record first-hand evidence that the bridge stopped answering RPC.
+export function recordIMessageBridgeStall(cliPath?: string | null): void {
+  const key = normalizeCliPath(cliPath);
+  bridgeStallUntil.set(key, Date.now() + BRIDGE_STALL_TTL_MS);
+  bridgeStatusCache.delete(key);
+}
+
+// Record first-hand evidence that the bridge answered.
+//
+// Any successful RPC clears the stall. Normal sends are not capability-gated,
+// so one working send releases the capability path immediately instead of
+// making it wait out the window.
+export function recordIMessageBridgeAlive(cliPath?: string | null): void {
+  bridgeStallUntil.delete(normalizeCliPath(cliPath));
+}
+
+export function isIMessageBridgeStalled(cliPath?: string | null): boolean {
+  const key = normalizeCliPath(cliPath);
+  const until = bridgeStallUntil.get(key);
+  if (until === undefined) {
+    return false;
+  }
+  if (until <= Date.now()) {
+    bridgeStallUntil.delete(key);
+    return false;
+  }
+  return true;
 }
 
 export function setCachedIMessagePrivateApiStatus(

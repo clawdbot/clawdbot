@@ -1,13 +1,16 @@
-// Imessage plugin tests cover discarding a cached bridge verdict when the
-// injected helper stops answering.
-import { describe, expect, it } from "vitest";
+// Imessage plugin tests cover treating an observed RPC stall as first-hand
+// evidence that outranks imsg's own status claim.
+import { describe, expect, it, vi } from "vitest";
 import { isIMessageBridgeStall } from "./client.js";
 import {
   getCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
-  invalidateCachedIMessagePrivateApiStatus,
+  isIMessageBridgeStalled,
+  recordIMessageBridgeAlive,
+  recordIMessageBridgeStall,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import { probeIMessagePrivateApi } from "./probe.js";
 
 const available: IMessagePrivateApiStatus = {
   available: true,
@@ -33,8 +36,8 @@ describe("isIMessageBridgeStall", () => {
   });
 
   it("ignores ordinary rejections, which say nothing about bridge health", () => {
-    // Discarding the capability cache on these would force a needless re-probe
-    // on every bad argument the model supplies.
+    // Treating these as a stall would suppress the bridge for a minute over an
+    // ordinary bad argument.
     expect(isIMessageBridgeStall(new Error('Unknown target "***" for iMessage.'))).toBe(false);
     expect(
       isIMessageBridgeStall(new Error("bridge transport requires an existing chat target")),
@@ -43,36 +46,81 @@ describe("isIMessageBridgeStall", () => {
   });
 });
 
-describe("invalidateCachedIMessagePrivateApiStatus", () => {
+describe("recordIMessageBridgeStall", () => {
   it("drops a positive verdict that would otherwise never expire", () => {
     // A successful probe is cached with expiresAt=0, so before this existed the
-    // verdict outlived the bridge and every later send was dispatched into a
-    // dead one, surfacing an opaque -32603 rather than "run imsg launch".
+    // verdict outlived the bridge and every later action was dispatched into a
+    // dead one.
     const cliPath = "/tmp/imsg-stall-fixture";
     setCachedIMessagePrivateApiStatus(cliPath, available);
     expect(getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
 
-    invalidateCachedIMessagePrivateApiStatus(cliPath);
+    recordIMessageBridgeStall(cliPath);
 
     expect(getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+    recordIMessageBridgeAlive(cliPath);
   });
 
-  it("normalizes the cli path the same way the setter does", () => {
+  it("normalizes the cli path the same way the cache does", () => {
     setCachedIMessagePrivateApiStatus("imsg", available);
-    expect(getCachedIMessagePrivateApiStatus("  imsg  ")?.available).toBe(true);
-
-    invalidateCachedIMessagePrivateApiStatus("  imsg  ");
-
+    recordIMessageBridgeStall("  imsg  ");
     expect(getCachedIMessagePrivateApiStatus("imsg")).toBeUndefined();
+    expect(isIMessageBridgeStalled("imsg")).toBe(true);
+    recordIMessageBridgeAlive("imsg");
   });
 
   it("leaves other cli paths alone", () => {
     setCachedIMessagePrivateApiStatus("/tmp/imsg-a", available);
     setCachedIMessagePrivateApiStatus("/tmp/imsg-b", available);
 
-    invalidateCachedIMessagePrivateApiStatus("/tmp/imsg-a");
+    recordIMessageBridgeStall("/tmp/imsg-a");
 
     expect(getCachedIMessagePrivateApiStatus("/tmp/imsg-a")).toBeUndefined();
     expect(getCachedIMessagePrivateApiStatus("/tmp/imsg-b")?.available).toBe(true);
+    expect(isIMessageBridgeStalled("/tmp/imsg-b")).toBe(false);
+    recordIMessageBridgeAlive("/tmp/imsg-a");
+  });
+
+  it("is released by first-hand evidence that the bridge answered", () => {
+    const cliPath = "/tmp/imsg-stall-release";
+    recordIMessageBridgeStall(cliPath);
+    expect(isIMessageBridgeStalled(cliPath)).toBe(true);
+
+    recordIMessageBridgeAlive(cliPath);
+
+    expect(isIMessageBridgeStalled(cliPath)).toBe(false);
+  });
+
+  it("lapses on its own so a repaired bridge is not suppressed forever", () => {
+    const cliPath = "/tmp/imsg-stall-lapse";
+    recordIMessageBridgeStall(cliPath);
+    expect(isIMessageBridgeStalled(cliPath)).toBe(true);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 61 * 1000);
+      expect(isIMessageBridgeStalled(cliPath)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("probeIMessagePrivateApi", () => {
+  // The whole point: `imsg status --json` reports the bridge connected from a
+  // stale handshake during this exact wedge, so a probe that trusts it re-caches
+  // the false positive the eviction just cleared. A recorded stall has to win.
+  // The short-circuit also means no `imsg` subprocess is spawned here.
+  it("reports unavailable while a stall is recorded, without consulting imsg status", async () => {
+    const cliPath = "/tmp/imsg-probe-stalled";
+    recordIMessageBridgeStall(cliPath);
+    try {
+      const status = await probeIMessagePrivateApi(cliPath, 5_000);
+      expect(status.available).toBe(false);
+      expect(status.error).toContain("imsg launch");
+      expect(status.error).toContain("stopped responding to RPC");
+    } finally {
+      recordIMessageBridgeAlive(cliPath);
+    }
   });
 });
