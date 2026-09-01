@@ -398,6 +398,7 @@ openclaw [--dev] [--profile <name>] <command>
     uninstall
     stop
     restart
+  connect
   worker
   approvals
     get
