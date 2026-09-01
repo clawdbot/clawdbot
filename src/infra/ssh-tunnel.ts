@@ -124,17 +124,23 @@ async function canConnectLocal(port: number): Promise<boolean> {
   });
 }
 
-async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+export async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
+  // Use performance.now() (monotonic clock) instead of Date.now() (wall clock)
+  // so NTP corrections, VM pause/resume, or manual time changes cannot shorten
+  // or extend the polling budget.
+  const deadlineMs = performance.now() + timeoutMs;
+  while (true) {
+    const remainingMs = Math.max(0, deadlineMs - performance.now());
+    if (remainingMs <= 0) {
+      throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
+    }
     if (await canConnectLocal(port)) {
       return;
     }
     await new Promise((r) => {
-      setTimeout(r, 50);
+      setTimeout(r, Math.min(50, remainingMs));
     });
   }
-  throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }
 
 export async function startSshPortForward(opts: {

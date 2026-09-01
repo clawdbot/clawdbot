@@ -25,7 +25,7 @@ vi.mock("./ssh-client.js", () => ({
 
 import { getFreePort } from "../test-utils/ports.js";
 import { PortInUseError } from "./ports.js";
-import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
+import { parseSshTarget, startSshPortForward, waitForLocalListener } from "./ssh-tunnel.js";
 
 describe("parseSshTarget", () => {
   it("parses user@host:port targets", () => {
@@ -253,11 +253,47 @@ describe("startSshPortForward", () => {
     expect(kill).toHaveBeenCalledWith("SIGTERM");
   });
 
+  it("uses a monotonic deadline and is not shortened by wall-clock backward skew", async () => {
+    const netConnectMock = vi.spyOn(net, "connect").mockImplementation(() => {
+      const socket = new EventEmitter() as net.Socket & {
+        connect: () => void;
+        removeAllListeners: () => void;
+        destroy: () => void;
+        setTimeout: (ms: number, cb?: () => void) => void;
+      };
+      socket.connect = vi.fn();
+      socket.removeAllListeners = vi.fn();
+      socket.destroy = vi.fn();
+      socket.setTimeout = vi.fn();
+      queueMicrotask(() => socket.emit("error", new Error("refused")));
+      return socket;
+    });
+
+    const baseTime = 1_000_000;
+    let callCount = 0;
+    const performanceNowMock = vi.spyOn(performance, "now").mockImplementation(() => {
+      callCount++;
+      // Simulate wall-clock backward skew / stall for the first half of the
+      // budget, then jump to the deadline. A monotonic-clock deadline still
+      // consumes the full timeout instead of exiting early.
+      return callCount <= 5 ? baseTime : baseTime + 250;
+    });
+
+    try {
+      const promise = waitForLocalListener(12345, 250);
+      await expect(promise).rejects.toThrow("ssh tunnel did not start listening");
+      expect(callCount).toBeGreaterThan(5);
+    } finally {
+      netConnectMock.mockRestore();
+      performanceNowMock.mockRestore();
+    }
+  });
+
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
       // Real timers only. The fake spawn opens a real socket, and
-      // waitForLocalListener retries on setTimeout against a Date.now() deadline.
+      // waitForLocalListener retries on setTimeout against a monotonic deadline.
       // Under fake timers neither advances, so a listener that loses the race on the
       // first probe hangs to the suite timeout instead of failing on its own budget.
       spawnFakeSshListening();
