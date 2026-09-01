@@ -146,7 +146,7 @@ async function readQaGatewayCliCommand(
   if (exitCode !== 0 && !failure) {
     const stderrText = formatQaChildOutputTail(stderr, "stderr");
     failure = createQaGatewayCliError(
-      `OpenClaw CLI exited ${exitCode}: ${stderrText || stdoutText}`,
+      `OpenClaw CLI exited ${exitCode}: ${[stderrText, stdoutText].filter(Boolean).join("\n")}`,
     );
   }
   if (stopped.errors.length) {

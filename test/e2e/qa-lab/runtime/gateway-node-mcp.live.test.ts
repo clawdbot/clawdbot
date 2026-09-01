@@ -184,7 +184,6 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
           controlUiEnabled: false,
           runtimeEnvPatch: {
             OPENAI_API_KEY,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
           },
           mutateConfig: (cfg) => {
