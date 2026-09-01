@@ -206,6 +206,10 @@ syntax natively without the Node loader. Only their runtime imports change.
 Existing package build entry paths and Vitest source parents stay unchanged. Other
 Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
+The session-title retention test declares its title-reader and session-utils roots
+in this same generation. Each fresh heap-measurement child runs their JavaScript
+without spending its execution deadline on TypeScript imports.
+
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the
 subprocess compiler or compile workers. A shard that needs a declaration requests the
