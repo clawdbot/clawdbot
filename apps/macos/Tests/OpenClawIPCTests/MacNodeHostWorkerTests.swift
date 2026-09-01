@@ -381,11 +381,12 @@ struct MacNodeHostWorkerTests {
         #expect(!MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 3, currentGeneration: 4))
     }
 
-    @Test func `worker forces app exec host without fallback`() async throws {
+    @Test func `worker forces app exec host without fallback or startup respawn`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
+        test "$OPENCLAW_NO_RESPAWN" = 1 || exit 46
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
