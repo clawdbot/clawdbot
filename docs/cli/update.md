@@ -193,8 +193,10 @@ It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
-Managed npm package directories without an install record are reinstalled from
-the selected registry source, using the active channel or exact version pin.
+When repair finds a configured npm plugin payload but cannot recover its install
+record, it reinstalls from the selected registry source, using the active channel
+or exact version pin. This requires registry access; if verification fails, repair
+preserves the existing payload and does not publish a new install record.
 Registry verification and any required capability review finish before the
 repaired install record is published.
 
