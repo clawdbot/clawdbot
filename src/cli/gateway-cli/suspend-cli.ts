@@ -25,10 +25,7 @@ function parseWaitMs(value: string | number | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value === "string" && value.trim() === "") {
-    throw new Error("--wait must be a non-negative number of seconds");
-  }
-  const seconds = typeof value === "number" ? value : Number(value.trim());
+  const seconds = typeof value === "number" ? value : Number(value.trim() || Number.NaN);
   if (!Number.isFinite(seconds) || seconds < 0) {
     throw new Error("--wait must be a non-negative number of seconds");
   }
