@@ -1250,6 +1250,10 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       toolsAllow: ["message"],
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
       // The delegation gate lives in resolveGatewayScopedTools, so dropping
       // this field at the HTTP mapping silently disables it for CLI backends.
       delegationCapability: "report_only",

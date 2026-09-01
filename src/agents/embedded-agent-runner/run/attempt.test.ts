@@ -128,11 +128,25 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       jobId: "job-1",
       memoryFlushWritePath: "memory/log.md",
       toolsAllow: ["memory_search", "memory_get"],
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
     });
     expect(context.trigger).toBe("manual");
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
-    expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
+    expect(context.runtimeToolAllowlist).toEqual([
+      "memory_search",
+      "memory_get",
+      "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+    ]);
+    expect(context.runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+    });
   });
 });
 

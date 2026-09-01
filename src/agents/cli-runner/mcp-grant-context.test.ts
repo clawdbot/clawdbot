@@ -58,6 +58,17 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
   });
 
+  it("carries the host-minted plugin tool grant into the loopback context", () => {
+    const runtimePluginToolGrant = {
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+    } as const;
+
+    expect(buildGrant({ runtimePluginToolGrant }).runtimePluginToolGrant).toEqual(
+      runtimePluginToolGrant,
+    );
+  });
+
   it.each(["read-only", "guarded", "workspace", "full"] as const)(
     "carries the exact %s session permission into the loopback grant",
     (permissionMode) => {

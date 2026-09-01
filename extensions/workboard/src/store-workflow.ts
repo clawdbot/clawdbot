@@ -295,6 +295,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...(execution ? { execution } : {}),
         metadata: {
           ...metadata,
+          workerProtocol: { state: "completed", updatedAt: now },
           claim: undefined,
           attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
           failureCount: 0,
@@ -357,6 +358,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : {}),
       metadata: {
         ...metadata,
+        workerProtocol: { state: "blocked", updatedAt: now, detail: reason },
         claim: undefined,
         attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
         failureCount: (metadata.failureCount ?? 0) + 1,

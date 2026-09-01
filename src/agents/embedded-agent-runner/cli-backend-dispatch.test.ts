@@ -424,6 +424,10 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     const params = baseRunParams({
       sessionTarget,
       toolsAllow: ["memory_search", "memory_get", "notes_retrieve_context"],
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
     });
 
     const result = await runEmbeddedAgentViaCliBackendIfEligible(params);
@@ -441,6 +445,10 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
       requireExplicitMessageTarget: true,
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+      },
       cliToolAvailability: {
         native: [],
         openClaw: ["memory_search", "memory_get", "notes_retrieve_context"],

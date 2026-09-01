@@ -1,7 +1,11 @@
 // Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import type {
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -190,11 +194,14 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("does not claim a card whose workspace authority changed after preflight", async () => {
-    const store = new WorkboardStore(createMemoryStore());
+    const store = new WorkboardStore(createMemoryStore(), {
+      boards: createMemoryStore<PersistedWorkboardBoard>(),
+    });
+    await store.upsertBoard({ id: "ops", defaultWorkspace: { kind: "scratch" } });
     const card = await store.create({
       title: "Racing authority update",
       status: "ready",
-      workspace: { kind: "dir", path: "/workspace" },
+      boardId: "ops",
       workspaceAccess: { unrestricted: true },
     });
     const originalClaim = store.claim.bind(store);
@@ -224,6 +231,39 @@ describe("dispatchAndStartWorkboardCards", () => {
     ]);
     expect(run).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "scratch" } } },
+    });
+  });
+
+  it("preserves an explicit card workspace over the board default", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      boards: createMemoryStore<PersistedWorkboardBoard>(),
+    });
+    await store.upsertBoard({
+      id: "ops",
+      defaultWorkspace: { kind: "dir", path: "/board-default" },
+    });
+    const card = await store.create({
+      title: "Explicit scratch worker",
+      status: "ready",
+      boardId: "ops",
+      workspace: { kind: "scratch" },
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-explicit" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { boardId: "ops", maxStarts: 1 },
+    });
+
+    expect(result.startFailures).toEqual([]);
+    expect(run.mock.calls[0]?.[0]).not.toHaveProperty("cwd");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "scratch" } } },
+    });
   });
 
   it("rejects worktree sources outside the dispatcher's workspace boundary", async () => {
