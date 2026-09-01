@@ -143,8 +143,14 @@ export function createWorkerDesktopTunnels(deps: {
         }
         socketDirectory = await filesystem.mkdtemp(path.join(WORKER_DESKTOP_SOCKET_ROOT, "oc-wd-"));
         await filesystem.chmod(socketDirectory, 0o700);
-        // Socket setup yields to Stop/replacement; recheck ownership before publishing SSH.
+        // Socket setup yields to Stop/replacement; clean late allocations before publishing SSH.
         if (!isCurrent()) {
+          await filesystem
+            .rm(socketDirectory, { recursive: true, force: true })
+            .catch(() => undefined);
+          socketDirectory = undefined;
+          await prepared.dispose().catch(() => undefined);
+          prepared = undefined;
           throw new Error("Worker desktop tunnel stopped before connecting");
         }
         const localSocketPath = path.join(socketDirectory, "desktop.sock");
