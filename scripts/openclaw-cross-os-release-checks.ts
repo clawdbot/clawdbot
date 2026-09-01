@@ -271,7 +271,8 @@ async function main(argv: string[]) {
     };
   } finally {
     await registry?.close();
-    for (const [name, value] of Object.entries(previousRegistry)) {
+    for (const name of ["NPM_CONFIG_REGISTRY", "npm_config_registry"] as const) {
+      const value = previousRegistry[name];
       if (value === undefined) {
         delete process.env[name];
       } else {
