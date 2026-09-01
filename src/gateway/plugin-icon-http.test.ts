@@ -46,7 +46,6 @@ const {
   handlePluginIconHttpRequest,
   LINK_FAVICON_MAX_BYTES,
   PLUGIN_ICON_CACHE_TTL_MS,
-  PLUGIN_ICON_MAX_BYTES,
   PLUGIN_ICON_MAX_REDIRECTS,
   PLUGIN_ICON_REQUEST_TIMEOUT_MS,
 } = await import("./plugin-icon-http.js");
