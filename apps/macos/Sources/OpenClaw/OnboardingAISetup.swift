@@ -1243,33 +1243,12 @@ extension OnboardingAISetupModel {
                         preparedModelRef: nil)
                     return
                 }
-                // The Gateway session survives socket loss; cancel by its known
-                // id before reporting failure so it cannot persist config later.
-                let cancellation = await self.gateway.cancelWizardSession(
-                    authSessionID,
-                    on: serverLease)
-                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if self.activationWizardCompletion != nil {
-                    let failure = cancellation == .cancelled ? OnboardingAISetupError.activationCancelled : error
-                    self.finishActivationWizard(.failure(failure))
-                    self.clearProviderAuth()
-                    return
-                }
-                if cancellation != .cancelled,
-                   await self.reconcileProviderAuthAfterUnknownOutcome(
-                       token: token,
-                       authAttemptID: authAttemptID,
-                       before: self.lastDetectedActivationState,
-                       originalServerLease: serverLease)
-                {
-                    return
-                }
-                if cancellation != .unresolved {
-                    self.authSessionID = nil
-                    self.providerAuthCancellation = nil
-                }
-                self.authBusy = false
-                self.authError = Self.transportFailure(error.localizedDescription)
+                await self.failProviderAuthRequest(
+                    error,
+                    token: token,
+                    authAttemptID: authAttemptID,
+                    sessionID: authSessionID,
+                    serverLease: serverLease)
             }
         }
     }
@@ -1379,31 +1358,50 @@ extension OnboardingAISetupModel {
                     preparedModelRef: result.preparedmodelref,
                     modelActivation: result.modelactivation)
             } catch {
-                let cancellation = await self.gateway.cancelWizardSession(sessionID, on: requestLease)
-                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                if self.activationWizardCompletion != nil {
-                    let failure = cancellation == .cancelled ? OnboardingAISetupError.activationCancelled : error
-                    self.finishActivationWizard(.failure(failure))
-                    self.clearProviderAuth()
-                    return
-                }
-                if cancellation != .cancelled,
-                   await self.reconcileProviderAuthAfterUnknownOutcome(
-                       token: token,
-                       authAttemptID: authAttemptID,
-                       before: self.lastDetectedActivationState,
-                       originalServerLease: requestLease)
-                {
-                    return
-                }
-                if cancellation != .unresolved {
-                    self.authSessionID = nil
-                    self.providerAuthCancellation = nil
-                }
-                self.authBusy = false
-                self.authError = Self.transportFailure(error.localizedDescription)
+                await self.failProviderAuthRequest(
+                    error,
+                    token: token,
+                    authAttemptID: authAttemptID,
+                    sessionID: sessionID,
+                    serverLease: requestLease)
             }
         }
+    }
+
+    private func failProviderAuthRequest(
+        _ error: Error,
+        token: UUID,
+        authAttemptID: UUID,
+        sessionID: String,
+        serverLease: GatewayConnection.ServerLease) async
+    {
+        // Socket loss does not retire the server session. Cancel its exact lease
+        // before reconciling or presenting a failure for this wizard generation.
+        let cancellation = await self.gateway.cancelWizardSession(sessionID, on: serverLease)
+        guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+        if self.activationWizardCompletion != nil {
+            let failure = cancellation == .cancelled ? OnboardingAISetupError.activationCancelled : error
+            self.finishActivationWizard(.failure(failure))
+            self.clearProviderAuth()
+            return
+        }
+        if cancellation != .cancelled,
+           await self.reconcileProviderAuthAfterUnknownOutcome(
+               token: token,
+               authAttemptID: authAttemptID,
+               before: self.lastDetectedActivationState,
+               originalServerLease: serverLease)
+        {
+            return
+        }
+        // Reconciliation also returns false when a replacement retires this flow.
+        guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
+        if cancellation != .unresolved {
+            self.authSessionID = nil
+            self.providerAuthCancellation = nil
+        }
+        self.authBusy = false
+        self.authError = Self.transportFailure(error.localizedDescription)
     }
 
     private func applyAuthWizardResult(
