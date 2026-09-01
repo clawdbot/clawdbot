@@ -148,6 +148,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
   });
 
   it("projects the recorded channel load failure instead of stale successful probes", async () => {
+    const credential = "synthetic-health-loader-credential";
     const probeAccount = vi.fn(async () => ({ ok: true }));
     const base = createChannelTestPluginBase({ id: "broken-channel" });
     inventoryPlugins = [
@@ -168,7 +169,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
           status: "error",
           failurePhase: "load",
           channelIds: ["broken-channel"],
-          error: "missing SDK export",
+          error: `missing SDK export; password=${credential}`,
         }),
       ],
     };
@@ -203,6 +204,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       lastError: expect.stringContaining("missing SDK export"),
     });
     expect(snap.channels["broken-channel"]).not.toHaveProperty("probe");
+    expect(JSON.stringify(snap.channels)).not.toContain(credential);
     expect(probeAccount).not.toHaveBeenCalled();
 
     // A different live owner wins over a failed plugin declaring the same channel.

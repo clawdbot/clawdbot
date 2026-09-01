@@ -315,6 +315,7 @@ describe("channelsHandlers channels.status", () => {
   it.each(["load", "register", "validation"] as const)(
     "keeps a channel visible after its plugin fails during %s",
     async (failurePhase) => {
+      const credential = "synthetic-loader-credential-that-must-not-escape";
       const failedProbe = vi.fn();
       const failed = createChannelPlugin({ id: "broken-channel", probeAccount: failedProbe });
       const healthyProbe = vi.fn(async () => ({ ok: true }));
@@ -324,6 +325,7 @@ describe("channelsHandlers channels.status", () => {
       mocks.applyPluginAutoEnable.mockReturnValue({
         config: {
           autoEnabled: true,
+          logging: { redactSensitive: "off", redactPatterns: ["never-match-custom"] },
           channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
         },
         changes: [],
@@ -338,13 +340,17 @@ describe("channelsHandlers channels.status", () => {
             status: "error",
             failurePhase,
             channelIds: ["broken-channel"],
-            error: "missing SDK export",
+            error: `missing SDK export; Authorization: Bearer ${credential}\n${"context ".repeat(300)}`,
           }),
         ],
       });
 
       const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
 
+      expect(JSON.stringify(payload)).not.toContain(credential);
+      const lastError = firstChannelAccount(payload, "broken-channel").lastError;
+      expect(String(lastError).length).toBeLessThan(1200);
+      expect(lastError).toContain("run openclaw doctor");
       expect(firstChannelAccount(payload, "broken-channel")).toMatchObject({
         configured: true,
         running: false,

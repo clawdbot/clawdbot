@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
@@ -55,12 +57,18 @@ export function resolveUnavailableChannelAccountSnapshot(
       (plugin) =>
         plugin.enabled && plugin.status === "error" && plugin.channelIds.includes(params.channelId),
     );
+  // Read-scoped status must redact loader text before truncation can split a credential.
+  const pluginError =
+    failedPlugin &&
+    redactToolPayloadTextWithConfig(
+      `Plugin ${failedPlugin.id} failed: ${failedPlugin.error}`,
+      cfg.logging,
+    );
   // Cold owners have no operational account to resolve or probe. Stale owners
   // retain usable credentials and are excluded by the secrets runtime lookup.
   const lastError = owner
     ? new SecretSurfaceUnavailableError(owner).message
-    : failedPlugin &&
-      `Plugin ${failedPlugin.id} failed: ${failedPlugin.error}; run openclaw doctor`;
+    : pluginError && `${truncateUtf16Safe(pluginError, 1_000)}; run openclaw doctor`;
   if (!lastError) {
     return undefined;
   }
