@@ -1,9 +1,12 @@
 /** Tests session-scoped MCP runtime catalog, transport, validation, and lifecycle behavior. */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +82,60 @@ type ConfiguredMcpServer = NonNullable<
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+
+async function startRequesterScopedMcpProofServer(): Promise<{
+  url: string;
+  sessionId: () => string | undefined;
+  initializeCount: () => number;
+  close: () => Promise<void>;
+}> {
+  const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
+  let sessionId: string | undefined;
+  let initializeCount = 0;
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: randomUUID,
+    onsessioninitialized(nextSessionId) {
+      sessionId = nextSessionId;
+      initializeCount += 1;
+    },
+  });
+  server.registerTool(
+    "requester_probe",
+    { description: "Return the live requester-scoped MCP transport identity" },
+    async () => ({ content: [{ type: "text", text: JSON.stringify({ sessionId }) }] }),
+  );
+  await server.connect(transport);
+  const httpServer = http.createServer((request, response) => {
+    if (request.url !== "/mcp" || request.headers.authorization !== "Bearer proof-token") {
+      response.writeHead(404).end();
+      return;
+    }
+    void transport.handleRequest(request, response).catch(() => {
+      if (!response.headersSent) {
+        response.writeHead(500).end();
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = httpServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("requester-scoped MCP proof server did not bind a loopback port");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/mcp`,
+    sessionId: () => sessionId,
+    initializeCount: () => initializeCount,
+    close: async () => {
+      await server.close();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
 
 async function writeListToolsMcpServer(params: {
   filePath: string;
@@ -3444,6 +3501,103 @@ process.on("SIGINT", shutdown);`,
     } finally {
       resolveRequester?.();
       clock.mockRestore();
+    }
+  });
+
+  it("keeps a real requester-scoped MCP transport alive during an idle sweep", async () => {
+    const proof = await startRequesterScopedMcpProofServer();
+    const resolverTesting = await import("./mcp-connection-resolver.js");
+    let nowMs = Date.now();
+    let resolveCount = 0;
+    let releaseResolver: (() => void) | undefined;
+    let requesterResolutionStarted: (() => void) | undefined;
+    const releaseResolution = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
+    });
+    const resolutionStarted = new Promise<void>((resolve) => {
+      requesterResolutionStarted = resolve;
+    });
+    resolverTesting.testing.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "real-requester",
+        resolve: async () => {
+          resolveCount += 1;
+          if (resolveCount === 2) {
+            requesterResolutionStarted?.();
+            await releaseResolution;
+          }
+          return {
+            url: proof.url,
+            headers: { Authorization: "Bearer proof-token" },
+          };
+        },
+      },
+    ]);
+    resolverTesting.testing.setMcpConnectionRevalidateMsForTest(1);
+    const manager = testing.createSessionMcpRuntimeManager({
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    const params = makeRequesterParams(
+      "session-real-requester-sweep",
+      {
+        mcp: {
+          servers: {
+            "real-requester": {
+              transport: "streamable-http",
+              url: "https://placeholder.invalid/mcp",
+            },
+          },
+        },
+      },
+      "proof-requester",
+    );
+
+    try {
+      const first = await manager.getOrCreateRequesterScoped(params);
+      const firstRuntime = expectDefined(first?.runtime, "first requester runtime");
+      const firstResult = await firstRuntime.callTool("real-requester", "requester_probe", {});
+      const firstContent = expectDefined(firstResult.content[0], "first MCP result");
+      if (firstContent.type !== "text") {
+        throw new Error("first MCP result did not contain text");
+      }
+      const firstSessionId = JSON.parse(firstContent.text).sessionId;
+
+      nowMs += 2;
+      const secondRequest = manager.getOrCreateRequesterScoped(params);
+      await resolutionStarted;
+
+      nowMs += 10 * 60 * 1000;
+      const evictedWhileResolving = await manager.sweepIdleRuntimes();
+      expect(evictedWhileResolving).toBe(0);
+      expect(manager.listRuntimeKeys()).toHaveLength(1);
+
+      releaseResolver?.();
+      const second = await secondRequest;
+      expect(second?.runtime).toBe(firstRuntime);
+      const secondResult = await firstRuntime.callTool("real-requester", "requester_probe", {});
+      const secondContent = expectDefined(secondResult.content[0], "second MCP result");
+      if (secondContent.type !== "text") {
+        throw new Error("second MCP result did not contain text");
+      }
+      const secondSessionId = JSON.parse(secondContent.text).sessionId;
+      expect(secondSessionId).toBe(firstSessionId);
+      expect(proof.initializeCount()).toBe(1);
+      console.log(
+        JSON.stringify({
+          claim: "real requester-scoped MCP transport survives idle sweep during resolution",
+          evictedWhileResolving,
+          runtimeReused: true,
+          mcpSessionReused: true,
+          initializeCount: proof.initializeCount(),
+        }),
+      );
+    } finally {
+      releaseResolver?.();
+      await manager.disposeAll();
+      resolverTesting.testing.setMcpServerConnectionResolversForTest();
+      resolverTesting.testing.setMcpConnectionRevalidateMsForTest();
+      await proof.close();
     }
   });
 
