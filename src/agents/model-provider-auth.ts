@@ -7,6 +7,7 @@ import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -47,6 +48,7 @@ import {
   type ProviderAuthWarmSnapshot,
 } from "./model-provider-auth-state.js";
 import { normalizeProviderId } from "./model-selection.js";
+import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export type ProviderAuthWarmWorkerResult =
@@ -248,6 +250,8 @@ export function createProviderAuthChecker(params: {
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
   allowPreparedRuntimeAuth?: boolean;
+  preparedAuth?: PreparedModelRuntimeAuth;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ProviderModelAuthChecker {
   const authCache = new Map<string, Promise<ModelAuthAvailabilityEvaluation>>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
@@ -261,9 +265,9 @@ export function createProviderAuthChecker(params: {
       (params.agentId && params.cfg
         ? resolveAgentDir(params.cfg, params.agentId, params.env)
         : undefined);
-    const authStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: false,
-    });
+    const authStore =
+      params.preparedAuth?.authStore ??
+      ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false });
     runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -273,6 +277,9 @@ export function createProviderAuthChecker(params: {
     modelAuthResolver = createModelAuthAvailabilityResolver({
       cfg: params.cfg ?? {},
       authStore,
+      preparedRuntimeAuthStore: params.preparedAuth?.authStore,
+      preparedRuntimeAuthModes: params.preparedAuth?.authModes,
+      metadataSnapshot: params.metadataSnapshot,
       agentDir,
       workspaceDir: params.workspaceDir,
       env: params.env,
@@ -311,6 +318,7 @@ export function createProviderAuthChecker(params: {
         agentDir: params.agentDir,
         agentId: params.agentId,
         env: params.env,
+        store: params.preparedAuth?.authStore,
         allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
         discoverExternalCliAuth: params.discoverExternalCliAuth,
         allowPreparedRuntimeAuth: params.allowPreparedRuntimeAuth,
