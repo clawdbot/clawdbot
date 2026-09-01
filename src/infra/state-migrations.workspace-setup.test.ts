@@ -848,6 +848,7 @@ describe("legacy workspace Doctor migration", () => {
       'bootstrapSeededAt canonical="2026-07-15T00:00:00.000Z" legacy="2026-07-16T00:00:00.000Z"',
     );
     expect(result.warnings[0]).toContain("move");
+    expect(result.warnings[0]).toContain("--accept-legacy-workspace-state");
     expect(fs.existsSync(setupPath)).toBe(true);
     expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
     expect(
@@ -855,6 +856,67 @@ describe("legacy workspace Doctor migration", () => {
         .prepare("SELECT bootstrap_seeded_at FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toEqual({ bootstrap_seeded_at: "2026-07-15T00:00:00.000Z" });
+  });
+
+  it("explicitly accepts legacy setup state when the operator selects it", async () => {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
+    db.prepare(
+      `INSERT INTO workspace_setup_state (
+         workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+       ) VALUES (?, ?, 1, ?, NULL, 1)`,
+    ).run(identity.workspaceKey, identity.workspacePath, "2026-07-15T00:00:00.000Z");
+    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
+    const legacySeededAt = "2026-07-16T00:00:00.000Z";
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, bootstrapSeededAt: legacySeededAt }),
+      "utf8",
+    );
+
+    const result = await migrateLegacyWorkspaceState({
+      detected: detect(context),
+      env: context.env,
+      stateDir: context.stateDir,
+      acceptLegacyWorkspaceState: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain("Migrated workspace setup state to SQLite.");
+    expect(fs.existsSync(setupPath)).toBe(false);
+    expect(
+      db
+        .prepare("SELECT bootstrap_seeded_at FROM workspace_setup_state WHERE workspace_key = ?")
+        .get(identity.workspaceKey),
+    ).toEqual({ bootstrap_seeded_at: legacySeededAt });
+  });
+
+  it("names a retained claim when a claimed setup source conflicts", async () => {
+    const context = setup();
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
+    db.prepare(
+      `INSERT INTO workspace_setup_state (
+         workspace_key, workspace_path, version, bootstrap_seeded_at, setup_completed_at, updated_at
+       ) VALUES (?, ?, 1, ?, NULL, 1)`,
+    ).run(identity.workspaceKey, identity.workspacePath, "2026-07-15T00:00:00.000Z");
+    const setupPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
+    const claimPath = `${setupPath}.doctor-importing`;
+    await fsp.writeFile(
+      claimPath,
+      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-16T00:00:00.000Z" }),
+      "utf8",
+    );
+
+    const result = await migrate(context);
+
+    expect(result.warnings[0]).toContain(claimPath);
+    expect(result.warnings[0]).not.toContain(
+      `at ${setupPath} conflicts with canonical SQLite state`,
+    );
+    expect(fs.existsSync(claimPath)).toBe(true);
+    expect(fs.existsSync(setupPath)).toBe(false);
   });
 
   it("merges complementary legacy milestones into unowned SQLite setup state", async () => {

@@ -14,6 +14,7 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "workspaceSuggestions",
   "yes",
   "repair",
+  "acceptLegacyWorkspaceState",
   "fix",
   "force",
   "nonInteractive",
@@ -56,6 +57,11 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
+    .option(
+      "--accept-legacy-workspace-state",
+      "Use the legacy workspace setup state when it conflicts with SQLite",
+      false,
+    )
     .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
@@ -132,13 +138,15 @@ export function registerMaintenanceCommands(program: Command) {
       const mutationOption =
         opts.repair === true || opts.fix === true || opts.force === true
           ? "--repair, --fix, or --force"
-          : opts.yes === true
-            ? "--yes"
-            : opts.generateGatewayToken === true
-              ? "--generate-gateway-token"
-              : typeof opts.sessionSqlite === "string"
-                ? `--session-sqlite ${opts.sessionSqlite}`
-                : undefined;
+          : opts.acceptLegacyWorkspaceState === true
+            ? "--accept-legacy-workspace-state"
+            : opts.yes === true
+              ? "--yes"
+              : opts.generateGatewayToken === true
+                ? "--generate-gateway-token"
+                : typeof opts.sessionSqlite === "string"
+                  ? `--session-sqlite ${opts.sessionSqlite}`
+                  : undefined;
       if (lintMode && mutationOption) {
         return exitDoctorError(
           `doctor ${lintMode} runs read-only lint checks and cannot be combined with ${mutationOption}.`,
@@ -183,6 +191,7 @@ export function registerMaintenanceCommands(program: Command) {
             workspaceSuggestions: opts.workspaceSuggestions,
             yes: Boolean(opts.yes),
             repair: Boolean(opts.repair) || Boolean(opts.fix),
+            acceptLegacyWorkspaceState: Boolean(opts.acceptLegacyWorkspaceState),
             force: Boolean(opts.force),
             nonInteractive: Boolean(opts.nonInteractive),
             generateGatewayToken: Boolean(opts.generateGatewayToken),

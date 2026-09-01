@@ -321,7 +321,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
   const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
   const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
-  const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
+  const doctorOnlyStateMigrations =
+    ctx.options.repair === true ||
+    ctx.options.yes === true ||
+    ctx.options.acceptLegacyWorkspaceState === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
@@ -347,6 +350,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
         detected: legacyState,
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+        ...(ctx.options.acceptLegacyWorkspaceState ? { acceptLegacyWorkspaceState: true } : {}),
         recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
         legacySessionSurfaces,
       });

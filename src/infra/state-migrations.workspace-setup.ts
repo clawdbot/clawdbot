@@ -421,6 +421,7 @@ async function cleanupReceiptSource(params: {
 async function migrateOneSource(params: {
   source: LegacyWorkspaceStateSource;
   env: NodeJS.ProcessEnv;
+  acceptLegacyWorkspaceState?: boolean;
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
@@ -513,6 +514,10 @@ async function migrateOneSource(params: {
         snapshot,
         parsed,
         env: params.env,
+        ...(params.acceptLegacyWorkspaceState ? { acceptLegacyWorkspaceState: true } : {}),
+        conflictPath: hasSource
+          ? params.source.sourcePath
+          : `${params.source.sourcePath}${CLAIM_SUFFIX}`,
         replaceRemovedReceipt: receipt?.removedSource === true,
       });
     }
@@ -568,6 +573,7 @@ export async function migrateLegacyWorkspaceState(params: {
   detected?: LegacyWorkspaceStateDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
+  acceptLegacyWorkspaceState?: boolean;
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
@@ -589,6 +595,7 @@ export async function migrateLegacyWorkspaceState(params: {
         const result = await migrateOneSource({
           source,
           env,
+          ...(params.acceptLegacyWorkspaceState ? { acceptLegacyWorkspaceState: true } : {}),
           ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
           ...(params.removeSource ? { removeSource: params.removeSource } : {}),
         });

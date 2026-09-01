@@ -177,9 +177,11 @@ function canonicalFingerprint(value: unknown): string {
 function workspaceSetupConflictError(params: {
   source: LegacyWorkspaceStateSource;
   differences: string[];
+  conflictPath?: string;
 }): Error {
+  const sourcePath = params.conflictPath ?? params.source.sourcePath;
   return new Error(
-    `legacy workspace setup at ${params.source.sourcePath} conflicts with canonical SQLite state (${params.differences.join("; ")}). Canonical state was preserved and the legacy source remains in place, so workspace use stays blocked. Verify the canonical row, then move ${params.source.sourcePath} aside if it is stale and rerun Doctor.`,
+    `legacy workspace setup at ${sourcePath} conflicts with canonical SQLite state (${params.differences.join("; ")}). Canonical state was preserved and the legacy source remains in place, so workspace use stays blocked. Verify both records. If the legacy source is authoritative, rerun Doctor with --fix --accept-legacy-workspace-state; if it is stale, move ${sourcePath} aside and rerun Doctor.`,
   );
 }
 
@@ -353,6 +355,8 @@ export function importAndRecordReceipt(params: {
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
   replaceRemovedReceipt?: boolean;
+  acceptLegacyWorkspaceState?: boolean;
+  conflictPath?: string;
 }): { sourceKey: string; imported: boolean } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
   const runId = `${key}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -403,34 +407,22 @@ export function importAndRecordReceipt(params: {
                   ]
                 : []),
             ];
-            throw workspaceSetupConflictError({ source: params.source, differences });
-          }
-          const existingFingerprint = setupFingerprint({
-            workspacePath: existing.workspace_path,
-            bootstrapSeededAt: existing.bootstrap_seeded_at,
-            setupCompletedAt: existing.setup_completed_at,
-          });
-          const sourceBootstrapSeededAt = params.parsed.value.bootstrapSeededAt ?? null;
-          const sourceSetupCompletedAt = params.parsed.value.setupCompletedAt ?? null;
-          const coversSource =
-            (sourceBootstrapSeededAt === null ||
-              existing.bootstrap_seeded_at === sourceBootstrapSeededAt) &&
-            (sourceSetupCompletedAt === null ||
-              existing.setup_completed_at === sourceSetupCompletedAt);
-          const authority = findMigrationAuthority({
-            db,
-            kysely,
-            source: params.source,
-            fingerprint: existingFingerprint,
-          });
-          if (authority && params.source.priority < authority.priority) {
+            if (!params.acceptLegacyWorkspaceState) {
+              throw workspaceSetupConflictError({
+                source: params.source,
+                differences,
+                conflictPath: params.conflictPath,
+              });
+            }
             executeSqliteQuerySync(
               db,
               kysely
                 .updateTable("workspace_setup_state")
                 .set({
-                  bootstrap_seeded_at: sourceBootstrapSeededAt,
-                  setup_completed_at: sourceSetupCompletedAt,
+                  workspace_path: params.source.workspaceDir,
+                  version: WORKSPACE_SETUP_STATE_VERSION,
+                  bootstrap_seeded_at: params.parsed.value.bootstrapSeededAt ?? null,
+                  setup_completed_at: params.parsed.value.setupCompletedAt ?? null,
                   updated_at: now,
                 })
                 .where("workspace_key", "=", params.source.workspaceKey),
@@ -438,59 +430,119 @@ export function importAndRecordReceipt(params: {
             imported = true;
             resolution = "replaced";
             verifiedFingerprint = incomingFingerprint;
-          } else if (coversSource) {
-            resolution = "verified";
-            verifiedFingerprint = existingFingerprint;
-          } else if (!authority) {
-            const mergedBootstrapSeededAt = existing.bootstrap_seeded_at ?? sourceBootstrapSeededAt;
-            const mergedSetupCompletedAt = existing.setup_completed_at ?? sourceSetupCompletedAt;
-            const hasConflictingMilestone =
-              (sourceBootstrapSeededAt !== null &&
-                existing.bootstrap_seeded_at !== null &&
-                sourceBootstrapSeededAt !== existing.bootstrap_seeded_at) ||
-              (sourceSetupCompletedAt !== null &&
-                existing.setup_completed_at !== null &&
-                sourceSetupCompletedAt !== existing.setup_completed_at);
-            if (hasConflictingMilestone) {
-              const differences = [
-                ...(sourceBootstrapSeededAt !== null &&
-                existing.bootstrap_seeded_at !== null &&
-                sourceBootstrapSeededAt !== existing.bootstrap_seeded_at
-                  ? [
-                      `bootstrapSeededAt canonical=${JSON.stringify(existing.bootstrap_seeded_at)} legacy=${JSON.stringify(sourceBootstrapSeededAt)}`,
-                    ]
-                  : []),
-                ...(sourceSetupCompletedAt !== null &&
-                existing.setup_completed_at !== null &&
-                sourceSetupCompletedAt !== existing.setup_completed_at
-                  ? [
-                      `setupCompletedAt canonical=${JSON.stringify(existing.setup_completed_at)} legacy=${JSON.stringify(sourceSetupCompletedAt)}`,
-                    ]
-                  : []),
-              ];
-              throw workspaceSetupConflictError({ source: params.source, differences });
-            }
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .updateTable("workspace_setup_state")
-                .set({
-                  bootstrap_seeded_at: mergedBootstrapSeededAt,
-                  setup_completed_at: mergedSetupCompletedAt,
-                  updated_at: now,
-                })
-                .where("workspace_key", "=", params.source.workspaceKey),
-            );
-            imported = true;
-            resolution = "merged";
-            verifiedFingerprint = setupFingerprint({
-              workspacePath: existing.workspace_path,
-              bootstrapSeededAt: mergedBootstrapSeededAt,
-              setupCompletedAt: mergedSetupCompletedAt,
-            });
           } else {
-            resolution = "superseded";
-            verifiedFingerprint = existingFingerprint;
+            const existingFingerprint = setupFingerprint({
+              workspacePath: existing.workspace_path,
+              bootstrapSeededAt: existing.bootstrap_seeded_at,
+              setupCompletedAt: existing.setup_completed_at,
+            });
+            const sourceBootstrapSeededAt = params.parsed.value.bootstrapSeededAt ?? null;
+            const sourceSetupCompletedAt = params.parsed.value.setupCompletedAt ?? null;
+            const coversSource =
+              (sourceBootstrapSeededAt === null ||
+                existing.bootstrap_seeded_at === sourceBootstrapSeededAt) &&
+              (sourceSetupCompletedAt === null ||
+                existing.setup_completed_at === sourceSetupCompletedAt);
+            const authority = findMigrationAuthority({
+              db,
+              kysely,
+              source: params.source,
+              fingerprint: existingFingerprint,
+            });
+            if (
+              params.acceptLegacyWorkspaceState ||
+              (authority && params.source.priority < authority.priority)
+            ) {
+              executeSqliteQuerySync(
+                db,
+                kysely
+                  .updateTable("workspace_setup_state")
+                  .set({
+                    bootstrap_seeded_at: sourceBootstrapSeededAt,
+                    setup_completed_at: sourceSetupCompletedAt,
+                    updated_at: now,
+                  })
+                  .where("workspace_key", "=", params.source.workspaceKey),
+              );
+              imported = true;
+              resolution = "replaced";
+              verifiedFingerprint = incomingFingerprint;
+            } else if (coversSource) {
+              resolution = "verified";
+              verifiedFingerprint = existingFingerprint;
+            } else if (!authority) {
+              const mergedBootstrapSeededAt =
+                existing.bootstrap_seeded_at ?? sourceBootstrapSeededAt;
+              const mergedSetupCompletedAt = existing.setup_completed_at ?? sourceSetupCompletedAt;
+              const hasConflictingMilestone =
+                (sourceBootstrapSeededAt !== null &&
+                  existing.bootstrap_seeded_at !== null &&
+                  sourceBootstrapSeededAt !== existing.bootstrap_seeded_at) ||
+                (sourceSetupCompletedAt !== null &&
+                  existing.setup_completed_at !== null &&
+                  sourceSetupCompletedAt !== existing.setup_completed_at);
+              if (hasConflictingMilestone) {
+                const differences = [
+                  ...(sourceBootstrapSeededAt !== null &&
+                  existing.bootstrap_seeded_at !== null &&
+                  sourceBootstrapSeededAt !== existing.bootstrap_seeded_at
+                    ? [
+                        `bootstrapSeededAt canonical=${JSON.stringify(existing.bootstrap_seeded_at)} legacy=${JSON.stringify(sourceBootstrapSeededAt)}`,
+                      ]
+                    : []),
+                  ...(sourceSetupCompletedAt !== null &&
+                  existing.setup_completed_at !== null &&
+                  sourceSetupCompletedAt !== existing.setup_completed_at
+                    ? [
+                        `setupCompletedAt canonical=${JSON.stringify(existing.setup_completed_at)} legacy=${JSON.stringify(sourceSetupCompletedAt)}`,
+                      ]
+                    : []),
+                ];
+                if (!params.acceptLegacyWorkspaceState) {
+                  throw workspaceSetupConflictError({
+                    source: params.source,
+                    differences,
+                    conflictPath: params.conflictPath,
+                  });
+                }
+                executeSqliteQuerySync(
+                  db,
+                  kysely
+                    .updateTable("workspace_setup_state")
+                    .set({
+                      bootstrap_seeded_at: sourceBootstrapSeededAt,
+                      setup_completed_at: sourceSetupCompletedAt,
+                      updated_at: now,
+                    })
+                    .where("workspace_key", "=", params.source.workspaceKey),
+                );
+                imported = true;
+                resolution = "replaced";
+                verifiedFingerprint = incomingFingerprint;
+              } else {
+                executeSqliteQuerySync(
+                  db,
+                  kysely
+                    .updateTable("workspace_setup_state")
+                    .set({
+                      bootstrap_seeded_at: mergedBootstrapSeededAt,
+                      setup_completed_at: mergedSetupCompletedAt,
+                      updated_at: now,
+                    })
+                    .where("workspace_key", "=", params.source.workspaceKey),
+                );
+                imported = true;
+                resolution = "merged";
+                verifiedFingerprint = setupFingerprint({
+                  workspacePath: existing.workspace_path,
+                  bootstrapSeededAt: mergedBootstrapSeededAt,
+                  setupCompletedAt: mergedSetupCompletedAt,
+                });
+              }
+            } else {
+              resolution = "superseded";
+              verifiedFingerprint = existingFingerprint;
+            }
           }
         } else {
           // Missing row, or an attestation-only merged row (NULL version) that
@@ -499,12 +551,15 @@ export function importAndRecordReceipt(params: {
             existing?.workspace_path != null &&
             existing.workspace_path !== params.source.workspaceDir
           ) {
-            throw workspaceSetupConflictError({
-              source: params.source,
-              differences: [
-                `workspace path canonical=${JSON.stringify(existing.workspace_path)} legacy=${JSON.stringify(params.source.workspaceDir)}`,
-              ],
-            });
+            if (!params.acceptLegacyWorkspaceState) {
+              throw workspaceSetupConflictError({
+                source: params.source,
+                differences: [
+                  `workspace path canonical=${JSON.stringify(existing.workspace_path)} legacy=${JSON.stringify(params.source.workspaceDir)}`,
+                ],
+                conflictPath: params.conflictPath,
+              });
+            }
           }
           const setupColumns = {
             workspace_path: params.source.workspaceDir,

@@ -872,6 +872,7 @@ type LegacyStateMigrationPlan = {
   pluginSessionStoreAgentIds?: readonly string[];
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  acceptLegacyWorkspaceState?: boolean;
   skipAgentScopedMigrations?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 };
@@ -996,7 +997,14 @@ function buildLegacyStateMigrationSteps(
 
   const doctorFinalSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
-        ownerStep(detected.workspace, migrateLegacyWorkspaceState),
+        finalStep(() =>
+          migrateLegacyWorkspaceState({
+            detected: detected.workspace,
+            env,
+            stateDir,
+            ...(params.acceptLegacyWorkspaceState ? { acceptLegacyWorkspaceState: true } : {}),
+          }),
+        ),
         ownerStep(detected.webPush, migrateLegacyWebPush),
         ownerStep(detected.nodeHost, migrateLegacyNodeHostConfig),
         ownerStep(detected.subagentRegistry, migrateLegacySubagentRegistry),
@@ -1103,6 +1111,7 @@ export async function runLegacyStateMigrations(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  acceptLegacyWorkspaceState?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<MigrationMessages> {
   const detected = params.detected;
@@ -1123,6 +1132,7 @@ export async function runLegacyStateMigrations(params: {
       now: params.now,
       recoverCorruptTargetStore: params.recoverCorruptTargetStore,
       doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+      acceptLegacyWorkspaceState: params.acceptLegacyWorkspaceState,
       legacySessionSurfaces,
     }),
   );
