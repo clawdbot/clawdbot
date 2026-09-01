@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
@@ -24,7 +24,7 @@ export function renderLazySettingsSidebar(
   if (!failed) {
     host.loadSettingsSidebarRenderer();
   }
-  return html`<aside class="settings-sidebar" aria-busy=${failed ? "false" : "true"}>
+  return html`<aside class="settings-sidebar" aria-busy=${failed ? nothing : "true"}>
     <header class="settings-sidebar__header">
       <button type="button" class="settings-sidebar__back" @click=${props.onExit}>
         <span class="settings-sidebar__back-icon" aria-hidden="true">${icons.arrowLeft}</span>
