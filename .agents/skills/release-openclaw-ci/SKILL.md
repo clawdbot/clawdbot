@@ -206,6 +206,13 @@ Bind both results to that exact SHA; either generated-locale drift blocks
 dispatch. Keep target execution outside the trusted dispatch helper—do not
 execute an arbitrary target checkout as helper code.
 
+Before expensive full validation, also run `pnpm ui:build` on the same frozen
+trusted target with its frozen dependencies in approved isolation, outside the
+trusted dispatch helper. Record the target SHA with the successful production
+build, precompressed-asset verification, and startup/largest-asset budget results;
+any failure blocks fanout. Do not substitute a dev server or raise budgets to admit
+the target.
+
 Before full release validation:
 
 ```bash
