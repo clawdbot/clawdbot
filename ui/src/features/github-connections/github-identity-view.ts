@@ -38,6 +38,15 @@ const GITHUB_REFRESH_STATE = {
   not_applicable: "common.na",
 } as const;
 
+const GITHUB_AUTHORIZATION_LABEL = {
+  code: "agentTools.githubCodeReady",
+  pending: "agentTools.githubWaiting",
+  cancelling: "agentTools.githubCancelling",
+  finishing: "agentTools.githubFinishing",
+  cancel_error: "agentTools.githubCancelFailed",
+  network_error: "agentTools.githubNetworkRetry",
+} as const;
+
 export function renderGitHubHealth(identity: GitHubIdentityFacts | null) {
   const status = identity ? GITHUB_CREDENTIAL_STATUS[identity.credentialState] : null;
   return renderSettingsStatus({
@@ -128,32 +137,13 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
       `,
     });
   }
-  if (
-    authorization.phase === "code" ||
-    authorization.phase === "pending" ||
-    authorization.phase === "network_error" ||
-    authorization.phase === "cancelling" ||
-    authorization.phase === "finishing" ||
-    authorization.phase === "cancel_error"
-  ) {
-    if (!("userCode" in authorization)) {
-      return nothing;
-    }
+  if ("userCode" in authorization) {
     const copyLabel = t("agentTools.githubCopyCode");
-    const stateLabel =
-      authorization.phase === "code"
-        ? t("agentTools.githubCodeReady")
-        : authorization.phase === "cancelling"
-          ? t("agentTools.githubCancelling")
-          : authorization.phase === "finishing"
-            ? t("agentTools.githubFinishing")
-            : authorization.phase === "cancel_error"
-              ? t("agentTools.githubCancelFailed")
-              : authorization.phase === "network_error"
-                ? t("agentTools.githubNetworkRetry")
-                : authorization.slowedDown
-                  ? t("agentTools.githubSlowDown")
-                  : t("agentTools.githubWaiting");
+    const stateLabel = t(
+      authorization.phase === "pending" && authorization.slowedDown
+        ? "agentTools.githubSlowDown"
+        : GITHUB_AUTHORIZATION_LABEL[authorization.phase],
+    );
     return html`
       ${renderSettingsRow({
         title: t("agentTools.githubAuthorization"),
@@ -226,6 +216,18 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
   if (controller.patVisible) {
     return nothing;
   }
+  const authorizeButton = html`<button
+    class="btn primary"
+    @click=${() => void controller.startAuthorization()}
+  >
+    ${t("githubConnections.continue")}
+  </button>`;
+  const patButton =
+    controller.scope !== "personal"
+      ? html`<button class="btn" @click=${() => controller.showPatFallback()}>
+          ${t("agentTools.githubUsePat")}
+        </button>`
+      : nothing;
   if (
     authorization.phase === "access_denied" ||
     authorization.phase === "expired" ||
@@ -246,37 +248,20 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
         label: t("agentTools.githubAuthorizationFailed"),
       }),
       description: formatUiExternalText(description),
-      control: html`
-        <button class="btn primary" @click=${() => void controller.startAuthorization()}>
-          ${t("githubConnections.continue")}
-        </button>
-        ${controller.scope !== "personal"
-          ? html`<button class="btn" @click=${() => controller.showPatFallback()}>
-              ${t("agentTools.githubUsePat")}
-            </button>`
-          : nothing}
-      `,
+      control: html`${authorizeButton}${patButton}`,
     });
   }
   return html`
     ${renderSettingsRow({
       title: t("agentTools.githubAuthorization"),
       description: t("agentTools.githubConnectHint"),
-      control: html`
-        <button class="btn primary" @click=${() => void controller.startAuthorization()}>
-          ${t("githubConnections.continue")}
-        </button>
-      `,
+      control: authorizeButton,
     })}
     ${controller.scope !== "personal"
       ? renderSettingsRow({
           title: t("agentTools.githubPatFallback"),
           description: t("agentTools.githubPatFallbackHint"),
-          control: html`
-            <button class="btn" @click=${() => controller.showPatFallback()}>
-              ${t("agentTools.githubUsePat")}
-            </button>
-          `,
+          control: patButton,
         })
       : nothing}
   `;
