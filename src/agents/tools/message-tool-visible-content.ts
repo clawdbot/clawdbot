@@ -325,16 +325,14 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
     ...(readStringArrayParam(params, "mediaUrls") ?? []),
     ...readStructuredAttachmentMediaParams(params.attachments),
   ];
-  return hasReplyPayloadContent(
-    {
-      text,
-      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
-      mediaUrls,
-      presentation: params.presentation,
-      interactive: params.interactive,
-    },
-    { trimText: true },
-  );
+  return hasReplyPayloadContent({
+    text,
+    mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
+    mediaUrls,
+    presentation: params.presentation,
+    interactive: params.interactive,
+    location: params.location,
+  });
 }
 
 export function sanitizeMessageToolVisiblePayload(

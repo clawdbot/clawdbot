@@ -4734,7 +4734,13 @@ describe("message tool boot-echo guard", () => {
     });
   });
 
-  it("sanitizes boot echo text and still sends when media content remains", async () => {
+  it.each([
+    { name: "media content", content: { mediaUrl: "file:///tmp/status.png" } },
+    {
+      name: "a portable location",
+      content: { location: { latitude: 48.858844, longitude: 2.294351 } },
+    },
+  ])("sanitizes boot echo text and still sends when $name remains", async ({ content }) => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
@@ -4744,12 +4750,11 @@ describe("message tool boot-echo guard", () => {
       action: {
         target: "telegram:123",
         text: echoedText,
-        mediaUrl: "file:///tmp/status.png",
+        ...content,
       },
       toolOptions: { agentSessionKey: "agent:main" },
     });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
+    expect(call?.params).toMatchObject({ text: "", ...content });
   });
 
   it("sanitizes boot echo text and still sends when snake_case media content remains", async () => {
@@ -5078,6 +5083,27 @@ describe("message tool internal-runtime-context sanitization", () => {
     });
     expect(JSON.stringify(result)).not.toContain("sender_id");
     expect(JSON.stringify(result)).not.toContain("+15551234567");
+  });
+
+  it.each([
+    {
+      name: "internal runtime context",
+      message:
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    },
+    {
+      name: "inbound delivery metadata",
+      message:
+        "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+  ])("preserves a standalone location after stripping $name", async ({ message }) => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+    const location = { latitude: 48.858844, longitude: 2.294351 };
+    const call = await executeSend({
+      action: { target: "telegram:123", message, location },
+    });
+
+    expect(call?.params).toMatchObject({ message: "", location });
   });
 
   it("preserves legitimate outbound messages that start with timestamp-like text", async () => {
