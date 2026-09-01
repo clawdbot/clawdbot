@@ -1,11 +1,16 @@
 // Covers the runtime chooser /models offers for providers served by an
 // app-server agent harness rather than by a CLI backend.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildModelsProviderData } from "./commands-models.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  resetPluginRuntimeStateForTest,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { buildPreparedModelsProviderData } from "./commands-models.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
 
@@ -35,7 +40,11 @@ const CONFIG = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
 } as OpenClawConfig;
 
+let previousPluginRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+
 beforeEach(() => {
+  previousPluginRegistry = captureActivePluginRegistrySnapshot();
+  resetPluginRuntimeStateForTest();
   // No CLI backends registered anywhere, so every runtime choice observed here
   // comes from the app-server bindings rather than a CLI runtime binding.
   cliBackendsTesting.setDepsForTest({
@@ -57,9 +66,15 @@ beforeEach(() => {
   ]);
 });
 
-describe("buildModelsProviderData app-server runtime choices", () => {
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+  resetPluginRuntimeStateForTest();
+  restoreActivePluginRegistrySnapshot(previousPluginRegistry);
+});
+
+describe("buildPreparedModelsProviderData app-server runtime choices", () => {
   it("offers the Copilot runtime for github-copilot models", async () => {
-    const data = await buildModelsProviderData(CONFIG);
+    const data = await buildPreparedModelsProviderData(CONFIG);
 
     expect(data.runtimeChoicesByProvider?.get("github-copilot")).toEqual([
       {
@@ -76,7 +91,7 @@ describe("buildModelsProviderData app-server runtime choices", () => {
   });
 
   it("keeps offering the Codex runtime for openai models", async () => {
-    const data = await buildModelsProviderData(CONFIG);
+    const data = await buildPreparedModelsProviderData(CONFIG);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.map((choice) => choice.id)).toEqual([
       "codex",
@@ -85,7 +100,7 @@ describe("buildModelsProviderData app-server runtime choices", () => {
   });
 
   it("leaves providers with no app-server harness out of the chooser", async () => {
-    const data = await buildModelsProviderData(CONFIG);
+    const data = await buildPreparedModelsProviderData(CONFIG);
 
     expect(data.runtimeChoicesByProvider?.get("unbound-provider")).toBeUndefined();
   });
