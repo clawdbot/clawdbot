@@ -78,10 +78,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
-import {
-  createSessionsYieldTool,
-  UNSUPPORTED_CRON_YIELD_ERROR,
-} from "./tools/sessions-yield-tool.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
@@ -578,19 +575,20 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         ]
       : []),
     ...swarmToolGroups.agentsWait,
-    createSessionsYieldTool({
-      sessionId: options?.sessionId,
-      claimYield: createRequesterYieldCallback({
-        requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
-        requesterAgentId: sessionAgentId,
-        requesterTurnRunId: options?.runId,
-        claimYieldCompletion: options?.claimYieldCompletion,
-      }),
-      onYield: options?.onYield,
-      ...(isCronSessionKey(trimmedRunSessionKey || options?.agentSessionKey)
-        ? { unsupportedError: UNSUPPORTED_CRON_YIELD_ERROR }
-        : {}),
-    }),
+    ...(isCronSessionKey(trimmedRunSessionKey || options?.agentSessionKey)
+      ? []
+      : [
+          createSessionsYieldTool({
+            sessionId: options?.sessionId,
+            claimYield: createRequesterYieldCallback({
+              requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
+              requesterAgentId: sessionAgentId,
+              requesterTurnRunId: options?.runId,
+              claimYieldCompletion: options?.claimYieldCompletion,
+            }),
+            onYield: options?.onYield,
+          }),
+        ]),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,

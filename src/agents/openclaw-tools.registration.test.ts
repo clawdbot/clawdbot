@@ -105,6 +105,16 @@ describe("openclaw-tools progress_card gating", () => {
     ).toEqual([]);
   });
 
+  it("omits sessions_yield for cron requester sessions", () => {
+    const tools = createTestOpenClawTools({
+      runSessionKey: "agent:main:cron:isolated",
+      agentSessionKey: "agent:main:cron:isolated",
+      runId: "run-1",
+    });
+
+    expect(tools.find((candidate) => candidate.name === "sessions_yield")).toBeUndefined();
+  });
+
   it("enables progress_card by default", () => {
     expectProgressCardEnabled({ config: {} as OpenClawConfig }, true);
   });
