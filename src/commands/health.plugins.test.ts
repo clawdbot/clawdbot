@@ -169,7 +169,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
           status: "error",
           failurePhase: "load",
           channelIds: ["broken-channel"],
-          error: `missing SDK export; password=${credential}`,
+          error: `missing SDK export; password=${credential}\n${"context ".repeat(300)}`,
         }),
       ],
     };
@@ -204,7 +204,8 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       lastError: expect.stringContaining("missing SDK export"),
     });
     expect(snap.channels["broken-channel"]).not.toHaveProperty("probe");
-    expect(JSON.stringify(snap.channels)).not.toContain(credential);
+    expect(JSON.stringify(snap)).not.toContain(credential);
+    expect(snap.plugins?.errors[0]?.error.length).toBeLessThanOrEqual(1000);
     expect(probeAccount).not.toHaveBeenCalled();
 
     // A different live owner wins over a failed plugin declaring the same channel.
@@ -230,6 +231,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
   });
 
   it("surfaces a failed service while continuing healthy siblings", async () => {
+    const credential = "synthetic-service-credential";
     const siblingStart = vi.fn();
     const registry = {
       ...createTestRegistry([]),
@@ -248,7 +250,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
           service: {
             id: "broken",
             start: () => {
-              throw new Error("listen EADDRINUSE: address already in use");
+              throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
             },
           },
           source: "test",
@@ -281,8 +283,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       activated: true,
       activationSource: "explicit",
       failurePhase: "service",
-      error: "service broken: listen EADDRINUSE: address already in use",
+      error: expect.stringContaining("service broken: listen EADDRINUSE: address already in use"),
     });
+    expect(JSON.stringify(failed)).not.toContain(credential);
 
     await pluginServicesHandle.stop();
     pluginServicesHandle = undefined;
