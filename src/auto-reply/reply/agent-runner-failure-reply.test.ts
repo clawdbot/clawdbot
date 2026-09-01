@@ -3,6 +3,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildPreflightCompactionFailureText,
+  buildExternalRunFailureReply,
 } from "./agent-runner-failure-reply.js";
 
 const EMPTY_INTERACTIVE_REPLY_TEXT =
@@ -49,5 +50,14 @@ describe("buildPreflightCompactionFailureText", () => {
       "⚠️ Context is too large and auto-compaction timed out before it could finish. " +
         "Try again, use /compact, or use /new to start a fresh session.",
     );
+  });
+});
+
+describe("buildExternalRunFailureReply", () => {
+  it("strips repeated warning prefixes from detailed agent failures", () => {
+    const reply = buildExternalRunFailureReply("⚠️ ⚠️ connection failed", { includeDetails: true });
+
+    expect(reply.text).toContain("⚠️ Agent failed before reply: connection failed.");
+    expect(reply.text).not.toContain("Agent failed before reply: ⚠️");
   });
 });
