@@ -8,8 +8,8 @@
 // *current* per-agent database path (see the comment on
 // sweepLegacyMemorySidecarReindexOrphans in doctor-memory-sidecar.ts).
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { memorySidecarStateMigration } from "./doctor-memory-sidecar.js";
 
@@ -18,14 +18,11 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("Memory Core legacy sidecar migration reindex-orphan reachability", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let stateDir = "";
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-sidecar-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(stateDir, { recursive: true, force: true });
+  beforeEach(() => {
+    stateDir = tempDirs.make("openclaw-legacy-sidecar-");
   });
 
   it("reclaims aged pre-8b7269d1978 .tmp- orphan shadows beside the legacy sidecar while active ones survive", async () => {
