@@ -5,6 +5,10 @@ import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
+} from "../../scripts/lib/tsdown-config-groups.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
 
@@ -282,12 +286,14 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     { script: "prepare-extension-package-boundary-artifacts.mts", failStagingCleanup: false },
     { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: false },
     { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: true },
+    { script: "write-unified-entry-dts.ts", failStagingCleanup: false },
+    { script: "write-unified-entry-dts.ts", failStagingCleanup: true },
   ])(
     "retains nested $script cleanup metadata (staging cleanup failure=$failStagingCleanup)",
     async ({ script, failStagingCleanup }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        installScripts(root, [script, "run-tsgo.mts"]);
+        installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
         write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
         fs.mkdirSync(path.join(root, "packages"), { recursive: true });
         fs.symlinkSync(
@@ -297,12 +303,20 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
         const moduleUrl = (name: string) =>
           pathToFileURL(path.join(sourceRoot, "scripts/lib", name)).href;
+        write(
+          root,
+          "tsdown.config.ts",
+          `export default ${JSON.stringify([...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS, ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS])}.map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
+        );
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
-          "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
-          "../tsdown.config.ts": `export default ['openclaw-dts-plugin-sdk-1', 'openclaw-dts-plugin-sdk-2'].map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
-          "./tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
-          "./lib/declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
+          [scriptUrl]: {
+            "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
+          },
+          [moduleUrl("tsdown-declaration-writer.mts")]: {
+            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
+            "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
+          },
         };
         const hook = write(
           root,
@@ -319,8 +333,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           }
           const replacements = ${JSON.stringify(replacements)};
           registerHooks({ resolve(specifier, context, next) {
-            if (context.parentURL === ${JSON.stringify(scriptUrl)} && Object.hasOwn(replacements, specifier)) {
-              return { url: 'data:text/javascript,' + encodeURIComponent(replacements[specifier]), shortCircuit: true };
+            const sources = replacements[context.parentURL];
+            if (sources && Object.hasOwn(sources, specifier)) {
+              return { url: 'data:text/javascript,' + encodeURIComponent(sources[specifier]), shortCircuit: true };
             }
             return next(specifier, context);
           }});

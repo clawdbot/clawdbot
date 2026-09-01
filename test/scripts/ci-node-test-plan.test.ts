@@ -237,7 +237,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const gatewayGroups = groups.filter((group) =>
       group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
     );
-    expect(gatewayGroups.map((group) => group.configs[0]).toSorted()).toEqual([
+    expect(
+      gatewayGroups.flatMap((group) => group.configs).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual([
       "test/vitest/vitest.gateway-methods-isolated.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
     ]);
@@ -1076,9 +1078,38 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("splits tooling checks independently from built artifacts", () => {
+    const compilerFixture = "test/scripts/write-unified-entry-dts.test.ts";
     const toolingShards = createNodeTestShards().filter((shard) =>
       shard.shardName.startsWith("core-tooling"),
     );
+    const compilerParent = toolingShards.find((shard) =>
+      shard.includePatterns?.includes(compilerFixture),
+    )!;
+    for (const runnerBackend of ["blacksmith", "hybrid", "github"]) {
+      const jobs = createNodeTestShardBundles({ compactMode: "pull-request", runnerBackend });
+      const owner = jobs.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(compilerFixture)),
+      );
+      // This fixture runs the real full-build guard, which needs more than the
+      // available heap observed inside a small runner's retained tooling graph.
+      expect(owner?.runner, runnerBackend).toBe(DEFAULT_NODE_TEST_RUNNER);
+      expect(
+        jobs
+          .flatMap((job) => job.groups)
+          .filter((group) => group.includePatterns?.includes(compilerFixture)),
+      ).toHaveLength(1);
+      if (runnerBackend !== "blacksmith") {
+        const siblings = jobs
+          .flatMap((job) => job.groups)
+          .filter(
+            (group) =>
+              group.shard_name.startsWith(`${compilerParent.shardName}-hosted-`) &&
+              !group.includePatterns?.includes(compilerFixture),
+          );
+        expect(siblings.length).toBeGreaterThan(0);
+        expect(siblings.every((group) => group.runner === BUNDLED_NODE_TEST_RUNNER)).toBe(true);
+      }
+    }
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
     expect(stripes).toHaveLength(16);
