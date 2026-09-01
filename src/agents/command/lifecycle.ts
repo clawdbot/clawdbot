@@ -94,6 +94,9 @@ export function createAgentCommandLifecycle(params: {
         ...(timeoutPhase ? { timeoutPhase } : {}),
         ...(providerStarted !== undefined ? { providerStarted } : {}),
         ...(error ? { error: formatErrorMessage(error) } : {}),
+        ...(error && params.state.lifecycleErrorObservation
+          ? { errorObservation: params.state.lifecycleErrorObservation }
+          : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         ...(terminalDelivery ? { terminalDelivery } : {}),
         ...(terminalReceipt ? { terminalReceipt } : {}),
@@ -120,6 +123,9 @@ export function createAgentCommandLifecycle(params: {
           startedAt: params.startedAt,
           endedAt: Date.now(),
           error: formatLifecycleError(error),
+          ...(params.state.lifecycleErrorObservation
+            ? { errorObservation: params.state.lifecycleErrorObservation }
+            : {}),
           ...extraData,
         },
       });

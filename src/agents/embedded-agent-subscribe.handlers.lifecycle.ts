@@ -2,6 +2,7 @@
  * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
  */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -69,6 +70,7 @@ export function handleAgentEnd(
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
+  let errorObservation: ReturnType<typeof projectChatErrorDetail>;
   // Terminal delivery does not depend on streamed text alone: when the streamed
   // assistant texts are empty, payload building falls back to the completed
   // assistant message's visible text, so such a turn still reaches the user.
@@ -168,6 +170,14 @@ export function handleAgentEnd(
         provider: lastAssistant.provider,
       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
     lifecycleErrorText = safeErrorText;
+    // Lifecycle events also reach clients, so log-only diagnostics must not leave here.
+    errorObservation = projectChatErrorDetail({
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
+      failoverReason,
+      ...observedError,
+      httpStatus: observedError.httpCode ? Number(observedError.httpCode) : undefined,
+    });
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
@@ -209,6 +219,7 @@ export function handleAgentEnd(
         ? summarizeToolValidationError(ctx.state.lastToolError)
         : undefined;
     const terminalMeta = {
+      ...(errorObservation ? { errorObservation } : {}),
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
