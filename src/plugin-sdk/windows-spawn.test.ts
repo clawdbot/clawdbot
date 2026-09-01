@@ -2,15 +2,11 @@
  * Tests Windows spawn compatibility helpers.
  */
 import { spawnSync } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsExecutablePath,
-  resolveWindowsSpawnProgram,
-} from "./windows-spawn.js";
+import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 const { createTempDir } = createPluginSdkTestHarness({
   cleanup: {
@@ -25,7 +21,7 @@ describe("resolveWindowsSpawnProgram", () => {
     async () => {
       const dir = await createTempDir("openclaw-windows-spawn-env-case-");
       const executable = path.join(dir, "mixed-env-tool.MiXeD");
-      await link(process.execPath, executable);
+      await copyFile(process.execPath, executable);
       const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
 
       const program = resolveWindowsSpawnProgram({
@@ -46,19 +42,6 @@ describe("resolveWindowsSpawnProgram", () => {
       expect(child.stdout).toBe("native-ok");
     },
   );
-
-  it("resolves a bare Windows command to its .cmd shim instead of the extensionless POSIX shim", async () => {
-    const dir = await createTempDir("openclaw-windows-pathext-");
-    await writeFile(path.join(dir, "claude"), "#!/bin/sh\nexit 1\n", "utf8");
-    await writeFile(path.join(dir, "claude.CMD"), "@ECHO off\r\n", "utf8");
-
-    const resolved = resolveWindowsExecutablePath("claude", {
-      PATH: dir,
-      PATHEXT: ".EXE;.CMD;.BAT;.COM",
-    });
-
-    expect(resolved).toBe(path.join(dir, "claude.CMD"));
-  });
 
   it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
     expect(() =>

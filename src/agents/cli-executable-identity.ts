@@ -168,13 +168,15 @@ function resolveCommandPath(params: {
     // workspaces. A cwd-relative executable cannot name one durable owner.
     return undefined;
   }
-  if (process.platform === "win32" && !hasPathSeparator(params.command)) {
-    // Windows cannot execute an extensionless POSIX shim directly. Resolve the
-    // bare name through PATHEXT to the same .cmd/.exe file the spawn path will
-    // execute, matching the file npm actually installs as the entrypoint.
-    return resolveWindowsExecutablePath(params.command, params.env);
+  const command =
+    process.platform === "win32"
+      ? resolveWindowsExecutablePath(params.command, params.env)
+      : params.command;
+  if (process.platform === "win32" && !isDurableRootedCommand(command)) {
+    // The Windows resolver returns the raw command when PATH lookup misses.
+    return undefined;
   }
-  return resolveExecutablePath(params.command, {
+  return resolveExecutablePath(command, {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     env: params.env,
   });
