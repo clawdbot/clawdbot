@@ -325,19 +325,20 @@ export function redactConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   uiHints?: ConfigUiHints,
 ): ConfigFileSnapshot {
-  // Internal migration inputs can contain resolved secrets; never expose them in public snapshots.
-  const {
-    sourceConfigBeforeMigrations: _sourceConfigBeforeMigrations,
-    pluginMetadataSnapshot: _pluginMetadataSnapshot,
-    ...publicSnapshot
-  } = snapshot as typeof snapshot & { pluginMetadataSnapshot?: unknown };
-
+  const { pluginMetadataSnapshot: _pluginMetadataSnapshot, ...publicSnapshot } =
+    snapshot as typeof snapshot & {
+      pluginMetadataSnapshot?: unknown;
+    };
   if (!snapshot.valid) {
-    // Invalid configs cannot be safely redacted and restored, so withhold their contents.
+    // Invalid config cannot safely round-trip through redaction and restoration.
+    // Withhold every config projection so diagnostics cannot expose credentials.
     const redactedConfig = {} as ConfigFileSnapshot["config"];
     const redactedResolved = {} as ConfigFileSnapshot["resolved"];
     return {
       ...publicSnapshot,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations
+        ? redactedResolved
+        : undefined,
       sourceConfig: redactedResolved,
       runtimeConfig: redactedConfig,
       config: redactedConfig,
@@ -366,6 +367,7 @@ export function redactConfigSnapshot(
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
   return {
     ...publicSnapshot,
+    sourceConfigBeforeMigrations: redactObject(snapshot.sourceConfigBeforeMigrations, uiHints),
     sourceConfig: redactedResolved,
     runtimeConfig: redactedConfig,
     config: redactedConfig,

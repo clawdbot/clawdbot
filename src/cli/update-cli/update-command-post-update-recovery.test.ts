@@ -31,7 +31,7 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
-import { finishUpdate } from "./update-command-post-update.js";
+import { finishUpdate, type UpdateCommandOutcome } from "./update-command-post-update.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 
@@ -61,8 +61,8 @@ async function finishFailedUpdate(
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
   } = {},
-): Promise<void> {
-  await finishUpdate({
+): Promise<UpdateCommandOutcome> {
+  return await finishUpdate({
     result,
     root: result.root ?? "/repo",
     installKindChanged: false,
@@ -102,8 +102,8 @@ async function finishFailedUpdate(
   });
 }
 
-async function finishSkippedUpdate(reason: string): Promise<void> {
-  await finishFailedUpdate(
+async function finishSkippedUpdate(reason: string): Promise<UpdateCommandOutcome> {
+  return await finishFailedUpdate(
     {
       status: "skipped",
       mode: reason === "dirty" ? "git" : "unknown",
@@ -127,13 +127,14 @@ describe("skipped update exit status", () => {
     ["dirty", 1],
     ["not-git-install", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
-    await finishSkippedUpdate(reason);
+    const outcome = await finishSkippedUpdate(reason);
     if (reason === "dirty") {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("Update blocked: local files are edited"),
       );
     }
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(exitCode);
+    expect(outcome.exitCode).toBe(exitCode);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -174,7 +175,7 @@ describe("failed Git update recovery restart", () => {
     ),
   )("reports the terminal $service recovery for a $status update", async ({ status, service }) => {
     mocks.restart.mockResolvedValueOnce(service);
-    await finishFailedUpdate(
+    const outcome = await finishFailedUpdate(
       {
         ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }),
         status,
@@ -186,9 +187,7 @@ describe("failed Git update recovery restart", () => {
       status: service === "failed" ? "error" : status,
       recovery: { serviceRestartSafe: true, version: "1.0.0", service },
     });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(
-      status === "skipped" && service === "healthy" ? 0 : 1,
-    );
+    expect(outcome.exitCode).toBe(status === "skipped" && service === "healthy" ? 0 : 1);
   });
 
   it("does not turn missing producer safety into restart permission", async () => {
@@ -241,17 +240,17 @@ describe("failed Git update recovery restart", () => {
 
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("repair the checkout or installation"),
-    );
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("rerun `openclaw update`"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Run `openclaw triage`"));
   });
 
   it("does not restart when the mutation owner returned no recovery verdict", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-    await finishFailedUpdate(failedResult(undefined), { json: true, stopped: false });
+    const outcome = await finishFailedUpdate(failedResult(undefined), {
+      json: true,
+      stopped: false,
+    });
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(79);
+    expect(outcome.exitCode).toBe(79);
   });
 
   it.each([
@@ -266,7 +265,7 @@ describe("failed Git update recovery restart", () => {
       if (restoreFails) {
         mocks.restoreWindowsAutoStart.mockRejectedValueOnce(new Error("restore failed"));
       }
-      await finishFailedUpdate(
+      const outcome = await finishFailedUpdate(
         failedResult(
           safe
             ? { serviceRestartSafe: true, version: "1.0.0" }
@@ -274,7 +273,7 @@ describe("failed Git update recovery restart", () => {
         ),
         { json: true, stopped: true },
       );
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(expected);
+      expect(outcome.exitCode).toBe(expected);
       expect(mocks.restart).toHaveBeenCalledTimes(safe && !restoreFails ? 1 : 0);
       expect(mocks.writeSentinel.mock.lastCall?.[0].result.recovery?.serviceRestartSafe).toBe(
         safe && !restoreFails,
@@ -285,7 +284,7 @@ describe("failed Git update recovery restart", () => {
   it("preserves a fresh child's unsafe exit without re-enabling Windows autostart", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     mocks.freshProcess.mockResolvedValueOnce({ resumed: false, exitCode: 79 });
-    await finishUpdate({
+    const outcome = await finishUpdate({
       result: { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
       root: "/repo",
       configSnapshot: { valid: false },
@@ -294,12 +293,12 @@ describe("failed Git update recovery restart", () => {
       startedAt: Date.now(),
       controlPlaneUpdateSentinelMeta: undefined,
     } as unknown as FinishUpdateParams);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(79);
+    expect(outcome.exitCode).toBe(79);
     expect(mocks.restoreWindowsAutoStart).not.toHaveBeenCalled();
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
-  it("explains how to recover from a dirty rollback checkout", async () => {
+  it("routes a dirty rollback checkout into triage", async () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 
     await finishFailedUpdate(
@@ -308,10 +307,8 @@ describe("failed Git update recovery restart", () => {
 
     const output = log.mock.calls.flat().map(String).join("\n");
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(output).toContain("From the update root shown above");
-    expect(output).toContain("git status --short");
-    expect(output).toContain("resolve the reported changes");
-    expect(output).toContain("rerun `openclaw update`");
+    expect(output).toContain("Run `openclaw triage`");
+    expect(output).toContain("diagnose and repair the installation");
     expect(output).toContain("Keep the gateway stopped until the update succeeds");
   });
 
@@ -324,8 +321,8 @@ describe("failed Git update recovery restart", () => {
     );
 
     const output = log.mock.calls.flat().map(String).join("\n");
-    expect(output).toContain("rerun `openclaw --profile work update`");
-    expect(output).not.toContain("rerun `openclaw update`");
+    expect(output).toContain("Run `openclaw --profile work triage`");
+    expect(output).not.toContain("Run `openclaw triage`");
   });
 
   it("does not claim an unsafe recovery stopped a service that was already down", async () => {
@@ -338,7 +335,7 @@ describe("failed Git update recovery restart", () => {
 
     const output = log.mock.calls.flat().map(String).join("\n");
     expect(output).toContain("Update recovery could not prove a runnable installation");
-    expect(output).toContain("resolve the reported changes");
+    expect(output).toContain("Run `openclaw triage`");
     expect(output).not.toContain("remains stopped");
     expect(output).not.toContain("Keep the gateway stopped");
   });

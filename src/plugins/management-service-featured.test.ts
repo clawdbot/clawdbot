@@ -946,6 +946,14 @@ describe("plugin management Featured authority", () => {
       install: { npmSpec: "@acme/action@^1.2.3" },
       source: "official",
     },
+    {
+      name: "malformed npm selector with unversioned ClawHub",
+      install: {
+        npmSpec: "@acme/action@^1.2.3",
+        clawhubSpec: "clawhub:@acme/action",
+      },
+      source: "official",
+    },
     { name: "no install", install: {}, source: undefined },
     {
       name: "rejected state",

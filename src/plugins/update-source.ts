@@ -575,6 +575,8 @@ export function resolveClawHubUpdateSpecs(params: {
   record: PluginInstallRecord;
   officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
+  officialPackageName?: string;
+  coreVersion?: string;
 }): {
   installSpec?: string;
   recordSpec?: string;
@@ -596,6 +598,8 @@ export function resolveClawHubUpdateSpecs(params: {
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
+    officialPackageName: params.officialPackageName,
+    coreVersion: params.coreVersion,
   });
 }
 

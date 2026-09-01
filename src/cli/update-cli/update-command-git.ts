@@ -156,6 +156,9 @@ export function createBeforeGitMutation(params: {
         formatSchemaRefusalLines(postStopSchemas).join("\n"),
       );
     }
+    // Git's deferred prepare phase owns the task suspension. Once mutation
+    // starts, only a verified recovery may re-enable persistent autostart.
+    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     // A candidate checkout cannot own the service until its global exposure
     // succeeds. Finalization refreshes and activates the verified installation.
     return params.switchToGit

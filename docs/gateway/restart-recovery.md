@@ -87,6 +87,20 @@ the gateway.
 
 ## Recovery after a failed update
 
+After a failed interactive update, OpenClaw finishes updater cleanup and opens
+[`openclaw triage`](/cli/triage). Triage starts an available local coding agent
+with the failed installation's diagnostics and asks it to diagnose, repair, and
+verify that installation. The agent keeps its normal permissions.
+
+For a failed Control UI or unattended update, run this in a terminal on the
+Gateway host, using the same OpenClaw profile and state/config paths:
+
+```bash
+openclaw triage
+```
+
+JSON output, `--yes`, and piped update commands do not start an interactive agent.
+
 Git updates may restore and verify the original source and runtime before Doctor
 starts. Once candidate Doctor starts, subsequent failures retain that candidate
 and explicitly refuse recovery: code rollback cannot reverse state migrations.
@@ -126,8 +140,8 @@ notifications are attempted before recovery; the helper does not recreate them
 after the recovering Gateway consumes them. Check the final CLI result and the
 handoff log for the recovery outcome.
 
-Inspect `openclaw gateway status --deep` and the update diagnostics. Repair the
-failed Doctor or installation check before restarting. Avoid blindly installing
+Repair the failed Doctor or installation check before restarting. Triage can
+inspect `openclaw gateway status --deep` and the update diagnostics. Avoid blindly installing
 older code after a newer release has migrated configuration or databases; see
 [Updating and recovery](/install/updating). Restart sentinels report the outcome;
 copying one does not grant permission to restart a service.

@@ -665,7 +665,10 @@ export function resolveUpdateStatusBanner(params: {
 }): ApplicationStatusBanner {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  let guidance = t(UPDATE_FAILURE_REASON_KEYS[reason] ?? "updates.failureReasons.default");
+  if (status === "error" && reason !== "managed-service-handoff-already-running") {
+    guidance += ` ${t("updates.recoveryTriage")}`;
+  }
   const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",

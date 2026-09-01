@@ -8,6 +8,7 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_WORKSPACE_DIR",
 ] as const;
 const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -104,7 +105,7 @@ export function resolveOwnedManagedUpdateEnv(params: {
   });
 }
 
-export function resolvePostInstallDoctorEnv(params?: {
+export function resolveUpdateTargetEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;

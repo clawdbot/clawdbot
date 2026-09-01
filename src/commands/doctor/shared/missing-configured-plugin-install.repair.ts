@@ -172,15 +172,16 @@ async function repairMissingPluginInstallsWithLease(
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
-  const outcomes: PluginUpdateOutcome[] = [];
   const deferredRepairDetails: string[] = [];
-  const failedPluginIds = new Set<string>();
+  const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
+    // A later failed attempt does not resolve an earlier consent refusal.
+    let outcome = failedPlugins.get(pluginId);
     const retainedEnabledInstall =
       code === PLUGIN_CAPABILITY_CONSENT_REQUIRED &&
       knownIds.has(pluginId) &&
@@ -202,10 +203,10 @@ async function repairMissingPluginInstallsWithLease(
     } else {
       warnings.push(...messages);
       if (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED) {
-        outcomes.push({ pluginId, status: "error", code, message: messages.join(" ") });
+        outcome = { pluginId, status: "error", code, message: messages.join(" ") };
       }
     }
-    failedPluginIds.add(pluginId);
+    failedPlugins.set(pluginId, outcome);
   };
 
   for (const [pluginId, record] of Object.entries(records)) {
@@ -295,6 +296,7 @@ async function repairMissingPluginInstallsWithLease(
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
         repairedPluginIds.add(outcome.pluginId);
+        failedPlugins.delete(outcome.pluginId);
         changes.push(
           installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
             ? `Refreshed stale configured plugin "${outcome.pluginId}".`
@@ -412,6 +414,7 @@ async function repairMissingPluginInstallsWithLease(
     notices.push(...installed.notices);
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
+      failedPlugins.delete(candidate.pluginId);
     }
     if (installed.failedPluginId) {
       recordFailure(installed.failedPluginId, installed.warnings, installed.code);
@@ -428,6 +431,7 @@ async function repairMissingPluginInstallsWithLease(
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
   const pluginInventoryChanged = nextRecords !== persistedRecords || repairedPluginIds.size > 0;
+  const outcomes = [...failedPlugins.values()].filter((outcome) => outcome !== undefined);
   return {
     changes,
     warnings,
@@ -442,9 +446,9 @@ async function repairMissingPluginInstallsWithLease(
         }
       : {}),
     ...(pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
-    ...(failedPluginIds.size > 0
+    ...(failedPlugins.size > 0
       ? {
-          failedPluginIds: [...failedPluginIds].toSorted((left, right) =>
+          failedPluginIds: [...failedPlugins.keys()].toSorted((left, right) =>
             left.localeCompare(right),
           ),
         }

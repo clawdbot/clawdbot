@@ -90,7 +90,7 @@ function jsonFailure(message: string) {
 
 describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().exitOverride();
     registerMaintenanceCommands(program);
     try {
       await program.parseAsync(args, { from: "user" });
@@ -643,6 +643,14 @@ describe("registerMaintenanceCommands doctor action", () => {
     { args: [], options: { json: false, noExport: false, run: false } },
     { args: ["--json", "--no-export"], options: { json: true, noExport: true, run: false } },
     { args: ["--run"], options: { json: false, noExport: false, run: true } },
+    ...["claude", "codex", "opencode", "pi"].map((agent) => ({
+      args: ["--agent", agent],
+      options: { json: false, noExport: false, run: false, agent },
+    })),
+    {
+      args: ["--json", "--agent", "codex"],
+      options: { json: true, noExport: false, run: false, agent: "codex" },
+    },
   ])("forwards triage options for $args", async ({ args, options }) => {
     triageCommand.mockResolvedValue(undefined);
 
@@ -660,6 +668,31 @@ describe("registerMaintenanceCommands doctor action", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
+
+  it("rejects conflicting embedded and external triage routes", async () => {
+    await runMaintenanceCli(["triage", "--run", "--agent", "codex"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("triage --run cannot be combined with --agent.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([false, true])(
+    "rejects an unknown triage agent before diagnostics (json=%s)",
+    async (json) => {
+      await runMaintenanceCli(["triage", "--agent", "unknown-agent", ...(json ? ["--json"] : [])]);
+
+      expect(triageCommand).not.toHaveBeenCalled();
+      const message = "Invalid --agent. Use claude, codex, opencode, or pi.";
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.error).toHaveBeenCalledWith(message);
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
 
   it("passes reset options to reset command", async () => {
     resetCommand.mockResolvedValue(undefined);

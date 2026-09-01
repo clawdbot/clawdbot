@@ -30,10 +30,11 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterExitCode?: number;
   recoveryExitCode?: number;
   recoveryHang?: boolean;
+  recoveryClockAdvanceMs?: number;
   recoverySentinel?: "retained" | "consumed" | "replaced";
   helperExitCode?: number;
   updaterResult?: unknown;
-  updaterOutput?: "malformed" | "overflow" | "missing";
+  updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
   updaterNotification?: "published" | "consumed";
   gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited";
@@ -307,6 +308,7 @@ export function createManagedServiceUpdaterFixtureScript(params: {
   root: string;
   statePath: string;
   updaterPath: string;
+  logPath: string;
   stateDatabasePath: string;
   consumeNotification: string;
   options?: ManagedServiceManagerBoundaryOptions;
@@ -354,13 +356,33 @@ export function createManagedServiceUpdaterFixtureScript(params: {
     `const result = JSON.stringify(${JSON.stringify(updaterResult)});`,
     `const mode = ${JSON.stringify(options?.updaterOutput)};`,
     `const output = mode === "missing" ? "" : mode === "malformed" ? "diagnostic before JSON\\n" + result : mode === "overflow" ? " ".repeat(4 * 1024 * 1024) + result : result;`,
-    `process.stdout.write(output, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
+    `let remaining = Buffer.from(output);`,
+    ...(options?.updaterOutput === "split-utf8"
+      ? [
+          `const split = remaining.findIndex((byte) => byte >= 0x80) + 1;`,
+          `if (!split) throw new Error("expected a Unicode installation root");`,
+          `const prefix = remaining.subarray(0, split);`,
+          `const logPath = ${JSON.stringify(params.logPath)};`,
+          `const logOffset = fs.statSync(logPath).size;`,
+          `fs.writeSync(1, prefix);`,
+          // The raw log acknowledges a distinct pipe read before the remaining UTF-8 bytes.
+          `const deadline = Date.now() + 5000;`,
+          `while (!fs.readFileSync(logPath).subarray(logOffset).includes(prefix)) {`,
+          `  if (Date.now() >= deadline) throw new Error("helper did not receive the UTF-8 prefix");`,
+          `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);`,
+          `}`,
+          `remaining = remaining.subarray(split);`,
+        ]
+      : []),
+    `process.stdout.write(remaining, () => { ${options?.updaterSignal ? 'process.kill(process.pid, "SIGTERM");' : `process.exit(${options?.updaterExitCode ?? 7});`} });`,
   ].join("");
 }
 
 export function createManagedServiceLaunchdClockPreload(params: {
   commandTimingsPath: string;
   clockEachCommandMs: number;
+  recoveryClockAdvanceMs?: number;
+  recoveryCommandArgv: string[];
 }): string {
   return [
     'const fs = require("node:fs");',
@@ -384,7 +406,12 @@ export function createManagedServiceLaunchdClockPreload(params: {
     `    fs.appendFileSync(${JSON.stringify(params.commandTimingsPath)}, JSON.stringify({ action: args[0], startedAtMs, timeoutMs }) + "\\n");`,
     `    elapsed += Math.min(${params.clockEachCommandMs}, timeoutMs);`,
     "  }",
-    "  return actualSpawn(command, args, options);",
+    "  const child = actualSpawn(command, args, options);",
+    // Advance only when the exact guarded restart closes, before the helper resumes.
+    `  if (command === process.execPath && args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))}) {`,
+    `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,
+    "  }",
+    "  return child;",
     "};",
   ].join("\n");
 }
@@ -463,22 +490,30 @@ export function registerManagedRecoveryOutcomeTests(
   );
 
   itUnix.each(
-    (["systemd", "launchd"] as const).flatMap((kind) =>
-      (["error", "skipped"] as const).flatMap((status) =>
+    (["systemd", "launchd"] as const).flatMap((kind) => [
+      ...(["error", "skipped"] as const).flatMap((status) =>
         ([undefined, "published", "consumed"] as const).map((updaterNotification) => ({
           kind,
           status,
           updaterNotification,
+          updaterOutput: undefined,
         })),
       ),
-    ),
+      {
+        kind,
+        status: "error" as const,
+        updaterNotification: "published" as const,
+        updaterOutput: "split-utf8" as const,
+      },
+    ]),
   )(
-    "$kind restores a verified Git $status before the child owns a service stop (notification=$updaterNotification)",
-    async ({ kind, status, updaterNotification }) => {
+    "$kind restores a verified Git $status before the child owns a service stop (notification=$updaterNotification, output=$updaterOutput)",
+    async ({ kind, status, updaterNotification, updaterOutput }) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
       const { commands, state, sentinel, log } = await runManagedServiceManagerBoundary(kind, {
         updaterExitCode: status === "skipped" ? 0 : 7,
         updaterNotification,
+        updaterOutput,
         updaterResult: {
           status,
           reason,

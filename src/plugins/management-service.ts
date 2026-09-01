@@ -1041,7 +1041,7 @@ export const listManagedPlugins = withManagedPluginCache(
       }
       const kind = normalizeKinds(entry.kind);
       const install: ManagedPluginCatalogEntry["install"] =
-        !npmPackage && clawhub && !clawhub.version
+        facts.selectedSource?.source === "clawhub" && clawhub && !clawhub.version
           ? { source: "clawhub", packageName: clawhub.name }
           : facts.install
             ? { source: "official", pluginId }

@@ -17,6 +17,7 @@ import {
   isScheduledTaskDefinitelyNotRunning,
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
+import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
@@ -242,14 +243,6 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-function createAggregateErrorWithCause(
-  errors: unknown[],
-  message: string,
-  cause: unknown,
-): AggregateError {
-  return new AggregateError(errors, message, { cause });
-}
-
 function parsePositivePid(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
@@ -324,6 +317,11 @@ function armWindowsTaskAutoStartRecovery(
     unregisterSignalExitGate();
   };
   const restore = (restartSafe?: boolean) => {
+    // Finalization has already reported this lifecycle's outcome. A retained
+    // cleanup handle cannot reopen it or replay its settled restoration error.
+    if (!finishUpdate) {
+      return Promise.resolve();
+    }
     if (restartSafe === true) {
       restoreAllowed = true;
     }
@@ -371,16 +369,11 @@ async function abortWindowsTaskUpdateIfInterrupted(
   throw new UpdateCommandAbort();
 }
 
-async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
-  updateInstallKind: "git" | "package";
+async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
   serviceEnv: NodeJS.ProcessEnv | undefined;
   assertCurrentService?: () => Promise<void>;
 }): Promise<WindowsTaskAutoStartRecovery | undefined> {
-  if (
-    params.updateInstallKind !== "package" ||
-    process.platform !== "win32" ||
-    !params.serviceEnv
-  ) {
+  if (process.platform !== "win32" || !params.serviceEnv) {
     return undefined;
   }
   const recovery = armWindowsTaskAutoStartRecovery(params.serviceEnv, params.assertCurrentService);
@@ -389,7 +382,7 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
     suspended = await recovery.suspended;
   } catch (err) {
     await recovery.restore().catch(() => undefined);
-    recovery.complete();
+    recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
     throw err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
@@ -503,8 +496,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     return inspected;
   }
   const suspendTask = () =>
-    maybeSuspendWindowsTaskAutoStartForPackageUpdate({
-      updateInstallKind: params.updateInstallKind,
+    maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
       // Doctor pins a definition for the whole repair. Ordinary updates may
       // hand off to a replacement package root before restoring task autostart.
@@ -590,16 +582,18 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       throw err;
     }
     if (windowsTaskAutoStartRecovery) {
+      let autostartRestored = false;
       try {
         await windowsTaskAutoStartRecovery.restore();
+        autostartRestored = true;
       } catch (resumeErr) {
-        throw createAggregateErrorWithCause(
+        throw new ScheduledTaskAutoStartRecoveryError(
           [err, resumeErr],
           `Failed to stop the managed gateway (${String(err)}) and restore Windows Scheduled Task autostart (${String(resumeErr)})`,
-          err,
+          serviceState.env,
         );
       } finally {
-        windowsTaskAutoStartRecovery.complete();
+        windowsTaskAutoStartRecovery.complete(autostartRestored);
       }
       if (windowsTaskAutoStartRecovery.interrupted()) {
         throw new UpdateCommandAbort();

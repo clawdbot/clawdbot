@@ -25,9 +25,11 @@ import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-export async function createUpdateConfigSnapshot(): Promise<void> {
+export async function createUpdateConfigSnapshot(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   await createPreUpdateConfigSnapshot({
-    configPath: resolveConfigPath(),
+    configPath: resolveConfigPath(env),
     fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
   });
 }

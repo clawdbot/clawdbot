@@ -5,12 +5,15 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { prepareUpdateCommandCompletion } from "../cli/update-cli/update-command-completion.js";
 import { resolveUnsafeUpdateRecoveryGuidance } from "../cli/update-cli/update-recovery-guidance.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
+import { ScheduledTaskAutoStartRecoveryError } from "../daemon/schtasks-update-recovery.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { UpdateRecovery } from "../infra/update-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-runner-command.js";
-import { readCurrentGitUpdateRecovery } from "../infra/update-runner-git-recovery.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -75,6 +78,10 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       return { updated: false };
     }
     const updateRoot = params.root;
+    const completeUpdate = await prepareUpdateCommandCompletion({
+      runtime: params.runtime,
+      invocationCwd: process.cwd(),
+    });
     const externallyManaged = isServiceRepairExternallyManaged();
     const serviceLifecycle =
       isDefaultInstallIdentity(process.env) && !externallyManaged
@@ -95,9 +102,40 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       note(inspection.serviceMutationSkipMessage, "Update");
     }
     let gitMutationAuthorized = false;
+    let restartSafe = false;
+    let recoveryEnv: NodeJS.ProcessEnv | undefined;
     note("Running update…", "Update");
     const { progress, stop } = createUpdateProgress(process.stdout.isTTY);
-    let result: UpdateRunResult;
+    const startedAt = Date.now();
+    let result: UpdateRunResult | undefined;
+    const failedUpdate = (error: unknown, reason: string): UpdateRunResult => {
+      const message = formatErrorMessage(error);
+      const durationMs = Date.now() - startedAt;
+      params.runtime.error(message);
+      return {
+        ...result,
+        status: "error",
+        mode: "git",
+        root: updateRoot,
+        reason,
+        recovery:
+          result?.recovery?.serviceRestartSafe === false
+            ? result.recovery
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        steps: [
+          ...(result?.steps ?? []),
+          {
+            name: reason,
+            command: "openclaw update",
+            cwd: updateRoot,
+            durationMs,
+            exitCode: 1,
+            stderrTail: message,
+          },
+        ],
+        durationMs,
+      };
+    };
     try {
       result = await runGatewayUpdate({
         cwd: updateRoot,
@@ -109,50 +147,66 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         allowGatewayActivation: Boolean(
           inspection?.running && inspection.serviceUpdateVerdict?.kind === "owned",
         ),
-        beforeGitMutation: serviceLifecycle
-          ? async () => {
-              const previousSkip = inspection?.serviceMutationSkipMessage;
-              inspection = await serviceLifecycle.maybeStopManagedServiceBeforeMutableUpdate({
-                updateInstallKind: "git",
-                root: updateRoot,
-                shouldRestart: true,
-                jsonMode: false,
-                phase: "prepare",
-              });
-              if (inspection.blockMessage) {
-                throw new Error(inspection.blockMessage);
-              }
-              if (
-                inspection.serviceMutationSkipMessage !== previousSkip &&
-                inspection.serviceMutationSkipMessage
-              ) {
-                note(inspection.serviceMutationSkipMessage, "Update");
-              }
-              gitMutationAuthorized = true;
-              return serviceLifecycle.resolvePreparedGatewayUpdatePolicy(inspection, true);
+        beforeGitMutation: async () => {
+          if (serviceLifecycle) {
+            const previousSkip = inspection?.serviceMutationSkipMessage;
+            inspection = await serviceLifecycle.maybeStopManagedServiceBeforeMutableUpdate({
+              updateInstallKind: "git",
+              root: updateRoot,
+              shouldRestart: true,
+              jsonMode: false,
+              phase: "prepare",
+              expectedService:
+                inspection?.serviceUpdateVerdict?.kind === "owned" ? inspection : undefined,
+            });
+            if (inspection.blockMessage) {
+              throw new Error(inspection.blockMessage);
             }
-          : undefined,
+            if (
+              inspection.serviceMutationSkipMessage !== previousSkip &&
+              inspection.serviceMutationSkipMessage
+            ) {
+              note(inspection.serviceMutationSkipMessage, "Update");
+            }
+            inspection.windowsTaskAutoStartRecovery?.beginMutation();
+          }
+          gitMutationAuthorized = true;
+          return serviceLifecycle && inspection
+            ? serviceLifecycle.resolvePreparedGatewayUpdatePolicy(inspection, true)
+            : undefined;
+        },
       });
-    } catch (err) {
-      if (inspection?.stopped && gitMutationAuthorized) {
-        note(
-          "The gateway service remains stopped because the source checkout may be partially mutated. " +
-            `Inspect and repair the checkout, then restart the gateway manually with \`${formatCliCommand("openclaw gateway restart")}\`.`,
-          "Update",
-        );
-      } else if (inspection?.stopped) {
-        await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
-          recovery: await readCurrentGitUpdateRecovery(updateRoot),
-          preManagedServiceStop: inspection,
-          jsonMode: false,
-          timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
-          invocationCwd: updateRoot,
-        });
+      restartSafe = result.recovery?.serviceRestartSafe ?? result.status === "ok";
+      if (restartSafe) {
+        await inspection?.windowsTaskAutoStartRecovery?.restore(true);
       }
-      throw err;
+    } catch (err) {
+      if (err instanceof ScheduledTaskAutoStartRecoveryError) {
+        // Native preparation may fail after disabling autostart, before it can
+        // return an inspection. Carry its recorded failure and target to triage.
+        recoveryEnv = err.serviceEnv;
+      } else if (!gitMutationAuthorized) {
+        throw err;
+      }
+      const reason =
+        err instanceof ScheduledTaskAutoStartRecoveryError
+          ? "gateway-service-recovery-failed"
+          : result
+            ? "windows-task-autostart-restore-failed"
+            : "update-failed";
+      result = failedUpdate(err, reason);
+      restartSafe = false;
+      if (reason === "update-failed") {
+        note("The source checkout may be partially mutated.", "Update");
+      }
     } finally {
+      // Release native recovery before triage can start another update.
+      inspection?.windowsTaskAutoStartRecovery?.complete(restartSafe);
       stop();
     }
+    const ownedServiceEnv =
+      recoveryEnv ??
+      (inspection?.serviceUpdateVerdict?.kind === "owned" ? inspection.serviceEnv : undefined);
     const resultDetails = [
       `Status: ${result.status}`,
       `Mode: ${result.mode}`,
@@ -160,27 +214,46 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       result.reason && `Reason: ${result.reason}`,
     ].filter(Boolean);
     note(resultDetails.join("\n"), "Update result");
-    if (result.status !== "ok") {
-      if (result.recovery?.serviceRestartSafe === false) {
+    if (result.status !== "ok" || !restartSafe) {
+      if (
+        result.recovery?.serviceRestartSafe === false ||
+        (result.status === "error" && result.recovery?.serviceRestartSafe !== true)
+      ) {
+        const recovery: UpdateRecovery =
+          result.recovery?.serviceRestartSafe === false
+            ? result.recovery
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+        result = { ...result, status: "error", recovery };
         const managedGatewayStopped = inspection?.stopped === true;
         const summary = managedGatewayStopped
-          ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${result.recovery.reason}).`
-          : `Update recovery could not prove a runnable installation (${result.recovery.reason}).`;
+          ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${recovery.reason}).`
+          : `Update recovery could not prove a runnable installation (${recovery.reason}).`;
         const keepStopped = managedGatewayStopped
           ? "\nKeep the gateway stopped until the update succeeds."
           : "";
         note(
-          `${summary}\n${resolveUnsafeUpdateRecoveryGuidance(result.recovery.reason)}${keepStopped}`,
+          `${summary}\n${resolveUnsafeUpdateRecoveryGuidance(recovery.reason)}${keepStopped}`,
           "Update",
         );
       } else if (result.recovery?.serviceRestartSafe === true) {
-        await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
+        const recovered = await serviceLifecycle?.maybeRestartServiceAfterFailedMutableUpdate({
           recovery: result.recovery,
           preManagedServiceStop: inspection,
           jsonMode: false,
           timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
           invocationCwd: updateRoot,
         });
+        if (recovered) {
+          result = {
+            ...result,
+            status: recovered === "failed" ? "error" : result.status,
+            recovery: { ...result.recovery, service: recovered },
+          };
+        }
+      }
+      if (result.status === "error") {
+        await completeUpdate({ result, exitCode: 1 }, ownedServiceEnv);
+        return { updated: true, handled: true };
       }
       return { updated: true, handled: false };
     }
@@ -223,9 +296,12 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         note("Restarted the running gateway service after updating OpenClaw.", "Update");
       } catch (err) {
         const message = "Update completed, but gateway service restart failed";
-        params.runtime.error(`${message}: ${String(err)}`);
+        result = failedUpdate(
+          new Error(`${message}: ${formatErrorMessage(err)}`),
+          "gateway-restart-failed",
+        );
         params.outro(`${message}.`);
-        params.runtime.exit(1);
+        await completeUpdate({ result, exitCode: 1 }, ownedServiceEnv);
         return { updated: true, handled: true };
       }
     }

@@ -61,17 +61,17 @@ update `update.channel`, but a final extended-stable package version still
 checks only the verified `extended-stable` selector for update availability.
 That direct command is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.
-After the core swap, eligible official npm plugins with bare/default or
+After the core swap, eligible official npm and trusted official ClawHub plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
-non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
+non-`latest` tags, third-party plugins, custom registries, and other sources remain unchanged.
 Version-bound runtime plugins converge to the base release cohort when the
 core is a correction release (for example, `YYYY.M.P-2` uses plugin
 `YYYY.M.P`).
 Catalog installs created by current OpenClaw versions retain that default
 intent. Older records that contain only an exact version remain pinned because
-OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
-`openclaw plugins update @openclaw/name` once on the extended-stable channel
-to opt that plugin back into exact-core tracking.
+OpenClaw cannot safely distinguish an old automatic pin from a user pin. For npm
+installs, run `openclaw plugins update @openclaw/name` once on the extended-stable
+channel to opt that plugin back into exact-core tracking.
 
 `--channel dev` gives a persistent moving GitHub `main` checkout. Package
 installs reject the `--tag main` shorthand because the workspace checkout is
@@ -231,9 +231,9 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Add `--no-onboard` to skip onboarding. To force a specific install type, pass
 `--install-method git --no-onboard` or `--install-method npm --no-onboard`.
 
-If `openclaw update` fails after the npm package install phase, re-run the
-installer instead. It does not call the updater; it runs the global package
-install directly and can recover a partially updated npm install.
+If `openclaw triage` cannot start after a failed npm package replacement, re-run
+the installer. It runs the global package install directly and can recover a
+partially updated npm install. Keep an unverified Gateway stopped while repairing it.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
@@ -678,7 +678,18 @@ openclaw doctor --lint --json
 
 ## If you are stuck
 
-- Run `openclaw doctor` again and read the output carefully.
+Run `openclaw triage` in a terminal on the Gateway host, keeping the same profile
+and state/config overrides. It opens an installed coding agent with local
+diagnostics and any recorded failed-update outcome, so the agent can repair the
+installation and verify Gateway health. Use `openclaw triage --agent codex` to
+select a particular agent; see [Triage](/cli/triage) for supported agents and
+authentication requirements.
+
+Failed interactive updates open triage automatically after updater cleanup.
+JSON, `--yes`, and piped invocations print their result without starting an agent.
+Keep an unverified Gateway stopped and preserve migrated state during repair.
+The failed update retains its nonzero exit code after the agent finishes.
+
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)

@@ -108,7 +108,7 @@ async function writeScenario(
   await state.writeJson("scenario.json", { ...scenario, lane });
 }
 
-async function invoke(lane: Lane): Promise<void> {
+async function invoke(lane: Lane) {
   if (lane === "resume") {
     return resumePostCoreUpdate({
       root: state.root,
@@ -350,7 +350,7 @@ describe("update orchestration lifecycle ownership", () => {
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       await writeScenario(lane, { invalidConfig: true });
-      await invoke(lane);
+      const outcome = await invoke(lane);
       const output =
         lane === "current-process"
           ? mocks.print.mock.lastCall?.[0]
@@ -362,7 +362,9 @@ describe("update orchestration lifecycle ownership", () => {
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toContain("post-acquired");
       expect((await events()).at(-1)).toBe("validate");
-      if (lane !== "resume") {
+      if (lane === "current-process") {
+        expect(outcome?.exitCode).toBe(1);
+      } else if (lane === "repair") {
         expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       }
     },
@@ -412,13 +414,13 @@ describe("update orchestration lifecycle ownership", () => {
 
   it("rejects restart handling after a final doctor failure despite valid config", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invoke("current-process");
+    const outcome = await invoke("current-process");
     expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
       status: "error",
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
     });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(outcome?.exitCode).toBe(1);
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
@@ -524,7 +526,7 @@ describe("update orchestration lifecycle ownership", () => {
         env: {},
       });
       expect(startupBlock === null).toBe(valid);
-      expect(await events()).toEqual([
+      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual([
         "pre-attempt",
         "pre-acquired",
         "post-attempt",

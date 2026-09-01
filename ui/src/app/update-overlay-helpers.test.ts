@@ -27,6 +27,8 @@ import {
 
 const translations: Record<string, string> = {
   "updates.status": "Update {status}: {reason}. {guidance}",
+  "updates.recoveryTriage":
+    "Run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
   "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
   "updates.failureReasons.depsInstallFailed":
     "Dependency install failed. Fix the install error and retry.",
@@ -493,6 +495,21 @@ describe("update status localization", () => {
     });
   });
 
+  it.each(["skipped", "error"])(
+    "keeps an already running update out of recovery triage (%s)",
+    (status) => {
+      installTranslations();
+
+      const banner = resolveUpdateStatusBanner({
+        status,
+        reason: "managed-service-handoff-already-running",
+      });
+
+      expect(banner.text).toContain("managed-service-handoff-already-running");
+      expect(banner.text).not.toContain("openclaw triage");
+    },
+  );
+
   it("names the recorded cause instead of the reason slug when a step failed", async () => {
     installTranslations();
 
@@ -521,7 +538,7 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
+      text: `The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. ${translations["updates.recoveryTriage"]}`,
     });
   });
 
@@ -530,7 +547,7 @@ describe("update status localization", () => {
 
     expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
       tone: "danger",
-      text: "Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed.",
+      text: `Update error: disk-read-only. See the gateway logs for the exact failure and retry once the cause is fixed. ${translations["updates.recoveryTriage"]}`,
     });
     expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
   });
@@ -625,7 +642,7 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update error: restart-unhealthy. The replacement process never became healthy. The previous process stayed up so you can recover.",
+      text: `Update error: restart-unhealthy. The replacement process never became healthy. The previous process stayed up so you can recover. ${translations["updates.recoveryTriage"]}`,
     });
     await expect(
       verifyUpdate({
@@ -640,7 +657,7 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update error: supervisor-exited. See the gateway logs for the exact failure and retry once the cause is fixed.",
+      text: `Update error: supervisor-exited. See the gateway logs for the exact failure and retry once the cause is fixed. ${translations["updates.recoveryTriage"]}`,
     });
     await expect(
       verifyUpdate({

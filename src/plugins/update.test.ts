@@ -4087,56 +4087,102 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it("uses the beta core channel for a targeted official ClawHub install with npm-only catalog metadata", async () => {
-    installPluginFromClawHubMock.mockResolvedValue(
-      createSuccessfulClawHubUpdateResult({
-        pluginId: "discord",
-        targetDir: "/tmp/discord",
-        version: "2026.5.4-beta.1",
-        clawhubPackage: "@openclaw/discord",
-      }),
-    );
-
-    const result = await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "discord",
-        clawhubPackage: "@openclaw/discord",
-      }),
-      "discord",
-      { officialPluginUpdateChannel: "beta" },
-    );
-
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
-    expectRecordFields(result.config.plugins?.installs?.discord, {
-      source: "clawhub",
+  it.each([
+    {
+      channel: "beta",
       spec: "clawhub:@openclaw/discord",
+      expectedSpec: "clawhub:@openclaw/discord@beta",
       version: "2026.5.4-beta.1",
-      clawhubPackage: "@openclaw/discord",
-    });
-  });
+    },
+    {
+      channel: "extended-stable",
+      spec: "clawhub:@openclaw/discord",
+      expectedSpec: "clawhub:@openclaw/discord@2026.7.33",
+      version: "2026.7.33",
+    },
+    {
+      channel: "extended-stable",
+      spec: "clawhub:@openclaw/discord@latest",
+      expectedSpec: "clawhub:@openclaw/discord@2026.7.33",
+      version: "2026.7.33",
+    },
+    {
+      channel: "extended-stable",
+      spec: "clawhub:@openclaw/discord@rc",
+      expectedSpec: "clawhub:@openclaw/discord@rc",
+      version: "2026.7.34-rc.1",
+    },
+    {
+      channel: "extended-stable",
+      spec: "clawhub:@openclaw/discord@2026.6.33",
+      expectedSpec: "clawhub:@openclaw/discord@2026.6.33",
+      version: "2026.6.33",
+    },
+  ] as const)(
+    "updates official $spec on $channel with npm-only catalog metadata and preserves its selector",
+    async ({ channel, spec, expectedSpec, version }) => {
+      installPluginFromClawHubMock.mockResolvedValue(
+        createSuccessfulClawHubUpdateResult({
+          pluginId: "discord",
+          targetDir: "/tmp/discord",
+          version,
+          clawhubPackage: "@openclaw/discord",
+        }),
+      );
 
-  it("does not apply the official beta channel to custom ClawHub provenance", async () => {
-    installPluginFromClawHubMock.mockResolvedValue(
-      createSuccessfulClawHubUpdateResult({
-        pluginId: "discord",
-        targetDir: "/tmp/discord",
-        version: "2026.5.4",
+      const result = await updatePlugin(
+        createClawHubInstallConfig({
+          pluginId: "discord",
+          clawhubPackage: "@openclaw/discord",
+          spec,
+        }),
+        "discord",
+        { officialPluginUpdateChannel: channel, coreVersion: "2026.7.33" },
+      );
+
+      expect(clawHubInstallCall()?.spec).toBe(expectedSpec);
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expectRecordFields(result.config.plugins?.installs?.discord, {
+        source: "clawhub",
+        spec,
+        version,
         clawhubPackage: "@openclaw/discord",
-      }),
-    );
+      });
+    },
+  );
 
-    await updatePlugin(
-      createClawHubInstallConfig({
-        pluginId: "discord",
-        clawhubPackage: "@openclaw/discord",
-        clawhubUrl: "https://custom-clawhub.example",
-      }),
-      "discord",
-      { officialPluginUpdateChannel: "beta" },
-    );
+  it.each([
+    { channel: "beta", explicit: false },
+    { channel: "extended-stable", explicit: false },
+    { channel: "extended-stable", explicit: true },
+  ] as const)(
+    "does not core-pin custom ClawHub provenance on $channel (explicit: $explicit)",
+    async ({ channel, explicit }) => {
+      installPluginFromClawHubMock.mockResolvedValue(
+        createSuccessfulClawHubUpdateResult({
+          pluginId: "discord",
+          targetDir: "/tmp/discord",
+          version: "2026.5.4",
+          clawhubPackage: "@openclaw/discord",
+        }),
+      );
 
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord");
-  });
+      await updatePlugin(
+        createClawHubInstallConfig({
+          pluginId: "discord",
+          clawhubPackage: "@openclaw/discord",
+          clawhubUrl: "https://custom-clawhub.example",
+        }),
+        "discord",
+        {
+          ...(explicit ? { updateChannel: channel } : { officialPluginUpdateChannel: channel }),
+          coreVersion: "2026.7.33",
+        },
+      );
+
+      expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord");
+    },
+  );
 
   it("falls back to the default ClawHub spec when a beta release is unavailable", async () => {
     installPluginFromClawHubMock
@@ -5164,6 +5210,74 @@ describe("syncPluginsForUpdateChannel", () => {
       clawpackSize: 4096,
     });
   });
+
+  it.each(["npm", "clawhub", "source-fallback"] as const)(
+    "retries the declared default after a missing beta during %s externalization",
+    async (source) => {
+      resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+      const pluginId = "diagnostics-otel";
+      const npmSpec = "@openclaw/diagnostics-otel";
+      const clawhubSpec = `clawhub:${npmSpec}`;
+      const coreVersion = "2026.8.1-beta.3";
+      const attempts: Array<{ spec: string; expectedIntegrity?: string }> = [];
+      installPluginFromNpmSpecMock.mockImplementation(
+        async ({ spec, expectedIntegrity }: { spec: string; expectedIntegrity?: string }) => {
+          attempts.push({ spec, expectedIntegrity });
+          return source === "source-fallback" || spec !== npmSpec
+            ? { ok: false, code: "npm_package_not_found", error: "target unavailable" }
+            : createSuccessfulNpmUpdateResult({
+                pluginId,
+                targetDir: `/tmp/openclaw-plugins/${pluginId}`,
+                version: "2026.8.0",
+              });
+        },
+      );
+      installPluginFromClawHubMock.mockImplementation(async ({ spec }: { spec: string }) => {
+        attempts.push({ spec });
+        return spec !== clawhubSpec
+          ? { ok: false, code: "version_not_found", error: "beta unavailable" }
+          : createSuccessfulClawHubUpdateResult({
+              pluginId,
+              targetDir: `/tmp/openclaw-plugins/${pluginId}`,
+              version: "2026.8.0",
+              clawhubPackage: npmSpec,
+            });
+      });
+
+      const result = await syncExternalizedPlugin({
+        channel: "beta",
+        coreVersion,
+        bridge: {
+          bundledPluginId: pluginId,
+          npmSpec: source === "clawhub" ? undefined : npmSpec,
+          clawhubSpec: source === "npm" ? undefined : clawhubSpec,
+          expectedIntegrity: "sha512-catalog-default",
+          channelIds: [pluginId],
+        },
+        config: createExternalizedPluginConfig({ pluginId }),
+      });
+
+      expect(result.summary.errors).toEqual([]);
+      expect(attempts).toEqual([
+        ...(source === "clawhub"
+          ? []
+          : [
+              { spec: `${npmSpec}@${coreVersion}`, expectedIntegrity: undefined },
+              { spec: npmSpec, expectedIntegrity: "sha512-catalog-default" },
+            ]),
+        ...(source === "npm" ? [] : [{ spec: `${clawhubSpec}@beta` }, { spec: clawhubSpec }]),
+      ]);
+      expect(result.config.plugins?.installs?.[pluginId]).toMatchObject({
+        source: source === "npm" ? "npm" : "clawhub",
+        spec: source === "npm" ? npmSpec : clawhubSpec,
+        version: "2026.8.0",
+      });
+      expect(result.config.plugins?.load?.paths).toEqual([]);
+      expect(result.summary.warnings.join("\n")).toContain(
+        source === "npm" ? `${npmSpec}@${coreVersion}` : `${clawhubSpec}@beta`,
+      );
+    },
+  );
 
   it("selects npm before the declared ClawHub source", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());

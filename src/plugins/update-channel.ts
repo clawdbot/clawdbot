@@ -9,6 +9,7 @@ import {
   prepareManagedPluginArtifactConsentHandler,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
+import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import {
@@ -18,11 +19,13 @@ import {
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
 import {
+  installWithChannelFallback,
   installWithSourceFallback,
   resolvePluginInstallSources,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import { isUnavailableNpmTarget } from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -166,11 +169,6 @@ export async function syncPluginsForUpdateChannel(params: {
             })
           : null;
       const effectiveNpmSpec = channelNpmSpecs?.installSpec ?? npmSpec;
-      // The catalog integrity pin covers only the bridge's exact npm spec; an
-      // update-channel override resolves a different version and must not
-      // inherit it.
-      const bridgeNpmIntegrity =
-        effectiveNpmSpec === npmSpec ? bridge.expectedIntegrity?.trim() : undefined;
       const channelClawHubSpecs = clawhubSpec
         ? resolveClawHubInstallSpecsForUpdateChannel({
             spec: clawhubSpec,
@@ -184,14 +182,21 @@ export async function syncPluginsForUpdateChannel(params: {
       const sources = resolvePluginInstallSources({
         npmSpec: effectiveNpmSpec,
         clawhubSpec: channelClawHubSpecs?.installSpec,
-        expectedIntegrity: bridgeNpmIntegrity,
       });
       if (sources.length === 0) {
         summary.errors.push(`Failed to update ${targetPluginId}: no declared remote source.`);
         continue;
       }
 
+      const onFallback = (warning: string) => {
+        summary.warnings.push(warning);
+        logger.warn?.(warning);
+      };
       const install = async (source: "npm" | "clawhub", spec: string) => {
+        // A catalog digest authenticates only its original npm target, including
+        // a return to that target after a beta miss, never another source/version.
+        const expectedIntegrity =
+          source === "npm" && spec === npmSpec ? bridge.expectedIntegrity?.trim() : undefined;
         // Each source attempt owns its staged review; a registry fallback cannot inherit approval.
         const capabilityConsent = await prepareManagedPluginArtifactConsentHandler({
           config: next,
@@ -199,7 +204,7 @@ export async function syncPluginsForUpdateChannel(params: {
           source,
           spec,
           previousRecords: installs,
-          expectedIntegrity: source === "npm" ? bridgeNpmIntegrity : undefined,
+          expectedIntegrity,
           onCapabilityConsent: consent.onCapabilityConsent,
         });
         const options = {
@@ -219,7 +224,7 @@ export async function syncPluginsForUpdateChannel(params: {
               ? await installPluginFromClawHub({ ...options, baseUrl: bridge.clawhubUrl, env })
               : await installPluginFromNpmSpec({
                   ...options,
-                  expectedIntegrity: bridgeNpmIntegrity,
+                  expectedIntegrity,
                   trustedSourceLinkedOfficialInstall,
                 });
         } catch (error) {
@@ -230,22 +235,30 @@ export async function syncPluginsForUpdateChannel(params: {
           result = { ok: false, error: error.message };
         }
         consent.rethrowCallbackError();
-        return { result, capabilityConsent };
+        return { result, capabilityConsent, installSpec: spec };
       };
       const {
-        attempt: { result, capabilityConsent },
+        attempt: { result, capabilityConsent, installSpec },
         source: installedSource,
       } = await installWithSourceFallback({
         sources,
-        install: (source) => install(source.source, source.spec),
+        install: (source) =>
+          installWithChannelFallback({
+            installSpec: source.spec,
+            fallbackSpec: (source.source === "npm" ? channelNpmSpecs : channelClawHubSpecs)
+              ?.fallbackSpec,
+            install: (spec) => install(source.source, spec),
+            isRetryable: (attempt) =>
+              !attempt.result.ok &&
+              (source.source === "npm"
+                ? isUnavailableNpmTarget(attempt.result)
+                : isUnavailableClawHubTarget(attempt.result)),
+            onFallback,
+          }),
         result: (attempt) => attempt.result,
-        onFallback: (warning) => {
-          summary.warnings.push(warning);
-          logger.warn?.(warning);
-        },
+        onFallback,
       });
       const installSource = installedSource.source;
-      const installSpec = installedSource.spec;
 
       if (!result.ok) {
         const clawHubTrustWarning =

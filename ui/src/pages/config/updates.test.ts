@@ -552,7 +552,8 @@ describe("renderUpdates", () => {
       expect(
         container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
       ).not.toBeNull();
-      expect(row("CLI fallback").textContent).toContain("openclaw update status --json");
+      expect(row("CLI fallback").textContent).toContain("on the Gateway host");
+      expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
     },
   );
 

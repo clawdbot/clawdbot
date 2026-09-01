@@ -14,7 +14,7 @@ import { testing as updateCommandPluginsTesting } from "./update-command-plugins
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
-  resolvePostInstallDoctorEnv,
+  resolveUpdateTargetEnv,
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
@@ -189,9 +189,9 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
   });
 });
 
-describe("resolvePostInstallDoctorEnv", () => {
+describe("resolveUpdateTargetEnv", () => {
   it("uses the managed service profile paths for post-install doctor", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
@@ -219,7 +219,7 @@ describe("resolvePostInstallDoctorEnv", () => {
   });
 
   it("keeps the caller env when no managed service env is available", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       baseEnv: {
         PATH: "/bin",
         OPENCLAW_STATE_DIR: "/caller/state",

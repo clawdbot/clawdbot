@@ -85,6 +85,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();
   restoreDialogPolyfill();
   if (originalWebkit) {
@@ -182,7 +183,8 @@ it("keeps the dialog open and narrates the install, the restart, and the failure
   // precisely so it can keep reporting through the disconnect.
   await stream.push({ busy: true, connected: false, failure: null });
   expect(modal.textContent).toContain("Disconnected from the Gateway");
-  expect(modal.textContent).toContain("openclaw gateway status --deep");
+  expect(modal.textContent).toContain("openclaw triage");
+  expect(modal.textContent).toContain("on the Gateway host");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({

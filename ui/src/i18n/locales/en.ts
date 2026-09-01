@@ -538,7 +538,7 @@ export const en: TranslationMap & {
       installing: "Installing the update on the Gateway. It restarts once the install finishes.",
       restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
       disconnected:
-        "Disconnected from the Gateway. This page will try to reconnect. If it stays disconnected, run `openclaw gateway status --deep` on the Gateway host and inspect the update diagnostics before restarting.",
+        "Disconnected from the Gateway. This page will try to reconnect. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
       notStarted:
         "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
     },
@@ -549,6 +549,8 @@ export const en: TranslationMap & {
       "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
     error: "Update error: {error}",
     status: "Update {status}: {reason}. {guidance}",
+    recoveryTriage:
+      "Run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
     verificationFailedWithIdentity:
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:

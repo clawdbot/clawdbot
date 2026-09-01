@@ -865,8 +865,9 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     }
     if (childStatus) {
       const restarted = await runOwnedUpdateCommand(params.recoveryCommandArgv, params.recoveryTimeoutMs);
+      // The guarded CLI owns its restart deadline; identity inspection gets a fresh probe budget.
       const current = !restarted.signal && restarted.code === 0 && ownsRecovery()
-        ? await run(["print", target]) : null;
+        ? await runOwned("launchctl", ["print", target]) : null;
       const pid = current?.code === 0
         ? Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(current.stdout)?.[1]) : 0;
       restored = Boolean(pid && pid !== params.parentPid && isPidAlive(pid));
@@ -939,7 +940,8 @@ function killOwnedCommand(child) {
 async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
   const outputFd = fs.openSync(params.logPath, "a", 0o600);
   let timeout;
-  let updaterOutput = "";
+  const updaterChunks = [];
+  let updaterBytes = 0;
   let outputOverflow = false;
   try {
     const child = spawn(process.execPath, ["-e", ${JSON.stringify(HANDOFF_COMMAND_RUNNER_SCRIPT)}, JSON.stringify(commandArgv)], {
@@ -950,10 +952,11 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
     });
     child.stdout.on("data", (chunk) => {
       try { fs.writeSync(outputFd, chunk); } catch {}
-      if (Buffer.byteLength(updaterOutput) + chunk.length > 4 * 1024 * 1024) {
+      updaterBytes += chunk.length;
+      if (updaterBytes > 4 * 1024 * 1024) {
         outputOverflow = true;
-        updaterOutput = "";
-      } else if (!outputOverflow) updaterOutput += chunk.toString();
+        updaterChunks.length = 0;
+      } else updaterChunks.push(chunk);
     });
     const exited = new Promise((resolve) => {
       child.once("error", (error) => resolve({ error }));
@@ -996,7 +999,8 @@ async function runOwnedUpdateCommand(commandArgv, timeoutMs) {
     }
     if (exit.error) throw exit.error;
     appendLog("managed update command exited code=" + (exit.code ?? "null") + " signal=" + (exit.signal || "null"));
-    return { ...exit, updaterOutput, outputOverflow };
+    // Decode after close so split UTF-8 cannot corrupt the authoritative installation root.
+    return { ...exit, updaterOutput: Buffer.concat(updaterChunks).toString(), outputOverflow };
   } finally {
     clearTimeout(timeout);
     fs.closeSync(outputFd);

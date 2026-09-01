@@ -138,7 +138,12 @@ async function runManagedServiceManagerBoundary(
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${kind}-manager-boundary-`)),
+    await fs.mkdtemp(
+      path.join(
+        os.tmpdir(),
+        `openclaw-${kind}-manager-boundary-${options?.updaterOutput === "split-utf8" ? "安装-" : ""}`,
+      ),
+    ),
   );
   tempDirs.add(root);
   const commandsPath = path.join(root, "manager-commands.log");
@@ -226,6 +231,13 @@ async function runManagedServiceManagerBoundary(
     mockedChild.emit("exit", 0, null);
     tempDirs.add(path.dirname(scriptPath));
     const paramsPath = path.join(root, "manager-helper.json");
+    const recoveryCommand = createManagedServiceRecoveryCommandFixture({
+      kind,
+      root,
+      statePath,
+      stateDatabasePath,
+      options,
+    });
     await fs.writeFile(
       paramsPath,
       JSON.stringify({
@@ -242,13 +254,7 @@ async function runManagedServiceManagerBoundary(
         ...(options?.systemdHandoffDeadlineMs === undefined
           ? {}
           : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
-        ...createManagedServiceRecoveryCommandFixture({
-          kind,
-          root,
-          statePath,
-          stateDatabasePath,
-          options,
-        }),
+        ...recoveryCommand,
         ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
         recovery: { serviceRestartSafe: true, version: "1.0.0" },
         recoveryModulePath,
@@ -260,6 +266,7 @@ async function runManagedServiceManagerBoundary(
             root,
             statePath,
             updaterPath,
+            logPath: String(generated.logPath),
             stateDatabasePath,
             consumeNotification,
             options,
@@ -280,13 +287,15 @@ async function runManagedServiceManagerBoundary(
       );
     }
     let helperEnv: NodeJS.ProcessEnv = env;
-    if (options?.launchdTeardown?.clockEachCommandMs) {
+    if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
       const preloadPath = path.join(root, "launchd-clock-preload.cjs");
       await fs.writeFile(
         preloadPath,
         createManagedServiceLaunchdClockPreload({
           commandTimingsPath,
-          clockEachCommandMs: options.launchdTeardown.clockEachCommandMs,
+          clockEachCommandMs: options.launchdTeardown?.clockEachCommandMs ?? 0,
+          recoveryClockAdvanceMs: options.recoveryClockAdvanceMs,
+          recoveryCommandArgv: recoveryCommand.recoveryCommandArgv,
         }),
       );
       helperEnv = { ...env, NODE_OPTIONS: `--require ${preloadPath}` };

@@ -180,8 +180,8 @@ async function finishSuccessfulPackageSwitch(
     packageRoot: "/tmp/openclaw-update",
     restartEnvironment: process.env,
   },
-): Promise<void> {
-  await finishUpdate({
+): Promise<Awaited<ReturnType<typeof finishUpdate>>> {
+  return await finishUpdate({
     result: {
       status: "ok",
       mode: params.updateMode ?? "npm",
@@ -356,7 +356,7 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockResolvedValueOnce(false);
 
-    await finishSuccessfulPackageSwitch();
+    const outcome = await finishSuccessfulPackageSwitch();
 
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expect(mocks.printResult).toHaveBeenCalledWith(
@@ -366,7 +366,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "restart-unhealthy" }),
     );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(outcome.exitCode).toBe(1);
     expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
   });
 
@@ -401,7 +401,7 @@ describe("successful update finalization ordering", () => {
       throw new Error("task restore failed");
     });
 
-    await finishSuccessfulPackageSwitch({
+    const outcome = await finishSuccessfulPackageSwitch({
       previousRoot: "/tmp/openclaw-update",
       packageRoot: "/tmp/openclaw-update",
       restartEnvironment: process.env,
@@ -417,7 +417,7 @@ describe("successful update finalization ordering", () => {
 
     expect(restore).toHaveBeenCalledOnce();
     expect(mocks.restartService).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(outcome.exitCode).toBe(1);
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expect(mocks.printResult).toHaveBeenCalledWith(
       expect.objectContaining({ status: "error", reason: "windows-task-autostart-restore-failed" }),
@@ -546,7 +546,7 @@ describe("successful update finalization ordering", () => {
     process.env.PATH = path.dirname(wrapper);
     const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("unlink denied"));
     try {
-      await finishSuccessfulPackageSwitch({
+      const outcome = await finishSuccessfulPackageSwitch({
         previousRoot,
         packageRoot: path.join(home, "package"),
       });
@@ -559,7 +559,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "wrapper-retirement-failed" }),
       );
-      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(outcome.exitCode).toBe(1);
     } finally {
       unlink.mockRestore();
       process.env.PATH = previousPath;
@@ -782,7 +782,7 @@ describe("successful update finalization ordering", () => {
         } else {
           mocks.revalidateService.mockRejectedValueOnce(error);
         }
-        await finishSuccessfulPackageSwitch({
+        const outcome = await finishSuccessfulPackageSwitch({
           previousRoot: "/tmp/openclaw-update",
           packageRoot: "/tmp/openclaw-update",
           restartEnvironment: { ...process.env },
@@ -792,7 +792,7 @@ describe("successful update finalization ordering", () => {
 
         expect(mocks.restartService).not.toHaveBeenCalled();
         expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(outcome.exitCode).toBe(1);
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
@@ -829,7 +829,7 @@ describe("successful update finalization ordering", () => {
         command: { programArguments, environment: serviceEnv },
       });
       mocks.restartService.mockResolvedValueOnce(activated);
-      await finishSuccessfulPackageSwitch({
+      const outcome = await finishSuccessfulPackageSwitch({
         previousRoot: "/tmp/openclaw-update",
         packageRoot: "/tmp/openclaw-update",
         restartEnvironment: { ...process.env },
@@ -875,7 +875,7 @@ describe("successful update finalization ordering", () => {
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "restart-unhealthy" }),
         );
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(outcome.exitCode).toBe(1);
       }
     });
 

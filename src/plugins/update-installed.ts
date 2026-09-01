@@ -181,6 +181,7 @@ export async function updateNpmInstalledPlugins(params: {
       params.specOverrides?.[pluginId] ??
       (replacementPluginId ? trustedOfficialNpmSpec : undefined);
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
+    const recordClawHubPackage = resolveRecordedClawHubPackage(record);
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
       ? trustedOfficialClawHubInstall?.clawhubSpec
@@ -231,6 +232,8 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             officialSpecOverride: officialClawHubSpec,
             updateChannel,
+            officialPackageName: trustedOfficialClawHubInstall ? recordClawHubPackage : undefined,
+            coreVersion: params.coreVersion,
           })
         : undefined;
     const effectiveSpec =
@@ -275,7 +278,6 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const recordClawHubPackage = resolveRecordedClawHubPackage(record);
     if (record.source === "clawhub" && !recordClawHubPackage && !officialClawHubSpec) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (missing ClawHub package metadata).`);
       continue;

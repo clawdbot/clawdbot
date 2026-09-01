@@ -73,7 +73,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({}),
+  createDoctorPrompter: () => ({ confirm: async () => true }),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -142,7 +142,7 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
 }));
 
 vi.mock("../commands/doctor-update.js", () => ({
-  maybeOfferUpdateBeforeDoctor: async () => ({ handled: false }),
+  maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
 }));
 
 vi.mock("../commands/doctor-ui.js", () => ({

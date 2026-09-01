@@ -119,6 +119,30 @@ export function registerManagedRecoveryCommandTests(
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
+  itUnix("verifies launchd after a slow guarded restart", async () => {
+    const { state, sentinel, commandTimings } = await runManagedServiceManagerBoundary("launchd", {
+      recoveryClockAdvanceMs: 31_000,
+      updaterExitCode: 0,
+      updaterNotification: "published",
+      updaterResult: {
+        status: "skipped",
+        mode: "git",
+        reason: "no-upstream",
+        recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "original-git-build" },
+      },
+    });
+    expect(state).toMatchObject({ restored: true, healthProbeCount: 1 });
+    expect(sentinel).toMatchObject({
+      payload: {
+        status: "skipped",
+        stats: { steps: [{ name: "service-restore", log: { exitCode: 0 } }] },
+      },
+    });
+    const inspections = commandTimings.filter(({ action }) => action === "print");
+    expect(inspections.at(-1)!.startedAtMs - inspections.at(-2)!.startedAtMs).toBe(31_000);
+    expect(inspections.at(-1)!.timeoutMs).toBe(5_000);
+  });
+
   itUnix.each(["systemd", "launchd"] as const)(
     "keeps %s parked when the installed CLI refuses a verified recovery restart",
     async (kind) => {

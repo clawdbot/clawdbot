@@ -50,20 +50,14 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
-    const token = "synthetic-canonical-token-canary";
-    const preMigrationToken = "synthetic-pre-migration-token-canary";
+  it.each([true, false])("does not expose internal plugin metadata (valid=%s)", (valid) => {
     const snapshot = {
       ...makeSnapshot({
-        gateway: { auth: { token } },
         plugins: {
           allow: ["demo"],
         },
       }),
       valid,
-      sourceConfigBeforeMigrations: makeSnapshot({
-        gateway: { auth: { token: preMigrationToken } },
-      }).sourceConfig,
       pluginMetadataSnapshot: {
         manifestRegistry: {
           plugins: [
@@ -77,27 +71,14 @@ describe("redactConfigSnapshot", () => {
         },
       },
     };
-    const original = structuredClone(snapshot);
 
     const result = redactConfigSnapshot(snapshot);
-    const serialized = JSON.stringify(result);
 
-    expect(serialized).not.toContain(preMigrationToken);
-    expect(serialized).not.toContain(token);
-    expect(serialized).not.toContain("/private/plugin/root");
-    expect("sourceConfigBeforeMigrations" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
-    expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
-    const expectedConfig = valid
-      ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }
-      : {};
-    expect(result.config).toEqual(expectedConfig);
-    expect(result.sourceConfig).toEqual(expectedConfig);
-    expect(snapshot).toEqual(original);
   });
 
   it.each([true, false])(
-    "omits pre-migration credentials without mutating source (valid=%s)",
+    "redacts pre-migration credentials without mutating source (valid=%s)",
     (valid) => {
       const source = makeSnapshot({
         channels: { discord: { token: "synthetic-discord-token" } },
@@ -121,7 +102,22 @@ describe("redactConfigSnapshot", () => {
       const result = redactConfigSnapshot(snapshot, mainSchemaHints);
 
       expect(snapshot).toEqual(before);
-      expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+      expect(result.sourceConfigBeforeMigrations).toEqual(
+        valid
+          ? {
+              channels: { discord: { token: REDACTED_SENTINEL } },
+              models: {
+                providers: {
+                  inline: { apiKey: REDACTED_SENTINEL, models: [] },
+                  referenced: {
+                    apiKey: { source: "env", provider: "default", id: REDACTED_SENTINEL },
+                    models: [],
+                  },
+                },
+              },
+            }
+          : {},
+      );
       for (const secret of [
         "synthetic-discord-token",
         "synthetic-provider-key",
