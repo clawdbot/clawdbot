@@ -68,9 +68,12 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
   };
 }
 
-async function collect(context: CliBackendExecuteContext) {
+async function collect(
+  context: CliBackendExecuteContext,
+  secretInput?: Parameters<typeof executeClaudeAgentSdk>[1],
+) {
   const events: Record<string, unknown>[] = [];
-  for await (const event of executeClaudeAgentSdk(context)) {
+  for await (const event of executeClaudeAgentSdk(context, secretInput)) {
     events.push(event);
   }
   return events;
@@ -87,7 +90,7 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       writeSync(2, "PermissionError: [Errno 1] Operation not permitted: '/bin/ps' 🦞");
       process.exit(1);
     `);
-    const error = await collect(context).catch((error: unknown) => error);
+    const error = await collect(context).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain("exited with code 1");
     expect(String(error)).toContain("PermissionError: [Errno 1]");
@@ -116,19 +119,15 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
     context.env.OPENCLAW_MCP_TOKEN = grant;
     context.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR = "3";
     const buffers: Buffer[] = [];
-    const running = (async () => {
-      for await (const _event of executeClaudeAgentSdk(context, {
-        fd: 3,
-        createData: () => {
-          const bytes = Buffer.from(credential);
-          buffers.push(bytes);
-          return bytes;
-        },
-      })) {
-        /* consume the real SDK stream */
-      }
-    })();
-    const error = await running.catch((error: unknown) => error);
+    const running = collect(context, {
+      fd: 3,
+      createData: () => {
+        const bytes = Buffer.from(credential);
+        buffers.push(bytes);
+        return bytes;
+      },
+    });
+    const error = await running.catch((failure: unknown) => failure);
     expect(String(error)).toContain("PermissionError: denied resource 3");
     expect(String(error)).toContain("[REDACTED]");
     for (const privateText of [
@@ -187,7 +186,9 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
         },
         activate: () => {},
         remove: (handle) => {
-          if (current === handle) current = undefined;
+          if (current === handle) {
+            current = undefined;
+          }
         },
       };
       const stderr = vi.spyOn(process.stderr, "write");
@@ -196,7 +197,7 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
       );
       expect(current?.isIdle()).toBe(true);
       const error = await collect({ ...context, prompt, useResume: true }).catch(
-        (error: unknown) => error,
+        (failure: unknown) => failure,
       );
       expect(String(error)).toContain("exited with code 1");
       expect(String(error)).not.toContain("previous turn diagnostic");

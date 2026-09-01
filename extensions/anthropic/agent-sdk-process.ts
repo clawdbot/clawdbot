@@ -64,10 +64,13 @@ export function createClaudeAgentSdkProcessOwner(
   let atLineBoundary = true;
   const observeStderr = (process: ChildProcessWithoutNullStreams) => {
     child = process;
-    drained = new Promise<void>((resolve) => process.stderr.once("close", resolve));
+    drained = new Promise<void>((resolve) => {
+      process.stderr.once("close", resolve);
+    });
     process.stderr.setEncoding("utf8");
     process.stderr.on("error", () => {}); // A failed diagnostic pipe must not crash the Gateway.
-    process.stderr.on("data", (text: string) => {
+    process.stderr.on("data", (chunk: string) => {
+      let text = chunk;
       const context = currentContext();
       if (context !== owner) {
         owner = context;
