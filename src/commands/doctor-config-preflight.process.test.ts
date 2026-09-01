@@ -17,7 +17,9 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
+  runBuiltRuntime,
   runIsolatedModuleScript,
   runSourceRuntime,
   seedV17AdditiveRepairDatabase,
@@ -110,7 +112,7 @@ describe("doctor invalid config process exit", () => {
     fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
     const databasePath = seedV17AdditiveRepairDatabase(stateDir);
-    const runtimeRoot = createSourceRuntime(root);
+    const runtimeRoot = createBuiltRuntime(root);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -119,16 +121,9 @@ describe("doctor invalid config process exit", () => {
       OPENCLAW_TEST_FAST: "1",
       NO_COLOR: "1",
     };
-    const args = [
-      path.join(runtimeRoot, "src", "entry.ts"),
-      "doctor",
-      "--fix",
-      "--non-interactive",
-      "--yes",
-      "--no-workspace-suggestions",
-    ];
+    const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
 
-    const first = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    const first = runBuiltRuntime(runtimeRoot, env, args, 60_000);
     expect(first.error, first.stderr).toBeUndefined();
     expect(first.status, first.stderr).toBe(0);
     expect(`${first.stdout}\n${first.stderr}`).toContain("v17 -> v19");
@@ -163,7 +158,7 @@ describe("doctor invalid config process exit", () => {
       repaired.close();
     }
 
-    const second = runSourceRuntime(runtimeRoot, env, args, 60_000);
+    const second = runBuiltRuntime(runtimeRoot, env, args, 60_000);
     expect(second.error, second.stderr).toBeUndefined();
     expect(second.status, second.stderr).toBe(0);
     expect(`${second.stdout}\n${second.stderr}`).not.toMatch(
@@ -274,17 +269,11 @@ describe("doctor invalid config process exit", () => {
         },
       }),
     );
-    const runtimeRoot = createSourceRuntime(root);
-    const result = runSourceRuntime(
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = runBuiltRuntime(
       runtimeRoot,
       env,
-      [
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "doctor",
-        "--repair",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
+      ["doctor", "--repair", "--non-interactive", "--no-workspace-suggestions"],
       45_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
@@ -357,16 +346,11 @@ describe("doctor invalid config process exit", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, '{"agents": {broken json');
 
-    const runtimeRoot = createSourceRuntime(root);
-    const result = runSourceRuntime(
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = runBuiltRuntime(
       runtimeRoot,
       env,
-      [
-        path.join(runtimeRoot, "src", "entry.ts"),
-        "doctor",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-      ],
+      ["doctor", "--non-interactive", "--no-workspace-suggestions"],
       60_000,
     );
     const output = `${result.stderr}\n${result.stdout}`;
@@ -698,16 +682,13 @@ describe("gateway startup-migration refusal", () => {
       });
       fs.writeFileSync(configPath, originalConfig);
       seedPluginStateConflict(stateDir);
+      const runtimeRoot = createBuiltRuntime(root);
 
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+      const result = runBuiltRuntime(
+        runtimeRoot,
+        env,
+        ["gateway", "run", "--allow-unconfigured"],
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 
@@ -791,16 +772,13 @@ describe("gateway startup-migration refusal", () => {
           ...(startTime !== null ? { startTime } : {}),
         }),
       );
+      const runtimeRoot = createBuiltRuntime(root);
 
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
-        {
-          cwd: path.resolve("."),
-          encoding: "utf8",
-          env,
-          timeout: 30_000,
-        },
+      const result = runBuiltRuntime(
+        runtimeRoot,
+        env,
+        ["gateway", "run", "--allow-unconfigured"],
+        30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
 

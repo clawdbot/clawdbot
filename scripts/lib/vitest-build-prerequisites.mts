@@ -31,12 +31,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/cli",
   },
-  {
-    file: "src/commands/doctor-config-preflight.process.test.ts",
+  ...[
+    "src/commands/doctor-config-preflight.process.test.ts",
+    "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.commands.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/commands",
-  },
+  })),
   {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
