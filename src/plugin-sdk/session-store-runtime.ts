@@ -538,6 +538,11 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
       agentId,
       env: params.env,
     });
+  // Capture a generation fence before the lifecycle mutation begins. Any
+  // conversation binding created from this point onward belongs to a possible
+  // same-key successor session and must not be removed by the cleanup that
+  // follows the deletion (issue #115354).
+  const boundBeforeMs = Date.now();
   const result = await deleteAccessorSessionEntryLifecycle({
     ...(agentId !== undefined ? { agentId } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
@@ -562,9 +567,13 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
     // remaining owners from being cleaned because the session row has already
     // been committed deleted, but any failure is surfaced as a structured
     // partial-cleanup error instead of being silently discarded.
+    // The boundBefore fence keeps cleanup generation-aware: a successor that
+    // binds the same key after the lifecycle mutation has released cannot be
+    // erased by this delayed cleanup.
     await getSessionBindingService().unbind({
       targetSessionKey: params.sessionKey,
       reason: "session-delete",
+      boundBefore: boundBeforeMs,
     });
   }
   return result.deleted;

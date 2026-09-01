@@ -56,7 +56,10 @@ export type AccountScopedConversationBindingManager<TKind extends string = strin
   unbindConversation: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  unbindBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
+  unbindBySessionKey: (
+    targetSessionKey: string,
+    boundBefore?: number,
+  ) => AccountScopedConversationBindingRecord<TKind>[];
   stop: () => void;
 };
 
@@ -259,10 +262,12 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       );
       return previous ? asAccountBindingRecord(previous) : null;
     },
-    unbindBySessionKey: (targetSessionKey) =>
-      deleteCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope).map(
-        asAccountBindingRecord,
-      ),
+    unbindBySessionKey: (targetSessionKey, boundBefore) =>
+      deleteCurrentConversationBindingRecordsBySession(
+        targetSessionKey,
+        accountScope,
+        boundBefore,
+      ).map(asAccountBindingRecord),
     stop: () => {
       // Registrations are process-local; SQLite-owned bindings must survive manager shutdown.
       if (state.managersByAccountId.get(accountId) === manager) {
@@ -315,6 +320,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         return deleteCurrentConversationBindingRecordsBySession(
           input.targetSessionKey.trim(),
           accountScope,
+          input.boundBefore,
         );
       }
       const conversationId = resolveThreadBindingConversationIdFromBindingId({

@@ -241,6 +241,7 @@ function listCurrentConversationBindingRowsBySession(
   db: DatabaseSync,
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
+  boundBefore?: number,
   genericOnly = !scope,
 ): CurrentConversationBindingRow[] {
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
@@ -261,6 +262,9 @@ function listCurrentConversationBindingRowsBySession(
     // Generic lookups must not load or decode rows belonging to account-owned adapters.
     query = query.where("binding_id", "like", `${CURRENT_BINDINGS_ID_PREFIX}%`);
   }
+  if (boundBefore !== undefined) {
+    query = query.where("bound_at", "<=", boundBefore);
+  }
   return executeSqliteQuerySync(db, query.orderBy("binding_id", "asc")).rows;
 }
 
@@ -268,9 +272,15 @@ function listCurrentConversationBindingRowsBySession(
 export function listCurrentConversationBindingRecordsBySession(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
+  boundBefore?: number,
 ): SessionBindingRecord[] {
   const { db } = openOpenClawStateDatabase();
-  const rows = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope);
+  const rows = listCurrentConversationBindingRowsBySession(
+    db,
+    targetSessionKey,
+    scope,
+    boundBefore,
+  );
   const records = bindingRowsToRecords(rows);
   if (!records.some((record) => isBindingExpired(record))) {
     return records;
@@ -280,6 +290,7 @@ export function listCurrentConversationBindingRecordsBySession(
       transactionDb,
       targetSessionKey,
       scope,
+      boundBefore,
     );
     const active: SessionBindingRecord[] = [];
     for (const row of latestRows) {
@@ -298,6 +309,7 @@ export function listCurrentConversationBindingRecordsBySession(
 export function deleteCurrentConversationBindingRecordsBySession(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
+  boundBefore?: number,
   genericOnly = !scope,
 ): SessionBindingRecord[] {
   return runOpenClawStateWriteTransaction(({ db }) => {
@@ -305,6 +317,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
       db,
       targetSessionKey,
       scope,
+      boundBefore,
       genericOnly,
     );
     const removed: SessionBindingRecord[] = [];
@@ -549,6 +562,7 @@ export async function unbindGenericCurrentConversationBindings(
     ? deleteCurrentConversationBindingRecordsBySession(
         normalizedTargetSessionKey,
         input.scope,
+        input.boundBefore,
         true,
       )
     : [];

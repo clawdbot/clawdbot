@@ -657,6 +657,37 @@ describe("session binding service", () => {
     );
   });
 
+  it("respects boundBefore generation fence on session-delete cleanup", async () => {
+    const service = getSessionBindingService();
+    const targetSessionKey = "agent:main:acp:fence-session";
+    const first = await service.bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation: { channel: "workspace", accountId: "default", conversationId: "room-first" },
+    });
+    // Ensure the two bindings have distinct boundAt timestamps even on fast hosts.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await service.bind({
+      targetSessionKey,
+      targetKind: "session",
+      conversation: { channel: "workspace", accountId: "default", conversationId: "room-second" },
+    });
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    const fenceMs = (first!.boundAt + second!.boundAt) / 2;
+
+    await service.unbind({
+      targetSessionKey,
+      reason: "session-delete",
+      boundBefore: fenceMs,
+    });
+
+    expect(service.resolveByConversation(first!.conversation)).toBeNull();
+    expect(service.resolveByConversation(second!.conversation)).toEqual(
+      expect.objectContaining({ conversation: second!.conversation }),
+    );
+  });
+
   it("supports registered plugin channels through the generic current-conversation path", async () => {
     const service = getSessionBindingService();
 

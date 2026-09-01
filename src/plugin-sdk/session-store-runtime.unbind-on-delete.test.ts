@@ -2,7 +2,7 @@
 // successful deleteSessionEntry must unbind conversation bindings targeting
 // the deleted session, matching the gateway delete path. Without this, a
 // stale runtime binding keeps outranking configured ACP routes (issue #115354).
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSessionBindingService,
   isSessionBindingPartialCleanupError,
@@ -210,5 +210,105 @@ describe("session-store-runtime deleteSessionEntry unbinds conversation bindings
         conversationId: "conv-other",
       }),
     ).toBeNull();
+  });
+
+  it("keeps a same-key successor binding created after the lifecycle fence", async () => {
+    const sessionKey = "agent:main:acp:successor-session";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sdkchat",
+          source: "test",
+          plugin: {
+            id: "sdkchat",
+            meta: { aliases: [] },
+            conversationBindings: {
+              supportsCurrentConversationBinding: true,
+            },
+          },
+        },
+        {
+          pluginId: "adapterchat",
+          source: "test",
+          plugin: {
+            id: "adapterchat",
+            meta: { aliases: [] },
+            conversationBindings: {
+              supportsCurrentConversationBinding: true,
+            },
+          },
+        },
+      ]),
+    );
+
+    let releaseAdapter: (() => void) | undefined;
+    let adapterUnbindStarted = false;
+    let adapterBinding: SessionBindingRecord | null = null;
+    registerSessionBindingAdapter({
+      channel: "adapterchat",
+      accountId: "acct-1",
+      bind: async (input) => {
+        adapterBinding = {
+          bindingId: `adapter:${input.conversation.accountId}:${input.conversation.conversationId}`,
+          targetSessionKey: input.targetSessionKey,
+          targetKind: input.targetKind,
+          conversation: input.conversation,
+          status: "active",
+          boundAt: Date.now(),
+        };
+        return adapterBinding;
+      },
+      listBySession: (key) => (adapterBinding?.targetSessionKey === key ? [adapterBinding] : []),
+      resolveByConversation: () => null,
+      unbind: async () => {
+        adapterUnbindStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseAdapter = resolve;
+        });
+        const removed = adapterBinding ? [adapterBinding] : [];
+        adapterBinding = null;
+        return removed;
+      },
+    });
+
+    await seedSessionEntry(sessionKey, {
+      sessionId: "session-original",
+      updatedAt: Date.now(),
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "adapterchat",
+        accountId: "acct-1",
+        conversationId: "conv-adapter",
+      },
+    });
+
+    const deletePromise = deleteSessionEntry({ sessionKey, storePath });
+    await vi.waitFor(() => {
+      if (!adapterUnbindStarted) {
+        throw new Error("adapter unbind not started");
+      }
+    });
+
+    // While the adapter unbind is paused, a same-key successor binds through
+    // the generic path. This binding must survive the cleanup fence.
+    await getSessionBindingService().bind({
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "sdkchat",
+        accountId: "acct-1",
+        conversationId: "conv-successor",
+      },
+    });
+
+    releaseAdapter?.();
+    await expect(deletePromise).resolves.toBe(true);
+
+    const remaining = getSessionBindingService().listBySession(sessionKey);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.conversation.conversationId).toBe("conv-successor");
   });
 });

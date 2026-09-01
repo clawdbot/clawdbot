@@ -70,6 +70,13 @@ export type SessionBindingUnbindInput = {
   /** Restrict removal to this owner; omit only for intentional cross-channel cleanup. */
   scope?: SessionBindingScope;
   reason: string;
+  /**
+   * Generation fence: only bindings created at or before this timestamp are
+   * eligible for removal. Used by session-delete cleanup to avoid erasing a
+   * same-key successor binding that was created after the deleted session's
+   * lifecycle mutation finished.
+   */
+  boundBefore?: number;
 };
 
 /**
