@@ -569,13 +569,17 @@ fun ChatScreen(
 
   val shareImportNotice =
     when (attachmentNotices[composerOwner]) {
-      ChatComposerAttachmentNotice.Attachment ->
+      ChatComposerAttachmentNotice.Attachment -> {
         NativeText.Resource(source = "Could not stage an attachment for sending.", formatArgs = emptyList())
-      ChatComposerAttachmentNotice.Image ->
+      }
+
+      ChatComposerAttachmentNotice.Image -> {
         nativeText("Some shared images were omitted or could not be added.")
-      null ->
+      }
+
+      null -> {
         when {
-          sendMessageTooLong ->
+          sendMessageTooLong -> {
             joinedNativeText(
               separator = " ",
               parts =
@@ -584,9 +588,17 @@ fun ChatScreen(
                   verbatimText("${input.length}/$CHAT_COMPOSER_MAX_SEND_CHARS"),
                 ),
             )
-          sendCheckpointFull -> chatOutboxQueueFailureText()
-          else -> null
+          }
+
+          sendCheckpointFull -> {
+            chatOutboxQueueFailureText()
+          }
+
+          else -> {
+            null
+          }
         }
+      }
     }
 
   LaunchedEffect(chatDraft, composerOwner, mainSessionKey) {
@@ -1459,7 +1471,7 @@ private fun ChatMessageList(
         ) {
           itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
             when (item) {
-              is ChatTimelineItem.Message ->
+              is ChatTimelineItem.Message -> {
                 ChatBubble(
                   messageId = item.message.id,
                   entryId = item.message.entryId,
@@ -1481,20 +1493,26 @@ private fun ChatMessageList(
                   senderLabel = item.message.senderLabel,
                   disclosure = { disclosure(item.message) },
                 )
-              is ChatTimelineItem.OutboxCommand ->
+              }
+
+              is ChatTimelineItem.OutboxCommand -> {
                 ChatOutboxBubble(
                   item = item.item,
                   onRetry = { onRetryOutbox(item.item.id) },
                   onDelete = { onDeleteOutbox(item.item.id) },
                 )
-              is ChatTimelineItem.RecoveryOutboxCommand ->
+              }
+
+              is ChatTimelineItem.RecoveryOutboxCommand -> {
                 ChatOutboxBubble(
                   item = item.item,
                   retryEnabled = false,
                   onRetry = { onRetryOutbox(item.item.id) },
                   onDelete = { onDeleteOutbox(item.item.id) },
                 )
-              is ChatTimelineItem.OutboxRecoveryHeader ->
+              }
+
+              is ChatTimelineItem.OutboxRecoveryHeader -> {
                 ChatNotice(
                   title = nativeString("Messages to recover"),
                   body =
@@ -1503,18 +1521,36 @@ private fun ChatMessageList(
                       item.count,
                     ),
                 )
-              is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
-              is ChatTimelineItem.SubagentActivity ->
+              }
+
+              is ChatTimelineItem.PendingTools -> {
+                ToolBubble(toolCalls = item.toolCalls)
+              }
+
+              is ChatTimelineItem.SubagentActivity -> {
                 SubagentActivityRows(
                   activities = item.activities,
                   moreWorkingCount = item.moreWorkingCount,
                 )
-              is ChatTimelineItem.QuestionPrompt ->
+              }
+
+              is ChatTimelineItem.QuestionPrompt -> {
                 ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
-              is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
-              is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
-              is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
-              is ChatTimelineItem.StreamingAssistant ->
+              }
+
+              is ChatTimelineItem.TurnRecapSummary -> {
+                ChatTurnRecapRow(item.recap)
+              }
+
+              is ChatTimelineItem.SystemNotice -> {
+                ChatSystemNoticeRow(item)
+              }
+
+              is ChatTimelineItem.SystemDivider -> {
+                ChatSystemDividerRow(item)
+              }
+
+              is ChatTimelineItem.StreamingAssistant -> {
                 ChatBubble(
                   messageId = null,
                   entryId = null,
@@ -1534,6 +1570,8 @@ private fun ChatMessageList(
                   loadImageArtifact = loadImageArtifact,
                   loadMediaArtifact = loadMediaArtifact,
                 )
+              }
+
               ChatTimelineItem.Thinking -> {
                 val run = workingRun
                 if (run != null) {
@@ -1810,14 +1848,23 @@ internal fun ChatBubble(
   val displayableContent =
     content.filter { part ->
       when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
+        "text" -> {
+          !part.text.isNullOrBlank()
+        }
+
         "image" -> {
           val visible = visibleImageCount < 4
           visibleImageCount += 1
           visible
         }
-        "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.type == "file" || part.isAudioAttachment() || part.isVideoAttachment()
+
+        "canvas" -> {
+          normalizedRole == "assistant" && part.widget != null
+        }
+
+        else -> {
+          part.type == "file" || part.isAudioAttachment() || part.isVideoAttachment()
+        }
       }
     }
   val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
@@ -1888,37 +1935,58 @@ internal fun ChatBubble(
           }
           displayableContent.forEach { part ->
             when {
-              part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-              part.type == "text" -> Unit
-              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+              part.type == "text" && !collapsibleUserText -> {
+                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              }
+
+              part.type == "text" -> {
+                Unit
+              }
+
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
                 ChatAudioPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
-              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+              }
+
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
                 ChatVideoPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
-              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
-              part.type == "image" && !part.base64.isNullOrBlank() ->
+              }
+
+              part.isAudioAttachment() || part.isVideoAttachment() -> {
+                ChatMediaAttachmentLabel(content = part)
+              }
+
+              part.type == "image" && !part.base64.isNullOrBlank() -> {
                 ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
-              part.type == "image" && !part.artifactId.isNullOrBlank() ->
+              }
+
+              part.type == "image" && !part.artifactId.isNullOrBlank() -> {
                 ChatManagedImage(
                   artifactId = part.artifactId,
                   label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
                   resolverReady = inlineWidgetResolverReady,
                   loadImage = loadImageArtifact,
                 )
-              part.type == "canvas" && normalizedRole == "assistant" ->
+              }
+
+              part.type == "canvas" && normalizedRole == "assistant" -> {
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),
                   resolverReady = inlineWidgetResolverReady,
                   resolveResource = resolveInlineWidgetResource,
                 )
-              else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
+
+              else -> {
+                Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
             }
           }
           if (omittedImageCount > 0) {
@@ -2288,16 +2356,21 @@ private fun ProgressCardPill(card: ChatProgressCard) {
 private fun PlanStepMarker(status: ChatPlanStepStatus) {
   Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
     when (status) {
-      ChatPlanStepStatus.Completed ->
+      ChatPlanStepStatus.Completed -> {
         Text(
           text = "✓",
           style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
           color = ClawTheme.colors.success,
         )
-      ChatPlanStepStatus.InProgress ->
+      }
+
+      ChatPlanStepStatus.InProgress -> {
         Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
-      ChatPlanStepStatus.Pending ->
+      }
+
+      ChatPlanStepStatus.Pending -> {
         Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
+      }
     }
   }
 }
@@ -2709,7 +2782,9 @@ private fun ChatModelPickerRow(
         GatewayModelUnavailableReason.MissingAuth,
         GatewayModelUnavailableReason.AuthFailed,
         -> nativeString("Authentication needed")
+
         GatewayModelUnavailableReason.Cooldown -> nativeString("Unavailable")
+
         null -> nativeString("Unavailable")
       }
     }

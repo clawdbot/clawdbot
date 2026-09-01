@@ -200,8 +200,14 @@ private fun ChatLinkPreview(
       ) {
         Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         when (val preview = result) {
-          null -> Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          LinkPreviewResult.Failed -> Text(nativeString("No preview available"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          null -> {
+            Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+
+          LinkPreviewResult.Failed -> {
+            Text(nativeString("No preview available"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          }
+
           is LinkPreviewResult.Loaded -> {
             preview.metadata.title?.let { title ->
               Text(
@@ -282,10 +288,19 @@ fun ChatOutboxBubble(
   val statusColor = if (failed) ClawTheme.colors.danger else ClawTheme.colors.warning
   val statusLabel =
     when (item.status) {
-      ChatOutboxStatus.Queued -> nativeString("Queued — sends when reconnected")
-      ChatOutboxStatus.Sending -> nativeString("Sending…")
-      ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
-      ChatOutboxStatus.Failed ->
+      ChatOutboxStatus.Queued -> {
+        nativeString("Queued — sends when reconnected")
+      }
+
+      ChatOutboxStatus.Sending -> {
+        nativeString("Sending…")
+      }
+
+      ChatOutboxStatus.Accepted -> {
+        nativeString("Sent — confirming delivery…")
+      }
+
+      ChatOutboxStatus.Failed -> {
         chatOutboxDisplayError(item.lastError)
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
@@ -298,6 +313,7 @@ fun ChatOutboxBubble(
               }
             nativeString("Failed — \$it", localized)
           } ?: nativeString("Failed")
+      }
     }
 
   ChatBubbleContainer(
@@ -401,8 +417,11 @@ internal fun ChatManagedImage(
   }
 
   when {
-    image != null -> ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
-    failed ->
+    image != null -> {
+      ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
+    }
+
+    failed -> {
       Surface(
         onClick = { retryGeneration += 1 },
         shape = RoundedCornerShape(10.dp),
@@ -417,13 +436,16 @@ internal fun ChatManagedImage(
           color = ClawTheme.colors.textMuted,
         )
       }
-    else ->
+    }
+
+    else -> {
       Text(
         nativeString("Loading image…"),
         modifier = Modifier.padding(12.dp),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )
+    }
   }
 }
 
