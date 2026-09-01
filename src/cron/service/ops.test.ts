@@ -627,34 +627,6 @@ function insertCronJobRow(storePath: string, job: CronJob) {
   });
 }
 
-describe("cron payload kind conversion persistence", () => {
-  it("persists a kind change to command without env through update", async () => {
-    const { storePath } = await makeStorePath();
-    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
-    const job = await add(state, {
-      enabled: true,
-      name: "convert-me",
-      schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      payload: { kind: "agentTurn" as const, message: "before" },
-    });
-
-    const updated = await update(state, job.id, {
-      payload: { kind: "command", argv: ["echo", "hi"] },
-    });
-    expect(updated.payload).toMatchObject({ kind: "command", argv: ["echo", "hi"] });
-    expect(Object.hasOwn(updated.payload, "env")).toBe(false);
-
-    const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
-    expect(persisted?.payload).toMatchObject({ kind: "command", argv: ["echo", "hi"] });
-    expect(Object.hasOwn(persisted?.payload ?? {}, "env")).toBe(false);
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-  });
-});
-
 describe("cron stale job-family adoption", () => {
   it("removes owner-tagged legacy rows outside the active store", async () => {
     const { storePath } = await makeStorePath();

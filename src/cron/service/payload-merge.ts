@@ -62,20 +62,14 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
-  if (patch.kind === "systemEvent") {
-    if (existing.kind !== "systemEvent") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "systemEvent" && existing.kind === "systemEvent") {
     const text = typeof patch.text === "string" ? patch.text : existing.text;
     const next: Extract<CronPayload, { kind: "systemEvent" }> = { ...existing, text };
     applyToolsAllowPatch(next, patch, existing);
     return next;
   }
 
-  if (patch.kind === "command") {
-    if (existing.kind !== "command") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "command" && existing.kind === "command") {
     const next: Extract<CronPayload, { kind: "command" }> = { ...existing };
     if (Array.isArray(patch.argv)) {
       next.argv = patch.argv;
@@ -101,10 +95,7 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     applyToolsAllowPatch(next, patch, existing);
     return next;
   }
-  if (patch.kind === "script") {
-    if (existing.kind !== "script") {
-      return buildPayloadFromPatch(patch);
-    }
+  if (patch.kind === "script" && existing.kind === "script") {
     const next: Extract<CronPayload, { kind: "script" }> = { ...existing };
     if (typeof patch.script === "string") {
       next.script = patch.script;
@@ -119,13 +110,9 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
-  if (patch.kind !== "agentTurn") {
+  if (patch.kind !== "agentTurn" || existing.kind !== "agentTurn") {
     // System-owned payloads carry no fields; the service boundary already
     // rejects client patches for them.
-    return { kind: patch.kind };
-  }
-
-  if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
 
@@ -223,8 +210,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     ...(Array.isArray(patch.fallbacks) ? { fallbacks: patch.fallbacks } : {}),
     ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
     ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
-    ...(typeof patch.lightContext === "boolean" ? { lightContext: patch.lightContext } : {}),
-    ...(typeof patch.allowUnsafeExternalContent === "boolean"
+    ...(patch.lightContext !== undefined ? { lightContext: patch.lightContext } : {}),
+    ...(patch.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }
       : {}),
   };
