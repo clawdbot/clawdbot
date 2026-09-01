@@ -457,9 +457,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       if (previousState === "legacy" || previousState === "accepted") {
         expect(result.warnings).toEqual([]);
         expect(result.notices).toEqual([expect.stringContaining("--accept-capabilities")]);
+        expect(result.capabilityConsentRequired).toBeUndefined();
       } else {
         expect(result.warnings).toEqual([expect.stringContaining("--accept-capabilities")]);
         expect(result.notices).toBeUndefined();
+        expect(result.capabilityConsentRequired).toBe(true);
       }
     },
   );
@@ -520,6 +522,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       );
       expect(result.warnings).toEqual(["Review replacement capabilities."]);
       expect(result.notices).toBeUndefined();
+      expect(result.capabilityConsentRequired).toBe(true);
       if (siblingSucceeded) {
         expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
           result.records,
@@ -628,6 +631,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
       if (accepted) {
         expect(consent).toHaveBeenCalledOnce();
+        expect(result.capabilityConsentRequired).toBeUndefined();
         expect(result.warnings).toEqual([]);
         expect(result.records.matrix).toMatchObject({
           acceptedSurface: { tools: ["matrix.write"] },
@@ -652,6 +656,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         expect(result.records).toEqual({});
         expect(result.failedPluginIds).toEqual(["matrix"]);
         expect(result.warnings.join("\n")).toMatch(/capabilit/i);
+        expect(result.capabilityConsentRequired).toBe(true);
         expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
       }
     },
@@ -3721,86 +3726,152 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual(['Repaired broken installed plugin "demo".']);
   });
 
-  it("reinstalls a known configured plugin from the catalog when its recorded install path is missing", async () => {
-    const records = installedRecords("discord", {
-      spec: "@openclaw/discord",
-      installPath: "/tmp/openclaw-missing-discord-install-record",
-    });
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
-        {
-          id: "discord",
-          channels: ["discord"],
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      channelPluginEntry({
-        id: "discord",
-        npmSpec: "@openclaw/discord",
-        label: "Discord",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    ]);
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
+  it.each([
+    { recordedConsentRequired: false, siblingConsentRequired: false },
+    { recordedConsentRequired: true, siblingConsentRequired: false },
+    { recordedConsentRequired: true, siblingConsentRequired: true },
+  ])(
+    "reinstalls a known configured plugin from the catalog when its recorded install path is missing (recorded consent=$recordedConsentRequired, sibling consent=$siblingConsentRequired)",
+    async ({ recordedConsentRequired, siblingConsentRequired }) => {
+      const actual = await vi.importActual<typeof import("../../../plugins/capability-consent.js")>(
+        "../../../plugins/capability-consent.js",
+      );
+      prepareManagedPluginArtifactConsentHandler.mockImplementation(
+        actual.prepareManagedPluginArtifactConsentHandler,
+      );
+      const root = tempDirs.make("openclaw-doctor-catalog-recovery-");
+      const artifactDir = path.join(root, "artifact");
+      fs.mkdirSync(artifactDir);
+      createColdPluginFixture({
+        rootDir: artifactDir,
         pluginId: "discord",
-        npmSpec: "@openclaw/discord",
-        version: "1.2.3",
-      }),
-    );
-    mocks.updateNpmInstalledPlugins.mockResolvedValue({
-      changed: false,
-      config: {
-        plugins: {
-          installs: records,
+        packageName: "@openclaw/discord",
+        packageVersion: "1.2.3",
+        manifest: { contracts: { tools: ["fixture.write"] } },
+      });
+      const records = installedRecords("discord", {
+        spec: "@openclaw/discord",
+        installPath: path.join(root, "missing-discord"),
+      });
+      if (siblingConsentRequired) {
+        records.sibling = {
+          source: "npm",
+          spec: "@example/sibling",
+          installPath: path.join(root, "missing-sibling"),
+        };
+      }
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        index: { plugins: [] },
+        plugins: [
+          {
+            id: "discord",
+            channels: ["discord"],
+          },
+        ],
+        diagnostics: [],
+      });
+      mocks.listChannelPluginCatalogEntries.mockReturnValue([
+        channelPluginEntry({
+          id: "discord",
+          npmSpec: "@openclaw/discord",
+          label: "Discord",
+          trustedSourceLinkedOfficialInstall: true,
+        }),
+      ]);
+      mocks.installPluginFromNpmSpec.mockImplementationOnce(
+        async (params: { onBeforePluginArtifactCommit: PluginInstallArtifactConsentHandler }) => {
+          await params.onBeforePluginArtifactCommit({
+            pluginId: "discord",
+            stagedArtifactDir: artifactDir,
+            mode: "install",
+          });
+          return successfulInstall({
+            pluginId: "discord",
+            npmSpec: "@openclaw/discord",
+            version: "1.2.3",
+            targetDir: artifactDir,
+          });
         },
-      },
-      outcomes: [
-        {
-          pluginId: "discord",
-          status: "skipped",
-          message: "No update applied.",
+      );
+      mocks.updateNpmInstalledPlugins.mockResolvedValue({
+        changed: false,
+        config: {
+          plugins: {
+            installs: records,
+          },
         },
-      ],
-    });
+        outcomes: [
+          {
+            pluginId: "discord",
+            status: recordedConsentRequired ? "error" : "skipped",
+            ...(recordedConsentRequired ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
+            message: recordedConsentRequired
+              ? "Review recorded capabilities."
+              : "No update applied.",
+          },
+          ...(siblingConsentRequired
+            ? [
+                {
+                  pluginId: "sibling",
+                  status: "error",
+                  code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+                  message: "Review sibling capabilities.",
+                },
+              ]
+            : []),
+        ],
+      });
 
-    const result = await repairConfiguredPlugins({
-      plugins: {
-        entries: {
-          discord: { enabled: true },
+      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>(async (review) => ({
+        reviewToken: review.reviewToken,
+      }));
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          plugins: {
+            entries: {
+              discord: { enabled: true },
+              ...(siblingConsentRequired ? { sibling: { enabled: true } } : {}),
+            },
+          },
+          channels: {
+            discord: { enabled: true },
+          },
         },
-      },
-      channels: {
-        discord: { enabled: true },
-      },
-    });
+        env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        onCapabilityConsent,
+      });
 
-    const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
-      pluginIds: ["discord"],
-    });
-    const updateConfig = updateArg.config as Record<string, unknown>;
-    expectRecordFields(updateConfig.plugins, { installs: records });
-    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: expectedNpmInstallSpec("@openclaw/discord"),
-      expectedPluginId: "discord",
-      trustedSourceLinkedOfficialInstall: true,
-    });
-    const persistedRecords = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
-    expectRecordFields((persistedRecords as Record<string, unknown>).discord, {
-      spec: "@openclaw/discord",
-      installPath: "/tmp/openclaw-plugins/discord",
-    });
-    expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
-      config: expect.any(Object),
-      env: {},
-    });
-    expect(result.changes).toEqual([
-      `Installed missing configured plugin "discord" from ${expectedNpmInstallSpec("@openclaw/discord")}.`,
-    ]);
-  });
+      const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
+        pluginIds: siblingConsentRequired ? ["discord", "sibling"] : ["discord"],
+      });
+      const updateConfig = updateArg.config as Record<string, unknown>;
+      expectRecordFields(updateConfig.plugins, { installs: records });
+      expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+        spec: expectedNpmInstallSpec("@openclaw/discord"),
+        expectedPluginId: "discord",
+        trustedSourceLinkedOfficialInstall: true,
+      });
+      const persistedRecords = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
+      expectRecordFields((persistedRecords as Record<string, unknown>).discord, {
+        spec: "@openclaw/discord",
+        installPath: artifactDir,
+      });
+      expect(mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords, 0, 1)).toEqual({
+        config: expect.any(Object),
+        env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      });
+      expect(result.changes).toEqual([
+        `Installed missing configured plugin "discord" from ${expectedNpmInstallSpec("@openclaw/discord")}.`,
+      ]);
+      expect(onCapabilityConsent).toHaveBeenCalledOnce();
+      expect(result.records.discord?.acceptedSurface?.tools).toEqual(["fixture.write"]);
+      expect(result.repairedPluginIds).toEqual(["discord"]);
+      expect(result.capabilityConsentRequired).toBe(siblingConsentRequired ? true : undefined);
+    },
+  );
 
   it("updates a known configured plugin when its installed manifest path still exists", async () => {
     const records = installedRecords("discord", {

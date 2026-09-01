@@ -48,6 +48,8 @@ type RepairMissingPluginInstallsResult = {
   /** User-facing notices from successful repairs that still need operator review. */
   notices?: string[];
   warnings: string[];
+  /** Consent blocked activation; a retained usable enabled artifact only emits a notice. */
+  capabilityConsentRequired?: true;
   /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
   /** Successful install-record or package repairs that invalidate retained metadata. */
@@ -175,6 +177,7 @@ async function repairMissingPluginInstallsWithLease(
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
+  const consentBlockedPluginIds = new Set<string>();
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -198,6 +201,9 @@ async function repairMissingPluginInstallsWithLease(
       );
     } else {
       warnings.push(...messages);
+      if (code === PLUGIN_CAPABILITY_CONSENT_REQUIRED) {
+        consentBlockedPluginIds.add(pluginId);
+      }
     }
     failedPluginIds.add(pluginId);
   };
@@ -406,6 +412,8 @@ async function repairMissingPluginInstallsWithLease(
     notices.push(...installed.notices);
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
+      // Catalog recovery can succeed after the recorded-package attempt refused consent.
+      consentBlockedPluginIds.delete(candidate.pluginId);
     }
     if (installed.failedPluginId) {
       recordFailure(installed.failedPluginId, installed.warnings, installed.code);
@@ -425,6 +433,7 @@ async function repairMissingPluginInstallsWithLease(
   return {
     changes,
     warnings,
+    ...(consentBlockedPluginIds.size > 0 ? { capabilityConsentRequired: true as const } : {}),
     ...(notices.length > 0 ? { notices } : {}),
     ...(deferredRepairDetails.length > 0 ? { deferredRepairDetails } : {}),
     ...(repairedPluginIds.size > 0
