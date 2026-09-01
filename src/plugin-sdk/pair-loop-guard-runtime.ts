@@ -401,14 +401,18 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     entry.windowMs = windowMs;
     pruneRecentEvents(entry, nowMs, windowMs);
     const eventId = paramsLocal.eventId?.trim();
-    if (eventId && entry.recentEvents.some((event) => event.eventId === eventId)) {
-      return { suppressed: false };
-    }
+    const pairReplay =
+      eventId !== undefined && entry.recentEvents.some((event) => event.eventId === eventId);
     // The burst bucket records each unique event even when the pair budget
     // suppresses it, so a live storm remains armed through pair cooldown gaps.
     const burstResult = recordConversationBurstAndCheck({ ...paramsLocal, nowMs });
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
+    }
+    // Replay identity prevents either budget from being consumed twice, but it must not bypass
+    // an already-active conversation cooldown returned by the burst bucket above.
+    if (pairReplay) {
+      return burstResult;
     }
 
     entry.recentEvents.push({

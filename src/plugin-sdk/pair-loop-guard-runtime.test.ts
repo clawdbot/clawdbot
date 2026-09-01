@@ -347,15 +347,36 @@ describe("conversation burst budget", () => {
     ).toBe(true);
   });
 
+  it("keeps an active conversation cooldown when an earlier pair event is replayed", () => {
+    const guard = createPairLoopGuard();
+    for (let index = 0; index <= 10; index += 1) {
+      guard.recordAndCheck({
+        ...base,
+        senderId: `bot-${index % 2}`,
+        eventId: `event-${index}`,
+        nowMs: index * 1_000,
+      });
+    }
+
+    expect(
+      guard.recordAndCheck({
+        ...base,
+        senderId: "bot-0",
+        eventId: "event-0",
+        nowMs: 10_001,
+      }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 15_000 });
+  });
+
   it("deduplicates a replay even when its first delivery was pair-suppressed", () => {
     const guard = createPairLoopGuard();
-    const settings = {
+    const strictSettings = {
       ...burstSettings,
       maxEventsPerWindow: 1,
       cooldownMs: 1_000,
       maxConversationBotEvents: 4,
     };
-    const strictBase = { ...base, settings };
+    const strictBase = { ...base, settings: strictSettings };
 
     expect(
       guard.recordAndCheck({ ...strictBase, senderId: "bot-0", eventId: "a", nowMs: 0 }),
