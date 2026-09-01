@@ -59,7 +59,7 @@ export function tagPendingCommentaryText(
 }
 
 /** Records the confirmed final-answer boundary after reasoning resumes. */
-export function tagInterruptedTextPhases(
+function tagInterruptedTextPhases(
   content: ReadonlyArray<unknown>,
   interruptedText: unknown,
   preservedVisibleText: ReadonlySet<unknown> = EMPTY_ASSISTANT_TEXT_BLOCK_SET,
