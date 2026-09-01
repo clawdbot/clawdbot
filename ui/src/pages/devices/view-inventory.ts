@@ -89,11 +89,11 @@ export function renderDeviceInventory(props: DevicesProps) {
   const empty = groups.length === 0 && !gatewayPresence;
   const deviceRows = html`
     ${gatewayPresence ? renderPresenceRow({ kind: "gateway", entry: gatewayPresence }) : nothing}
-    ${empty
-      ? loading
-        ? renderSettingsLoadingSkeleton()
-        : renderSettingsEmpty(t("devices.inventory.empty"))
-      : groups.map((group) => renderInventoryGroup(group, props))}
+    ${loading && groups.length === 0
+      ? renderSettingsLoadingSkeleton()
+      : empty
+        ? renderSettingsEmpty(t("devices.inventory.empty"))
+        : groups.map((group) => renderInventoryGroup(group, props))}
   `;
   return html`
     ${props.devicesError ? html`<div class="callout danger">${props.devicesError}</div>` : nothing}

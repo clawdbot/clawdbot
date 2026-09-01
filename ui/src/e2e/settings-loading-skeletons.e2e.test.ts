@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -16,25 +15,29 @@ const suite = createControlUiE2eSuite({
 });
 
 const proofStage = process.env.OPENCLAW_UI_PROOF_STAGE ?? "after";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-loading-skeletons",
-  proofStage,
-);
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const captureBeforeProof = captureUiProof && proofStage === "before";
+
+async function captureScreenshot(
+  target: import("playwright").Locator,
+  name: string,
+): Promise<void> {
+  if (!captureUiProof) {
+    return;
+  }
+  await target.screenshot({
+    animations: "disabled",
+    path: path.join(suite.artifactDir, `${proofStage}-${name}.png`),
+  });
+}
 
 async function captureLoadingState(
   target: import("playwright").Locator,
   name: string,
 ): Promise<void> {
   await target.waitFor({ state: "visible" });
-  await mkdir(proofDir, { recursive: true });
-  await target.screenshot({
-    animations: "disabled",
-    path: path.join(proofDir, `${name}.png`),
-  });
-  if (proofStage === "before") {
+  await captureScreenshot(target, name);
+  if (captureBeforeProof) {
     return;
   }
   const skeletons = target.locator(".settings-loading-skeleton");
@@ -149,6 +152,7 @@ suite.define(() => {
           "device.pair.list": { paired: [], pending: [] },
           "node.list": { nodes: [] },
         },
+        presenceUsers: [{ host: "Gateway", id: "gateway", mode: "gateway" }],
       });
       await page.goto(`${suite.server.baseUrl}settings/devices`);
       await waitForControlUiRoute(page, {
@@ -263,7 +267,7 @@ suite.define(() => {
         "agent-tools-available",
       );
       await captureLoadingState(
-        proofStage === "before"
+        captureBeforeProof
           ? panel.locator(".callout", { hasText: "Loading runtime tool catalog" }).first()
           : panel.locator(".settings-section", { hasText: "Tool catalog" }).first(),
         "agent-tools-catalog",
@@ -320,10 +324,7 @@ suite.define(() => {
       const spinner = history.locator(".custodian__history-spinner");
       await spinner.waitFor({ state: "visible" });
       expect(await history.locator(".settings-loading-skeleton").count()).toBe(0);
-      await history.screenshot({
-        animations: "disabled",
-        path: path.join(proofDir, "custodian-refresh.png"),
-      });
+      await captureScreenshot(history, "custodian-refresh");
     });
   });
 
@@ -414,11 +415,7 @@ suite.define(() => {
       await spinner.waitFor({ state: "visible" });
       expect(await spinner.isVisible()).toBe(true);
       expect(await panel.locator(".settings-loading-skeleton").count()).toBe(0);
-      await mkdir(proofDir, { recursive: true });
-      await panel.screenshot({
-        animations: "disabled",
-        path: path.join(proofDir, "config-schema.png"),
-      });
+      await captureScreenshot(panel, "config-schema");
     });
   });
 
