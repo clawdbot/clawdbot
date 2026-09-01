@@ -15,7 +15,7 @@ import {
 import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
-} from "../../../packages/gateway-protocol/src/schema.js";
+} from "../../../packages/gateway-protocol/src/schema/system-event.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import {
   readUtilityModelSetting,
