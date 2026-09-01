@@ -1,8 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  hasErrnoCode,
+  readLegacyJsonStateFile,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -252,9 +253,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       });
       let keys: ReefKeys;
       try {
-        keys = parseReefKeys(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+        keys = parseReefKeys(JSON.parse(await readLegacyJsonStateFile(filePath)) as unknown);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        if (hasErrnoCode(error, "ENOENT")) {
           return { changes, warnings };
         }
         warnings.push(
@@ -378,12 +379,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         if (!(await legacyReefFileExists(filePath))) {
           continue;
         }
-        let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
+        let parsed: unknown;
         try {
-          legacy = source.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-        } catch {
-          // The structural validation below owns the fail-closed warning.
+          parsed = JSON.parse(await readLegacyJsonStateFile(filePath)) as unknown;
+        } catch (error) {
+          if (hasErrnoCode(error, "ENOENT")) {
+            continue;
+          }
+          if (!(error instanceof SyntaxError)) {
+            warnings.push(
+              `Failed importing ${source.label}: ${String(error)}; left source in place`,
+            );
+            continue;
+          }
         }
+        const legacy = source.parse(parsed);
         if (!legacy) {
           warnings.push(`Failed importing ${source.label}: invalid JSON; left source in place`);
           continue;

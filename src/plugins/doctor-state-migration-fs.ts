@@ -1,5 +1,34 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "../infra/file-read.js";
+
+const MAX_LEGACY_JSON_STATE_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Reads one small legacy JSON source through the descriptor that was size-checked. */
+export async function readLegacyJsonStateFile(filePath: string): Promise<string> {
+  const file = await fs.open(filePath, "r");
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Legacy state source is not a regular file: ${filePath}`);
+    }
+    if (stat.size > MAX_LEGACY_JSON_STATE_FILE_BYTES) {
+      throw new Error(
+        `Legacy state file is too large: ${stat.size} bytes exceeds ${MAX_LEGACY_JSON_STATE_FILE_BYTES} bytes: ${filePath}`,
+      );
+    }
+    // The descriptor pins the checked file, and the fixed window prevents a
+    // concurrent writer from growing the migration read past the safety cap.
+    const buffer = Buffer.alloc(stat.size);
+    const bytesRead = await readFileWindowFully(file, buffer, 0);
+    if (bytesRead !== buffer.length) {
+      throw new Error(`Legacy state file shrank while reading: ${filePath}`);
+    }
+    return buffer.toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
 
 /** True when the legacy-state path exists and is a regular file. */
 export async function legacyStateFileExists(filePath: string): Promise<boolean> {

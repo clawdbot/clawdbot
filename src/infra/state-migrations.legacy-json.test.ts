@@ -63,29 +63,33 @@ describe("legacy JSON plugin migration diagnostics", () => {
       { fault: "EACCES", expectedError: "EACCES" },
       { fault: "EIO", expectedError: "EIO" },
       { fault: "invalid JSON", expectedError: "SyntaxError" },
+      { fault: "oversized JSON", expectedError: "too large" },
       { fault: "ENOENT", expectedError: null },
       { fault: "unrecognized shape", expectedError: null },
     ])(
       "reports $fault without importing or archiving the source",
       async ({ fault, expectedError }) => {
-        const source = fault === "invalid JSON" ? "{" : "{}";
+        const source =
+          fault === "invalid JSON"
+            ? "{"
+            : fault === "oversized JSON"
+              ? "[]" + " ".repeat(10 * 1024 * 1024)
+              : "{}";
         if (fault !== "ENOENT") {
           await fs.writeFile(sourcePath, source, "utf8");
         }
+        const archivedPath = `${sourcePath}.migrated`;
+        const priorArchive = fault === "oversized JSON" ? "previous recovery" : null;
+        if (priorArchive) {
+          await fs.writeFile(archivedPath, priorArchive, "utf8");
+        }
         const readFile = fs.readFile.bind(fs);
-        let sourceReads = 0;
-        vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
-          if (filePath === sourcePath) {
-            sourceReads++;
-            // Let detection succeed, then fail the direct migration read.
-            if (phase === "migration" && sourceReads === 1) {
-              return '[{"disabled":true}]';
-            }
-            if (fault === "EACCES" || fault === "EIO") {
-              throw Object.assign(new Error(`${fault}: read ${sourcePath}`), { code: fault });
-            }
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+          if (filePath === sourcePath && (fault === "EACCES" || fault === "EIO")) {
+            throw Object.assign(new Error(`${fault}: open ${sourcePath}`), { code: fault });
           }
-          return readFile(filePath, options);
+          return await open(filePath, flags, mode);
         });
 
         let warnings: string[];
@@ -100,13 +104,15 @@ describe("legacy JSON plugin migration diagnostics", () => {
           expect(detected.pluginPlans?.hasLegacy).toBe(false);
           warnings = detected.warnings;
         } else {
+          vi.spyOn(registry.entries[0]!.migration, "detectLegacyState").mockResolvedValue({
+            preview: ["Fixture legacy state"],
+          });
           const result = await autoMigrateLegacyPluginDoctorState({
             config: {},
             env: state.env,
             homedir: () => state.home,
           });
           expect(result.changes).toEqual([]);
-          expect(sourceReads).toBe(2);
           warnings = result.warnings;
         }
 
@@ -125,7 +131,11 @@ describe("legacy JSON plugin migration diagnostics", () => {
         if (fault !== "ENOENT") {
           await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
         }
-        await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+        if (priorArchive) {
+          await expect(readFile(archivedPath, "utf8")).resolves.toBe(priorArchive);
+        } else {
+          await expect(fs.stat(archivedPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
       },
     );
   });

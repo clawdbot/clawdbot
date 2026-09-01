@@ -6,16 +6,19 @@
  * uninstall flows). Those stay on focused repair and plugin-state-store subpaths;
  * the deprecated `runtime-doctor` package facade re-exports only this light module.
  */
-import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
-import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
+import {
+  archiveLegacyStateSource,
+  readLegacyJsonStateFile,
+} from "../plugins/doctor-state-migration-fs.js";
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
+export { hasErrnoCode } from "../infra/errno.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
 export {
   createLegacyPrivateNetworkDoctorContract,
@@ -60,6 +63,7 @@ export type {
 export {
   archiveLegacyStateSource,
   legacyStateFileExists,
+  readLegacyJsonStateFile,
 } from "../plugins/doctor-state-migration-fs.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
@@ -414,7 +418,7 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
 }): PluginDoctorStateMigration {
   const readSource = async (filePath: string): Promise<TSource | null> => {
     try {
-      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+      return params.parse(JSON.parse(await readLegacyJsonStateFile(filePath)) as unknown);
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;

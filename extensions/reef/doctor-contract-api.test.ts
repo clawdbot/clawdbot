@@ -348,6 +348,41 @@ describe("Reef doctor contract", () => {
     );
   });
 
+  it.each([
+    {
+      filename: "keys.json",
+      migrationId: "reef-keys-json-to-plugin-state",
+      value: reefKeys(),
+    },
+    {
+      filename: "identity.json",
+      migrationId: "reef-registration-json-to-plugin-state",
+      value: { handle: "molty", relayUrl: "https://reefwire.ai" },
+    },
+  ])("preserves an oversized $filename and its existing archive", async (testCase) => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const filePath = path.join(legacyDir, testCase.filename);
+    const archivePath = `${filePath}.migrated`;
+    const json = JSON.stringify(testCase.value);
+    const source = json + " ".repeat(10 * 1024 * 1024 + 1 - Buffer.byteLength(json));
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(filePath, source);
+    fs.writeFileSync(archivePath, "previous recovery");
+
+    const result = await migrationById(testCase.migrationId).migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("too large")]);
+    expect(fs.readFileSync(filePath, "utf8")).toBe(source);
+    expect(fs.readFileSync(archivePath, "utf8")).toBe("previous recovery");
+  });
+
   it("keeps legacy identity keys blocked until their handle binding is canonical", async () => {
     const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const keys = reefKeys();

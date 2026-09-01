@@ -143,8 +143,10 @@ and plugin-state import behavior.
 
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
-errors and invalid JSON reach Doctor's detection or migration warnings; the
-source remains untouched so the operator can fix it and retry.
+errors, invalid JSON, and sources larger than 10 MiB reach Doctor's detection or
+migration warnings. The source remains untouched so the operator can fix it and
+retry. The size check and read use one open file descriptor, so replacing or
+growing the path cannot bypass the limit.
 
 Use `phase: "after-session-repair"` when a migration needs canonical session
 ownership evidence. Ordinary Doctor detects these migrations; `--fix` applies

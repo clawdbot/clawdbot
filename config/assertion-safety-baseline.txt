@@ -1089,7 +1089,6 @@ extensions/raft/src/accounts.ts	1
 extensions/raft/src/gateway.ts	2
 extensions/raft/src/inbound.ts	1
 extensions/raft/src/setup.ts	2
-extensions/reef/doctor-contract-api.ts	1
 extensions/reef/protocol/audit.ts	1
 extensions/reef/protocol/canonical.ts	1
 extensions/reef/protocol/envelope.ts	1
