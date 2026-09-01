@@ -114,6 +114,31 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     },
   );
 
+  it("runs a targeted immediate cron wake when recurring heartbeats are disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:one-shot",
+        agentId: "main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:one-shot",
+      },
+    });
+    runner.stop();
+  });
+
   it.each([
     {
       name: "without a session target",
@@ -170,6 +195,30 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
       intent: "immediate",
       reason: "wake",
       sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it("keeps targeted cron wakes disabled when heartbeats are globally disabled", async () => {
+    useFakeHeartbeatTime();
+    setHeartbeatsEnabled(false);
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:one-shot",
+      agentId: "main",
       coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
@@ -341,6 +390,27 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
       intent: "immediate",
       reason: "hook:123e4567-e89b-12d3-a456-426614174000",
       agentId: "bogus",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it("rejects targeted cron wakes for unconfigured agents", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { list: [{ id: "main" }] } } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:one-shot",
+      agentId: "unknown",
       coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
