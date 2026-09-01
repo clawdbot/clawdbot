@@ -499,6 +499,49 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("honors named account enablement in manifest-only inventory", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      manifestChannelConfig: true,
+    });
+    const metadataSnapshot = resolvePluginMetadataSnapshot({
+      config: createExternalChannelTestConfig({ pluginDir }),
+    });
+    const resolveEnabled = (channels: Record<string, Record<string, unknown>>) => {
+      const cfg = createExternalChannelTestConfig({ pluginDir, channels });
+      const plugin = listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot }).find(
+        (entry) => entry.id === "external-chat",
+      );
+      expect(plugin).toBeDefined();
+      const account = plugin!.config.resolveAccount(cfg, "ops");
+      return plugin!.config.isEnabled(account, cfg);
+    };
+
+    expect(
+      resolveEnabled({
+        "external-chat": {
+          enabled: true,
+          accounts: { ops: { enabled: false, token: "disabled" } },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnabled({
+        "external-chat": {
+          enabled: false,
+          accounts: { ops: { enabled: true, token: "enabled" } },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnabled({
+        "external-chat": {
+          enabled: false,
+          accounts: { ops: { token: "inherits-disabled" } },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("reevaluates persisted auth without replacing manifest adapters or loading channel runtime", () => {
     const stateDir = makePluginLoaderTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

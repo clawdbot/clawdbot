@@ -221,6 +221,17 @@ function resolveManifestChannelAccountConfig(params: {
   return channelConfig;
 }
 
+function isManifestChannelAccountEnabled(params: {
+  account: { config: Record<string, unknown> };
+  cfg: OpenClawConfig;
+  channelId: string;
+}): boolean {
+  const accountEnabled = params.account.config.enabled;
+  return typeof accountEnabled === "boolean"
+    ? accountEnabled
+    : getChannelConfigRecord(params.cfg, params.channelId).enabled !== false;
+}
+
 function buildManifestChannelPlugin(params: {
   record: PluginManifestRecord;
   channelId: string;
@@ -316,7 +327,12 @@ function createManifestChannelPlugin(params: {
           accountId,
         }),
       }),
-      isEnabled: (_account, cfg) => getChannelConfigRecord(cfg, params.channelId).enabled !== false,
+      isEnabled: (account, cfg) =>
+        isManifestChannelAccountEnabled({
+          account,
+          cfg,
+          channelId: params.channelId,
+        }),
       isConfigured: (_account, cfg) =>
         hasExplicitChannelConfig({
           config: cfg,
