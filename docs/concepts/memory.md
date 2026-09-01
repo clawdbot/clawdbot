@@ -257,7 +257,9 @@ owner or agent-derived items into long-term memory (`MEMORY.md`):
   `plugins.entries.<memory-plugin>.config.dreaming.enabled: false` on the active memory
   plugin (by default `memory-core`).
 - **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron
-  job for a full dreaming sweep.
+  job for a full dreaming sweep. A selected non-core memory plugin must explicitly
+  declare the `memory-core` Dreaming engine in its manifest before OpenClaw loads
+  that sidecar; bundled `memory-lancedb` does.
 - **Thresholded**: promotions must pass score, recall-frequency, and
   query-diversity gates.
 - **Consolidated**: a bounded subagent rewrite merges duplicates and

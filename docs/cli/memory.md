@@ -460,8 +460,9 @@ material), **REM** (reflect and surface themes), **deep** (promote durable
 facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
 
 - Enable with `plugins.entries.<memory-plugin>.config.dreaming.enabled: true` on the active
-  memory plugin (by default `memory-core`; default `true`); the active memory plugin
-  auto-manages the sweep cron job, no manual `openclaw cron add` required.
+  memory plugin (by default `memory-core`; default `true`); `memory-core` executes the lifecycle
+  directly or as an explicitly declared sidecar for a supporting non-core plugin, and auto-manages
+  the sweep cron job. No manual `openclaw cron add` is required.
 - Toggle from chat with `/dreaming on|off`; inspect with `/dreaming status`
   (or `/dreaming`/`/dreaming help`). `on`/`off` requires channel owner status
   or gateway `operator.admin`; `status` and help stay available to anyone who

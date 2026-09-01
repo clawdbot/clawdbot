@@ -264,6 +264,32 @@ describe("loadOpenClawPlugins", () => {
         },
       },
       {
+        label: "does not infer dreaming support for memory plugins without an engine contract",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({ supportsDreaming: false });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const selected = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("not in allowlist");
+          expect(selected?.status).toBe("loaded");
+        },
+      },
+      {
         label: "keeps restrictive allowlist dreaming sidecar in manifest-only snapshots",
         loadRegistry: () => {
           const { selectedId } = setupBundledDreamingMemoryPlugins({

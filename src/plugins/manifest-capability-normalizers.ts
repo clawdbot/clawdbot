@@ -371,6 +371,7 @@ const MANIFEST_CONTRACT_KEYS = [
   "workerProviders",
   "usageProviders",
   "migrationProviders",
+  "memoryDreamingEngines",
   "gatewayMethodDispatch",
   "tools",
 ] as const satisfies readonly (keyof PluginManifestContracts)[];

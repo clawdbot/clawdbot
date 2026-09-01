@@ -11,6 +11,7 @@ import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
+  supportsMemoryDreamingEngine,
 } from "../memory-host-sdk/dreaming.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
@@ -121,7 +122,8 @@ export function resolveAuthorizedDreamingSidecar(params: {
     !selectedMemoryPlugin ||
     !sidecarPlugin ||
     !hasKind(selectedMemoryPlugin.kind, "memory") ||
-    !hasKind(sidecarPlugin.kind, "memory")
+    !hasKind(sidecarPlugin.kind, "memory") ||
+    !supportsMemoryDreamingEngine(selectedMemoryPlugin.contracts, engineId)
   ) {
     return null;
   }

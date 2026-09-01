@@ -27,10 +27,24 @@ const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
+export const MEMORY_DREAMING_ENGINE_CONTRACT = "memoryDreamingEngines";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 export const MANAGED_MEMORY_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 export const MEMORY_DREAMING_SYSTEM_EVENT_TEXT =
   "__openclaw_memory_core_short_term_promotion_dream__";
+
+export function supportsMemoryDreamingEngine(
+  contracts: Readonly<Record<string, readonly string[]>> | undefined,
+  engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
+): boolean {
+  const normalizedEngineId = normalizeLowercaseStringOrEmpty(engineId);
+  return Boolean(
+    normalizedEngineId &&
+    contracts?.[MEMORY_DREAMING_ENGINE_CONTRACT]?.some(
+      (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedEngineId,
+    ),
+  );
+}
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME = "Memory Light Dreaming";
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
 export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";

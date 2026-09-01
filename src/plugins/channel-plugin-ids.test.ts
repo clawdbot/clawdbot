@@ -209,8 +209,16 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       },
     },
     { id: "voice-call", activation: { onStartup: true } },
-    { id: "memory-core", kind: "memory" },
-    { id: "memory-lancedb", kind: "memory" },
+    {
+      id: "memory-core",
+      kind: "memory",
+      contracts: { memoryDreamingEngines: ["memory-core"] },
+    },
+    {
+      id: "memory-lancedb",
+      kind: "memory",
+      contracts: { memoryDreamingEngines: ["memory-core"] },
+    },
     { id: "demo-global-sidecar", origin: "global", activation: { onStartup: true } },
     {
       id: "demo-global-startup-opt-out",
@@ -2437,6 +2445,32 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         },
       } as OpenClawConfig,
       expected: ["browser", "memory-core", "memory-lancedb"],
+    });
+  });
+
+  it("does not start a dreaming sidecar for memory plugins without an engine contract", () => {
+    const registry = createManifestRegistryFixture();
+    useManifestRegistryFixture({
+      ...registry,
+      plugins: registry.plugins.map((plugin) =>
+        plugin.id === "memory-lancedb"
+          ? Object.assign({}, plugin, { contracts: undefined })
+          : plugin,
+      ),
+    });
+
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-lancedb"],
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
     });
   });
 

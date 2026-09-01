@@ -1932,6 +1932,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "wecom-openclaw-plugin",
       channels: ["wecom"],
       configSchema: { type: "object" },
+      contracts: { memoryDreamingEngines: ["memory-core"] },
     });
 
     const registry = loadRegistry([
@@ -1944,6 +1945,7 @@ describe("loadPluginManifestRegistry", () => {
     ]);
 
     expect(registry.plugins[0]?.contracts?.tools).toEqual(["wecom_mcp"]);
+    expect(registry.plugins[0]?.contracts?.memoryDreamingEngines).toEqual(["memory-core"]);
     const wecomConfig = expectRecordFields(
       registry.plugins[0]?.channelConfigs?.wecom,
       "wecom config",

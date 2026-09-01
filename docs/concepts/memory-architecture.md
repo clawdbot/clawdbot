@@ -433,6 +433,9 @@ knobs that exist:
 | Flush behavior                  | `agents.defaults.compaction.memoryFlush`                                                                 | [Memory overview](/concepts/memory)                      |
 | Memory plugin selection         | `plugins.slots.memory`                                                                                   | [Builtin](/concepts/memory-builtin), [Plugins](/plugins) |
 
+Non-core memory plugins require an explicit `memoryDreamingEngines` manifest contract before
+OpenClaw loads the `memory-core` Dreaming sidecar.
+
 ## Related
 
 - [Memory overview](/concepts/memory)

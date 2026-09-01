@@ -675,6 +675,12 @@ before applying it. Source session transcripts remain in the session store.
 
 Dreaming is configured under `plugins.entries.<memory-plugin>.config.dreaming` on the active memory plugin (selected by `plugins.slots.memory`, by default `memory-core`), not under `memory.search`.
 
+The selected plugin is the configuration owner; `memory-core` is the execution owner. Non-core
+memory plugins must explicitly list `memory-core` in their manifest's
+`contracts.memoryDreamingEngines` before OpenClaw will load that sidecar. The bundled
+`memory-lancedb` plugin declares this contract. If the contract is absent, or `memory-core` is
+disabled or denied, OpenClaw does not infer Dreaming support.
+
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 
 For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).

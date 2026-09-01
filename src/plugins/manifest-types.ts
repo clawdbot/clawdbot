@@ -472,6 +472,8 @@ export type PluginManifestContracts = {
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   usageProviders?: string[];
   migrationProviders?: string[];
+  /** Memory Dreaming engine ids this plugin can use when it owns the memory slot. */
+  memoryDreamingEngines?: string[];
   gatewayMethodDispatch?: string[];
   tools?: string[];
 };

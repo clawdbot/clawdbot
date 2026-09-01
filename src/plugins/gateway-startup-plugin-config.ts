@@ -15,6 +15,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
+  supportsMemoryDreamingEngine,
 } from "../memory-host-sdk/dreaming.js";
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
@@ -179,7 +180,11 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
     (plugin) => plugin.pluginId === params.selectedMemoryPluginId,
   );
   const sidecarPlugin = params.index.plugins.find((plugin) => plugin.pluginId === engineId);
-  if (!selectedPlugin?.startup.memory || !sidecarPlugin?.startup.memory) {
+  if (
+    !selectedPlugin?.startup.memory ||
+    !sidecarPlugin?.startup.memory ||
+    !supportsMemoryDreamingEngine(selectedPlugin.contributions?.contracts, engineId)
+  ) {
     return new Set();
   }
   const activationState = resolveEffectivePluginActivationState({
