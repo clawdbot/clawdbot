@@ -120,6 +120,7 @@ type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "docume
 const MANAGED_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
   "application/pdf",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/yaml",

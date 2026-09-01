@@ -2340,6 +2340,31 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
   });
 
+  it("prepares advertised PowerPoint documents as managed attachments", async () => {
+    const pptxPath = path.join(stateDir, "deck.pptx");
+    await fs.writeFile(pptxPath, Buffer.from("PK\x03\x04 pptx placeholder"));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [pptxPath],
+      stateDir,
+      localRoots: [stateDir],
+      allowLocalNonImage: true,
+      messageId: "msg-pptx",
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "document",
+          label: "deck.pptx",
+          mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }),
+      },
+    ]);
+  });
+
   it("does not apply the configured image cap to managed audio", async () => {
     const audioPath = path.join(stateDir, "large-audio.mp3");
     await fs.writeFile(audioPath, Buffer.alloc(2048, 1));

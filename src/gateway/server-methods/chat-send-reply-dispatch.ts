@@ -251,6 +251,12 @@ export function createChatSendReplyDispatch(params: {
     if (!persistedContentForAppend?.length) {
       return;
     }
+    // attachment_error blocks are live UI-only failure cards. Persisting them
+    // into durable model history makes a later transcript replay cast them into
+    // the assistant-content union and crash on the missing tool-call id.
+    const persistedHistoryContent = persistedContentForAppend.filter(
+      (block) => block.type !== "attachment_error",
+    );
     const transcriptReply =
       mediaMessage?.transcriptText ??
       extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -293,7 +299,7 @@ export function createChatSendReplyDispatch(params: {
       // The harness row is the canonical final assistant. Replace that exact
       // identity so media materialization cannot append a parallel reply.
       const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
-        content: persistedContentForAppend,
+        content: persistedHistoryContent,
         idempotencyKey: ownedTranscriptIdempotencyKey,
         managedMediaUrls: sourceMediaUrls,
         scope: transcriptScope,
@@ -332,7 +338,7 @@ export function createChatSendReplyDispatch(params: {
       const rewritten = await rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
         afterSeq: assistantTranscriptRewriteState.afterSeq,
         assistantMessageIndex,
-        content: persistedContentForAppend,
+        content: persistedHistoryContent,
         expectedGeneration: assistantTranscriptRewriteState.generation,
         mediaUrls: sourceMediaUrls,
         scope: transcriptScope,
@@ -376,7 +382,7 @@ export function createChatSendReplyDispatch(params: {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
       message: transcriptReply,
-      ...(persistedContentForAppend.length ? { content: persistedContentForAppend } : {}),
+      ...(persistedHistoryContent.length ? { content: persistedHistoryContent } : {}),
       sessionId,
       storePath: latestStorePath,
       agentId,

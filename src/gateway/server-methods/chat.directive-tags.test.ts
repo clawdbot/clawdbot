@@ -1390,13 +1390,13 @@ async function expectUnpersistedAgentRunFinal(params: {
     expect(assistantUpdates).toHaveLength(1);
     expect(assistantUpdates[0]?.message).toMatchObject({
       role: "assistant",
-      content: [
-        { type: "text", text: params.payload.text },
-        { type: "attachment_error", attachment: params.expectedMediaFailure },
-      ],
+      content: [{ type: "text", text: params.payload.text }],
     });
     expect(assistantEntries).toHaveLength(1);
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    // attachment_error is a live UI-only card; it must never enter durable history.
+    expect(JSON.stringify(assistantUpdates)).not.toContain("attachment_error");
+    expect(JSON.stringify(assistantEntries)).not.toContain("attachment_error");
     return;
   }
 
@@ -3551,7 +3551,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("persists a named failure when agent-run media disappears before delivery", async () => {
+  it("keeps text while excluding the failure card from durable history for agent-run media", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
