@@ -62,7 +62,10 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "./openclaw-state-schema-v10-retirement.test-support.js";
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "./openclaw-state-schema-v11-retirement.test-support.js";
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "./openclaw-state-schema-v12-foldin.test-support.js";
@@ -148,6 +151,13 @@ function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
   database
     .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
     .run("2026.7.0");
+}
+
+function markStateDatabaseAsV5(database: DatabaseSync): void {
+  database.exec(`
+    PRAGMA user_version = 5;
+    UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
+  `);
 }
 
 function createInitialStateSchemaShape() {
@@ -4679,6 +4689,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         currentSchema.db,
         "previous v9 reader",
         getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+        OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
       ),
     ).not.toThrow();
     closeOpenClawStateDatabaseForTest();
@@ -6146,28 +6157,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         )
         .get() as { sql: string }
     ).sql;
+    // This fixture models the shipped two-kind schema, which predates external
+    // verification attempts and their operator-approval trigger.
+    legacyDb.exec(`
+      DROP TRIGGER trg_operator_approval_closes_external_verification;
+      DROP TABLE plugin_external_verification_attempts;
+    `);
     legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
     legacyDb.exec(currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"));
     legacyDb.exec("DROP TABLE operator_approvals_current");
+    markStateDatabaseAsV5(legacyDb);
     legacyDb.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
       kind: "operator-approvals-system-agent",
       path: databasePath,
     });
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
-      ],
-      warnings: [],
-    });
+    const repaired = repairOpenClawStateDatabaseSchema(options);
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).toContain(
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    );
 
     const reopened = openOpenClawStateDatabase(options);
     const migratedSql = reopened.db
       .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'")
       .get() as { sql: string };
     expect(migratedSql.sql).toContain("'system-agent'");
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'plugin_external_verification_attempts'",
+        )
+        .get(),
+    ).toEqual({ name: "plugin_external_verification_attempts" });
   });
 
   it("does not recursively recommend doctor when operator approval repair refuses a shape", () => {

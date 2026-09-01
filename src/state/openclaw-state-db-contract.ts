@@ -53,6 +53,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "agent_provenance",
   "cron_run_receipts",
+  "plugin_external_verification_attempts",
   "config_revision_keys",
   "secret_store_entries",
   "projects",
@@ -67,8 +68,19 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
+// Triggers that reference a lazy table must leave the projected runtime
+// schema with it: SQLite validates trigger bodies at fire time, so a dangling
+// trigger breaks the first ordinary write that fires it on an upgraded
+// database. The owning first-use ensure installs table, indexes, and trigger
+// together.
+export const LAZY_ADDITIVE_STATE_TRIGGERS = [
+  "trg_operator_approval_closes_external_verification",
+] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "idx_plugin_external_verification_active_approval",
+  "idx_plugin_external_verification_run_active",
+  "idx_plugin_external_verification_approval_created",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",

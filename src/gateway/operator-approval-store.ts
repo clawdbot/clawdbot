@@ -423,6 +423,22 @@ function hasValidLifecycleTuple(params: {
   );
 }
 
+function presentationAllowsDecision(
+  presentation: ApprovalPresentation,
+  decision: OperatorApprovalDecision,
+): boolean {
+  if (Array.prototype.includes.call(presentation.allowedDecisions, decision)) {
+    return true;
+  }
+  // External allow decisions are intentionally absent from the generic resolver surface.
+  // Only the plugin-bound completion transaction may authorize one.
+  return (
+    presentation.kind === "plugin" &&
+    (decision === "allow-once" || decision === "allow-always") &&
+    presentation.externalResolution?.decisions.includes(decision) === true
+  );
+}
+
 function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
   const presentation = parseApprovalPresentation(row.presentation_json);
   const reviewerDeviceIds = parseStringArray(row.reviewer_device_ids_json);
@@ -467,8 +483,7 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
     row.resolution_ref !==
       buildApprovalResolutionRef({ approvalId: row.approval_id, approvalKind: kind }) ||
     !hasValidLifecycleTuple({ row, status, decision, terminalReason, resolverKind }) ||
-    (status === "allowed" &&
-      (!decision || !Array.prototype.includes.call(presentation.allowedDecisions, decision)))
+    (status === "allowed" && (!decision || !presentationAllowsDecision(presentation, decision)))
   ) {
     return null;
   }

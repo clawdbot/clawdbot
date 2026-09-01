@@ -13,6 +13,7 @@ import {
   FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
+  LAZY_ADDITIVE_STATE_TRIGGERS,
 } from "./openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -70,6 +71,18 @@ export function getOpenClawStateRuntimeSchema(options: {
     }
     schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
   }
+  const omittedTriggers = options.includeVersionLazyAdditiveTables
+    ? []
+    : LAZY_ADDITIVE_STATE_TRIGGERS;
+  for (const triggerName of omittedTriggers) {
+    const start = schema.indexOf(`CREATE TRIGGER IF NOT EXISTS ${triggerName}`);
+    const endMarker = "\nEND;";
+    const end = start >= 0 ? schema.indexOf(endMarker, start) : -1;
+    if (start < 0 || end < 0) {
+      throw new Error(`lazy additive state schema trigger is missing for ${triggerName}`);
+    }
+    schema = `${schema.slice(0, start)}${schema.slice(end + endMarker.length)}`;
+  }
   for (const indexName of omittedIndexes) {
     const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
     const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
@@ -109,11 +122,46 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
   },
 };
 
+/**
+ * The external-verification close trigger lives on the core operator_approvals
+ * table but belongs to the lazy plugin_external_verification_attempts feature.
+ * A previous reader that predates the feature (attempts table absent) sees the
+ * trigger as unexpected; a current reader (table present) requires it. Register
+ * it as an optional canonical trigger group keyed to the lazy table so both
+ * readers validate. The SQL is derived from the canonical schema and normalized
+ * to SQLite's stored form (no IF NOT EXISTS, no trailing semicolon) so it
+ * cannot drift from the shipped trigger.
+ */
+const EXTERNAL_VERIFICATION_CLOSE_TRIGGER_NAME =
+  "trg_operator_approval_closes_external_verification";
+
+function canonicalExternalVerificationCloseTrigger(): { name: string; sql: string } {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    `CREATE TRIGGER IF NOT EXISTS ${EXTERNAL_VERIFICATION_CLOSE_TRIGGER_NAME}`,
+  );
+  const endMarker = "\nEND;";
+  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error("external verification close trigger is missing from the canonical schema");
+  }
+  const stored = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length)
+    .replace("CREATE TRIGGER IF NOT EXISTS ", "CREATE TRIGGER ")
+    .replace(/;$/u, "");
+  return { name: EXTERNAL_VERIFICATION_CLOSE_TRIGGER_NAME, sql: stored };
+}
+
+const EXTERNAL_VERIFICATION_OPTIONAL_TRIGGER_GROUP = {
+  tableName: "operator_approvals",
+  optionalWhenTableMissing: "plugin_external_verification_attempts",
+  triggers: [canonicalExternalVerificationCloseTrigger()],
+} as const;
+
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
   allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...CLAW_STARTUP_ADDITIVE_STATE_TABLES],
   allowedMissingIndexes: CLAW_READONLY_OPTIONAL_STATE_INDEXES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
+  optionalCanonicalTriggerGroups: [EXTERNAL_VERIFICATION_OPTIONAL_TRIGGER_GROUP],
 };
 
 /** Identify schema differences that the writable shared-state cold open repairs. */
