@@ -20,24 +20,23 @@ const FRESH_TAIL_MESSAGES = 2;
 const frozenCloneByMessage = new WeakMap<AgentMessage, AgentMessage>();
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
-  if (!value || typeof value !== "object" || seen.has(value as object)) {
+  if (!value || typeof value !== "object" || seen.has(value)) {
     return value;
   }
-  seen.add(value as object);
-  for (const key of Object.getOwnPropertyNames(value)) {
-    deepFreeze((value as Record<string, unknown>)[key], seen);
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreeze(Reflect.get(value, key), seen);
   }
   return Object.freeze(value);
 }
 
 /**
- * Gives hooks an isolated message snapshot they cannot mutate in-session.
+ * Gives the observational `llm_input` hook an isolated read-only snapshot.
  * Cached entries are deep-frozen so the same clone is safe to share across
- * hook events and handlers: isolation only ever needed to protect the session
- * from hook writes (per-event clones were discarded after each run, so no
- * working hook behavior can depend on mutating them).
+ * repeated observations. Modifying hooks must continue to receive fresh,
+ * writable clones instead of using this cache.
  */
-export function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
+export function cloneLlmInputHookMessages(messages: AgentMessage[]): AgentMessage[] {
   const freshFrom = Math.max(0, messages.length - FRESH_TAIL_MESSAGES);
   return messages.map((message, index) => {
     if (index >= freshFrom || !message || typeof message !== "object") {

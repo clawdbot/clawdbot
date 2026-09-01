@@ -26,7 +26,7 @@ import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
-import { cloneHookMessages } from "./attempt-hook-messages.js";
+import { cloneLlmInputHookMessages } from "./attempt-hook-messages.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -354,7 +354,7 @@ export function observeEmbeddedAttemptPrompt(input: {
           model: attempt.modelId,
           systemPrompt: input.systemPromptForHook,
           prompt: input.llmBoundaryPromptForPrecheck,
-          historyMessages: cloneHookMessages(input.hookMessagesForCurrentPrompt),
+          historyMessages: cloneLlmInputHookMessages(input.hookMessagesForCurrentPrompt),
           imagesCount: input.imageCount,
           tools: input.tools,
         },

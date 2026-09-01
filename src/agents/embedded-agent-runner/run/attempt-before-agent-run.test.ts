@@ -80,12 +80,17 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
   it("passes cloned prompt context and leaves passing turns unchanged", async () => {
     const handler = vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
       const first = event.messages[0] as Extract<AgentMessage, { role: "user" }>;
-      first.content = "mutated by hook";
+      const content = first.content as Array<{ text: string; type: "text" }>;
+      content[0]!.text = "mutated by hook";
       return { outcome: "pass" as const };
     });
     const { input, lock, state } = createInput([
       { pluginId: "policy", hookName: "before_agent_run", handler, source: "test" },
     ]);
+    state.messages.push(
+      { role: "user", content: [{ type: "text", text: "older prompt" }], timestamp: 2 },
+      { role: "user", content: [{ type: "text", text: "new prompt" }], timestamp: 3 },
+    );
     input.modelPrompt = "[media attached: /tmp/a.png (image/png)]\ninspect this";
 
     await expect(runEmbeddedAttemptBeforeAgentRun(input)).resolves.toBeUndefined();
