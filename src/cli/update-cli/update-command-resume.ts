@@ -138,7 +138,8 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
       configSnapshot: restoredConfig.snapshot,
       configChanged: restoredConfig.changed,
       restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts: params.opts,
+      json: params.opts.json,
+      acceptCapabilities: params.opts.acceptCapabilities,
       timeoutMs: params.timeoutMs,
       pluginInstallRecords,
     });

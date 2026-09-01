@@ -325,7 +325,8 @@ export async function finishUpdate(params: {
             configSnapshot: postUpdateConfigSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: params.opts,
+            json: params.opts.json,
+            acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
           });

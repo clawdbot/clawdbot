@@ -139,6 +139,7 @@ export function resolvePostInstallDoctorEnv(params?: {
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
   const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  delete resolvedEnv.OPENCLAW_SERVICE_REPAIR_POLICY;
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }

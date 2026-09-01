@@ -2,18 +2,18 @@
 import {
   createPluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
-} from "../../config/plugin-install-record-map.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+} from "../config/plugin-install-record-map.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/official-external-install-records.js";
+} from "./official-external-install-records.js";
 import {
   runPluginPayloadSmokeCheck,
   type PluginPayloadSmokeResult,
-} from "./plugin-payload-validation.js";
+} from "./payload-verification.js";
 
 /** Runs the static payload check without repair, installs, or network access. */
 export async function runActivePluginPayloadSmokeCheck(params: {

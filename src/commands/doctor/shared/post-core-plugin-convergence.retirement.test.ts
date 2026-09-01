@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
   listManagedPluginNpmRoots: vi.fn(),
@@ -11,38 +11,38 @@ const mocks = vi.hoisted(() => ({
   runPluginPayloadSmokeCheck: vi.fn(),
 }));
 
-vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
+vi.mock("./missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
 }));
-vi.mock("../../commands/doctor-plugin-registry.js", () => ({
+vi.mock("../../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
-vi.mock("../../plugins/plugin-peer-link.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/plugin-peer-link.js")>();
+vi.mock("../../../plugins/plugin-peer-link.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/plugin-peer-link.js")>();
   return {
     ...actual,
     relinkOpenClawPeerDependenciesInManagedNpmRoot:
       mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
   };
 });
-vi.mock("../../plugins/npm-project-roots.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/npm-project-roots.js")>();
+vi.mock("../../../plugins/npm-project-roots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/npm-project-roots.js")>();
   return {
     ...actual,
     listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
   };
 });
-vi.mock("./plugin-payload-validation.js", () => ({
+vi.mock("../../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
 }));
 
-import { resolvePluginNpmGenerationProjectDir } from "../../plugins/install-paths.js";
+import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
-} from "../../plugins/installed-plugin-index-records.js";
-import { VERSION } from "../../version.js";
+} from "../../../plugins/installed-plugin-index-records.js";
+import { VERSION } from "../../../version.js";
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
 describe("post-core bundled plugin retirement", () => {
@@ -130,8 +130,8 @@ describe("post-core bundled plugin retirement", () => {
       { config: cfg, env },
     );
     const actualDoctorRegistry = await vi.importActual<
-      typeof import("../../commands/doctor-plugin-registry.js")
-    >("../../commands/doctor-plugin-registry.js");
+      typeof import("../../doctor-plugin-registry.js")
+    >("../../doctor-plugin-registry.js");
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(
       actualDoctorRegistry.maybeRepairStaleManagedNpmBundledPlugins,
     );
