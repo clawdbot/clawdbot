@@ -28,13 +28,14 @@ final class OnboardingAISetupModel {
     private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
+    private(set) var providerAuthCancellation: ProviderAuthCancellation?
     private(set) var authBusy = false {
         didSet { self.updateBusyReason() }
     }
 
     var authText = ""
     var authSelection = 0
-    var authConfirmation = true
+    var authConfirmation = false
     private(set) var providerCatalogLoaded = false
     private(set) var providerCatalogError: String?
     private(set) var statuses: [String: CandidateStatus] = [:]
@@ -77,7 +78,6 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var authSessionID: String?
     @ObservationIgnored private var authAttemptID = UUID()
     @ObservationIgnored private var authRequestID: UUID?
-    @ObservationIgnored private var providerAuthCancellationRequested = false
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
@@ -873,6 +873,7 @@ extension OnboardingAISetupModel {
         }
         do {
             let result = try await requestActivation(
+                option: self.activationAuthOption(for: request),
                 params: params,
                 timeoutMs: requestTimeoutMs,
                 serverLease: lease,
@@ -955,6 +956,7 @@ extension OnboardingAISetupModel {
     }
 
     private func requestActivation(
+        option: AuthOption,
         params: [String: AnyCodable],
         timeoutMs: Double,
         serverLease: GatewayConnection.ServerLease,
@@ -973,7 +975,13 @@ extension OnboardingAISetupModel {
                     throw CancellationError()
                 }
                 if supportsActivationWizard {
-                    return try await self.requestActivationWizard(params: params, serverLease: serverLease)
+                    guard self.activationWizardCompletion == nil else {
+                        throw OnboardingAISetupError.activationOutcomeUnavailable
+                    }
+                    return try await withCheckedThrowingContinuation { continuation in
+                        self.activationWizardCompletion = continuation
+                        self.startSetupWizard(option, kind: .activation, params: params, serverLease: serverLease)
+                    }
                 }
                 let data = try await gateway.request(
                     method: "openclaw.setup.activate",
@@ -989,19 +997,6 @@ extension OnboardingAISetupModel {
                 try await Task.sleep(nanoseconds: retryDelayMs * 1_000_000)
                 retryDelayMs = min(retryDelayMs * 2, 5000)
             }
-        }
-    }
-
-    private func requestActivationWizard(
-        params: [String: AnyCodable],
-        serverLease: GatewayConnection.ServerLease) async throws -> ActivateResult
-    {
-        guard self.activationWizardCompletion == nil else {
-            throw OnboardingAISetupError.activationOutcomeUnavailable
-        }
-        return try await withCheckedThrowingContinuation { continuation in
-            self.activationWizardCompletion = continuation
-            self.startSetupWizard(.activation, kind: .activation, params: params, serverLease: serverLease)
         }
     }
 
@@ -1201,7 +1196,7 @@ extension OnboardingAISetupModel {
                     await self.gateway.cancelWizardSession(result.sessionid, on: serverLease)
                     return
                 }
-                if self.providerAuthCancellationRequested {
+                if self.providerAuthCancellation != nil {
                     // Cancel can race admission before the Gateway registers the requested id.
                     // Redeem the late response only to release its exact admitted session.
                     self.authSessionID = result.sessionid
@@ -1288,7 +1283,8 @@ extension OnboardingAISetupModel {
         }
         let keepPresented = self.activationWizardCompletion != nil
         let context = (token: self.attemptToken, state: self.lastDetectedActivationState, authID: self.authAttemptID)
-        self.providerAuthCancellationRequested = true
+        self.providerAuthCancellation = .requesting
+        self.authError = nil
         if keepPresented { self.authBusy = true } else { self.dismissProviderAuth() }
         Task {
             let cancellation = await self.gateway.cancelWizardSession(
@@ -1325,6 +1321,7 @@ extension OnboardingAISetupModel {
                 if self.authRequestID == nil, self.authStep == nil {
                     self.advanceProviderAuth(stepID: nil, value: nil)
                 }
+                self.providerAuthCancellation = .unconfirmed
                 self.authError = Self.providerAuthCancellationUnconfirmed()
                 return
             }
@@ -1554,7 +1551,7 @@ extension OnboardingAISetupModel {
         // Closing a wizard retires every reply captured by its generation.
         self.authAttemptID = UUID()
         self.authRequestID = nil
-        self.providerAuthCancellationRequested = false
+        self.providerAuthCancellation = nil
         self.dismissProviderAuth()
     }
 
