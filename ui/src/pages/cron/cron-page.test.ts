@@ -322,6 +322,47 @@ describe("CronPage editor state sync", () => {
     expect(request).toHaveBeenCalledWith("cron.scratch.get", { id: job.id });
   });
 
+  it("does not fetch heartbeat scratch for read-only operators", async () => {
+    const job: CronJob = {
+      id: "heartbeat-job",
+      name: "Heartbeat monitor",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "heartbeat" },
+      state: {},
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([job]);
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    gateway.emitSnapshot({
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = createPage(createContext(gateway), { render: true });
+    page.routeSearch = "?job=heartbeat-job";
+
+    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(job.id));
+    await waitForCronPage(() => expect(page.cron.cronForm.payloadText).toBe(""));
+    expect(request).not.toHaveBeenCalledWith("cron.scratch.get", expect.anything());
+  });
+
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },

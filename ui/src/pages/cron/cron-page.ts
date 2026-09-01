@@ -300,6 +300,11 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private async loadHeartbeatScratch(jobId: string) {
+    // cron.scratch.get requires operator.admin. Skip the read for read-only
+    // operators instead of sending a request that is guaranteed to be denied.
+    if (!this.canManageCron) {
+      return;
+    }
     const connectionScope = this.gateway.capture();
     const client = this.gateway.client;
     if (!connectionScope || !client) {
