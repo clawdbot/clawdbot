@@ -42,7 +42,6 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case .chatMetadataChanged:
-            guard self.modelAvailabilityIsSessionScoped else { return }
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
         case let .sessionsChanged(change):

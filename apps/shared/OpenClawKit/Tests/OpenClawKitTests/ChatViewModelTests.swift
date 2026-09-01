@@ -8762,6 +8762,42 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
+    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async throws {
+        let sequenceRecoveryGate = AsyncGate()
+        let unavailable = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: false,
+            unavailableReason: "auth-failed")
+        let available = modelChoice(
+            id: "claude-opus-4-6",
+            name: "Claude Opus 4.6",
+            available: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            modelAvailabilityIsSessionScoped: true,
+            modelCatalogHook: { call in
+                if call == 1 {
+                    await sequenceRecoveryGate.wait()
+                }
+                return OpenClawChatModelCatalogSnapshot(
+                    choices: call == 2 ? [available] : [unavailable],
+                    availabilityIsSessionScoped: true)
+            })
+        await vm.fetchModels()
+        #expect(vm.modelChoices.first?.available == false)
+
+        vm.handleTransportEvent(.seqGap)
+        try await waitUntil("sequence recovery catalog refresh starts") {
+            await transport.modelAgentIDs().count >= 2
+        }
+        vm.handleTransportEvent(.chatMetadataChanged)
+        await sequenceRecoveryGate.open()
+        try await waitUntil("metadata refresh clears the stale auth gate") {
+            await MainActor.run { vm.modelChoices.first?.available == true }
+        }
+    }
+
     @Test @MainActor func `current session mutations refresh selected model availability`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
