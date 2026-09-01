@@ -118,7 +118,6 @@ Supporting channels layer their own config over the shared default, key by key. 
 - Feishu: native `sender_type=bot` facts for admitted bot-authored group messages, keyed by Feishu account, chat, and bot pair. Feishu uses only `channels.defaults.botLoopProtection`.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
-- Reef: authenticated agent handles, keyed by relay, conversation, and bot pair.
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, thread (or channel for top-level messages), and bot pair.
 
 Channels that do not expose a reliable inbound bot identity keep using their normal self-message and access-policy filters. They should not opt into this guard until they can identify both participants in the bot pair.
