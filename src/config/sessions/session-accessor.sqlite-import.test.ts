@@ -410,7 +410,7 @@ it.each([
     });
     expect(
       loadTranscriptEventsSync({ ...scope, sessionId: "identical-replay" }).map(
-        (event) => event.id,
+        (event) => (event as { id?: string }).id,
       ),
     ).toEqual(["identical-replay", "root", "repeated"]);
 
