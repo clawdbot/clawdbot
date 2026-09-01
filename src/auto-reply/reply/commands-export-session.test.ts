@@ -1,7 +1,7 @@
 // Tests session and trajectory export command packaging, filesystem writes, and approval routing.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mjs";
+import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -48,7 +48,7 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
+  resolveSessionFilePathCore: hoisted.resolveSessionFilePathMock,
   resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 
@@ -140,6 +140,7 @@ function makeParams(): HandleCommandsParams {
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir: "/tmp/workspace",
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
@@ -277,6 +278,21 @@ describe("buildExportSessionReply", () => {
   });
 
   it("injects scripts and session data through the real export template", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "hidden-input",
+        parentId: null,
+        timestamp: "2026-08-31T12:00:00.000Z",
+        message: {
+          role: "user",
+          content: "Synthetic continuation input",
+          display: false,
+          provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+        },
+      },
+    ];
+    hoisted.sessionTranscriptEvents = entries;
     await buildExportSessionReply(makeParams());
 
     const html = writtenHtml();
@@ -290,8 +306,8 @@ describe("buildExportSessionReply", () => {
       Buffer.from(
         JSON.stringify({
           header: null,
-          entries: [],
-          leafId: null,
+          entries,
+          leafId: "hidden-input",
           hasLeafControl: false,
           systemPrompt: "system prompt",
           tools: [],
@@ -612,6 +628,30 @@ describe("buildExportSessionReply", () => {
     expect(reply.text).toContain("📊 Entries: 2");
     expect(reply.text).toContain(
       "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 2",
+    );
+  });
+
+  it("marks the skipped-row list as truncated when more than 20 rows are invalid", async () => {
+    hoisted.sessionTranscriptEvents = [
+      ...Array.from({ length: 25 }, (_, index) => ({
+        type: "message",
+        id: `bad-${index + 1}`,
+        timestamp: `2026-05-16T00:00:${String(index).padStart(2, "0")}.000Z`,
+        message: { content: "missing role" },
+      })),
+      {
+        type: "message",
+        id: "entry-valid",
+        timestamp: "2026-05-16T00:01:00.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      },
+    ];
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    const expectedRows = Array.from({ length: 20 }, (_, index) => index + 1).join(", ");
+    expect(reply.text).toContain(
+      `⚠️ Skipped 25 malformed transcript rows that were not session entries. rows ${expectedRows}, …`,
     );
   });
 

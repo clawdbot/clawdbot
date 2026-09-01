@@ -7,10 +7,7 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  hasConfiguredSecretInput,
-  isProviderApiKeyConfigured,
-} from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -24,6 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image";
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
@@ -149,15 +147,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
     models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image"],
-    isConfigured: ({ cfg, agentDir }) =>
-      // generateImage already authenticates from a config apiKey; count a
-      // usable one (non-blank literal or secret ref) as configured here too,
-      // so image gen works from config alone, like chat.
-      hasConfiguredSecretInput(cfg?.models?.providers?.google?.apiKey) ||
-      isProviderApiKeyConfigured({
-        provider: "google",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
     capabilities: {
       generate: {
         maxCount: GOOGLE_MAX_IMAGE_RESULTS,
@@ -259,8 +249,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!data) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
+          const standardData = toStandardGoogleProviderBase64(data);
+          if (!standardData) {
+            throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
+          }
           const image = generatedImageAssetFromBase64({
-            base64: data,
+            base64: standardData,
             index: imageIndex,
             mimeType:
               normalizeOptionalString(inline.mimeType) ??

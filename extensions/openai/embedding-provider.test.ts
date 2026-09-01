@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
   fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
+  resolveEmbeddingEndpointUrl: (baseUrl: string, endpoint: string) => `${baseUrl}/${endpoint}`,
   resolveRemoteEmbeddingClient: mocks.resolveRemoteEmbeddingClient,
 }));
 
@@ -55,7 +56,7 @@ describe("OpenAI embedding provider", () => {
       createOptions({ inputType: "passage", queryInputType: "query" }),
     );
 
-    await provider.embedQuery("hello");
+    await provider.embed("hello", { inputType: "query" });
 
     expectFetchRemoteEmbeddingVectorsBody({
       model: "text-embedding-3-small",
@@ -90,9 +91,7 @@ describe("OpenAI embedding provider", () => {
   });
 
   it("sends outputDimensionality as OpenAI dimensions", async () => {
-    const { provider } = await createOpenAiEmbeddingProvider(
-      createOptions({ outputDimensionality: 512 }),
-    );
+    const { provider } = await createOpenAiEmbeddingProvider(createOptions({ dimensions: 512 }));
 
     await provider.embedBatch(["doc"]);
 
@@ -195,7 +194,7 @@ describe("OpenAI embedding provider", () => {
       }),
     );
 
-    await provider.embedQuery("test");
+    await provider.embed("test", { inputType: "query" });
 
     expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith({
       url: "https://router.requesty.ai/v1/embeddings",

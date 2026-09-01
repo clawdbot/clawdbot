@@ -39,6 +39,42 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   return null;
 }
 
+export function splitMockConversationContext(text: string) {
+  // The Codex harness projects history and the new request into one user item.
+  // Quoted history must not dispatch a task or completion as the current request.
+  const projection =
+    /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
+      text,
+    );
+  return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+}
+
+export function extractMockSubagentContext(input: ResponsesInputItem[]) {
+  const turn = extractLastMatchingUserTurn(input, /[\s\S]/);
+  if (!turn) {
+    return undefined;
+  }
+  const { current, history } = splitMockConversationContext(turn.text);
+  const task =
+    /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(
+      current,
+    )?.[1];
+  if (!task) {
+    return undefined;
+  }
+  const inheritedUserTexts = extractAllUserTexts(input.slice(0, turn.index)).filter(
+    (text) => !isInternalRuntimeContextCarrierText(text),
+  );
+  for (const match of history.matchAll(
+    /(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g,
+  )) {
+    if (match[1]) {
+      inheritedUserTexts.push(match[1]);
+    }
+  }
+  return { task, inheritedUserTexts };
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>
@@ -158,6 +194,9 @@ export function extractToolOutput(input: ResponsesInputItem[]) {
   return item ? stringifyFunctionCallOutput(item.output) : "";
 }
 
+export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
+  findCurrentToolOutput(input)?.output;
+
 export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
   return item?.is_error === true || item?.isError === true;
@@ -264,7 +303,7 @@ export function extractSlackMpimRetainedBotNonce(
   return undefined;
 }
 
-export function extractAllInputTexts(input: ResponsesInputItem[]) {
+function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (typeof item.output === "string" && item.output.trim()) {
@@ -404,7 +443,7 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
   const latestUserIndex = findLastUserIndex(input);
   if (latestUserIndex < 0) {
     return { text: "", imageInputCount: 0 };
@@ -426,6 +465,28 @@ export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
       .filter(Boolean)
       .join("\n"),
     imageInputCount,
+  };
+}
+
+export function extractCurrentImageRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+) {
+  // Match only the current request. Historical image prompts must not override
+  // a later non-image turn just because they remain in transcript context.
+  const imageUserTurn = extractLatestImageUserTurn(input);
+  if (imageUserTurn.imageInputCount === 0) {
+    return imageUserTurn;
+  }
+  const developerInstructions = input
+    .filter((item) => item.role === "developer" && Array.isArray(item.content))
+    .map((item) => extractInputText(item.content as unknown[]))
+    .filter(Boolean);
+  return {
+    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount: imageUserTurn.imageInputCount,
   };
 }
 

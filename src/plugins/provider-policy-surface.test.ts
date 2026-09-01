@@ -14,7 +14,12 @@ describe("direct provider policy surface", () => {
       throw new Error("unexpected manifest registry import");
     });
     const resolveModelRoutes = vi.fn();
-    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({ resolveModelRoutes }));
+    const isResponseModelEquivalent = vi.fn();
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
+      deprecatedProfileIds: ["demo:legacy"],
+      resolveModelRoutes,
+      isResponseModelEquivalent,
+    }));
 
     vi.doMock("./bundled-dir.js", () => ({
       resolveBundledPluginsDir: () => "/tmp/bundled-plugins",
@@ -31,6 +36,8 @@ describe("direct provider policy surface", () => {
     const surface = resolveDirectBundledProviderPolicySurface("openai");
 
     expect(surface?.resolveModelRoutes).toBe(resolveModelRoutes);
+    expect(surface?.isResponseModelEquivalent).toBe(isResponseModelEquivalent);
+    expect(surface?.deprecatedProfileIds).toEqual(["demo:legacy"]);
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
       artifactBasename: "provider-policy-api.js",

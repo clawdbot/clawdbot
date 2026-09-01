@@ -17,7 +17,7 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
-} from "../../../packages/gateway-protocol/src/schema.js";
+} from "../../../packages/gateway-protocol/src/schema/commands.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -157,7 +157,8 @@ function mapCommand(
     ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
     ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
     description: clampDescription(cmd.description),
-    ...(cmd.category ? { category: cmd.category } : {}),
+    // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
+    ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
     source,
     scope: cmd.scope,
     acceptsArgs: Boolean(cmd.acceptsArgs),
@@ -195,6 +196,7 @@ function buildPluginCommandEntries(params: {
       source: "plugin",
       scope: "both",
       acceptsArgs: spec.acceptsArgs,
+      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
     });
   }
 
@@ -237,7 +239,15 @@ export function buildCommandsListResult(params: {
     const skill = skillsByKey.get(cmd.key);
     commands.push({
       ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
-      ...(skill ? { skillModelVisible: skill.modelVisible !== false } : {}),
+      ...(skill
+        ? {
+            skillDisplayName: clampString(
+              skill.displayName ?? skill.skillName,
+              COMMAND_NAME_MAX_LENGTH,
+            ),
+            skillModelVisible: skill.modelVisible !== false,
+          }
+        : {}),
     });
   }
 

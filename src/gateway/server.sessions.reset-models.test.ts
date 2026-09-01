@@ -9,15 +9,16 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 type ResetSessionEntry = {
   sessionId?: string;
@@ -32,9 +33,11 @@ type ResetSessionEntry = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   parentSessionKey?: string;
+  parentSessionId?: string;
   createdVia?: string;
   createdActor?: { type: string; id?: string };
   createdAt?: number;
+  sandbox?: "required";
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   previousSessionId?: string;
   forkedFromParent?: boolean;
@@ -60,8 +63,6 @@ type ResetSessionEntry = {
   groupActivation?: string;
   groupActivationNeedsSystemIntro?: boolean;
   execHost?: string;
-  execSecurity?: string;
-  execAsk?: string;
   execNode?: string;
   displayName?: string;
   cliSessionBindings?: Record<
@@ -103,6 +104,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
     createdActor: { type: "human", id: "profile-reset-creator" },
     createdAt: expect.any(Number),
   });
+  expect(reset.payload?.entry).not.toHaveProperty("sandbox");
   expect(
     listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20).events,
   ).toContainEqual(
@@ -112,6 +114,50 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
       actorId: "profile-reset-creator",
     }),
   );
+});
+
+test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const profile = ensureProfileForEmail("sandboxed-reset-creator@example.test");
+  setUserProfileRole(profile.id, "guest");
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "none" },
+            agents: ["main"],
+            scopes: ["operator.read", "operator.write"],
+            sandbox: "required",
+          },
+        },
+      },
+    },
+  });
+
+  try {
+    const key = "agent:main:subagent:sandboxed-reset";
+    const reset = await directSessionReq<{ entry: ResetSessionEntry }>(
+      "sessions.reset",
+      { key },
+      {
+        client: {
+          authenticatedUserProfile: { profileId: profile.id },
+        } as never,
+      },
+    );
+
+    expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+    expect(reset.payload?.entry).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.sandbox).toBe("required");
+  } finally {
+    await writeConfigFile({});
+  }
 });
 
 const ownedChildMetadata = {
@@ -130,10 +176,16 @@ const ownedChildMetadata = {
   groupChannel: "dev",
   space: "hq",
   spawnedBy: "agent:main:main",
+  completionOwnerSessionKey: "agent:main:discord:direct:alice",
+  inheritedToolPolicyVersion: 1,
+  inheritedToolAllow: ["read", "message"],
+  inheritedToolDeny: ["exec"],
   spawnedWorkspaceDir: "/tmp/child-workspace",
   spawnedCwd: "/tmp/task-repo",
   parentSessionKey: "agent:main:main",
+  parentSessionId: "sess-parent",
   forkedFromParent: true,
+  sandbox: "required",
   spawnDepth: 2,
   subagentRole: "orchestrator",
   subagentControlScope: "children",
@@ -153,8 +205,6 @@ const ownedChildMetadata = {
   groupActivation: "always",
   groupActivationNeedsSystemIntro: true,
   execHost: "gateway",
-  execSecurity: "allowlist",
-  execAsk: "on-miss",
   execNode: "mac-mini",
   displayName: "Ops Child",
   cliSessionIds: {

@@ -20,8 +20,14 @@ const mocks = vi.hoisted(() => {
 vi.mock("./agent-scope.js", () => ({
   resolveAgentDir: (_config: unknown, agentId: string) => `/agents/${agentId}`,
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) => `/workspaces/${agentId}`,
+  resolveAmbientOwnerAgentId: () => "main",
   resolveDefaultAgentDir: () => "/agents/main",
   resolveDefaultAgentId: () => "main",
+  tryResolveLegacyCompatibilityAgentId: () => undefined,
+}));
+
+vi.mock("./legacy-inherited-auth-dir.js", () => ({
+  resolveLegacyInheritedAuthDir: () => "/agents/main",
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
@@ -182,6 +188,7 @@ describe("prepared agent model registry", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     };
     registry.getProviderMetadataOwners.mockReturnValue(providerMetadataOwners);
     mocks.prepareSnapshot.mockResolvedValue(snapshot);

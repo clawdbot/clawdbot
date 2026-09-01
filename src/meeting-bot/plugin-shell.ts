@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
+import type { OpenClawPluginCliRootCommandDescriptor } from "../plugins/plugin-registration.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import {
@@ -34,8 +34,6 @@ import type {
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-const SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
-
 type MeetingPluginShellPlatform = {
   browserLabel: string;
   displayName: string;
@@ -67,10 +65,13 @@ export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHos
     bridgeIdPrefix: `${platform.session.idPrefix}_node_`,
     talkBackModes: new Set(["agent", "bidi"]),
     agentMode: "agent",
+    defaultAudio: {
+      backend: "auto",
+      bufferBytes: 4_096,
+      format: "pcm16-24khz",
+    },
     normalizeUrl: (value) => platform.urls.validateAndNormalize(value),
     normalizeMeetingKey: (value) => platform.urls.normalizeForReuse(value),
-    outputMentionsAudioDevice: (output) => /\bBlackHole\s+2ch\b/i.test(output),
-    systemProfilerCommand: SYSTEM_PROFILER_COMMAND,
     browser: {
       application: "Google Chrome",
       buildProfileArgs: (profile) => ["--args", `--profile-directory=${profile}`],
@@ -98,34 +99,6 @@ export function createMeetingPluginNodeInvokePolicy(
   });
 }
 
-function createMeetingPluginCliDescriptor(name: string, description: string) {
-  return {
-    name,
-    description,
-    hasSubcommands: true,
-    machineOutput: ({ argv }: { argv: readonly string[] }) =>
-      getRootOptionAwareCommandPath(argv, 2).length === 2,
-  } as const;
-}
-
-export function createMeetingPluginCliMetadata(options: {
-  commandName: string;
-  description: string;
-  id: string;
-  name: string;
-}) {
-  const descriptor = createMeetingPluginCliDescriptor(options.commandName, options.description);
-  return {
-    id: options.id,
-    name: options.name,
-    description: `${options.name} CLI metadata`,
-    descriptor,
-    register(api: OpenClawPluginApi) {
-      api.registerCli(() => {}, { descriptors: [descriptor] });
-    },
-  };
-}
-
 export function createMeetingChromeRuntimeBindings() {
   return {
     createBindings: createMeetingRealtimeEngineBindings,
@@ -143,12 +116,7 @@ export function createMeetingPluginChromeTransport<
 >(
   options: Omit<
     MeetingChromeTransportOptions<Mode, Health, Transcript>,
-    | "browserNodeAdapter"
-    | "isRealtimeRouteReady"
-    | "isTalkBackMode"
-    | "nodeCommandName"
-    | "outputMentionsAudioDevice"
-    | "systemProfilerCommand"
+    "browserNodeAdapter" | "isRealtimeRouteReady" | "isTalkBackMode" | "nodeCommandName"
   >,
 ) {
   return createMeetingChromeTransport<MeetingChromeTransportConfig, Mode, Health, Transcript>({
@@ -157,8 +125,6 @@ export function createMeetingPluginChromeTransport<
     isRealtimeRouteReady: isMeetingRealtimeRouteReady,
     isTalkBackMode: isMeetingTalkBackMode,
     nodeCommandName: options.platform.nodeCommandName,
-    outputMentionsAudioDevice: (output) => /\bBlackHole\s+2ch\b/i.test(output),
-    systemProfilerCommand: SYSTEM_PROFILER_COMMAND,
   });
 }
 
@@ -185,6 +151,7 @@ type MeetingPluginShellEntryOptions<
   | "unknownActionMessage"
 > & {
   cli: {
+    descriptor: OpenClawPluginCliRootCommandDescriptor;
     load(): Promise<(params: { program: Command; config: Config }) => void>;
   };
   browserGuestLabel: string;
@@ -231,13 +198,9 @@ export function createMeetingPluginShellEntry<
       }),
     registerCli: (api, config) => {
       api.registerCli(async ({ program }) => (await loadCli())({ program, config }), {
-        commands: [methodPrefix],
-        descriptors: [
-          createMeetingPluginCliDescriptor(
-            methodPrefix,
-            `Join and manage ${options.browserGuestLabel} guests`,
-          ),
-        ],
+        commands: [options.cli.descriptor.name],
+        // Share the metadata descriptor so help and runtime output policy cannot drift.
+        descriptors: [options.cli.descriptor],
       });
     },
   });

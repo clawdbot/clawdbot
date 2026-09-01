@@ -119,6 +119,9 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}"',
+    );
+    expect(script).toContain(
       '-e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS:-0}"',
     );
     expect(script).toContain(
@@ -160,6 +163,43 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
       'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
     );
     expect(script).not.toContain("run_setup_command npm install -g @openai/codex");
+  });
+
+  it("keeps the staged Gateway and Codex plugin on the same source module graph", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+    const selection = script
+      .split('openclaw_live_link_runtime_tree "$tmp_dir"\n')[1]
+      ?.split('openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"')[0];
+    expect(selection).toBeDefined();
+
+    const root = fs.mkdtempSync(
+      path.join(process.env.TMPDIR ?? "/tmp", "openclaw-codex-plugin-roots-"),
+    );
+    try {
+      const stagedRoot = path.join(root, "staged");
+      const stagedPlugin = path.join(stagedRoot, "extensions", "codex");
+      fs.mkdirSync(stagedPlugin, { recursive: true });
+      fs.writeFileSync(path.join(stagedPlugin, "openclaw.plugin.json"), "{}");
+      fs.mkdirSync(path.join(root, "dist-runtime", "extensions", "codex"), {
+        recursive: true,
+      });
+      const executableSelection = selection!
+        .replaceAll("/app/dist-runtime", path.join(root, "dist-runtime"))
+        .replaceAll("/app/dist", path.join(root, "dist"));
+      const result = spawnSync(
+        "bash",
+        ["-c", `${executableSelection}\nprintf '%s' "$OPENCLAW_BUNDLED_PLUGINS_DIR"`],
+        {
+          encoding: "utf8",
+          env: { ...process.env, tmp_dir: stagedRoot },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(path.join(stagedRoot, "extensions"));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails instead of skipping when Codex auth cannot identify an account", () => {

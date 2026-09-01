@@ -2,45 +2,281 @@
 import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
-  runMatrixQaE2eeClientOperation,
 } from "./e2ee-client-internals.js";
+import { createMatrixQaE2eeScenarioClient } from "./e2ee-client.js";
 import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
+
+const runtimeFixture = vi.hoisted(() => ({
+  logging: undefined as PluginRuntime["logging"] | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+  loadQaRunnerBundledPluginTestApi: async () => ({
+    setMatrixRuntime: (runtime: Pick<PluginRuntime, "logging">) => {
+      runtimeFixture.logging = runtime.logging;
+    },
+    MatrixClient: class {
+      on() {}
+      off() {}
+      async start() {}
+      async drainPendingDecryptions() {}
+      async stopAndPersist() {}
+      async stopWithoutPersist() {}
+    },
+  }),
+}));
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
-  runMatrixQaE2eeClientOperation,
 };
 
 describe("matrix qa e2ee client storage", () => {
-  it("stops a disposable client when an E2EE operation exceeds its scenario timeout", async () => {
+  it("provides normal diagnostics without enabling secret-bearing SDK debug output", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-logging-"));
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>> | undefined;
+    try {
+      client = await createMatrixQaE2eeScenarioClient({
+        accessToken: "fixture-token",
+        actorId: "driver",
+        baseUrl: "http://127.0.0.1:8008",
+        observedEvents: [],
+        outputDir,
+        scenarioId: "matrix-e2ee-qr-verification",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix.test",
+      });
+      expect(runtimeFixture.logging).toBeDefined();
+      const logger = runtimeFixture.logging!.getChildLogger({ module: "matrix:crypto" });
+      logger.debug?.('shared_secret: "fixture-only-qr-secret"');
+      logger.info("verification started");
+      logger.warn("verification warning");
+      logger.error("verification failure");
+      expect(debug).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledExactlyOnceWith("verification started");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("verification warning");
+      expect(error).toHaveBeenCalledExactlyOnceWith("verification failure");
+    } finally {
+      await client?.stop();
+      vi.restoreAllMocks();
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  function createLifecycleFixture(options?: {
+    discard?: () => Promise<void>;
+    drain?: () => Promise<void>;
+    shutdownTimeoutMs?: number;
+  }) {
+    const calls: string[] = [];
+    const lifecycle = testing.createMatrixQaE2eeClientLifecycle({
+      detachListeners: vi.fn(() => calls.push("detach")),
+      drainPendingDecryptions: vi.fn(async () => {
+        calls.push("drain");
+        await options?.drain?.();
+      }),
+      shutdownTimeoutMs: options?.shutdownTimeoutMs ?? 500,
+      stopAndPersist: vi.fn(async () => {
+        calls.push("stop-and-persist");
+      }),
+      stopWithoutPersist: vi.fn(async () => {
+        calls.push("stop-and-discard");
+        await options?.discard?.();
+      }),
+    });
+    return { calls, lifecycle };
+  }
+
+  it("drains decryptions before stopping the SDK and persisting", async () => {
+    const { calls, lifecycle } = createLifecycleFixture();
+
+    await lifecycle.stop();
+
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
+  });
+
+  it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
+    const { calls, lifecycle } = createLifecycleFixture();
+
+    const first = lifecycle.stop();
+    const second = lifecycle.stop();
+    await Promise.all([first, second]);
+    const third = lifecycle.stop();
+    const run = vi.fn(async () => "sent");
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    await expect(
+      lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow("shutdown has started");
+    expect(run).not.toHaveBeenCalled();
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
+  });
+
+  it("gives an active operation a bounded grace period before draining and stopping", async () => {
     vi.useFakeTimers();
     try {
-      const stop = vi.fn();
-      const operation = testing.runMatrixQaE2eeClientOperation({
+      const { calls, lifecycle } = createLifecycleFixture();
+      let finishOperation: ((value: string) => void) | undefined;
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>((resolve) => {
+            calls.push("operation");
+            finishOperation = resolve;
+          }),
+        timeoutMs: 1_000,
+      });
+
+      const stop = lifecycle.stop();
+      expect(calls).toEqual(["operation", "detach"]);
+      finishOperation?.("sent");
+      await operation;
+      await stop;
+
+      expect(calls).toEqual(["operation", "detach", "drain", "stop-and-persist"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards without persisting when active operation grace expires", async () => {
+    vi.useFakeTimers();
+    try {
+      let finishDiscard: (() => void) | undefined;
+      const { calls, lifecycle } = createLifecycleFixture({
+        discard: () =>
+          new Promise<void>((resolve) => {
+            finishDiscard = resolve;
+          }),
+        shutdownTimeoutMs: 100,
+      });
+      void lifecycle.runOperation({
         label: "Matrix E2EE text send",
         run: () =>
           new Promise<string>(() => {
-            // Intentionally pending so the timeout owns settlement.
+            calls.push("operation");
           }),
-        stop,
-        timeoutMs: 150_000,
+        timeoutMs: 1_000,
       });
-      const rejection = expect(operation).rejects.toThrow(
-        "Matrix E2EE text send timed out after 150000ms",
+      const stop = lifecycle.stop();
+      const rejection = expect(stop).rejects.toThrow(
+        "shutdown failed while waiting for active Matrix SDK operations",
       );
 
-      await vi.advanceTimersByTimeAsync(150_000);
+      await vi.advanceTimersByTimeAsync(100);
+
+      let rejected = false;
+      void stop.catch(() => {
+        rejected = true;
+      });
+      await Promise.resolve();
+      expect(rejected).toBe(false);
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
+
+      finishDiscard?.();
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards without persisting when pending decryptions exceed the shutdown deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, lifecycle } = createLifecycleFixture({
+        drain: () =>
+          new Promise<void>(() => {
+            // Intentionally pending so the shutdown deadline owns settlement.
+          }),
+        shutdownTimeoutMs: 100,
+      });
+      const stop = lifecycle.stop();
+      const rejection = expect(stop).rejects.toThrow(
+        "shutdown failed while draining pending Matrix decryptions",
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
 
       await rejection;
-      expect(stop).toHaveBeenCalledOnce();
+      expect(calls).toEqual(["detach", "drain", "stop-and-discard"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("requests lifecycle shutdown on operation timeout instead of directly discarding", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, lifecycle } = createLifecycleFixture({
+        shutdownTimeoutMs: 100,
+      });
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>(() => {
+            calls.push("operation");
+          }),
+        timeoutMs: 50,
+      });
+      const rejection = expect(operation).rejects.toThrow(
+        "Matrix E2EE text send timed out after 50ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      await rejection;
+      expect(calls).toEqual(["operation", "detach"]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes a tracked operation that rejects after shutdown has discarded state", async () => {
+    vi.useFakeTimers();
+    try {
+      const { lifecycle } = createLifecycleFixture({
+        shutdownTimeoutMs: 50,
+      });
+      let rejectOperation: ((error: Error) => void) | undefined;
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectOperation = reject;
+          }),
+        timeoutMs: 1_000,
+      });
+      const operationRejection = expect(operation).rejects.toThrow("late send failure");
+      const stop = lifecycle.stop();
+      const stopRejection = expect(stop).rejects.toThrow(
+        "shutdown failed while waiting for active Matrix SDK operations",
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+      await stopRejection;
+      rejectOperation?.(new Error("late send failure"));
+      await operationRejection;
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

@@ -12,8 +12,6 @@ import {
   TerminalOpenResultSchema,
   TerminalResizeParamsSchema,
   TerminalSessionInfoSchema,
-  TerminalTextParamsSchema,
-  TerminalTextResultSchema,
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
 } from "./terminal.js";
@@ -28,8 +26,6 @@ export const TerminalProtocolSchemas = {
   TerminalAttachResult: TerminalAttachResultSchema,
   TerminalSessionInfo: TerminalSessionInfoSchema,
   TerminalListResult: TerminalListResultSchema,
-  TerminalTextParams: TerminalTextParamsSchema,
-  TerminalTextResult: TerminalTextResultSchema,
   TerminalUploadParams: TerminalUploadParamsSchema,
   TerminalUploadResult: TerminalUploadResultSchema,
   TerminalAckResult: TerminalAckResultSchema,

@@ -1,15 +1,18 @@
 // Openai API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  OPENAI_ACCOUNT_WIZARD_GROUP,
-  OPENAI_API_KEY_LABEL,
-  OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
-  OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
-  OPENAI_CHATGPT_LOGIN_HINT,
-  OPENAI_CHATGPT_LOGIN_LABEL,
-} from "./auth-choice-copy.js";
 
 const noopAuth = async () => ({ profiles: [] });
+const OPENAI_API_KEY_LABEL = "OpenAI API Key";
+const OPENAI_CHATGPT_LOGIN_LABEL = "ChatGPT Login";
+const OPENAI_CHATGPT_LOGIN_HINT = "Sign in with your ChatGPT or Codex subscription";
+const OPENAI_CHATGPT_DEVICE_PAIRING_LABEL = "ChatGPT Device Pairing";
+const OPENAI_CHATGPT_DEVICE_PAIRING_HINT =
+  "Pair your ChatGPT account in browser with a device code";
+const OPENAI_ACCOUNT_WIZARD_GROUP = {
+  groupId: "openai",
+  groupLabel: "OpenAI",
+  groupHint: "ChatGPT/Codex sign-in or API key",
+} as const;
 
 export function createOpenAIProvider(): ProviderPlugin {
   return {
@@ -45,7 +48,6 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
           choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
           assistantPriority: -10,
-          assistantVisibility: "manual-only",
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
@@ -60,6 +62,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceLabel: OPENAI_API_KEY_LABEL,
           choiceHint: "Use your OpenAI API key directly",
           assistantPriority: 5,
+          onboardingFeatured: true,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },

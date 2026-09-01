@@ -1,7 +1,12 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import { testing as mcpResolverTesting } from "../agents/mcp-connection-resolver.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
+import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -10,10 +15,12 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
   buildGatewayProbeConnectionDetails: vi.fn(),
-  probeGatewayStatus: vi.fn(),
+  callGateway: vi.fn(),
+  isGatewayCredentialsRequiredError: vi.fn(),
+  isContainerEnvironment: vi.fn(() => false),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
-  resolvePluginProviders: vi.fn((): Array<Record<string, unknown>> => []),
+  resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
@@ -26,6 +33,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -44,15 +52,17 @@ vi.mock("../agents/agent-tools.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayProbeConnectionDetails: mocks.buildGatewayProbeConnectionDetails,
-}));
-
-vi.mock("../cli/daemon-cli/probe.js", () => ({
-  probeGatewayStatus: mocks.probeGatewayStatus,
+  callGateway: mocks.callGateway,
+  isGatewayCredentialsRequiredError: mocks.isGatewayCredentialsRequiredError,
 }));
 
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: mocks.readGatewayServiceState,
   resolveGatewayService: mocks.resolveGatewayService,
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -65,7 +75,7 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
 const {
@@ -93,6 +103,7 @@ function bundleMcpTool(name: string, parameters: unknown): AnyAgentTool {
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
+    mcpResolverTesting.setMcpServerConnectionResolversForTest(undefined);
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -103,23 +114,16 @@ describe("doctor runtime tool schema checks", () => {
     mocks.normalizeProviderToolSchemasWithPlugin
       .mockReset()
       .mockImplementation(({ context }) => context.tools);
-    mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
-      url: "http://127.0.0.1:5829",
-    });
-    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
-      ok: true,
-      server: { version: "2026.6.26" },
-    });
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
       runtime: { status: "running" },
     });
     mocks.resolveGatewayService.mockClear();
-    mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
   });
 
@@ -373,19 +377,27 @@ describe("doctor runtime tool schema checks", () => {
         "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
     });
     expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", toolPolicyAuditLogLevel: "debug" }),
+      expect.objectContaining({ agentId: "main" }),
     );
     expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker", toolPolicyAuditLogLevel: "debug" }),
+      expect.objectContaining({ agentId: "worker" }),
     );
     expect(mocks.loadModelCatalog).toHaveBeenCalledTimes(2);
     expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ agentId: "main" }),
+      expect.objectContaining({
+        agentId: "main",
+        readOnly: true,
+        providerDiscoveryProviderIds: [],
+      }),
     );
     expect(mocks.loadModelCatalog).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ agentId: "worker" }),
+      expect.objectContaining({
+        agentId: "worker",
+        readOnly: true,
+        providerDiscoveryProviderIds: [],
+      }),
     );
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
@@ -430,50 +442,91 @@ describe("doctor runtime tool schema checks", () => {
     );
   });
 
-  it("loads bundled MCP runtime once per distinct agent workspace", async () => {
+  it("reuses one bundled MCP probe for equivalent agent workspaces", async () => {
     mocks.createOpenClawCodingTools.mockReturnValue([]);
-    mocks.createBundleMcpToolRuntime.mockImplementation(
-      async (options: { workspaceDir: string }) => ({
-        tools: options.workspaceDir.includes("worker")
-          ? [
-              bundleMcpTool("fuzzplugin__move_angles", {
-                type: "array",
-                items: { type: "number" },
-              }),
-            ]
-          : [bundleMcpTool("healthy", { type: "object", properties: {} })],
-        dispose: mocks.disposeBundleRuntime,
-      }),
+    mocks.createBundleMcpToolRuntime.mockResolvedValue({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "fuzzplugin",
+          safeServerName: "fuzzplugin",
+          launchSummary: "node fuzzplugin-mcp.mjs",
+          message: "connection failed",
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    const findings = await collectRuntimeToolSchemaFindings({
+      mcp: {
+        servers: {
+          fuzzplugin: { command: "node", args: ["fuzzplugin-mcp.mjs"] },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/main-workspace" },
+          { id: "worker", workspace: "/tmp/worker-workspace" },
+        ],
+      },
+    });
+
+    expect(findings).toEqual([
+      {
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message:
+          'Configured MCP server "fuzzplugin" could not expose runtime tools for schema validation.',
+        path: "mcp.servers.fuzzplugin",
+        requirement: "connection failed",
+        fixHint:
+          "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+      },
+    ]);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
     );
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not probe requester-scoped MCP servers without a requester", async () => {
+    const resolveConnection = vi.fn();
+    mcpResolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        pluginId: "fuzzplugin",
+        serverName: "fuzzplugin",
+        resolve: resolveConnection,
+      },
+    ]);
 
     await expect(
       collectRuntimeToolSchemaFindings({
-        agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/main-workspace" },
-            { id: "worker", workspace: "/tmp/worker-workspace" },
-          ],
+        mcp: {
+          servers: {
+            fuzzplugin: {
+              url: "https://placeholder.invalid/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+            },
+          },
         },
       }),
     ).resolves.toContainEqual({
       checkId: "core/doctor/runtime-tool-schemas",
-      severity: "error",
+      severity: "info",
       message:
-        "Agent worker tool fuzzplugin__move_angles from plugin bundle-mcp has an unsupported input schema for runtime projection.",
-      path: "mcp.servers",
-      target: "fuzzplugin__move_angles",
-      requirement: 'fuzzplugin__move_angles.parameters.type must be "object"',
-      fixHint:
-        "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor.",
+        'Configured requester-scoped MCP server "fuzzplugin" was not probed without an authenticated requester.',
+      path: "mcp.servers.fuzzplugin",
+      requirement: "authenticated requester context",
+      fixHint: "Verify this server from an authenticated agent turn.",
     });
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(2);
+    expect(resolveConnection).not.toHaveBeenCalled();
     expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
+      expect.objectContaining({
+        excludeServerNames: new Set(["fuzzplugin"]),
+      }),
     );
-    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: expect.stringContaining("worker-workspace") }),
-    );
-    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(2);
   });
 
   it("does not report bundle MCP schemas filtered out by the final runtime tool policy", async () => {
@@ -554,16 +607,15 @@ describe("doctor runtime tool schema checks", () => {
 
 describe("doctor gateway runtime checks", () => {
   beforeEach(() => {
+    mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
     mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
       url: "http://127.0.0.1:5829",
     });
-    mocks.probeGatewayStatus.mockReset().mockResolvedValue({
-      ok: true,
-      server: { version: "2026.6.26" },
-    });
+    mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
+    mocks.isGatewayCredentialsRequiredError.mockReset().mockReturnValue(false);
     mocks.readGatewayServiceState.mockReset().mockResolvedValue({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: {},
       command: { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" },
@@ -572,33 +624,212 @@ describe("doctor gateway runtime checks", () => {
     mocks.resolveGatewayService.mockReset().mockReturnValue({ label: "openclaw-gateway" });
   });
 
-  it("reports unreachable gateway health probes", async () => {
-    mocks.probeGatewayStatus.mockResolvedValueOnce({
-      ok: false,
-      error: "connect ECONNREFUSED 127.0.0.1:5829",
+  it("projects every degraded SecretRef owner from exactly one authenticated read-only status RPC", async () => {
+    const cfg = { gateway: { mode: "local" as const } };
+    const privateToken = "SYNTHETIC_PRIVATE_URL_TOKEN";
+    mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
+      url: "wss://127.0.0.1:5829",
+      tlsFingerprint: "sha256:test-doctor-fingerprint",
+      preauthHandshakeTimeoutMs: 1200,
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      degradedSecretOwners: [
+        {
+          ownerKind: "account",
+          ownerId: "discord:ops",
+          state: "unavailable",
+          paths: ["channels.discord.accounts.ops.token"],
+          reason: "secret reference was not found (env:default:PRIVATE_REF_ID)",
+        },
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "stale",
+          paths: ["tts.providers.elevenlabs.apiKey", "tts.providers.elevenlabs.voiceId"],
+          reason: "secret provider policy denied resolution",
+        },
+        {
+          ownerKind: "provider",
+          ownerId: `vault\u001b]52;c;attack\u0007:https://user:${privateToken}@secret.test/${"a".repeat(500)}`,
+          state: "unavailable",
+          paths: Array.from(
+            { length: 12 },
+            (_, index) =>
+              `providers.example.${index}.https://secret.test/value?token=${privateToken}\n${"z".repeat(400)}`,
+          ),
+          reason: `secret provider failed: ${privateToken}\nref PRIVATE_REF_ID`,
+        },
+      ],
+      degradedPlugins: [{ pluginId: "not-this-check" }],
     });
 
-    await expect(
-      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: "Gateway is not reachable: connect ECONNREFUSED 127.0.0.1:5829",
-      path: "gateway.mode",
-      target: "http://127.0.0.1:5829",
-      fixHint:
-        "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+    const findings = await collectGatewayHealthFindings({
+      cfg,
+      configPath: "/tmp/selected-openclaw.json",
     });
+
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      sharedStateMode: "read-only",
+      config: cfg,
+      configPath: "/tmp/selected-openclaw.json",
+      tlsFingerprint: "sha256:test-doctor-fingerprint",
+      preauthHandshakeTimeoutMs: 1200,
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("cold account:discord:ops"),
+        path: "channels.discord.accounts.ops.token",
+        target: "account:discord:ops",
+        fixHint: expect.stringContaining("openclaw secrets reload"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("stale capability:tts"),
+        path: "tts.providers.elevenlabs.apiKey",
+        target: "capability:tts",
+        fixHint: expect.stringContaining("openclaw secrets reload"),
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("provider:vault"),
+        path: expect.stringContaining("providers.example.0"),
+        target: expect.stringContaining("provider:vault"),
+      }),
+    ]);
+    expect(findings[1]?.message).toContain("tts.providers.elevenlabs.voiceId");
+    const finding = findings[2];
+    const rendered = JSON.stringify(findings);
+    expect(finding?.message).toContain("omitted");
+    expect(finding?.message).toContain("secret resolution failed");
+    expect(finding?.message.length).toBeLessThanOrEqual(700);
+    expect(finding?.target?.length).toBeLessThanOrEqual(150);
+    expect(finding?.path?.length).toBeLessThanOrEqual(180);
+    expect(rendered).not.toContain(privateToken);
+    expect(rendered).not.toContain("PRIVATE_REF_ID");
+    expect(rendered).not.toContain("not-this-check");
+    expect(rendered).not.toContain("\u001b");
+    expect(rendered).not.toContain("\u0007");
+  });
+
+  it.each([
+    {
+      label: "missing Gateway authentication",
+      error: new Error("auth token SYNTHETIC_PRIVATE_TOKEN\nref PRIVATE_REF_ID"),
+      credentialsRequired: true,
+      message:
+        "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+    },
+    {
+      label: "an unavailable Gateway authentication SecretRef",
+      error: new GatewaySecretRefUnavailableError("gateway.auth.token"),
+      credentialsRequired: false,
+      message:
+        "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+    },
+    {
+      label: "temporary Gateway authentication rate limiting",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized: too many failed authentication attempts (retry later)",
+        details: { code: "AUTH_RATE_LIMITED", authReason: "rate_limited" },
+        retryable: true,
+      }),
+      credentialsRequired: false,
+      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+    },
+    {
+      label: "an unreachable Gateway with terminal control characters",
+      error: new Error("connect ECONNREFUSED 127.0.0.1:5829\u001b]52;c;attack\u0007\u009b"),
+      credentialsRequired: false,
+      message: "Gateway status could not be inspected: connect ECONNREFUSED 127.0.0.1:5829",
+    },
+  ])("reports $label from exactly one sanitized status attempt", async (entry) => {
+    if (entry.error instanceof GatewayClientRequestError) {
+      retainGatewayResponsePayload(entry.error, undefined);
+    }
+    mocks.callGateway.mockRejectedValueOnce(entry.error);
+    mocks.isGatewayCredentialsRequiredError.mockReturnValueOnce(entry.credentialsRequired);
+
+    const findings = await collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: entry.message,
+        path: "gateway.mode",
+        target: "http://127.0.0.1:5829",
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
+    expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("reports preparation failures without exposing URL credentials or control characters", async () => {
+    mocks.buildGatewayProbeConnectionDetails.mockRejectedValueOnce(
+      new Error(
+        `invalid wss://user:${"SYNTHETIC_PRIVATE_TOKEN".repeat(20)}@gateway.test/rpc\nmore`,
+      ),
+    );
+
+    const findings = await collectGatewayHealthFindings({ cfg: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: expect.stringContaining("Gateway health inspection could not be prepared"),
+        path: "gateway",
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("prepares the target but skips the RPC for active exec credentials unless execution is allowed", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local" as const,
+        auth: {
+          mode: "token" as const,
+          token: { source: "exec" as const, provider: "vault", id: "PRIVATE_REF_ID" },
+        },
+      },
+    };
+
+    const findings = await collectGatewayHealthFindings({ cfg, env: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: expect.stringContaining("intentionally skipped"),
+        fixHint: expect.stringContaining("--allow-exec"),
+      }),
+    ]);
+    expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
+    expect(mocks.buildGatewayProbeConnectionDetails).toHaveBeenCalledOnce();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+
+    await expect(
+      collectGatewayHealthFindings({ cfg, env: {}, allowExecSecretRefs: true }),
+    ).resolves.toEqual([]);
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
   });
 
   it("redacts sensitive remote gateway URLs from health finding targets", async () => {
     mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
       url: "wss://user:pass@gateway.example.test/rpc?token=secret&safe=value",
     });
-    mocks.probeGatewayStatus.mockResolvedValueOnce({
-      ok: false,
-      error: "remote gateway did not answer",
-    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("remote gateway did not answer"));
 
     const findings = await collectGatewayHealthFindings({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example.test/rpc" } } },
@@ -607,7 +838,7 @@ describe("doctor gateway runtime checks", () => {
     expect(findings).toContainEqual({
       checkId: "core/doctor/gateway-health",
       severity: "warning",
-      message: "Gateway is not reachable: remote gateway did not answer",
+      message: "Gateway status could not be inspected: remote gateway did not answer",
       path: "gateway.remote.url",
       target: "wss://***:***@gateway.example.test/rpc?token=***&safe=value",
       fixHint: "Verify the remote Gateway URL, network path, TLS settings, and credentials.",
@@ -619,7 +850,7 @@ describe("doctor gateway runtime checks", () => {
   it("reports missing local gateway daemon service", async () => {
     mocks.readGatewayServiceState.mockResolvedValueOnce({
       installed: false,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: {},
       command: null,
@@ -644,11 +875,21 @@ describe("doctor gateway runtime checks", () => {
 
     expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
   });
+
+  it("skips host-service findings for a container without an OpenClaw service", async () => {
+    mocks.isContainerEnvironment.mockReturnValue(true);
+
+    await expect(
+      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toEqual([]);
+
+    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
+  });
 });
 
 describe("doctor provider catalog projection checks", () => {
   beforeEach(() => {
-    mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
   });
 
   it("reports provider catalog rows that fail unified text projection", async () => {
@@ -668,7 +909,7 @@ describe("doctor provider catalog projection checks", () => {
         },
       },
     );
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -693,18 +934,22 @@ describe("doctor provider catalog projection checks", () => {
     });
   });
 
-  it("loads full provider registrations for static catalog validation", async () => {
-    await collectProviderCatalogProjectionFindings({});
+  it("loads full provider registrations without selecting a default workspace", async () => {
+    const cfg = { agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] } };
+    await collectProviderCatalogProjectionFindings(cfg);
 
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
       expect.not.objectContaining({
         discoveryEntriesOnly: true,
       }),
     );
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
+    );
   });
 
   it("reports provider catalog model rows with invalid ids", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -739,7 +984,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports whitespace-only provider catalog model ids", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -774,7 +1019,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model rows with invalid names", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -807,7 +1052,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model lists with invalid shapes", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -846,7 +1091,7 @@ describe("doctor provider catalog projection checks", () => {
         throw new Error("model iterator failed");
       },
     });
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -880,7 +1125,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog results without provider containers", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -906,7 +1151,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports invalid multi-provider catalog keys", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -940,7 +1185,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports falsy non-empty provider catalog results", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -966,7 +1211,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports invalid provider catalog orders without aborting doctor", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1011,7 +1256,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("validates static catalog rows when live catalog order access fails", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1048,7 +1293,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports static catalog hook access failures without aborting doctor", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1077,7 +1322,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports static catalog hooks with non-function run values", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1111,7 +1356,7 @@ describe("doctor provider catalog projection checks", () => {
       {},
     );
     revoke();
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1139,7 +1384,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports present but invalid single-provider catalog branches", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",

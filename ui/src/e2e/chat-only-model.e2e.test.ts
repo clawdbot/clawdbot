@@ -1,14 +1,17 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:main";
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "chat-only-model")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("chat-only-model")
+      : null;
+});
 
 const models = [
   {
@@ -59,9 +62,6 @@ function sessionsList(model: string, modelProvider: string) {
 
 suite.define(() => {
   it("explains chat-only models and keeps model switching as the recovery path", async () => {
-    if (proofDir) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -70,6 +70,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "lmstudio/qwen3-8b",
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       models,
       sessionKey,
       methodResponses: {
@@ -101,8 +102,12 @@ suite.define(() => {
       const localOption = composer.locator('[data-chat-model-option="lmstudio/qwen3-8b"]');
       const openAiOption = composer.locator('[data-chat-model-option="openai/gpt-5.5"]');
       await expect
-        .poll(async () => (await localOption.textContent())?.replace(/\s+/g, " ").trim())
-        .toContain("32.8k context · Chat only");
+        .poll(() => localOption.locator(".chat-controls__model-option-meta").textContent())
+        .toBe("32.8k");
+      await expect.poll(() => localOption.getAttribute("aria-label")).toContain("cannot use tools");
+      const infoIcon = localOption.locator(".chat-controls__model-chat-only-info");
+      await expect.poll(() => infoIcon.locator("svg").count()).toBe(1);
+      await expect.poll(async () => (await infoIcon.boundingBox())?.width).toBe(16);
       await expect
         .poll(async () => (await openAiOption.textContent())?.includes("Chat only"))
         .toBe(false);
@@ -115,18 +120,16 @@ suite.define(() => {
         });
       }
 
-      await composer.locator('[data-chat-model-provider="openai"]').click();
       await openAiOption.click();
       const patch = await gateway.waitForRequest("sessions.patch");
       expect(patch.params).toMatchObject({ key: sessionKey, model: "openai/gpt-5.5" });
       await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("available");
       await expect.poll(() => badge.count()).toBe(0);
 
-      const pickerDetails = composer.locator("details.chat-controls__model");
+      const pickerDetails = composer.locator("details.chat-controls__model-picker");
       if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
         await picker.click();
       }
-      await composer.locator('[data-chat-model-provider="lmstudio"]').click();
       await localOption.click();
       await expect.poll(() => picker.getAttribute("data-chat-model-tools")).toBe("unavailable");
       if (await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open)) {
@@ -146,7 +149,7 @@ suite.define(() => {
       if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
         await picker.click();
       }
-      const menu = composer.locator(".chat-controls__inline-select-menu--combined");
+      const menu = composer.locator(".chat-controls__model-menu");
       await expect
         .poll(async () => {
           const box = await menu.boundingBox();

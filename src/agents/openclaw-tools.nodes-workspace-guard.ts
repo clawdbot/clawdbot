@@ -22,7 +22,7 @@ export function applyNodesToolWorkspaceGuard(
   }
   return wrapToolWorkspaceRootGuardWithOptions(
     nodesToolBase,
-    options.sandboxRoot ?? options.workspaceDir,
+    options.sandboxRoot ?? options.fsPolicy.root ?? options.workspaceDir,
     {
       containerWorkdir: options.sandboxContainerWorkdir,
       normalizeGuardedPathParams: true,

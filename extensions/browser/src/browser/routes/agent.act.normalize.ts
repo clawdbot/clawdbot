@@ -4,8 +4,10 @@
  * Converts loosely typed route bodies into the closed BrowserActRequest union
  * used by Playwright and Chrome MCP action executors.
  */
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
+  ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_VIEWPORT_DIMENSION,
   ACT_MAX_WAIT_TIME_MS,
@@ -14,12 +16,7 @@ import {
 import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -28,13 +25,13 @@ import {
 } from "./route-numeric.js";
 import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
-function normalizeActKind(raw: unknown): ActKind {
-  const kind = toStringOrEmpty(raw);
-  if (!isActKind(kind)) {
-    throw new Error("kind is required");
-  }
-  return kind;
-}
+const KEY_ALIASES = new Map([
+  ["esc", "Escape"],
+  ["return", "Enter"],
+  ["del", "Delete"],
+  ["ctrl", "Control"],
+  ["cmd", "Meta"],
+]);
 
 function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
@@ -87,11 +84,11 @@ function normalizeFields(rawFields: unknown): BrowserFormField[] {
     .filter((field): field is BrowserFormField => field !== null);
 }
 
-function normalizeBatchAction(value: unknown): BrowserActRequest {
+function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("batch actions must be objects");
   }
-  return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
+  return normalizeActRequest(value as Record<string, unknown>, { source: "batch", depth });
 }
 
 function readActionNonNegativeInteger(
@@ -131,10 +128,14 @@ function readResizeDimension(body: Record<string, unknown>, key: "width" | "heig
 /** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
-  options?: { source?: "request" | "batch" },
+  options?: { source?: "request" | "batch"; depth?: number },
 ): BrowserActRequest {
   const source = options?.source ?? "request";
-  const kind = normalizeActKind(body.kind);
+  const depth = options?.depth ?? 0;
+  const kind = toStringOrEmpty(body.kind);
+  if (!isActKind(kind)) {
+    throw new Error("kind is required");
+  }
 
   switch (kind) {
     case "click": {
@@ -231,7 +232,11 @@ export function normalizeActRequest(
       };
     }
     case "press": {
-      const key = toStringOrEmpty(body.key);
+      // Empty chord segments represent a literal plus key and must survive normalization.
+      const key = toStringOrEmpty(body.key)
+        .split("+")
+        .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+        .join("+");
       if (!key) {
         throw new Error("press requires key");
       }
@@ -287,8 +292,9 @@ export function normalizeActRequest(
     case "select": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;
-      const values = toStringArray(body.values);
-      if ((!ref && !selector) || !values?.length) {
+      // Option values are content: empty strings and surrounding whitespace can identify a choice.
+      const values = filterStringEntries(body.values);
+      if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
@@ -396,7 +402,15 @@ export function normalizeActRequest(
       };
     }
     case "batch": {
-      const actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
+      // Bound nesting before recursing: oversized bodies parse fine, but
+      // unbounded recursion overflows the stack before the count check runs.
+      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
+      if (depth > ACT_MAX_BATCH_DEPTH) {
+        throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
+      }
+      const actions = Array.isArray(body.actions)
+        ? body.actions.map((action) => normalizeBatchAction(action, depth + 1))
+        : [];
       if (!actions.length) {
         throw new Error(source === "batch" ? "batch requires actions" : "actions are required");
       }

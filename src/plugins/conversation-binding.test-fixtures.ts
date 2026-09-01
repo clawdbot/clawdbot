@@ -1,34 +1,9 @@
-/** Test-only reset for process-global plugin conversation binding state. */
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
 type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
-
-type PluginBindingGlobalState = {
-  fallbackNoticeBindingIds: Set<string>;
-  approvalsCache: unknown;
-  approvalsLoaded: boolean;
-  approvalsSaveChain: Promise<void>;
-};
-
-export function resetPluginConversationBindingStateForTest(): void {
-  resolveGlobalMap(Symbol.for("openclaw.pluginBindingPendingRequests")).clear();
-  const state = resolveGlobalSingleton<PluginBindingGlobalState>(
-    Symbol.for("openclaw.plugins.binding.global-state"),
-    () => ({
-      fallbackNoticeBindingIds: new Set(),
-      approvalsCache: null,
-      approvalsLoaded: false,
-      approvalsSaveChain: Promise.resolve(),
-    }),
-  );
-  state.approvalsCache = null;
-  state.approvalsLoaded = false;
-  state.approvalsSaveChain = Promise.resolve();
-  state.fallbackNoticeBindingIds.clear();
-}
 
 export function seedPluginConversationBindingApprovalForTest(params: {
   pluginRoot: string;
@@ -62,5 +37,5 @@ export function seedPluginConversationBindingApprovalForTest(params: {
     );
   });
   // Seeded rows must become visible even if another test loaded the process cache first.
-  resetPluginConversationBindingStateForTest();
+  void drainGlobalSingletonLifecycleState();
 }

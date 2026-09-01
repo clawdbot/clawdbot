@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -26,15 +26,15 @@ const models = [
   },
 ];
 
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-alias-display")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("model-alias-display")
+      : null;
+});
 
 async function createProofContext() {
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -55,6 +55,7 @@ suite.define(() => {
     const context = await createProofContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       models,
       sessionKey: "agent:main:main",
     });
@@ -65,7 +66,6 @@ suite.define(() => {
       const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
-      await main.locator('[data-chat-model-provider="anthropic"]').click();
 
       const opus = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
@@ -83,11 +83,10 @@ suite.define(() => {
         });
       }
 
-      await main.locator('[data-chat-model-provider="nvidia"]').click();
       const nvidia = main.locator(
         '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
-      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
+      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {
@@ -147,16 +146,16 @@ suite.define(() => {
       expect(modelRequest.params).toEqual({ agentId: "main" });
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
-      const select = page.locator("select.settings-select").first();
+      const select = page.locator("wa-select.model-picker__select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-opus-4-8"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-opus-4-8"]').textContent())
         .toContain("Opus 4.8 · opus");
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-sonnet-5"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-sonnet-5"]').textContent())
         .toContain("Sonnet 5 · sonnet");
       await expect
-        .poll(() => select.locator('option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
+        .poll(() => select.locator('wa-option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
         .toContain("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 

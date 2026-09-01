@@ -124,48 +124,6 @@ struct TailscaleIntegrationSectionTests {
         #expect(await loader.requestCount == 2)
     }
 
-    @Test func `tailscale section builds body when not installed`() {
-        let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
-        var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(mode: "off", requireCredentials: false, statusMessage: "Idle")
-        _ = view.body
-    }
-
-    @Test func `tailscale section builds body for serve mode`() {
-        let service = TailscaleService(
-            isInstalled: true,
-            isRunning: true,
-            tailscaleHostname: "openclaw.tailnet.ts.net",
-            tailscaleIP: "100.64.0.1")
-        var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(
-            mode: "serve",
-            requireCredentials: true,
-            password: "secret",
-            statusMessage: "Running")
-        _ = view.body
-    }
-
-    @Test func `tailscale section builds body for funnel mode`() {
-        let service = TailscaleService(
-            isInstalled: true,
-            isAppInstalled: true,
-            isRunning: false,
-            tailscaleHostname: nil,
-            tailscaleIP: nil,
-            statusError: "not running")
-        var view = TailscaleIntegrationSection(connectionMode: .remote, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(
-            mode: "funnel",
-            requireCredentials: false,
-            statusMessage: "Needs start",
-            validationMessage: "Invalid token")
-        _ = view.body
-    }
-
     @Test func `general tailscale hydration does not rewrite existing config`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

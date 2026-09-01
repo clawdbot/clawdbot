@@ -1,6 +1,6 @@
 /** Pure mount and path helpers for the remote sandbox filesystem bridge. */
 import path from "node:path";
-import { normalizeContainerPath as normalizeSandboxContainerPath } from "./path-utils.js";
+import { normalizeContainerPathCore } from "./path-utils.js";
 import {
   isExistingWorkspaceSkillMountSource,
   resolveMaterializedSandboxSkillsWorkspaceDir,
@@ -101,6 +101,26 @@ export function compareRemoteMountsByLocalPath(a: RemoteMountInfo, b: RemoteMoun
   return b.localRoot.length - a.localRoot.length || mountPriority(b) - mountPriority(a);
 }
 
+export function buildRemoteProtectedSkillRoots(params: {
+  workspaceContainerRoot: string;
+  agentContainerRoot: string;
+  includeAgentMount: boolean;
+}): string[] {
+  const roots = [
+    path.posix.join(params.workspaceContainerRoot, "skills"),
+    path.posix.join(params.workspaceContainerRoot, ".agents", "skills"),
+    path.posix.join(params.workspaceContainerRoot, ".openclaw", "sandbox-skills", "skills"),
+  ];
+  if (params.includeAgentMount) {
+    roots.push(
+      path.posix.join(params.agentContainerRoot, "skills"),
+      path.posix.join(params.agentContainerRoot, ".agents", "skills"),
+      path.posix.join(params.agentContainerRoot, ".openclaw", "sandbox-skills", "skills"),
+    );
+  }
+  return roots;
+}
+
 function mountPriority(mount: RemoteMountInfo): number {
   if (mount.source === "protectedSkill") {
     return 2;
@@ -112,7 +132,7 @@ function mountPriority(mount: RemoteMountInfo): number {
 }
 
 export function normalizeContainerPath(value: string): string {
-  const normalized = normalizeSandboxContainerPath(value.trim() || "/");
+  const normalized = normalizeContainerPathCore(value.trim() || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 

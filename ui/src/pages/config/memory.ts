@@ -4,8 +4,8 @@ import "../../components/agent-select-registration.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
-  renderDocsLink,
-  renderSettingsDefaultState,
+  renderLearnMoreLink,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -18,9 +18,6 @@ import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
   DEFAULT_MEMORY_ENGINE_ID,
-  MEMORY_BACKEND_ANCHOR_ID,
-  type MemoryBackend,
-  type MemoryBackendSelection,
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
@@ -167,17 +164,12 @@ type MemoryViewProps = {
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
-  onEngineReset: () => void;
-  /** null when the slot owner runs its own retrieval, so this row does not apply. */
-  backendSelection: MemoryBackendSelection | null;
-  backendBusy: boolean;
-  onBackendChange: (backend: MemoryBackend) => void;
-  onBackendReset: () => void;
   addons: readonly MemoryAddonRow[];
   canToggleAddons: boolean;
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
+  canImportMemory: boolean;
   /** New status-led landing view. */
   overview: TemplateResult;
   /** Search and read the selected agent's indexed memory. */
@@ -198,7 +190,6 @@ const MEMORY_PANEL_ID = "memory-settings-panel";
 const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
 
 const MEMORY_ENGINE_OFF = "";
-const MEMORY_BACKEND_INVALID = "__invalid__";
 
 function engineHintKey(selection: MemoryEngineSelection): string {
   switch (selection.kind) {
@@ -219,12 +210,10 @@ function renderEngineSection(props: MemoryViewProps) {
   const defaultEngine =
     props.engineOptions.find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
     t("memoryPage.engine.openClawMemory");
-  const defaultState = renderSettingsDefaultState({
-    value: defaultEngine,
-    overridden: props.engineSelection.kind !== "auto",
-    disabled: props.engineBusy,
-    onReset: props.onEngineReset,
-  });
+  const defaultDescription = renderSettingsDefaultDescription(
+    defaultEngine,
+    props.engineSelection.kind !== "auto",
+  );
   if (props.engineOptions.length === 0) {
     return renderSettingsSection(
       { title: t("memoryPage.engine.title"), description: t("memoryPage.engine.description") },
@@ -232,12 +221,9 @@ function renderEngineSection(props: MemoryViewProps) {
         title: t("memoryPage.engine.rowTitle"),
         description: html`
           ${t("memoryPage.engine.catalogUnavailable")} ${t(engineHintKey(props.engineSelection))}
-          ${defaultState.description}
+          ${defaultDescription}
         `,
-        control: html`
-          ${defaultState.action}
-          ${renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true })}
-        `,
+        control: renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
       }),
     );
   }
@@ -255,18 +241,15 @@ function renderEngineSection(props: MemoryViewProps) {
     html`
       ${renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
-        description: html`${t(engineHintKey(props.engineSelection))} ${defaultState.description}`,
+        description: html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
         stacked: true,
-        control: html`
-          ${defaultState.action}
-          ${renderSettingsSegmented({
-            value: engineId ?? MEMORY_ENGINE_OFF,
-            options,
-            disabled: props.engineBusy,
-            ariaLabel: t("memoryPage.engine.rowTitle"),
-            onChange: (value) => props.onEngineChange(value || null),
-          })}
-        `,
+        control: renderSettingsSegmented({
+          value: engineId ?? MEMORY_ENGINE_OFF,
+          options,
+          disabled: props.engineBusy,
+          ariaLabel: t("memoryPage.engine.rowTitle"),
+          onChange: (value) => props.onEngineChange(value || null),
+        }),
       })}
       ${renderDisabledEngineRow(props, engineId)}
       ${props.engineOutcome === null
@@ -313,71 +296,6 @@ function renderDisabledEngineRow(props: MemoryViewProps, engineId: string | null
       </button>
     `,
   });
-}
-
-function renderBackendSection(props: MemoryViewProps) {
-  // builtin/qmd is resolved by the memory runtime the slot owner registers
-  // (resolveActiveMemoryBackendConfig in src/plugins/memory-runtime.ts). An
-  // engine that registers none ignores it, so the row must not appear there.
-  if (props.backendSelection === null) {
-    return nothing;
-  }
-  const invalid = props.backendSelection.kind === "invalid";
-  const backend = props.backendSelection.backend;
-  const defaultState = renderSettingsDefaultState({
-    value: t("memoryPage.backend.builtin"),
-    overridden: props.backendSelection.kind !== "default",
-    disabled: props.backendBusy,
-    onReset: props.onBackendReset,
-  });
-  const controlValue =
-    props.backendSelection.kind === "invalid"
-      ? MEMORY_BACKEND_INVALID
-      : props.backendSelection.backend;
-  const options: Array<{
-    value: MemoryBackend | typeof MEMORY_BACKEND_INVALID;
-    label: unknown;
-  }> = [];
-  if (invalid) {
-    options.push({ value: MEMORY_BACKEND_INVALID, label: t("memoryPage.backend.invalid") });
-  }
-  options.push(
-    { value: "builtin", label: t("memoryPage.backend.builtin") },
-    { value: "qmd", label: t("memoryPage.backend.qmd") },
-  );
-  // Anchor target for settings search: `backend` is curated out of the schema
-  // editor, so it has no `#config-section-*` id of its own to scroll to.
-  return html`<div id=${MEMORY_BACKEND_ANCHOR_ID}>
-    ${renderSettingsSection(
-      { title: t("memoryPage.backend.title"), description: t("memoryPage.backend.description") },
-      renderSettingsRow({
-        title: t("memoryPage.backend.rowTitle"),
-        description: html`
-          ${invalid
-            ? t("memoryPage.backend.invalidHint")
-            : backend === "qmd"
-              ? t("memoryPage.backend.qmdHint")
-              : t("memoryPage.backend.builtinHint")}
-          ${defaultState.description}
-        `,
-        stacked: true,
-        control: html`
-          ${defaultState.action}
-          ${renderSettingsSegmented<MemoryBackend | typeof MEMORY_BACKEND_INVALID>({
-            value: controlValue,
-            options,
-            disabled: props.backendBusy,
-            ariaLabel: t("memoryPage.backend.rowTitle"),
-            onChange: (value) => {
-              if (value !== MEMORY_BACKEND_INVALID) {
-                props.onBackendChange(value);
-              }
-            },
-          })}
-        `,
-      }),
-    )}
-  </div>`;
 }
 
 // Only `enabled` is a positive claim; the other three are deliberately muted so
@@ -447,7 +365,7 @@ function renderAddonsSection(props: MemoryViewProps) {
 function renderSettingsTab(props: MemoryViewProps) {
   return html`
     <div class="settings-page">
-      ${renderEngineSection(props)} ${renderBackendSection(props)} ${renderAddonsSection(props)}
+      ${renderEngineSection(props)} ${renderAddonsSection(props)}
       <p class="settings-page__intro">${t("memoryPage.search.intro")}</p>
     </div>
     ${props.editor}
@@ -458,9 +376,11 @@ function renderSettingsTab(props: MemoryViewProps) {
         renderSettingsRow({
           title: t("tabs.memoryImport"),
           description: t("subtitles.memoryImport"),
-          control: html`<a class="memory-page__link" href=${props.memoryImportHref}
-            >${t("memoryPage.import.link")}</a
-          >`,
+          control: props.canImportMemory
+            ? html`<a class="memory-page__link" href=${props.memoryImportHref}
+                >${t("memoryPage.import.link")}</a
+              >`
+            : renderSettingsValue(t("memoryImport.adminRequired")),
         }),
       )}
     </div>
@@ -470,11 +390,11 @@ function renderSettingsTab(props: MemoryViewProps) {
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
-      <section class="content-header content-header--page hub-page-header">
+      <section class="content-header content-header--settings content-header--page hub-page-header">
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">
-            ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+            ${t("memoryPage.intro")} ${renderLearnMoreLink(MEMORY_DOCS_URL)}
           </div>
         </div>
         <div class="hub-page-header__tabs">
@@ -493,7 +413,7 @@ export function renderMemory(props: MemoryViewProps) {
           })}
         </div>
         <div class="hub-page-header__actions">
-          ${props.activeTab === "settings"
+          ${props.activeTab === "settings" || props.agents.length <= 1
             ? nothing
             : html`
                 <div class="agent-scope-control">

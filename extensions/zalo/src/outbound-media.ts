@@ -146,14 +146,14 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  const entry = await store.read(id, now);
-  if (!entry || entry.metadata.routePath !== routePath) {
+  const metadata = await store.readMetadata(id, now);
+  if (!metadata || metadata.routePath !== routePath) {
     res.statusCode = 404;
     res.end("Not Found");
     return true;
   }
 
-  const expiresAt = asDateTimestampMs(entry.metadata.expiresAt);
+  const expiresAt = asDateTimestampMs(metadata.expiresAt);
   if (expiresAt === undefined || expiresAt <= now) {
     await store.delete(id);
     res.statusCode = 410;
@@ -161,27 +161,41 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  if (!safeEqualSecret(url.searchParams.get("token"), entry.metadata.token)) {
+  const token = url.searchParams.get("token");
+  if (!safeEqualSecret(token, metadata.token)) {
     res.statusCode = 401;
     res.end("Unauthorized");
     return true;
   }
 
-  if (entry.metadata.contentType) {
-    res.setHeader("Content-Type", entry.metadata.contentType);
+  let servedMetadata = metadata;
+  let body: Buffer | undefined;
+  if (method === "GET") {
+    const entry = await store.read(id, now);
+    if (
+      !entry ||
+      entry.metadata.routePath !== routePath ||
+      !safeEqualSecret(token, entry.metadata.token)
+    ) {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return true;
+    }
+    servedMetadata = entry.metadata;
+    body = entry.buffer;
+  }
+
+  if (servedMetadata.contentType) {
+    res.setHeader("Content-Type", servedMetadata.contentType);
   }
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Content-Length", String(entry.metadata.byteLength));
-
+  res.setHeader("Content-Length", String(servedMetadata.byteLength));
+  res.statusCode = 200;
+  res.end(body);
   if (method === "HEAD") {
-    res.statusCode = 200;
-    res.end();
     return true;
   }
-
-  res.statusCode = 200;
-  res.end(entry.buffer);
   await store.delete(id);
   return true;
 }

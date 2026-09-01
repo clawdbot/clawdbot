@@ -10,7 +10,10 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
 import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
@@ -20,6 +23,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -50,7 +54,7 @@ const SCENARIOS = {
     docsRefs: ["docs/tools/tts.md", "docs/tools/media-overview.md"],
     codeRefs: [
       SOURCE_PATH,
-      "packages/speech-core/src/tts.ts",
+      "src/tts/runtime-api.ts",
       "src/gateway/managed-image-attachments.ts",
       "src/gateway/server-methods/artifacts.ts",
     ],
@@ -280,7 +284,9 @@ async function waitForChatFinal(
     if (finalEvent) {
       return finalEvent.payload;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error(`timed out waiting for WebChat final event for run ${runId}`);
 }
@@ -301,7 +307,9 @@ async function waitForWebchatAudio(params: {
     if (attachment) {
       return { attachment, history };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   return { attachment: undefined, history };
 }
@@ -310,11 +318,12 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-tts-"));
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let client: GatewayClient | undefined;
   const events: Array<{ event: string; payload?: unknown }> = [];
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -396,7 +405,7 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
     return `real Gateway pid=${gateway.pid ?? "unknown"}; WebChat history contained trusted audio; syntheses=1; scoped ticket served ${body.length} bytes`;
   } finally {
     client?.stop();
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -434,7 +443,9 @@ async function waitForActiveTalkStatus(client: GatewayClient, sessionKey: string
       return status;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
     }
   }
   throw lastError instanceof Error ? lastError : new Error("timed out waiting for active Talk run");
@@ -462,7 +473,9 @@ async function waitForQueuedTalkSteer(client: GatewayClient, sessionKey: string)
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   if (lastError instanceof Error) {
     throw lastError;
@@ -474,10 +487,11 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-talk-"));
   const fixture = await createFixturePlugin(fixtureRoot);
   const mock = await startQaMockOpenAiServer({ finalOnlyMarkerPauseMs: 60_000 });
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let client: GatewayClient | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -513,7 +527,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
       url: gateway.wsUrl,
     });
     const sessionKey = "agent:qa:main";
-    const created = await client.request<Record<string, unknown>>("talk.client.create", {
+    const created = await client.request("talk.client.create", {
       sessionKey,
       provider: FIXTURE_REALTIME_PROVIDER_ID,
     });
@@ -583,7 +597,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
     client?.stop();
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -643,7 +657,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

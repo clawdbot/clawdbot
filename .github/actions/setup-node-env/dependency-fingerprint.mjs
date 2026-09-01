@@ -35,11 +35,11 @@ const INSTALL_INPUT_FILES = [
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
   ".npmrc",
+  ".pnpmfile.mjs",
   ".pnpmfile.cjs",
   "pnpmfile.cjs",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
-  ".github/actions/setup-node-env/sticky-importers.sh",
-  ".github/actions/setup-node-env/verify-importers.mjs",
+  "node-version.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
@@ -55,7 +55,7 @@ function canonicalize(value) {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, child]) => [key, canonicalize(child)]),
   );
 }
@@ -86,6 +86,10 @@ function hasAuditedLifecycleScripts(manifest, relativePath) {
 
 function normalizeManifest(manifest) {
   const normalized = { ...manifest };
+  // Pnpm ignores OpenClaw's package metadata, and the audited install hooks do
+  // not read it. Runtime schema/publication metadata must not relink the whole
+  // workspace or hold canonical main fanout behind a cold dependency rebuild.
+  delete normalized.openclaw;
   if (
     manifest.scripts &&
     typeof manifest.scripts === "object" &&
@@ -128,7 +132,7 @@ function trackedPackageManifests(workspace) {
   return result.stdout
     .split("\0")
     .filter((entry) => entry === "package.json" || entry.endsWith("/package.json"))
-    .sort();
+    .toSorted();
 }
 
 function computeDependencyFingerprint({ workspace, frozenLockfile }) {
@@ -145,7 +149,7 @@ function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     try {
       manifest = JSON.parse(source);
     } catch (error) {
-      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`);
+      throw new Error(`invalid JSON in ${relativePath}: ${error.message}`, { cause: error });
     }
     return { manifest, relativePath };
   });

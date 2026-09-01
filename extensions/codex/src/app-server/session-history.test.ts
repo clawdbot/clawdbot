@@ -1,12 +1,24 @@
 // Codex tests cover mirrored session-history branch selection.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  captureCodexSettledTurnFinalizationContext,
+  CodexSettledTurnContext,
+} from "./settled-turn-context.js";
+import {
+  attachCodexMirrorIdentity,
+  attachUpstreamUserText,
+  readMirrorIdentity,
+  readUpstreamUserText,
+} from "./upstream-prompt-provenance.js";
 
 const tempDirs: string[] = [];
 
@@ -52,6 +64,30 @@ function messageEntry(params: {
       role: params.role,
       content: params.content,
       timestamp: 1,
+    },
+  };
+}
+
+function bashEntry(params: {
+  id: string;
+  parentId: string;
+  output: string;
+  excludeFromContext: boolean;
+}) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: "2026-06-15T00:00:00.000Z",
+    message: {
+      role: "bashExecution",
+      command: `print ${params.output}`,
+      output: params.output,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 1,
+      excludeFromContext: params.excludeFromContext,
     },
   };
 }
@@ -106,6 +142,137 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it.each([false, true])(
+    "projects persisted native evidence without reading beyond the budget (oversized=%s)",
+    async (oversized) => {
+      const { marker, sessionTarget } = await writeSqliteSession();
+      for (let index = 0; index < (oversized ? 201 : 0); index += 1) {
+        await appendSessionTranscriptMessageByIdentity({
+          ...sessionTarget,
+          message: { role: "user", content: `prior-${index}`, timestamp: index + 3 },
+        });
+      }
+      const unreadMarker = "synthetic-unread-settled-payload:";
+      if (oversized) {
+        await appendSessionTranscriptMessageByIdentity({
+          ...sessionTarget,
+          message: {
+            role: "user",
+            content: unreadMarker + "x".repeat(1024 * 1024),
+            timestamp: 205,
+          },
+        });
+      }
+      const upstreamPrompt = "Native context\nSend the synthetic update.";
+      const settledMessages = [
+        attachUpstreamUserText(
+          attachCodexMirrorIdentity(
+            { role: "user", content: "Send the synthetic update.", timestamp: 206 },
+            "settled:prompt",
+          ),
+          upstreamPrompt,
+        ),
+        attachCodexMirrorIdentity(
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "sent", name: "message", arguments: {} }],
+            timestamp: 207,
+          } as AgentMessage,
+          "settled:tool:sent:call",
+        ),
+        attachCodexMirrorIdentity(
+          {
+            role: "toolResult",
+            toolCallId: "sent",
+            toolName: "message",
+            isError: false,
+            content: [{ type: "text", text: "Synthetic update sent." }],
+            timestamp: 208,
+          },
+          "settled:tool:sent:result",
+        ),
+      ];
+      for (const message of settledMessages) {
+        await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+      }
+      const originalParse = JSON.parse;
+      let laterPayloadReads = 0;
+      const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes(unreadMarker)) {
+          laterPayloadReads += 1;
+        }
+        return originalParse(text, reviver);
+      });
+      try {
+        const captured = await captureCodexSettledTurnFinalizationContext({
+          ...sessionTarget,
+          sessionTarget,
+          sessionFile: marker,
+          settledMessages,
+          mirroredMessages: settledMessages,
+          turnId: "settled",
+        });
+        if (oversized) {
+          expect(captured).toBeUndefined();
+        } else {
+          expect(captured).toBeInstanceOf(CodexSettledTurnContext);
+          expect(captured?.data).toContainEqual({
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: upstreamPrompt }],
+          });
+          expect(Object.isFrozen(captured?.data)).toBe(true);
+          expect(captured?.data.at(-1)).toMatchObject({
+            type: "function_call_output",
+            call_id: "sent",
+            output: "Synthetic update sent.",
+          });
+        }
+        expect(laterPayloadReads).toBe(0);
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
+  it("preserves native prompt evidence across explicit model-only reads", async () => {
+    const { marker, sessionTarget } = await writeSqliteSession();
+    const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);
+    const message = {
+      role: "user" as const,
+      content: "native visible",
+      timestamp: 3,
+      __openclaw: {
+        upstreamUserText,
+        mirrorIdentity: "synthetic-native-turn",
+        mirrorOrigin: "codex",
+        turnTainted: true,
+      },
+    };
+    await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
+    const target = { ...sessionTarget, sessionTarget, sessionFile: marker };
+    const hash = (text: string | undefined) =>
+      createHash("sha256")
+        .update(text ?? "")
+        .digest("hex");
+    const before = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    expect(hash(readUpstreamUserText(before))).toBe(hash(upstreamUserText));
+    const model = (await readCodexMirroredSessionHistoryMessages(
+      target,
+      undefined,
+      "model-context",
+    ))!.at(-1)!;
+    expect(readUpstreamUserText(model)).toBeUndefined();
+    expect(readMirrorIdentity(model)).toBe("synthetic-native-turn");
+    expect(model).toMatchObject({
+      content: "native visible",
+      timestamp: 3,
+      __openclaw: { mirrorOrigin: "codex", turnTainted: true },
+    });
+    const after = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    expect(hash(readUpstreamUserText(after))).toBe(hash(upstreamUserText));
+    expect(readMirrorIdentity(after)).toBe("synthetic-native-turn");
+  });
   it("treats a missing mirrored session file as empty history", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
     tempDirs.push(dir);
@@ -157,6 +324,24 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
     ).resolves.toBeUndefined();
+  });
+
+  it("rejects a legacy transcript whose session header belongs to another session", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({
+        id: "foreign",
+        parentId: null,
+        role: "assistant",
+        content: "foreign answer",
+      }),
+    ]);
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        sessionFile,
+        sessionId: "another-session",
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("replays SQLite marker history by session identity", async () => {
@@ -275,6 +460,47 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 
+  it("applies the admission fence when session metadata still points to a legacy file", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "prior", parentId: null, role: "user", content: "legacy prior prompt" }),
+      messageEntry({
+        id: "current",
+        parentId: "prior",
+        role: "user",
+        content: "legacy current prompt",
+      }),
+    ]);
+    const { sessionKey, sessionTarget } = await writeSqliteSession({
+      storedSessionFile: sessionFile,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...sessionTarget,
+      message: { role: "user", content: "sqlite current prompt", timestamp: 3 },
+    });
+    if (!admitted?.anchor) {
+      throw new Error("expected current-turn admission anchor");
+    }
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(
+        {
+          agentId: sessionTarget.agentId,
+          sessionFile,
+          sessionId: sessionTarget.sessionId,
+          sessionKey,
+        },
+        {
+          ...admitted.anchor,
+          logicalTurnId: "codex-legacy-file-turn",
+          role: "user",
+        },
+      ),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
@@ -304,6 +530,42 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "user", content: "root prompt" },
       { role: "assistant", content: [{ type: "text", text: "active answer" }] },
     ]);
+  });
+
+  it("projects private shell rows out of mirrored history without rewriting persisted bytes", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
+      bashEntry({
+        id: "private-shell",
+        parentId: "root",
+        output: "private shell output",
+        excludeFromContext: true,
+      }),
+      bashEntry({
+        id: "visible-shell",
+        parentId: "private-shell",
+        output: "visible shell output",
+        excludeFromContext: false,
+      }),
+      messageEntry({
+        id: "continued",
+        parentId: "visible-shell",
+        role: "user",
+        content: "continue prompt",
+      }),
+    ]);
+    const persistedBefore = await fs.readFile(sessionFile, "utf8");
+
+    const messages = await readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile));
+
+    expect(messages).toMatchObject([
+      { role: "user", content: "root prompt" },
+      { role: "bashExecution", output: "visible shell output" },
+      { role: "user", content: "continue prompt" },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("private shell output");
+    expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
+    expect(persistedBefore).toContain("private shell output");
   });
 
   it("honors explicit navigation to an empty branch", async () => {

@@ -1,6 +1,6 @@
-// Qa Lab tests cover lab server plugin behavior.
+// QA Lab tests cover lab server plugin behavior.
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -146,20 +146,22 @@ const captureMock = vi.hoisted(() => {
   };
 
   return {
+    acquire: vi.fn(() => ({
+      store,
+      release: store.close,
+    })),
     store,
     reset() {
       sessions.splice(0);
       events.splice(0);
+      captureMock.acquire.mockClear();
       store.close.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  acquireDebugProxyCaptureStore: () => ({
-    store: captureMock.store,
-    release: captureMock.store.close,
-  }),
+  acquireDebugProxyCaptureStore: captureMock.acquire,
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
@@ -343,7 +345,79 @@ async function createQaLabRepoRootFixture(params?: {
   return repoRoot;
 }
 
+type QaLabSuiteScenarioFixture = {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  steps: unknown[];
+  details?: string;
+};
+
+async function createQaLabSuiteResultFixture(params?: {
+  scenarios?: QaLabSuiteScenarioFixture[];
+  watchUrl?: string;
+}) {
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-suite-result-"));
+  cleanups.push(async () => {
+    await rm(outputDir, { recursive: true, force: true });
+  });
+  const scenarios = params?.scenarios ?? [
+    { name: "Channel chat baseline", status: "pass" as const, steps: [] },
+  ];
+  const report = "# QA report\n";
+  const evidencePath = path.join(outputDir, "qa-evidence.json");
+  const reportPath = path.join(outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(outputDir, "qa-suite-summary.json");
+  await Promise.all([
+    writeFile(
+      evidencePath,
+      JSON.stringify({
+        entries: scenarios.map((scenario) => ({ result: { status: scenario.status } })),
+      }),
+      "utf8",
+    ),
+    writeFile(reportPath, report, "utf8"),
+    writeFile(
+      summaryPath,
+      JSON.stringify({
+        run: { status: "completed" },
+        counts: {
+          total: scenarios.length,
+          passed: scenarios.filter((scenario) => scenario.status === "pass").length,
+          failed: scenarios.filter((scenario) => scenario.status === "fail").length,
+          skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
+        },
+        scenarios,
+      }),
+      "utf8",
+    ),
+  ]);
+  return {
+    evidencePath,
+    outputDir,
+    report,
+    reportPath,
+    scenarios,
+    summaryPath,
+    ...(params?.watchUrl ? { watchUrl: params.watchUrl } : {}),
+  };
+}
+
 describe("qa-lab server", () => {
+  it("returns a 500 JSON response when a shared bus route rejects", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => await lab.stop());
+    const requestError = new Error("combined snapshot unavailable");
+    lab.state.getSnapshot = () => {
+      throw requestError;
+    };
+
+    const response = await fetch(`${lab.baseUrl}/v1/state`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: requestError.message });
+  });
+
   it("dispatches explicit mixed-kind selections through the suite planner", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {
@@ -351,14 +425,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "suite",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture(),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
@@ -408,6 +477,7 @@ describe("qa-lab server", () => {
       expect.objectContaining({
         alternateModel: "openai/gpt-5.6-luna",
         channelDriver: "crabline",
+        controlUiEnabled: true,
         primaryModel: "openai/gpt-5.6-luna",
         providerMode: "live-frontier",
         scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
@@ -431,6 +501,164 @@ describe("qa-lab server", () => {
     });
   });
 
+  it.each([
+    { label: "failed", status: "fail" as const },
+    { label: "skipped", status: "skip" as const },
+  ])(
+    "marks $label suite results failed while preserving generated artifacts",
+    async ({ status }) => {
+      const lab = await startQaLabServerForTest();
+      cleanups.push(async () => {
+        await lab.stop();
+      });
+      const result = await createQaLabSuiteResultFixture({
+        scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
+      });
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
+
+      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+          scenarioIds: ["dm-chat-baseline"],
+        }),
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(async () => {
+        const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+          latestReport: { outputPath: string; markdown: string };
+          runner: {
+            status: string;
+            error: string;
+            artifacts: {
+              outputDir: string;
+              evidencePath: string;
+              reportPath: string;
+              summaryPath: string;
+            };
+          };
+        };
+        expect(bootstrap.runner.status).toBe("failed");
+        expect(bootstrap.runner.error).toBe("QA suite reported 1 failed or skipped scenario(s).");
+        expect(bootstrap.runner.artifacts).toEqual(
+          expect.objectContaining({
+            outputDir: result.outputDir,
+            evidencePath: result.evidencePath,
+            reportPath: result.reportPath,
+            summaryPath: result.summaryPath,
+          }),
+        );
+        expect(bootstrap.latestReport).toEqual(
+          expect.objectContaining({ outputPath: result.reportPath, markdown: result.report }),
+        );
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "invalid",
+      summary: "{invalid-summary",
+      expectedError: "Could not parse QA summary JSON",
+    },
+    {
+      label: "empty",
+      summary: JSON.stringify({
+        run: { status: "completed" },
+        counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+        scenarios: [],
+      }),
+      expectedError: "did not include any executed scenarios",
+    },
+  ])(
+    "fails closed on an $label suite summary while preserving artifacts",
+    async (invalidResult) => {
+      const lab = await startQaLabServerForTest();
+      cleanups.push(async () => {
+        await lab.stop();
+      });
+      const result = await createQaLabSuiteResultFixture();
+      await writeFile(result.summaryPath, invalidResult.summary, "utf8");
+      suiteLaunchMock.runQaSuite.mockResolvedValue({
+        executionKind: "flow",
+        expectedCells: [],
+        observedCells: [],
+        result,
+      });
+
+      const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+          scenarioIds: ["dm-chat-baseline"],
+        }),
+      });
+
+      expect(response.status).toBe(202);
+      await vi.waitFor(async () => {
+        const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+          runner: { status: string; error: string; artifacts: { summaryPath: string } };
+        };
+        expect(bootstrap.runner.status).toBe("failed");
+        expect(bootstrap.runner.error).toContain(invalidResult.expectedError);
+        expect(bootstrap.runner.artifacts.summaryPath).toBe(result.summaryPath);
+      });
+    },
+  );
+
+  it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    const result = await createQaLabSuiteResultFixture({
+      scenarios: [
+        { name: "Channel chat baseline", status: "pass", steps: [] },
+        {
+          name: "Runtime tool fixture — image_generate",
+          status: "skip",
+          steps: [],
+          details: "image_generate mock provider report-only: tool unavailable",
+        },
+      ],
+    });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
+      result,
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        profile: "all",
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await vi.waitFor(async () => {
+      const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+        runner: { status: string; error: string | null };
+      };
+      expect(bootstrap.runner.status).toBe("completed");
+      expect(bootstrap.runner.error).toBeNull();
+    });
+  });
+
   it("keeps mock providers independent from real channel adapters", async () => {
     const lab = await startQaLabServerForTest();
     cleanups.push(async () => {
@@ -438,15 +666,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-        watchUrl: "http://runtime-watch.invalid",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture({ watchUrl: "http://runtime-watch.invalid" }),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
@@ -476,6 +698,58 @@ describe("qa-lab server", () => {
       expect(bootstrap.runner.status).toBe("completed");
       expect(bootstrap.runner.artifacts.watchUrl).toBe("http://runtime-watch.invalid");
     });
+  });
+
+  it("launches a plural-only catalog scenario on its selected live channel", async () => {
+    liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
+    const lab = await startQaLabServerForTest();
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+    suiteLaunchMock.runQaSuite.mockResolvedValue({
+      executionKind: "flow",
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture(),
+    });
+
+    const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        profile: "all",
+        channel: "buzz",
+        channelDriver: "live",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-canary"],
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as {
+      plan: {
+        selectedScenarios: Array<{
+          id: string;
+          declaredChannel: string | null;
+          effectiveChannel: string | null;
+        }>;
+      };
+    };
+    expect(payload.plan.selectedScenarios).toEqual([
+      expect.objectContaining({
+        id: "channel-canary",
+        declaredChannel: null,
+        effectiveChannel: "buzz",
+      }),
+    ]);
+    await vi.waitFor(() => expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1));
+    expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "live",
+        channelId: "buzz",
+        scenarioIds: ["channel-canary"],
+      }),
+    );
   });
 
   it("allows only one concurrent request to commit a resolved suite plan", async () => {
@@ -509,14 +783,9 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1);
     finishSuite?.({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture(),
     });
     await vi.waitFor(async () => {
       const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
@@ -550,15 +819,9 @@ describe("qa-lab server", () => {
     });
     suiteLaunchMock.runQaSuite.mockResolvedValue({
       executionKind: "flow",
-      result: {
-        evidencePath: "/tmp/qa-evidence.json",
-        outputDir: "/tmp/qa-output",
-        report: "# QA report\n",
-        reportPath: "/tmp/qa-report.md",
-        scenarios: [],
-        summaryPath: "/tmp/qa-summary.json",
-        watchUrl: lab.baseUrl,
-      },
+      expectedCells: [],
+      observedCells: [],
+      result: await createQaLabSuiteResultFixture({ watchUrl: lab.baseUrl }),
     });
 
     const response = await fetch(`${lab.baseUrl}/api/scenario/suite`, {
@@ -671,7 +934,7 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("cleans up capture state when embedded gateway setup fails", async () => {
+  it("does not open capture state when embedded gateway setup fails", async () => {
     qaChannelMock.resolveAccount.mockImplementationOnce(() => {
       throw new Error("embedded setup failed");
     });
@@ -683,10 +946,11 @@ describe("qa-lab server", () => {
       }),
     ).rejects.toThrow("embedded setup failed");
 
-    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    expect(captureMock.acquire).not.toHaveBeenCalled();
+    expect(captureMock.store.close).not.toHaveBeenCalled();
   });
 
-  it("closes the server and capture state when embedded gateway stop fails", async () => {
+  it("closes the server and acquired capture state when embedded gateway stop fails", async () => {
     qaChannelMock.startAccount.mockImplementationOnce(
       async ({ abortSignal }: { abortSignal?: AbortSignal }) =>
         await new Promise<void>((_resolve, reject) => {
@@ -707,10 +971,80 @@ describe("qa-lab server", () => {
       host: "127.0.0.1",
       port: 0,
     });
+    await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`);
 
     await expect(lab.stop()).rejects.toThrow("gateway stop failed");
 
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
     expect(captureMock.store.close).toHaveBeenCalledTimes(1);
+    await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+  });
+
+  it("keeps the bus available until the embedded gateway finishes stopping", async () => {
+    let markGatewayStopping = () => {};
+    const gatewayStopping = new Promise<void>((resolve) => {
+      markGatewayStopping = resolve;
+    });
+    let finishGatewayStop = () => {};
+    const gatewayStopped = new Promise<void>((resolve) => {
+      finishGatewayStop = resolve;
+    });
+    qaChannelMock.startAccount.mockImplementationOnce(
+      async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        markGatewayStopping();
+        await gatewayStopped;
+      },
+    );
+
+    const lab = await startQaLabServer({ host: "127.0.0.1", port: 0 });
+    const waitForCursorAdvance = lab.state.waitForCursorAdvance.bind(lab.state);
+    let pollWaiterStarted = false;
+    let pollWaiterSettled = false;
+    lab.state.waitForCursorAdvance = async (...args) => {
+      pollWaiterStarted = true;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaiterSettled = true;
+      }
+    };
+    const poll = fetch(`${lab.listenUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "cleanup", cursor: 0, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = httpRequest(new URL("/api/inbound/message", lab.listenUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
+    await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
+    const stopping = lab.stop();
+    await gatewayStopping;
+    try {
+      await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
+      expect(pollWaiterSettled).toBe(false);
+    } finally {
+      finishGatewayStop();
+      setTimeout(() => slowInbound.end(inboundBody.slice(1)), 50);
+      await stopping;
+    }
+    await poll;
+    expect(pollWaiterSettled).toBe(true);
+    expect(lab.state.getSnapshot()).toMatchObject({ events: [], messages: [] });
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
@@ -763,7 +1097,16 @@ describe("qa-lab server", () => {
       "release",
       "all",
     ]);
-    expect(bootstrap.runnerCatalog.channels).toContain("qa-channel");
+    expect(bootstrap.runnerCatalog.channels).toEqual([
+      "buzz",
+      "discord",
+      "matrix",
+      "msteams",
+      "qa-channel",
+      "slack",
+      "telegram",
+      "whatsapp",
+    ]);
 
     const startupStatus = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/startup-status`)
@@ -1552,14 +1895,22 @@ describe("qa-lab server", () => {
       host: "127.0.0.1",
       port: 0,
     });
+    let stopped = false;
     cleanups.push(async () => {
-      await lab.stop();
+      if (!stopped) {
+        await lab.stop();
+      }
     });
+
+    await fetchWithRetry(`${lab.baseUrl}/healthz`);
+    await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
+    expect(captureMock.acquire).not.toHaveBeenCalled();
 
     const sessions = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
     ).json()) as { sessions: Array<{ id: string }> };
     expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
 
     const events = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
@@ -1611,6 +1962,11 @@ describe("qa-lab server", () => {
     expect(query.rows).toHaveLength(1);
     expect(query.rows[0]?.host).toBe("api.example.com");
     expect(query.rows[0]?.duplicateCount).toBe(2);
+    expect(captureMock.acquire).toHaveBeenCalledTimes(1);
+
+    await lab.stop();
+    stopped = true;
+    expect(captureMock.store.close).toHaveBeenCalledTimes(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

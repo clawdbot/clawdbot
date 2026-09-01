@@ -1,13 +1,12 @@
 /** Shared gateway refresh for CLI auth writes made outside the gateway process. */
 import { callGateway } from "../../gateway/call.js";
 
-// CLI auth writes occur outside the gateway process, which may retain an older
-// runtime snapshot. Best-effort: auth writes must still succeed with no gateway.
-export async function refreshRunningGatewayAuthState(): Promise<void> {
+// Best-effort refresh: auth writes must still succeed when the gateway is absent or stale.
+export async function refreshRunningGatewayAuthState(agentId?: string): Promise<void> {
   try {
     await callGateway({
       method: "models.authStatus",
-      params: { refresh: true },
+      params: { refresh: true, ...(agentId ? { agentId } : {}) },
       timeoutMs: 3000,
     });
   } catch {

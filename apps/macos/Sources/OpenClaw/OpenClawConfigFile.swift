@@ -207,18 +207,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
-        var root = self.loadDict()
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        mutate(&gateway)
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        self.saveDict(root)
-    }
-
     static func gatewayUpdateChannel() -> String? {
         let root = self.loadDict()
         let update = root["update"] as? [String: Any]
@@ -234,6 +222,21 @@ enum OpenClawConfigFile {
         let root = self.loadDict()
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
+    }
+
+    /// Beta macOS builds wrote this retired key after core moved it to SQLite.
+    /// Repair only that app-owned shape before local Gateway validation can reject it.
+    static func migrateRetiredAppMetadataForGatewayStart() -> Bool {
+        self.withFileLock {
+            let root = self.loadDict()
+            guard let meta = root["meta"] as? [String: Any],
+                  meta.keys.contains("lastTouchedAt")
+            else {
+                return true
+            }
+            self.logger.notice("removing retired app-written config metadata before Gateway start")
+            return self.saveDict(root)
+        }
     }
 }
 
@@ -422,53 +425,6 @@ extension OpenClawConfigFile {
         return port
     }
 
-    static func setRemoteGatewayUrl(host: String, port: Int?) {
-        guard let port, port > 0 else { return }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            let existingUrl = (remote["url"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let scheme = URL(string: existingUrl)?.scheme ?? "ws"
-            remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayUrlString(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["url"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayTransport(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["transport"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func clearRemoteGatewayUrl() {
-        self.updateGatewayDict { gateway in
-            guard var remote = gateway["remote"] as? [String: Any] else { return }
-            guard remote["url"] != nil else { return }
-            remote.removeValue(forKey: "url")
-            if remote.isEmpty {
-                gateway.removeValue(forKey: "remote")
-            } else {
-                gateway["remote"] = remote
-            }
-        }
-    }
-
     private static func remoteGatewayUrl() -> URL? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],
@@ -514,7 +470,9 @@ extension OpenClawConfigFile {
         var meta = root["meta"] as? [String: Any] ?? [:]
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "macos-app"
         meta["lastTouchedVersion"] = version
-        meta["lastTouchedAt"] = ISO8601DateFormatter().string(from: Date())
+        // Machine-state timestamps moved to SQLite. Keeping this retired config key makes the
+        // matching CLI reject the app's config before the Gateway can start.
+        meta.removeValue(forKey: "lastTouchedAt")
         root["meta"] = meta
     }
 

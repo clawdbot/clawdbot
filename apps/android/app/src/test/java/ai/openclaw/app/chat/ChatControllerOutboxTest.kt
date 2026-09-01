@@ -502,6 +502,21 @@ class ChatControllerOutboxTest {
     OutboxScenario(this, capacity).block()
   }
 
+  private fun ChatController.singleOutboxStatus(): ChatOutboxStatus =
+    outboxItems.value
+      .single()
+      .status
+
+  private fun FakeCommandOutbox.singleStatus(): ChatOutboxStatus =
+    rows.values
+      .single()
+      .status
+
+  private fun FakeCommandOutbox.statusFor(text: String): ChatOutboxStatus =
+    rows.values
+      .first { it.text == text }
+      .status
+
   @Test
   fun enqueueWhileOfflineShowsQueuedRowAndSurvivesControllerRecreation() =
     outboxTest {
@@ -566,12 +581,7 @@ class ChatControllerOutboxTest {
       runCurrent()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        chat.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Queued, chat.singleOutboxStatus())
 
       gateway.settingsPatchGate?.complete(Unit)
       advanceUntilIdle()
@@ -598,12 +608,7 @@ class ChatControllerOutboxTest {
       runCurrent()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        chat.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Queued, chat.singleOutboxStatus())
 
       gateway.settingsPatchGate?.complete(Unit)
       advanceUntilIdle()
@@ -682,18 +687,8 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("accepted"), gateway.sentMessages)
       assertFalse(chat.healthOk.value)
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .first { it.text == "accepted" }
-          .status,
-      )
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        outbox.rows.values
-          .first { it.text == "younger" }
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.statusFor("accepted"))
+      assertEquals(ChatOutboxStatus.Queued, outbox.statusFor("younger"))
 
       outbox.acceptedStatusUpdateFailure = null
       chat.handleGatewayEvent("health", null)
@@ -708,12 +703,7 @@ class ChatControllerOutboxTest {
       val parked = outbox.rows.values.first { it.text == "accepted" }
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .first { it.text == "younger" }
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.statusFor("younger"))
     }
 
   @Test
@@ -902,18 +892,8 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("ambiguous"), gateway.sentMessages)
       assertFalse(chat.healthOk.value)
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .first { it.text == "ambiguous" }
-          .status,
-      )
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        outbox.rows.values
-          .first { it.text == "younger" }
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.statusFor("ambiguous"))
+      assertEquals(ChatOutboxStatus.Queued, outbox.statusFor("younger"))
 
       outbox.failedStatusUpdateFailure = null
       gateway.sendResponse = { key -> """{"runId":"$key","status":"started"}""" }
@@ -930,12 +910,7 @@ class ChatControllerOutboxTest {
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(listOf("ambiguous", "younger"), gateway.sentMessages)
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        restarted.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, restarted.singleOutboxStatus())
     }
 
   @Test
@@ -984,18 +959,8 @@ class ChatControllerOutboxTest {
 
       assertTrue(gateway.sentMessages.isEmpty())
       assertFalse(chat.healthOk.value)
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .first { it.text == "older" }
-          .status,
-      )
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        outbox.rows.values
-          .first { it.text == "younger" }
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.statusFor("older"))
+      assertEquals(ChatOutboxStatus.Queued, outbox.statusFor("younger"))
 
       outbox.queuedStatusUpdateFailure = null
       gateway.sendFailureBeforeDispatch = null
@@ -1039,12 +1004,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertEquals(1, gateway.sentMessages.size)
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        restarted.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, restarted.singleOutboxStatus())
 
       restarted.retryOutboxCommand(ambiguous.id)
       advanceUntilIdle()
@@ -1068,12 +1028,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        chat.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, chat.singleOutboxStatus())
 
       chat.retryOutboxCommand("migrated-ambiguous")
       advanceUntilIdle()
@@ -1213,12 +1168,7 @@ class ChatControllerOutboxTest {
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(1, gateway.sentMessages.size)
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        restarted.outboxItems.value
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, restarted.singleOutboxStatus())
 
       restarted.retryOutboxCommand(ambiguous.id)
       advanceUntilIdle()
@@ -1486,12 +1436,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertEquals(listOf("interrupted send"), gateway.sentMessages)
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
       processJob.cancel()
 
       gateway.sendFailureAfterDispatch = null
@@ -1702,12 +1647,7 @@ class ChatControllerOutboxTest {
 
       // The row keeps its 'sending' claim; the next process surfaces it as delivery-unconfirmed
       // instead of silently replaying a possibly delivered dispatch.
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
       gateway.sendFailureAfterDispatch = null
       gateway.echoDeliveredSendsInHistory = false
       val restarted = controller()
@@ -1734,12 +1674,7 @@ class ChatControllerOutboxTest {
       gateway.online = true
       first.handleGatewayEvent("health", null)
       runCurrent()
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
       processJob.cancel()
 
       // The next process proves the turn against canonical history and retires the row
@@ -1766,12 +1701,7 @@ class ChatControllerOutboxTest {
       gateway.online = true
       first.handleGatewayEvent("health", null)
       runCurrent()
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
       processJob.cancel()
 
       // The gateway lost the turn (crash between ACK and transcript write): an idle history
@@ -2042,22 +1972,12 @@ class ChatControllerOutboxTest {
       chat.switchSession("agent:other:main")
       gateway.sendGate?.complete(Unit)
       assertTrue(send.await())
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
       advanceTimeBy(120_001)
       runCurrent()
 
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, outbox.singleStatus())
       chat.switchSession("agent:main:main")
       assertEquals(0, chat.pendingRunCount.value)
       assertTrue(chat.messages.value.none { message -> message.content.any { it.text == "hidden accepted turn" } })
@@ -2086,12 +2006,7 @@ class ChatControllerOutboxTest {
       advanceTimeBy(120_001)
       runCurrent()
 
-      assertEquals(
-        ChatOutboxStatus.Failed,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Failed, outbox.singleStatus())
       chat.switchSession("agent:main:main")
       assertEquals(0, chat.pendingRunCount.value)
     }
@@ -2392,12 +2307,7 @@ class ChatControllerOutboxTest {
       send.join()
 
       assertEquals(true, accepted)
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
       assertTrue(gateway.sentMessages.isEmpty())
     }
 
@@ -2485,12 +2395,7 @@ class ChatControllerOutboxTest {
 
       assertTrue(accepted.await())
       assertTrue(chat.healthOk.value)
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
       assertEquals(2, sendRequestCount)
       assertEquals(1, chat.pendingRunCount.value)
     }
@@ -2510,12 +2415,7 @@ class ChatControllerOutboxTest {
       val accepted = chat.sendMessageAwaitAcceptance(message = "slow turn", thinkingLevel = "off", attachments = emptyList())
       advanceTimeBy(1_000)
       assertTrue(accepted)
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
       // and the reconciliation sweep must not park the head while its run is in flight.
@@ -2541,12 +2441,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceTimeBy(5_000)
       assertEquals(listOf("queued turn"), gateway.sentMessages)
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
       // The run completes under the acknowledged id and its turn becomes visible in
       // canonical history. The adopted send must resolve with the live run: without the
@@ -2697,12 +2592,7 @@ class ChatControllerOutboxTest {
       gateway.echoDeliveredSendsInHistory = false
       chat.sendMessageAwaitAcceptance(message = "never confirmed", thinkingLevel = "off", attachments = emptyList())
       runCurrent()
-      assertEquals(
-        ChatOutboxStatus.Accepted,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
       // Run ownership expires without proof; the row surfaces for manual review.
       advanceUntilIdle()
@@ -2729,12 +2619,7 @@ class ChatControllerOutboxTest {
         chat.sendMessageAwaitAcceptance(message = "survives caller death", thinkingLevel = "off", attachments = emptyList())
       }
       runCurrent()
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
       callerJob.cancel()
       gate.complete(Unit)
       advanceUntilIdle()
@@ -2758,12 +2643,7 @@ class ChatControllerOutboxTest {
       val accepted = chat.sendMessageAwaitAcceptance(message = "owned by flush", thinkingLevel = "off", attachments = emptyList())
       advanceUntilIdle()
       assertTrue(accepted)
-      assertEquals(
-        ChatOutboxStatus.Queued,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Queued, outbox.singleStatus())
       assertTrue(gateway.sentMessages.isEmpty())
       assertFalse(chat.healthOk.value)
 
@@ -2788,12 +2668,7 @@ class ChatControllerOutboxTest {
       outbox.acceptedStatusUpdateFailure = IllegalStateException("storage unavailable")
       chat.sendMessageAwaitAcceptance(message = "stranded claim", thinkingLevel = "off", attachments = emptyList())
       runCurrent()
-      assertEquals(
-        ChatOutboxStatus.Sending,
-        outbox.rows.values
-          .single()
-          .status,
-      )
+      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
       assertFalse(chat.healthOk.value)
 
       // The re-armed recovery sweep parks the row on the next health transition, so the

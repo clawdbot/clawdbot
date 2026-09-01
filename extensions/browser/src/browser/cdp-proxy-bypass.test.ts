@@ -1,6 +1,7 @@
 // Browser tests cover cdp proxy bypass plugin behavior.
 import http from "node:http";
 import https from "node:https";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
@@ -8,23 +9,6 @@ const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
     () => undefined,
   ),
 }));
-
-function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
@@ -192,8 +176,8 @@ describe("cdp-proxy-bypass", () => {
 describe("withNoProxyForCdpUrl concurrency", () => {
   it("does not leak NO_PROXY when called concurrently", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const releaseA = createDeferred();
-      const enteredA = createDeferred();
+      const releaseA = createDeferred<void>();
+      const enteredA = createDeferred<void>();
 
       const callA = withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
         expect(process.env.NO_PROXY).toContain("localhost");
@@ -222,10 +206,10 @@ describe("withNoProxyForCdpUrl concurrency", () => {
 describe("withNoProxyForCdpUrl reverse exit order", () => {
   it("restores NO_PROXY when first caller exits before second", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const enteredA = createDeferred();
-      const enteredB = createDeferred();
-      const releaseA = createDeferred();
-      const releaseB = createDeferred();
+      const enteredA = createDeferred<void>();
+      const enteredB = createDeferred<void>();
+      const releaseA = createDeferred<void>();
+      const releaseB = createDeferred<void>();
 
       const callA = withNoProxyForCdpUrl(LOOPBACK_CDP_URL, async () => {
         enteredA.resolve();

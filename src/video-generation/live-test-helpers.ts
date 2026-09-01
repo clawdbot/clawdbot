@@ -4,12 +4,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
 
-export { parseProviderModelMap, redactLiveApiKey };
+export { parseProviderModelMap };
 
 // Default provider/model matrix for video live tests. Env/config filters can
 // override this without editing the live test source.
@@ -50,10 +49,13 @@ export function resolveLiveVideoResolution(params: {
   if (providerId === "pixverse") {
     return "540P";
   }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    return "720P";
+  }
   return "480P";
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseVideoProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw);
 }
 

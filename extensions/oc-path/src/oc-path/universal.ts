@@ -19,6 +19,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
+import { formatFrontmatterValue } from "./frontmatter-format.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
@@ -27,7 +28,7 @@ import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/ed
 import { emitJsonl } from "./jsonl/emit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
-import { formatOcPath, hasWildcard, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
+import { formatOcPath, isPattern, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
@@ -146,7 +147,7 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Single-match verb: wildcards belong to findOcPaths. Throw with a
   // structured code so consumers can route to the right verb.
-  if (hasWildcard(path)) {
+  if (isPattern(path)) {
     throw new OcPathError(
       `resolveOcPath received a wildcard pattern; use findOcPaths instead: ${formatOcPath(path)}`,
       formatOcPath(path),
@@ -426,7 +427,7 @@ export function setOcPath(
   value: string,
   options: SetOcPathOptions = {},
 ): SetResult {
-  if (hasWildcard(path)) {
+  if (isPattern(path)) {
     return {
       ok: false,
       reason: "wildcard-not-allowed",
@@ -871,16 +872,6 @@ function rebuildMdRaw(ast: MdAst): MdAst {
   }
   void emitJsonl;
   return { ...ast, raw: parts.join("\n") };
-}
-
-function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
-  return value;
 }
 
 function slugifyHeading(s: string): string {

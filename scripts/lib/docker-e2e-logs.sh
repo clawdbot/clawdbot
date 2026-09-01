@@ -143,6 +143,9 @@ run_logged_print_heartbeat() {
       terminate_heartbeat_command
       wait "$command_pid" 2>/dev/null || true
     fi
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$log_file" || true
+    fi
     rm -f "$log_file"
     restore_heartbeat_traps
     if [ "$cleanup_status" -ge 128 ]; then
@@ -153,7 +156,7 @@ run_logged_print_heartbeat() {
   trap 'cleanup_heartbeat_command 130' INT
   trap 'cleanup_heartbeat_command 143' TERM
   trap 'cleanup_heartbeat_command 129' HUP
-  "$@" >"$log_file" 2>&1 &
+  "$@" <&0 >"$log_file" 2>&1 &
   command_pid=$!
   local started_at="$SECONDS"
   local next_heartbeat=$interval_seconds

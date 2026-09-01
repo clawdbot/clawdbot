@@ -1,6 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -276,6 +277,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Trusted channel-configured policy for this admitted conversation turn. */
+  ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
@@ -301,6 +304,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
+  /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
+  InternalTurnSource?: "heartbeat" | "cron" | "exec";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -309,11 +314,14 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SessionCreation?: {
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   SenderIsBot?: boolean;
+  /** Channel-ingress fact: sender is the operator's own account (from-me). */
+  SenderIsSelf?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -322,7 +330,16 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   LocationAddress?: string;
   LocationSource?: string;
   LocationIsLive?: boolean;
+  LocationLivePeriodSeconds?: number;
   LocationCaption?: string;
+  /** Stable identity of the provider update that carried this message. */
+  ProviderUpdateId?: string;
+  /** Provider update kind, for example `message` or `edited_message`. */
+  ProviderUpdateKind?: string;
+  /** Provider-native timestamp for the original message. */
+  ProviderMessageTimestamp?: number;
+  /** Provider-native timestamp for an edited message update. */
+  ProviderEditTimestamp?: number;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */
@@ -345,6 +362,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   CommandAuthorized?: boolean;
   CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
+  CommandInterpretationSuppressed?: boolean;
   CommandTargetSessionKey?: string;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.
@@ -365,6 +383,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -398,6 +418,10 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Correlation interceptors must fail closed when this proof is absent.
    */
   InboundAccessAuthorized?: boolean;
+  /** Internal marker that channel ingress authoritatively observed route-context facts. */
+  ConversationRouteContextObserved?: boolean;
+  /** Canonical peer used by route selection; delivery targets may use a different namespace. */
+  ConversationRoutePeerId?: string;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.
@@ -452,7 +476,9 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-export type TemplateContext = RuntimeMsgContext & {
+type NonTemplateContextKey = "ConversationAvatar";
+
+export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
@@ -520,6 +546,9 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    if (key === "ConversationAvatar") {
+      return "";
+    }
     const value = ctx[key as keyof TemplateContext];
     return formatTemplateValue(value);
   });

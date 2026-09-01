@@ -1,5 +1,6 @@
 // Process-local node state shared by node and full-device pairing removal.
 import { randomUUID } from "node:crypto";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { removeRemoteNodeInfo } from "../skills/runtime/remote.js";
 import { clearNodePendingWork } from "./node-pending-work.js";
 import type { NodeRegistry } from "./node-registry.js";
@@ -15,7 +16,10 @@ export type PendingNodeAction = {
   enqueuedAtMs: number;
 };
 
-const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+const pendingNodeActionsById = resolveGlobalMap<string, PendingNodeAction[]>(
+  Symbol.for("openclaw.pendingNodeActions"),
+  "close-and-restart",
+);
 
 function prunePendingNodeActions(params: {
   nodeId: string;

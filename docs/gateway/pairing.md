@@ -38,6 +38,28 @@ Pending requests expire automatically **5 minutes after the node's last
 retry** — an actively reconnecting node keeps its one pending request alive
 rather than generating a fresh request (and approval prompt) per attempt.
 
+## One-paste node pairing
+
+In the Control UI Devices page, open the pairing dialog, choose **Node host**,
+and copy the generated command to the device:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
+```
+
+The setup link carries the Gateway endpoint, a short-lived single-use bootstrap
+token, and a TLS certificate pin when the Gateway directly serves a pinnable
+leaf certificate. The bootstrap token expires after 10 minutes. Explicit
+`--host`, `--port`, `--context-path`, `--tls`/`--no-tls`, and
+`--tls-fingerprint` flags override values from `--pair`.
+
+The bootstrap token and resulting device credential are separate, like a
+short-lived Tailscale auth key and the durable device identity it admits.
+Revoking or expiring the setup link does not revoke the paired device; remove
+the device separately when needed. The link never pre-approves `system.run` or
+folder sync. Those operations still use pending approval or
+[SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+
 ## CLI workflow (headless friendly)
 
 ```bash
@@ -93,6 +115,10 @@ Notes:
   - admin-sensitive request containing `system.run`, `system.run.prepare`,
     `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
     or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
+
+Here, `fs.listDir` is the node command relayed through `node.invoke`. The
+top-level Gateway `fs.listDir` RPC needs `operator.write` for
+workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.

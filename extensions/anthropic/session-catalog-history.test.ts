@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { importClaudeHistory } from "./session-catalog-history.js";
+import { parseTranscriptLine } from "./session-catalog-transcript.js";
 
 const appended: Array<Record<string, unknown>> = [];
 
@@ -20,7 +21,60 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
-  it("falls back for invalid timestamps while preserving valid pre-epoch dates", async () => {
+  it("omits metadata without changing other native conversation rows", async () => {
+    appended.length = 0;
+    const parse = (entry: Record<string, unknown>) =>
+      parseTranscriptLine(Buffer.from(JSON.stringify(entry)), (value, maxLength) =>
+        typeof value === "string" && value.length <= maxLength ? value : undefined,
+      );
+    const items = [
+      parse({
+        type: "user",
+        isMeta: true,
+        message: { role: "user", content: "private skill instructions" },
+      }),
+      parse({
+        type: "user",
+        uuid: "operator-1",
+        message: { role: "user", content: "run the review" },
+      }),
+      parse({
+        type: "user",
+        isCompactSummary: true,
+        message: { role: "user", content: "compacted context" },
+      }),
+      parse({
+        type: "user",
+        isVisibleInTranscriptOnly: true,
+        message: { role: "user", content: "transcript-only context" },
+      }),
+      parse({
+        type: "assistant",
+        message: { role: "assistant", content: "done" },
+      }),
+    ].filter((item) => item !== undefined);
+
+    await importClaudeHistory({
+      items,
+      threadId: "thread-1",
+      storePath: "/tmp/sessions.json",
+      sessionId: "session-1",
+      sessionKey: "agent:main:catalog-adopt",
+      agentId: "main",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(JSON.stringify(appended)).not.toContain("private skill instructions");
+    expect(appended.find((message) => message.content === "run the review")?.provenance).toBe(
+      undefined,
+    );
+    expect(appended.map((message) => message.content)).toEqual(
+      expect.arrayContaining(["run the review", "compacted context", "transcript-only context"]),
+    );
+    expect(appended.find((message) => message.role === "assistant")).toBeDefined();
+  });
+
+  it("preserves Date.parse semantics for valid strings and falls back for invalid values", async () => {
     appended.length = 0;
     const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
     vi.useFakeTimers();
@@ -29,11 +83,13 @@ describe("importClaudeHistory", () => {
       await importClaudeHistory({
         items: [
           { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
+          { type: "userMessage", text: "numeric year", timestamp: "2026", uuid: "u-2" },
+          { type: "userMessage", text: "numeric zero", timestamp: "0", uuid: "u-3" },
           {
             type: "userMessage",
             text: "pre-epoch",
             timestamp: "1969-12-31T23:59:59.000Z",
-            uuid: "u-2",
+            uuid: "u-4",
           },
         ],
         threadId: "thread-1",
@@ -47,8 +103,13 @@ describe("importClaudeHistory", () => {
       vi.useRealTimers();
     }
 
-    expect(appended).toHaveLength(2);
-    expect(appended.map((message) => message.timestamp)).toEqual([-1_000, fallbackTimestamp + 1]);
+    expect(appended).toHaveLength(4);
+    expect(appended.map((message) => message.timestamp)).toEqual([
+      -1_000,
+      Date.parse("0"),
+      Date.parse("2026"),
+      fallbackTimestamp + 3,
+    ]);
     expect(JSON.stringify(appended)).not.toContain('"timestamp":null');
   });
 

@@ -32,9 +32,12 @@ import {
   stripBom,
   validateNoOpEditTargets,
 } from "./edit-diff.js";
-import { withFileMutationQueue } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -96,6 +99,8 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
  * Override these to delegate file editing to remote systems (for example SSH).
  */
 export interface EditOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Write content to a file */
@@ -284,7 +289,7 @@ function getRenderablePreviewInput(
 
 function formatEditCall(
   args: RenderableEditArgs | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const invalidArg = invalidArgText(theme);
   const rawPath = str(args?.file_path ?? args?.path);
@@ -297,7 +302,7 @@ function formatEditCall(
 function formatEditResult(
   preview: EditPreview | undefined,
   result: EditToolResultLike,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   isError: boolean,
 ): string | undefined {
   const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
@@ -324,7 +329,7 @@ function formatEditResult(
 function getEditHeaderBg(
   preview: EditPreview | undefined,
   settledError: boolean | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): (text: string) => string {
   if (preview) {
     if ("error" in preview) {
@@ -341,7 +346,7 @@ function getEditHeaderBg(
 function buildEditCallComponent(
   component: EditCallRenderComponent,
   args: RenderableEditArgs | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): EditCallRenderComponent {
   component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
   component.clear();
@@ -385,6 +390,7 @@ export function createEditToolDefinition(
   options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails, EditRenderState> {
   const ops = options?.operations ?? defaultEditOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "edit",
     label: "edit",
@@ -406,9 +412,10 @@ export function createEditToolDefinition(
       void onUpdate;
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
+      const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
-      return withFileMutationQueue(absolutePath, async () => {
+      return withFileMutationQueueKeyResolution(queueKey, async () => {
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
@@ -538,14 +545,18 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
-          (preview) => {
-            if (component.previewArgsKey === requestKey) {
-              setEditPreview(component, preview, requestKey);
-              context.invalidate();
-            }
-          },
-        );
+        void computeEditsDiff(
+          previewInput.path,
+          previewInput.edits,
+          context.cwd,
+          ops,
+          resolvePath,
+        ).then((preview) => {
+          if (component.previewArgsKey === requestKey) {
+            setEditPreview(component, preview, requestKey);
+            context.invalidate();
+          }
+        });
       }
 
       return buildEditCallComponent(component, args, theme);

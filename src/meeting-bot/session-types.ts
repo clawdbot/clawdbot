@@ -1,3 +1,5 @@
+import type { MeetingAudioBackend } from "./audio-backend.js";
+
 /** Generic lifecycle state shared by browser and dial-in meeting sessions. */
 export type MeetingSessionState = "active" | "ended";
 
@@ -140,7 +142,7 @@ export type MeetingPluginSession<
   THealth extends MeetingBrowserHealth,
 > = MeetingSessionRecord<TTransport, TMode> & {
   chrome?: {
-    audioBackend: "blackhole-2ch";
+    audioBackend?: MeetingAudioBackend;
     launched: boolean;
     nodeId?: string;
     browserProfile?: string;

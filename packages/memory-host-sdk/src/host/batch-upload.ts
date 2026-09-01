@@ -1,9 +1,7 @@
 // Memory Host SDK module implements batch upload behavior.
-import {
-  buildBatchHeaders,
-  normalizeBatchBaseUrl,
-  type BatchHttpClientConfig,
-} from "./batch-utils.js";
+import { buildBatchHeaders, type BatchHttpClientConfig } from "./batch-utils.js";
+import { resolveEmbeddingEndpointUrl } from "./embeddings-remote-client.js";
+import { formatErrorMessage } from "./error-utils.js";
 import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import {
@@ -21,7 +19,6 @@ export async function uploadBatchJsonlFile(params: {
   maxResponseBytes?: number;
   signal?: AbortSignal;
 }): Promise<string> {
-  const baseUrl = normalizeBatchBaseUrl(params.client);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
   const form = new FormData();
   form.append("purpose", "batch");
@@ -32,7 +29,7 @@ export async function uploadBatchJsonlFile(params: {
   );
 
   const filePayload = await withRemoteHttpResponse({
-    url: `${baseUrl}/files`,
+    url: resolveEmbeddingEndpointUrl(params.client.baseUrl ?? "", "files"),
     ssrfPolicy: params.client.ssrfPolicy,
     fetchImpl: params.client.fetchImpl,
     signal: params.signal,
@@ -44,7 +41,7 @@ export async function uploadBatchJsonlFile(params: {
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
         const text = await readMemoryHostResponseTextSnippet(fileRes, { signal: params.signal });
-        throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
+        throw new Error(`${params.errorPrefix}: ${fileRes.status} ${formatErrorMessage(text)}`);
       }
       return (await readResponseJsonWithLimit(fileRes, {
         errorPrefix: params.errorPrefix,

@@ -18,9 +18,9 @@ const mocks = vi.hoisted(() => ({
   resolveChannelDefaultAccountId: vi.fn(() => "default"),
   isChannelVisibleInConfiguredLists: vi.fn(() => true),
   listExplicitConfiguredChannelIdsForConfig: vi.fn(() => [] as string[]),
-  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn<
-    () => OfficialExternalPluginRepairHint | null
-  >(() => null),
+  resolveMissingOfficialExternalChannelPluginRepairHints: vi.fn<
+    () => OfficialExternalPluginRepairHint[]
+  >(() => []),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -53,15 +53,15 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint:
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints,
 }));
 
 describe("buildProviderStatusIndex", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
   it("prefers inspectAccount for read-only status surfaces", async () => {
@@ -344,16 +344,18 @@ describe("buildProviderStatusIndex", () => {
   it("keeps configured missing external channels in provider metadata", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue(["feishu"]);
-    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
-      channelId: "feishu",
-      pluginId: "feishu",
-      label: "Feishu",
-      installSpec: "@openclaw/feishu",
-      installCommand: "openclaw plugins install @openclaw/feishu",
-      doctorFixCommand: "openclaw doctor --fix",
-      repairHint:
-        "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-    });
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([
+      {
+        channelId: "feishu",
+        pluginId: "feishu",
+        label: "Feishu",
+        installSpec: "@openclaw/feishu",
+        installCommand: "openclaw plugins install @openclaw/feishu",
+        doctorFixCommand: "openclaw doctor --fix",
+        repairHint:
+          "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+      },
+    ]);
 
     expect(
       buildProviderSummaryMetadataIndex({ channels: { feishu: { appId: "cli_xxx" } } } as never),
@@ -371,6 +373,27 @@ describe("buildProviderStatusIndex", () => {
         ],
       ]),
     );
+  });
+
+  it("skips missing-plugin resolution for channels already represented in metadata", () => {
+    const plugin = {
+      id: "feishu",
+      meta: { label: "Feishu" },
+      config: {
+        listAccountIds: () => ["default"],
+      },
+    } as never;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue(["feishu"]);
+
+    expect(
+      buildProviderSummaryMetadataIndex({ channels: { feishu: { appId: "cli_xxx" } } } as never)
+        .size,
+    ).toBe(1);
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHints).toHaveBeenCalledWith({
+      config: { channels: { feishu: { appId: "cli_xxx" } } },
+      channelIds: [],
+    });
   });
 
   it("uses repair hints instead of unknown for bound missing external channels", () => {

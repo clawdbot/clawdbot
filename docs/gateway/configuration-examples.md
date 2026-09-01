@@ -65,8 +65,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 {
   // Environment + shell
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
     shellEnv: {
@@ -75,7 +75,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth stores)
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
@@ -251,7 +251,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       heartbeat: {
         every: "30m",
         model: "anthropic/claude-sonnet-4-6",
-        target: "last",
+        target: "whatsapp",
         directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
         prompt: "HEARTBEAT",
@@ -384,6 +384,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         action: "agent",
         wakeMode: "now",
         name: "Gmail",
+        // One dispatch per pushed email; templates see the current message.
+        forEach: "messages",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
@@ -424,7 +426,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       token: "gateway-token",
       allowTailscale: true,
     },
-    tailscale: { mode: "serve", resetOnExit: false },
+    tailscale: { mode: "serve" },
     remote: { url: "ws://gateway-host.ts.net:18789", token: "remote-token" },
     reload: { mode: "hybrid" },
   },

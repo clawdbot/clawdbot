@@ -1,5 +1,22 @@
 {
   "id": "google",
+  "doctorContract": {},
+  "sessionRouteStateOwners": [
+    {
+      "id": "google",
+      "label": "Google",
+      "providerIds": ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+      "runtimeIds": ["google-gemini-cli"],
+      "cliSessionKeys": ["google-gemini-cli", "gemini-cli"],
+      "authProfilePrefixes": [
+        "google:",
+        "google-antigravity:",
+        "google-gemini-cli:",
+        "google-vertex:",
+        "gemini-cli:"
+      ]
+    }
+  ],
   "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
@@ -669,6 +686,7 @@
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
             "fallbackPaths": [
+              "${CLOUDSDK_CONFIG}/application_default_credentials.json",
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
@@ -732,14 +750,13 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
-    "memoryEmbeddingProviders": ["gemini"],
+    "embeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"],
-    "usageProviders": ["google-gemini-cli"]
+    "webSearchProviders": ["gemini"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

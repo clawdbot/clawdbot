@@ -59,7 +59,10 @@ export const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ]);
-export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+export const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+]);
 export function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
   const secretInput = context.preparedBackend.secretInput;
   if (!secretInput) {
@@ -172,7 +175,7 @@ export function buildCliExecLogLine(params: {
 }
 
 /** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_AUTH_LOG_KEYS);
   const childKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_AUTH_LOG_KEYS);
   const childKeySet = new Set(childKeys);

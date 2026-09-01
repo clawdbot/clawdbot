@@ -1,7 +1,8 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveIMessageEchoMediaKey } from "../state-contract.js";
 // Imessage plugin module implements echo cache behavior.
 import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
-import { hasPersistedIMessageEcho, resolveIMessageEchoMediaKey } from "./persisted-echo-cache.js";
+import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 type SentMessageLookup = {
   text?: string;
@@ -102,6 +103,7 @@ class DefaultSentMessageCache implements SentMessageCache {
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
+        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
       })
     ) {

@@ -410,6 +410,25 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+  it("rejects an enabled plugin that failed during gateway load", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      [
+        "[gateway] ready",
+        "[plugins] cua-computer failed to load from /app/dist/extensions/cua-computer/index.js: missing libX11",
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(() => runtimeSmoke.assertPluginLoaded(logPath, "cua-computer")).toThrow(
+      /cua-computer failed to load/u,
+    );
+    expect(() => runtimeSmoke.assertPluginLoaded(logPath, "slack")).not.toThrow();
+  });
+
   it("matches runtime slash aliases across command list surfaces", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const payload = {

@@ -889,16 +889,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     });
   });
 
-  it.each([
-    { configured: undefined, expected: 0 },
-    { configured: 3, expected: 3 },
-  ])("uses maxRetries=$expected when configured value is $configured", async (testCase) => {
-    await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-      maxRetries: testCase.configured,
-    }).result();
+  it("pins OpenAI SDK retries to zero", async () => {
+    await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
 
-    expect(mockOpenAI.requestOptions[0]).toMatchObject({ maxRetries: testCase.expected });
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
   it("surfaces HTTP response body text from OpenAI-compatible errors", async () => {
@@ -912,5 +906,26 @@ describe("OpenAI-compatible completions compatibility", () => {
     }).result();
 
     expect(result.errorMessage).toBe("502: gateway maintenance");
+  });
+
+  it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {
+    const media = "QUJDRA==";
+    mockOpenAI.nextError = Object.assign(new Error("400 status code (no body)"), {
+      status: 400,
+      body: { data: [{ b64_json: media }] },
+      error: {
+        code: "bad_image",
+        type: "invalid_request_error",
+        metadata: { raw: `render failed data:image/png;base64,${media}` },
+      },
+    });
+
+    const result = await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
+
+    expect(result).toMatchObject({
+      errorCode: "bad_image",
+      errorType: "invalid_request_error",
+    });
+    expect(JSON.stringify(result)).not.toContain(media);
   });
 });

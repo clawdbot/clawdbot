@@ -11,8 +11,12 @@ import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
   stripChannelTargetPrefix,
+  type PluginRuntime,
 } from "openclaw/plugin-sdk/channel-core";
-import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
@@ -77,6 +81,17 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         console.warn,
       ),
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const channel = normalizeTwitchMessagingTarget(target);
+        return (
+          Boolean(channel) &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (current) => current != null && normalizeTwitchMessagingTarget(current) === channel,
+          )
+        );
+      },
+    },
     outbound: twitchOutbound,
     base: {
       id: "twitch",
@@ -94,6 +109,12 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         chatTypes: ["group"],
       },
       messaging: {
+        normalizeTarget: normalizeTwitchMessagingTarget,
+        targetResolver: {
+          looksLikeId: (input) => Boolean(normalizeTwitchMessagingTarget(input)),
+          hint: "<channel-name>",
+        },
+        inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
         resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
           const channel = normalizeTwitchMessagingTarget(target);
           if (!channel) {
@@ -181,12 +202,21 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         startAccount: async (ctx): Promise<void> => {
           const account = ctx.account;
           const accountId = ctx.accountId;
-
-          ctx.setStatus?.({
+          // SAFETY: Gateway startup supplies the full registered runtime behind its context-only public type.
+          const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+          if (!channelRuntime?.inbound?.buildContext) {
+            throw new Error("Twitch requires its registered channel runtime context builder");
+          }
+          const statusSink = createAccountStatusSink({
             accountId,
+            setStatus: ctx.setStatus,
+          });
+
+          statusSink({
             running: true,
             lastStartAt: Date.now(),
             lastError: null,
+            lifecycle: "starting",
           });
 
           ctx.log?.info(`Starting Twitch connection for ${account.username}`);
@@ -203,9 +233,11 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                 return monitorTwitchProvider({
                   account,
                   accountId,
+                  channelRuntime,
                   config: ctx.cfg,
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,
+                  statusSink,
                 });
               },
               stop: async (monitor) => {

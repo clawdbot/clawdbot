@@ -7,18 +7,29 @@ import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
-import { openRootFile } from "../infra/boundary-file-read.js";
-import { pathExists } from "../infra/fs-safe.js";
+import type { ChatType } from "../channels/chat-type.js";
+import {
+  isRootFileMissingFailure,
+  openRootFileFollowingParents,
+} from "../infra/boundary-file-read.js";
+import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
+import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
 } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
@@ -50,7 +61,6 @@ export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
-export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
 export const GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES = [
@@ -70,27 +80,66 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
 const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
 const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
+const workspaceLogger = createSubsystemLogger("workspace");
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
-let gitAvailabilityPromise: Promise<boolean> | null = null;
+const gitInitializationInFlight = new Map<string, Promise<void>>();
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
+type WorkspaceFileSourceIdentity = readonly [
+  canonicalPath: string,
+  stat: FileIdentityStat,
+  exactIdentity: string,
+];
+// Loader-owned records retain the pinned-open identity through final session filtering.
+const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
 /**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
+ * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
  */
 type WorkspaceGuardedReadResult =
-  | { ok: true; content: string }
+  | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
-  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
+  // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
+  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function setWorkspaceFileSourceIdentity(
+  file: object,
+  sourceIdentity: WorkspaceFileSourceIdentity,
+): void {
+  workspaceFileSourceIdentities.set(file, sourceIdentity);
+}
+
+function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
+  return workspaceFileSourceIdentities.get(file);
+}
+
+export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
+  const leftIdentity = getWorkspaceFileSourceIdentity(left);
+  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  return leftIdentity?.[2] === rightIdentity?.[2];
+}
+
+export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
+  const leftIdentity = getWorkspaceFileSourceIdentity(left);
+  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  if (!leftIdentity || !rightIdentity) {
+    return false;
+  }
+  return (
+    leftIdentity[0] === rightIdentity[0] || sameFileIdentity(leftIdentity[1], rightIdentity[1])
+  );
 }
 
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  useCache?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   try {
     // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
@@ -101,11 +150,10 @@ async function readWorkspaceFileWithGuards(params: {
     // in openRootFile still protects against a swapped file between attempts.
     return await retryAsync(
       async () => {
-        const opened = await openRootFile({
+        const opened = await openRootFileFollowingParents({
           absolutePath: params.filePath,
           rootPath: params.workspaceDir,
           boundaryLabel: "workspace root",
-          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
         });
         if (!opened.ok) {
           // Boundary resolution can report transient IO as "validation", while
@@ -119,16 +167,20 @@ async function readWorkspaceFileWithGuards(params: {
         }
 
         const identity = workspaceFileIdentity(opened.stat, opened.path);
-        const cached = workspaceFileCache.get(params.filePath);
-        if (cached && cached.identity === identity) {
+        const sourceIdentity = [opened.path, opened.stat, identity] as const;
+        const cached =
+          params.useCache === false ? undefined : workspaceFileCache.get(params.filePath);
+        if (cached?.identity === identity) {
           syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached.content };
+          return { ok: true, content: cached.content, sourceIdentity };
         }
 
         try {
           const content = await readWorkspaceBootstrapFile(opened.fd);
-          workspaceFileCache.set(params.filePath, { content, identity });
-          return { ok: true, content };
+          if (params.useCache !== false) {
+            workspaceFileCache.set(params.filePath, { content, identity });
+          }
+          return { ok: true, content, sourceIdentity };
         } finally {
           syncFs.closeSync(opened.fd);
         }
@@ -143,7 +195,7 @@ async function readWorkspaceFileWithGuards(params: {
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
     workspaceFileCache.delete(params.filePath);
-    return { ok: false, reason: "io", error };
+    return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
   }
 }
 
@@ -605,7 +657,7 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
   if (await pathExists(params.bootstrapPath)) {
     return true;
   }
-  if (await hasWorkspaceUserContentEvidence(params.dir)) {
+  if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
     return true;
   }
   const currentState = readCanonicalWorkspaceStateSnapshot(params.dir);
@@ -624,24 +676,31 @@ async function workspaceSetupStateHasSurvivalEvidence(params: {
   ].every((fileName) => generatedHashes.has(fileName));
 }
 
-function readCanonicalWorkspaceStateSnapshot(dir: string): WorkspaceStateSnapshot {
-  const snapshot = readWorkspaceStateSnapshot(dir);
+function readCanonicalWorkspaceStateSnapshot(
+  dir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): WorkspaceStateSnapshot {
+  const snapshot = readWorkspaceStateSnapshot(dir, options);
   assertNoUnmigratedWorkspaceState({
     workspaceDir: dir,
   });
   return snapshot;
 }
 
-export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
-  const state = readCanonicalWorkspaceStateSnapshot(dir).setup;
+export async function isWorkspaceSetupCompleted(
+  dir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<boolean> {
+  const state = readCanonicalWorkspaceStateSnapshot(dir, options).setup;
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
 export async function resolveWorkspaceBootstrapStatus(
   dir: string,
+  options: OpenClawStateDatabaseOptions = {},
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = readCanonicalWorkspaceStateSnapshot(resolvedDir).setup;
+  const state = readCanonicalWorkspaceStateSnapshot(resolvedDir, options).setup;
   if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
     return "complete";
   }
@@ -653,51 +712,186 @@ export async function resolveWorkspaceBootstrapStatus(
   return "pending";
 }
 
+export class WorkspaceBootstrapSeedConflictError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "WorkspaceBootstrapSeedConflictError";
+  }
+}
+
+export async function seedWorkspaceBootstrap(params: {
+  dir: string;
+  content: Buffer;
+  nowMs?: number;
+  stateOptions?: OpenClawStateDatabaseOptions;
+}): Promise<"seeded" | "already-seeded" | "consumed"> {
+  if (params.content.byteLength > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+    throw new WorkspaceBootstrapSeedConflictError(
+      `BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`,
+    );
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(params.content);
+  } catch {
+    throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must be valid UTF-8.");
+  }
+  if (text.trim().length === 0) {
+    throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must not be empty.");
+  }
+
+  const dir = resolveUserPath(params.dir);
+  const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
+  const initialState = readCanonicalWorkspaceStateSnapshot(dir, params.stateOptions).setup;
+  if (initialState.setupCompletedAt) {
+    return "consumed";
+  }
+  const bootstrapExists = await pathExists(bootstrapPath);
+  if (initialState.bootstrapSeededAt && !bootstrapExists) {
+    return "consumed";
+  }
+
+  await fs.mkdir(dir, { recursive: true });
+  const workspaceRoot = await fsSafeRoot(dir, {
+    hardlinks: "reject",
+    maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+    symlinks: "reject",
+  });
+  let created = false;
+  if (!bootstrapExists) {
+    try {
+      await workspaceRoot.write(DEFAULT_BOOTSTRAP_FILENAME, params.content, {
+        overwrite: false,
+      });
+      created = true;
+    } catch (error) {
+      const alreadyExists =
+        (error as NodeJS.ErrnoException).code === "EEXIST" ||
+        (error instanceof FsSafeError && error.code === "already-exists");
+      if (!alreadyExists) {
+        throw error;
+      }
+    }
+  }
+
+  if (!created) {
+    await retryAsync(
+      async () => {
+        let statBefore: syncFs.Stats;
+        try {
+          statBefore = await fs.stat(bootstrapPath);
+        } catch (error) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md could not be read safely.",
+            { cause: error },
+          );
+        }
+        const existing = await readWorkspaceFileWithGuards({
+          filePath: bootstrapPath,
+          workspaceDir: dir,
+          useCache: false,
+        });
+        if (!existing.ok) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md could not be read safely.",
+          );
+        }
+        if (!Buffer.from(existing.content, "utf8").equals(params.content)) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
+          );
+        }
+        await delay(20);
+        let statAfter: syncFs.Stats;
+        try {
+          statAfter = await fs.stat(bootstrapPath);
+        } catch (error) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md could not be read safely.",
+            { cause: error },
+          );
+        }
+        if (
+          statBefore.size !== statAfter.size ||
+          statBefore.mtimeMs !== statAfter.mtimeMs ||
+          statAfter.size !== params.content.byteLength
+        ) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md write has not stabilized.",
+          );
+        }
+        const stable = await readWorkspaceFileWithGuards({
+          filePath: bootstrapPath,
+          workspaceDir: dir,
+          useCache: false,
+        });
+        if (!stable.ok || !Buffer.from(stable.content, "utf8").equals(params.content)) {
+          throw new WorkspaceBootstrapSeedConflictError(
+            "Existing BOOTSTRAP.md differs from the consented Claw bootstrap.",
+          );
+        }
+      },
+      {
+        attempts: 5,
+        minDelayMs: 20,
+        maxDelayMs: 80,
+        shouldRetry: (error) => error instanceof WorkspaceBootstrapSeedConflictError,
+      },
+    );
+  }
+
+  if (!initialState.bootstrapSeededAt) {
+    const nowMs = params.nowMs ?? Date.now();
+    mergeWorkspaceSetupState(
+      dir,
+      {
+        bootstrapSeededAt: new Date(nowMs).toISOString(),
+      },
+      nowMs,
+      params.stateOptions,
+    );
+  }
+  return created ? "seeded" : "already-seeded";
+}
+
 export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
-async function hasGitRepo(dir: string): Promise<boolean> {
+// Git availability is process-stable; cache the probe result, including failure, until restart.
+const isGitAvailable = createLazyPromise(async () => {
   try {
-    await fs.stat(path.join(dir, ".git"));
-    return true;
+    const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
+    return result.code === 0;
   } catch {
     return false;
   }
-}
-
-async function isGitAvailable(): Promise<boolean> {
-  if (gitAvailabilityPromise) {
-    return gitAvailabilityPromise;
-  }
-
-  gitAvailabilityPromise = (async () => {
-    try {
-      const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
-      return result.code === 0;
-    } catch {
-      return false;
-    }
-  })();
-
-  return gitAvailabilityPromise;
-}
+});
 
 async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
   if (!isBrandNewWorkspace) {
     return;
   }
-  if (await hasGitRepo(dir)) {
-    return;
-  }
-  if (!(await isGitAvailable())) {
-    return;
-  }
-  try {
-    await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
-  } catch {
-    // Ignore git init failures; workspace creation should still succeed.
-  }
+  // Concurrent first turns can all observe missing Git metadata. Join only the
+  // current initialization; later calls must inspect the workspace again.
+  await getOrCreatePromise(
+    gitInitializationInFlight,
+    dir,
+    async () => {
+      if (await fs.stat(path.join(dir, ".git")).catch(() => undefined)) {
+        return;
+      }
+      if (!(await isGitAvailable())) {
+        return;
+      }
+      try {
+        await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
+      } catch {
+        // Ignore git init failures; workspace creation should still succeed.
+      }
+    },
+    { evictOnSettled: true },
+  );
 }
 
 export async function ensureAgentWorkspace(params?: {
@@ -709,6 +903,13 @@ export async function ensureAgentWorkspace(params?: {
    * Required workspace setup such as AGENTS.md still runs.
    */
   skipOptionalBootstrapFiles?: string[];
+  /**
+   * Workspace provisioning mode. "runtime-managed-implicit" marks a workspace
+   * owned by a runtime-managed (ACP) agent without an explicit workspace and
+   * with a distinct authoritative cwd: only the directory is provisioned, and
+   * bootstrap files, workspace setup state, and `git init` are skipped (#92015).
+   */
+  provisioning?: "standard" | "runtime-managed-implicit";
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -721,6 +922,13 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  if (params?.provisioning === "runtime-managed-implicit") {
+    // The workspace belongs to a runtime-managed agent with a distinct cwd.
+    // Provision the directory (cwd fallback, media staging) without scaffolding
+    // bootstrap files, setup state, or a nested git repository (#92015).
+    await fs.mkdir(dir, { recursive: true });
+    return { dir, bootstrapPending: false };
+  }
   let initialState = readCanonicalWorkspaceStateSnapshot(dir);
   let reseedingExpiredWorkspaceState = false;
   const recentAttestation = recentWorkspaceAttestation(initialState.attestation);
@@ -988,14 +1196,35 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      result.push({
+      const file: WorkspaceBootstrapFile = {
         name: entry.name,
         path: entry.filePath,
         content: loaded.content,
         missing: false,
-      });
-    } else {
+      };
+      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+      result.push(file);
+    } else if (isRootFileMissingFailure(loaded)) {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
+    } else {
+      const fallbackReason = `workspace file could not be read (${loaded.reason})`;
+      const rawReason = loaded.error instanceof Error ? loaded.error.message : fallbackReason;
+      const reason = truncateUtf16Safe(
+        rawReason.replaceAll(/\s+/gu, " ").trim() || fallbackReason,
+        300,
+      );
+      workspaceLogger.warn("Workspace bootstrap file is unreadable.", {
+        fileName: entry.name,
+        filePath: entry.filePath,
+        reason,
+        consoleMessage: `Workspace bootstrap file is unreadable: file=${entry.filePath} reason=${reason}`,
+      });
+      result.push({
+        name: entry.name,
+        path: entry.filePath,
+        content: `[UNREADABLE: ${reason}]`,
+        missing: false,
+      });
     }
   }
   return result;
@@ -1010,20 +1239,64 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+type BootstrapSessionContext = {
+  sessionKey?: string;
+  chatType?: ChatType;
+  workspaceDir?: string;
+};
+
+function resolveBootstrapSessionContext(
+  session?: string | BootstrapSessionContext,
+): BootstrapSessionContext {
+  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
+}
+
+function filterRootMemoryBootstrapFiles(
+  files: WorkspaceBootstrapFile[],
+  workspaceRoot?: string,
+): WorkspaceBootstrapFile[] {
+  if (!workspaceRoot) {
+    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
+  }
+  const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
+  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
+  return files.filter((file) => {
+    if (typeof file.path !== "string") {
+      return true;
+    }
+    const filePath = file.path.trim();
+    if (!filePath) {
+      return true;
+    }
+    const resolvedPath = path.isAbsolute(filePath)
+      ? path.resolve(filePath)
+      : filePath.startsWith("~")
+        ? resolveUserPath(filePath)
+        : path.resolve(resolvedWorkspaceRoot, filePath);
+    return resolvedPath !== rootMemoryPath;
+  });
+}
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
-  sessionKey?: string,
+  session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey) {
-    return files;
+  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+  const isSubagent = isSubagentSessionKey(sessionKey);
+  const isCron = isCronSessionKey(sessionKey);
+  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
+  const isNonPrivate =
+    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
+  const privacyFilteredFiles = isNonPrivate
+    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
+    : files;
+  if (isSubagent) {
+    return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (isSubagentSessionKey(sessionKey)) {
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (isCron) {
+    return privacyFilteredFiles.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (isCronSessionKey(sessionKey)) {
-    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
-  }
-  return files;
+  return privacyFilteredFiles;
 }
 
 function hasGlobPattern(pattern: string): boolean {
@@ -1206,7 +1479,13 @@ export async function loadWorkspacePatternFilesWithDiagnostics(
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      files.push({ name: baseName, path: filePath, content: loaded.content });
+      const file: WorkspacePatternFile = {
+        name: baseName,
+        path: filePath,
+        content: loaded.content,
+      };
+      setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+      files.push(file);
       continue;
     }
 
@@ -1243,12 +1522,19 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     acceptedBasenames: VALID_BOOTSTRAP_NAMES,
   });
   return {
-    files: loaded.files.map((file) => ({
-      name: file.name as WorkspaceBootstrapFileName,
-      path: file.path,
-      content: file.content,
-      missing: false,
-    })),
+    files: loaded.files.map((file) => {
+      const bootstrapFile: WorkspaceBootstrapFile = {
+        name: file.name as WorkspaceBootstrapFileName,
+        path: file.path,
+        content: file.content,
+        missing: false,
+      };
+      const sourceIdentity = getWorkspaceFileSourceIdentity(file);
+      if (sourceIdentity) {
+        setWorkspaceFileSourceIdentity(bootstrapFile, sourceIdentity);
+      }
+      return bootstrapFile;
+    }),
     diagnostics: loaded.diagnostics,
   };
 }

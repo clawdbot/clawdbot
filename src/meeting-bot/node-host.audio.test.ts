@@ -19,12 +19,18 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
-import { createMeetingNodeHost } from "./node-host.js";
+import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.js";
 
 const TEST_UUID = "00000000-0000-4000-8000-000000000001";
 // Mirrors the node-host's private retention limits.
 const MAX_QUEUED_INPUT_CHUNKS = 200;
 const MAX_QUEUED_INPUT_BYTES = 1024 * 1024;
+const AUDIO_START_PARAMS = {
+  action: "start",
+  audioInputCommand: ["capture"],
+  audioOutputCommand: ["play"],
+  mode: "bidi",
+} as const;
 
 type TestStdin = EventEmitter & {
   accept: () => void;
@@ -84,7 +90,7 @@ function createProcess(params: {
   return proc;
 }
 
-function createHost() {
+function createHost(overrides: Partial<MeetingNodeHostOptions> = {}) {
   return createMeetingNodeHost({
     agentMode: "agent",
     assertAudioAvailable: vi.fn(),
@@ -103,6 +109,7 @@ function createHost() {
     normalizeMeetingKey: (url) => url,
     normalizeUrl: (input) => (typeof input === "string" ? input : "https://meeting.test"),
     talkBackModes: new Set(["bidi"]),
+    ...overrides,
   });
 }
 
@@ -112,6 +119,179 @@ async function invokeHost(
 ): Promise<Record<string, unknown>> {
   return JSON.parse(await host.handleCommand(JSON.stringify(params))) as Record<string, unknown>;
 }
+
+async function startAudioBridge(
+  options: { inputAutoClose?: boolean; outputStdin?: TestStdin } = {},
+) {
+  const inputStdout = new EventEmitter();
+  const inputProcess = createProcess({ stdout: inputStdout, autoClose: options.inputAutoClose });
+  const outputStdin = options.outputStdin ?? createStdin(true);
+  const outputProcess = createProcess({ stdin: outputStdin });
+  childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+  const host = createHost();
+  const started = await invokeHost(host, { ...AUDIO_START_PARAMS, launch: false });
+  return {
+    bridgeId: started.bridgeId as string,
+    host,
+    inputProcess,
+    inputStdout,
+    outputProcess,
+    outputStdin,
+  };
+}
+
+function invokeBridge(
+  bridge: Awaited<ReturnType<typeof startAudioBridge>>,
+  action: "clearAudio" | "pullAudio" | "pushAudio" | "status" | "stop",
+  params: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  return invokeHost(bridge.host, { action, bridgeId: bridge.bridgeId, ...params });
+}
+
+describe("meeting node host audio backend", () => {
+  beforeEach(() => {
+    cryptoMocks.randomUUID.mockReturnValue(TEST_UUID);
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("prepares the node-local backend and uses its generated command pair", async () => {
+    const inputProcess = createProcess({ stdout: new EventEmitter() });
+    const outputProcess = createProcess({ stdin: createStdin(true) });
+    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+    const prepareAudio = vi.fn(async () => ({
+      backend: "pipewire-pulse" as const,
+      deviceLabel: "OpenClaw Meeting Audio",
+      inputCommand: ["parec", "--device", "input name", ""],
+      outputCommand: ["pacat", "--device", "output name", ""],
+    }));
+    const host = createHost({ prepareAudio });
+
+    const started = await invokeHost(host, {
+      action: "start",
+      url: "https://meeting.test/linux",
+      mode: "bidi",
+      launch: false,
+      audioBackend: "auto",
+      audioBufferBytes: 2_048,
+      audioFormat: "g711-ulaw-8khz",
+      audioInputCommand: ["trusted-capture"],
+      audioOutputCommand: ["trusted-playback"],
+    });
+
+    expect(prepareAudio).toHaveBeenCalledWith(
+      {
+        backend: "auto",
+        bufferBytes: 2_048,
+        format: "g711-ulaw-8khz",
+        inputCommand: ["trusted-capture"],
+        outputCommand: ["trusted-playback"],
+        bargeInInputCommand: undefined,
+      },
+      10_000,
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "pacat",
+      ["--device", "output name", ""],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+      },
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "parec",
+      ["--device", "input name", ""],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    expect(started).toMatchObject({
+      audioBackend: "pipewire-pulse",
+      audioDeviceLabel: "OpenClaw Meeting Audio",
+      audioBridge: { type: "node-command-pair" },
+    });
+    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+  });
+
+  it("provisions audio before preserving the configured external bridge path", async () => {
+    const events: string[] = [];
+    const prepareAudio = vi.fn(async () => {
+      events.push("prepare");
+      return {
+        backend: "pipewire-pulse" as const,
+        deviceLabel: "OpenClaw Meeting Audio",
+        inputCommand: ["parec"],
+        outputCommand: ["pacat"],
+      };
+    });
+    childProcessMocks.spawnSync.mockImplementation(() => {
+      events.push("bridge");
+      return { error: undefined, signal: null, status: 0, stderr: "", stdout: "" };
+    });
+    const host = createHost({ prepareAudio });
+
+    const started = await invokeHost(host, {
+      action: "start",
+      url: "https://meeting.test/external",
+      mode: "bidi",
+      launch: false,
+      audioBridgeCommand: ["trusted-bridge", "start"],
+    });
+
+    expect(events).toEqual(["prepare", "bridge"]);
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+    expect(started).toMatchObject({
+      audioBackend: "pipewire-pulse",
+      audioBridge: { type: "external-command" },
+    });
+  });
+
+  it("returns the concrete backend from setup without starting bridge processes", async () => {
+    const prepareAudio = vi.fn(async () => ({
+      backend: "pipewire-pulse" as const,
+      deviceLabel: "OpenClaw Meeting Audio",
+      inputCommand: ["parec"],
+      outputCommand: ["pacat"],
+    }));
+    const host = createHost({ prepareAudio });
+
+    await expect(
+      invokeHost(host, {
+        action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      audioBackend: "pipewire-pulse",
+      audioDeviceLabel: "OpenClaw Meeting Audio",
+    });
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "input", inputCommand: [], outputCommand: ["play"] },
+    { name: "output", inputCommand: ["capture"], outputCommand: [] },
+  ])("rejects an empty $name command before spawning", async ({ inputCommand, outputCommand }) => {
+    const host = createHost({
+      prepareAudio: vi.fn(async () => ({
+        backend: "pipewire-pulse" as const,
+        deviceLabel: "OpenClaw Meeting Audio",
+        inputCommand,
+        outputCommand,
+      })),
+    });
+
+    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toThrow(
+      "audio command must not be empty",
+    );
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
+});
 
 describe("meeting node host audio output", () => {
   beforeEach(() => {
@@ -123,186 +303,94 @@ describe("meeting node host audio output", () => {
   });
 
   it("copies retained input buffers", async () => {
-    const inputStdout = new EventEmitter();
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: inputStdout }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
+    const bridge = await startAudioBridge();
     const source = Buffer.from([1, 2, 3]);
 
-    inputStdout.emit("data", source);
+    bridge.inputStdout.emit("data", source);
     source.fill(9);
 
-    const pulled = await invokeHost(host, {
-      action: "pullAudio",
-      bridgeId: started.bridgeId,
-    });
+    const pulled = await invokeBridge(bridge, "pullAudio");
     expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1, 2, 3]));
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("keeps only the newest bounded input chunks", async () => {
-    const inputStdout = new EventEmitter();
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: inputStdout }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
+    const bridge = await startAudioBridge();
 
     for (let value = 0; value <= MAX_QUEUED_INPUT_CHUNKS; value += 1) {
-      inputStdout.emit("data", Buffer.from([value]));
+      bridge.inputStdout.emit("data", Buffer.from([value]));
     }
 
-    const status = await invokeHost(host, {
-      action: "status",
-      bridgeId: started.bridgeId,
-    });
+    const status = await invokeBridge(bridge, "status");
     expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
       MAX_QUEUED_INPUT_CHUNKS,
     );
-    const pulled = await invokeHost(host, {
-      action: "pullAudio",
-      bridgeId: started.bridgeId,
-    });
+    const pulled = await invokeBridge(bridge, "pullAudio");
     expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1]));
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("keeps only the newest bounded input bytes", async () => {
-    const inputStdout = new EventEmitter();
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: inputStdout }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
+    const bridge = await startAudioBridge();
     const chunkBytes = 64 * 1024;
 
     for (let value = 0; value <= MAX_QUEUED_INPUT_BYTES / chunkBytes; value += 1) {
-      inputStdout.emit("data", Buffer.alloc(chunkBytes, value));
+      bridge.inputStdout.emit("data", Buffer.alloc(chunkBytes, value));
     }
 
-    const status = await invokeHost(host, {
-      action: "status",
-      bridgeId: started.bridgeId,
-    });
+    const status = await invokeBridge(bridge, "status");
     expect((status.bridge as Record<string, unknown>).queuedInputChunks).toBe(
       MAX_QUEUED_INPUT_BYTES / chunkBytes,
     );
-    const pulled = await invokeHost(host, {
-      action: "pullAudio",
-      bridgeId: started.bridgeId,
-    });
+    const pulled = await invokeBridge(bridge, "pullAudio");
     expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.alloc(chunkBytes, 1));
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("copies only the newest bytes from an oversized input chunk", async () => {
-    const inputStdout = new EventEmitter();
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: inputStdout }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
+    const bridge = await startAudioBridge();
     const source = Buffer.allocUnsafe(MAX_QUEUED_INPUT_BYTES + 4);
     for (let index = 0; index < source.length; index += 1) {
       source[index] = index % 251;
     }
     const expected = Buffer.from(source.subarray(source.length - MAX_QUEUED_INPUT_BYTES));
 
-    inputStdout.emit("data", source);
+    bridge.inputStdout.emit("data", source);
     source.fill(0);
 
-    const pulled = await invokeHost(host, {
-      action: "pullAudio",
-      bridgeId: started.bridgeId,
-    });
+    const pulled = await invokeBridge(bridge, "pullAudio");
     expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(expected);
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("delivers terminal close to an outstanding pull and then deletes the session", async () => {
-    const inputStdout = new EventEmitter();
-    const inputProcess = createProcess({ stdout: inputStdout });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId as string;
-    const pulling = invokeHost(host, {
-      action: "pullAudio",
-      bridgeId,
-      timeoutMs: 2_000,
-    });
+    const bridge = await startAudioBridge();
+    const { bridgeId } = bridge;
+    const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
 
-    inputProcess.stderr.emit("error", new Error("capture failed"));
+    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
 
     await expect(pulling).resolves.toEqual({ bridgeId, closed: true });
     await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toEqual({
+      await expect(invokeBridge(bridge, "status")).resolves.toEqual({
         bridge: { bridgeId, closed: true },
       });
     });
-    await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+    await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
       `unknown bridgeId: ${bridgeId}`,
     );
-    expect(outputProcess.kill).toHaveBeenCalledTimes(1);
-    expect(inputProcess.kill).toHaveBeenCalledTimes(1);
+    expect(bridge.outputProcess.kill).toHaveBeenCalledTimes(1);
+    expect(bridge.inputProcess.kill).toHaveBeenCalledTimes(1);
   });
 
   it("delivers final audio before terminal close deletes the session", async () => {
-    const inputStdout = new EventEmitter();
-    const inputProcess = createProcess({ stdout: inputStdout });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId as string;
-    const pulling = invokeHost(host, {
-      action: "pullAudio",
-      bridgeId,
-      timeoutMs: 2_000,
-    });
+    const bridge = await startAudioBridge();
+    const { bridgeId } = bridge;
+    const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
     const finalAudio = Buffer.from([1, 2, 3]);
 
-    inputStdout.emit("data", finalAudio);
-    inputProcess.stderr.emit("error", new Error("capture failed"));
+    bridge.inputStdout.emit("data", finalAudio);
+    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
 
     await expect(pulling).resolves.toEqual({
       bridgeId,
@@ -310,7 +398,7 @@ describe("meeting node host audio output", () => {
       base64: finalAudio.toString("base64"),
     });
     await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
         `unknown bridgeId: ${bridgeId}`,
       );
     });
@@ -319,31 +407,16 @@ describe("meeting node host audio output", () => {
   it("delivers stdout flushed after 250ms to a pending empty pull", async () => {
     vi.useFakeTimers();
     try {
-      const inputStdout = new EventEmitter();
-      const inputProcess = createProcess({ stdout: inputStdout, autoClose: false });
-      const outputProcess = createProcess({ stdin: createStdin(true) });
-      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-      const host = createHost();
-      const started = await invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        launch: false,
-        mode: "bidi",
-      });
-      const bridgeId = started.bridgeId as string;
+      const bridge = await startAudioBridge({ inputAutoClose: false });
+      const { bridgeId } = bridge;
       const finalAudio = Buffer.from([7, 8, 9]);
-      const pulling = invokeHost(host, {
-        action: "pullAudio",
-        bridgeId,
-        timeoutMs: 2_000,
-      });
+      const pulling = invokeBridge(bridge, "pullAudio", { timeoutMs: 2_000 });
 
-      inputProcess.stderr.emit("error", new Error("capture failed"));
+      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
       await vi.advanceTimersByTimeAsync(300);
-      inputStdout.emit("data", finalAudio);
-      inputStdout.emit("end");
-      inputStdout.emit("close");
+      bridge.inputStdout.emit("data", finalAudio);
+      bridge.inputStdout.emit("end");
+      bridge.inputStdout.emit("close");
 
       await expect(pulling).resolves.toEqual({
         bridgeId,
@@ -356,49 +429,36 @@ describe("meeting node host audio output", () => {
   });
 
   it("blocks output commands as soon as terminal teardown starts", async () => {
-    const inputStdout = new EventEmitter();
-    const inputProcess = createProcess({ stdout: inputStdout, autoClose: false });
-    const outputStdin = createStdin(false);
-    const outputProcess = createProcess({ stdin: outputStdin });
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
+    const bridge = await startAudioBridge({
+      inputAutoClose: false,
+      outputStdin: createStdin(false),
     });
-    const bridgeId = started.bridgeId as string;
-    const pushing = invokeHost(host, {
-      action: "pushAudio",
+    const { bridgeId } = bridge;
+    const pushing = invokeBridge(bridge, "pushAudio", {
       base64: Buffer.from([1, 2, 3]).toString("base64"),
-      bridgeId,
       outputGeneration: 0,
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
 
-    inputProcess.stderr.emit("error", new Error("capture failed"));
+    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
 
     await expect(pushing).resolves.toEqual({ bridgeId, ok: true, stale: true });
     await expect(
-      invokeHost(host, {
-        action: "pushAudio",
+      invokeBridge(bridge, "pushAudio", {
         base64: Buffer.from([4, 5, 6]).toString("base64"),
-        bridgeId,
         outputGeneration: 0,
       }),
     ).rejects.toThrow(`bridge is not open: ${bridgeId}`);
-    await expect(
-      invokeHost(host, { action: "clearAudio", bridgeId, outputGeneration: 1 }),
-    ).rejects.toThrow(`bridge is not open: ${bridgeId}`);
-    await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toMatchObject({
+    await expect(invokeBridge(bridge, "clearAudio", { outputGeneration: 1 })).rejects.toThrow(
+      `bridge is not open: ${bridgeId}`,
+    );
+    await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
       bridge: { bridgeId, closed: true },
     });
     await expect(
-      invokeHost(host, {
+      invokeHost(bridge.host, {
         action: "list",
         url: "https://meeting.test",
         mode: "bidi",
@@ -406,48 +466,37 @@ describe("meeting node host audio output", () => {
     ).resolves.toEqual({ bridges: [] });
     expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
 
-    inputStdout.emit("end");
-    inputStdout.emit("close");
-    await expect(invokeHost(host, { action: "stop", bridgeId })).resolves.toEqual({
+    bridge.inputStdout.emit("end");
+    bridge.inputStdout.emit("close");
+    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
       ok: true,
       stopped: false,
     });
   });
 
   it("drains final audio when input closes between sequential pulls", async () => {
-    const inputStdout = new EventEmitter();
-    const inputProcess = createProcess({ stdout: inputStdout });
-    const outputProcess = createProcess({ stdin: createStdin(true) });
-    childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId as string;
+    const bridge = await startAudioBridge();
+    const { bridgeId } = bridge;
     const firstAudio = Buffer.from([1, 2, 3]);
     const finalAudio = Buffer.from([4, 5, 6]);
 
-    inputStdout.emit("data", firstAudio);
-    inputStdout.emit("data", finalAudio);
-    inputProcess.stderr.emit("error", new Error("capture failed"));
+    bridge.inputStdout.emit("data", firstAudio);
+    bridge.inputStdout.emit("data", finalAudio);
+    bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
     await Promise.resolve();
 
-    await expect(invokeHost(host, { action: "pullAudio", bridgeId })).resolves.toEqual({
+    await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
       bridgeId,
       closed: false,
       base64: firstAudio.toString("base64"),
     });
-    await expect(invokeHost(host, { action: "pullAudio", bridgeId })).resolves.toEqual({
+    await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
       bridgeId,
       closed: true,
       base64: finalAudio.toString("base64"),
     });
     await vi.waitFor(async () => {
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
         `unknown bridgeId: ${bridgeId}`,
       );
     });
@@ -456,45 +505,34 @@ describe("meeting node host audio output", () => {
   it("starts terminal eviction after capture drain becomes ready", async () => {
     vi.useFakeTimers();
     try {
-      const inputStdout = new EventEmitter();
-      const inputProcess = createProcess({ stdout: inputStdout, autoClose: false });
-      const outputProcess = createProcess({ stdin: createStdin(true) });
-      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-      const host = createHost();
-      const started = await invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        launch: false,
-        mode: "bidi",
-      });
-      const bridgeId = started.bridgeId as string;
+      const bridge = await startAudioBridge({ inputAutoClose: false });
+      const { bridgeId } = bridge;
 
       const firstAudio = Buffer.from([1, 2, 3]);
       const finalAudio = Buffer.from([4, 5, 6]);
-      inputStdout.emit("data", firstAudio);
-      inputStdout.emit("data", finalAudio);
-      inputProcess.stderr.emit("error", new Error("capture failed"));
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).resolves.toEqual({
+      bridge.inputStdout.emit("data", firstAudio);
+      bridge.inputStdout.emit("data", finalAudio);
+      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
+      await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
         bridgeId,
         closed: false,
         base64: firstAudio.toString("base64"),
       });
 
       await vi.advanceTimersByTimeAsync(3_000);
-      inputStdout.emit("end");
-      inputStdout.emit("close");
+      bridge.inputStdout.emit("end");
+      bridge.inputStdout.emit("close");
       await vi.advanceTimersByTimeAsync(2_100);
 
-      await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toMatchObject({
+      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
         bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
       });
       await vi.advanceTimersByTimeAsync(2_899);
-      await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toMatchObject({
+      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
         bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
       });
       await vi.advanceTimersByTimeAsync(1);
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
         `unknown bridgeId: ${bridgeId}`,
       );
     } finally {
@@ -505,39 +543,28 @@ describe("meeting node host audio output", () => {
   it("keeps terminal audio while pull progress continues", async () => {
     vi.useFakeTimers();
     try {
-      const inputStdout = new EventEmitter();
-      const inputProcess = createProcess({ stdout: inputStdout });
-      const outputProcess = createProcess({ stdin: createStdin(true) });
-      childProcessMocks.spawn.mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
-      const host = createHost();
-      const started = await invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        launch: false,
-        mode: "bidi",
-      });
-      const bridgeId = started.bridgeId as string;
+      const bridge = await startAudioBridge();
+      const { bridgeId } = bridge;
       const firstAudio = Buffer.from([1, 2, 3]);
       const finalAudio = Buffer.from([4, 5, 6]);
 
-      inputStdout.emit("data", firstAudio);
-      inputStdout.emit("data", finalAudio);
-      inputProcess.stderr.emit("error", new Error("capture failed"));
+      bridge.inputStdout.emit("data", firstAudio);
+      bridge.inputStdout.emit("data", finalAudio);
+      bridge.inputProcess.stderr.emit("error", new Error("capture failed"));
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(4_000);
 
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).resolves.toEqual({
+      await expect(invokeBridge(bridge, "pullAudio")).resolves.toEqual({
         bridgeId,
         closed: false,
         base64: firstAudio.toString("base64"),
       });
       await vi.advanceTimersByTimeAsync(4_999);
-      await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toMatchObject({
+      await expect(invokeBridge(bridge, "status")).resolves.toMatchObject({
         bridge: { bridgeId, closed: true, queuedInputChunks: 1 },
       });
       await vi.advanceTimersByTimeAsync(1);
-      await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+      await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
         `unknown bridgeId: ${bridgeId}`,
       );
     } finally {
@@ -546,30 +573,19 @@ describe("meeting node host audio output", () => {
   });
 
   it("clears and deletes input retention on explicit stop", async () => {
-    const inputStdout = new EventEmitter();
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: inputStdout }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId as string;
-    inputStdout.emit("data", Buffer.alloc(64 * 1024));
+    const bridge = await startAudioBridge();
+    const { bridgeId } = bridge;
+    bridge.inputStdout.emit("data", Buffer.alloc(64 * 1024));
 
-    await expect(invokeHost(host, { action: "stop", bridgeId })).resolves.toEqual({
+    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
       ok: true,
       stopped: true,
     });
-    await expect(invokeHost(host, { action: "stop", bridgeId })).resolves.toEqual({
+    await expect(invokeBridge(bridge, "stop")).resolves.toEqual({
       ok: true,
       stopped: false,
     });
-    await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
+    await expect(invokeBridge(bridge, "pullAudio")).rejects.toThrow(
       `unknown bridgeId: ${bridgeId}`,
     );
   });
@@ -582,15 +598,9 @@ describe("meeting node host audio output", () => {
     });
     const host = createHost();
 
-    await expect(
-      invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        launch: false,
-        mode: "bidi",
-      }),
-    ).rejects.toBe(spawnError);
+    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toBe(
+      spawnError,
+    );
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
@@ -608,14 +618,9 @@ describe("meeting node host audio output", () => {
     const host = createHost();
     const bridgeId = `test-bridge-${TEST_UUID}`;
 
-    await expect(
-      invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        mode: "bidi",
-      }),
-    ).rejects.toThrow("failed to launch Chrome for Test Browser: launch failed");
+    await expect(invokeHost(host, AUDIO_START_PARAMS)).rejects.toThrow(
+      "failed to launch Chrome for Test Browser: launch failed",
+    );
     await vi.waitFor(async () => {
       await expect(invokeHost(host, { action: "status", bridgeId })).resolves.toEqual({
         bridge: { bridgeId, closed: true },
@@ -637,14 +642,7 @@ describe("meeting node host audio output", () => {
     const host = createHost();
     const bridgeId = `test-bridge-${TEST_UUID}`;
 
-    await expect(
-      invokeHost(host, {
-        action: "start",
-        audioInputCommand: ["capture"],
-        audioOutputCommand: ["play"],
-        mode: "bidi",
-      }),
-    ).rejects.toBe(launchError);
+    await expect(invokeHost(host, AUDIO_START_PARAMS)).rejects.toBe(launchError);
     await vi.waitFor(async () => {
       await expect(invokeHost(host, { action: "pullAudio", bridgeId })).rejects.toThrow(
         `unknown bridgeId: ${bridgeId}`,
@@ -655,25 +653,12 @@ describe("meeting node host audio output", () => {
   });
 
   it("waits for the output stream to accept a backpressured chunk", async () => {
-    const outputStdin = createStdin(false);
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: outputStdin }))
-      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId;
+    const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
+    const { outputStdin } = bridge;
 
     let settled = false;
-    const pushing = invokeHost(host, {
-      action: "pushAudio",
+    const pushing = invokeBridge(bridge, "pushAudio", {
       base64: Buffer.from([1, 2, 3]).toString("base64"),
-      bridgeId,
       outputGeneration: 0,
     }).then((result) => {
       settled = true;
@@ -686,55 +671,30 @@ describe("meeting node host audio output", () => {
 
     outputStdin.accept();
     await expect(pushing).resolves.toMatchObject({ ok: true });
-    await invokeHost(host, { action: "stop", bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("rejects output generations outside the safe integer range", async () => {
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: createStdin(true) }))
-      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
+    const bridge = await startAudioBridge();
 
     await expect(
-      invokeHost(host, {
-        action: "clearAudio",
-        bridgeId: started.bridgeId,
+      invokeBridge(bridge, "clearAudio", {
         outputGeneration: Number.MAX_SAFE_INTEGER + 1,
       }),
     ).rejects.toThrow("outputGeneration must be a non-negative integer");
-    await invokeHost(host, { action: "stop", bridgeId: started.bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("waits for output acceptance and rejects stale generations after clear", async () => {
-    const originalStdin = createStdin(false);
     const replacementStdin = createStdin(true);
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: originalStdin }))
-      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }))
-      .mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId;
+    const bridge = await startAudioBridge({ outputStdin: createStdin(false) });
+    childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
+    const { bridgeId } = bridge;
     expect(typeof bridgeId).toBe("string");
 
     let firstPushSettled = false;
-    const firstPush = invokeHost(host, {
-      action: "pushAudio",
+    const firstPush = invokeBridge(bridge, "pushAudio", {
       base64: Buffer.from([1, 2, 3]).toString("base64"),
-      bridgeId,
       outputGeneration: 0,
     }).then((result) => {
       firstPushSettled = true;
@@ -743,9 +703,7 @@ describe("meeting node host audio output", () => {
     await Promise.resolve();
     expect(firstPushSettled).toBe(false);
 
-    const cleared = await invokeHost(host, {
-      action: "clearAudio",
-      bridgeId,
+    const cleared = await invokeBridge(bridge, "clearAudio", {
       outputGeneration: 1,
     });
     expect(cleared).toMatchObject({ ok: true });
@@ -754,57 +712,40 @@ describe("meeting node host audio output", () => {
       stale: true,
     });
 
-    const stalePush = await invokeHost(host, {
-      action: "pushAudio",
+    const stalePush = await invokeBridge(bridge, "pushAudio", {
       base64: Buffer.from([4, 5, 6]).toString("base64"),
-      bridgeId,
       outputGeneration: 0,
     });
     expect(stalePush).toMatchObject({ ok: true, stale: true });
     expect(replacementStdin.write).not.toHaveBeenCalled();
 
-    await invokeHost(host, { action: "stop", bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 
   it("accepts legacy output commands and preserves their response shapes", async () => {
-    const originalStdin = createStdin(true);
     const replacementStdin = createStdin(true);
-    childProcessMocks.spawn
-      .mockReturnValueOnce(createProcess({ stdin: originalStdin }))
-      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }))
-      .mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
-    const host = createHost();
-    const started = await invokeHost(host, {
-      action: "start",
-      audioInputCommand: ["capture"],
-      audioOutputCommand: ["play"],
-      launch: false,
-      mode: "bidi",
-    });
-    const bridgeId = started.bridgeId;
+    const bridge = await startAudioBridge();
+    childProcessMocks.spawn.mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
+    const { bridgeId } = bridge;
 
     await expect(
-      invokeHost(host, {
-        action: "pushAudio",
+      invokeBridge(bridge, "pushAudio", {
         base64: Buffer.from([1, 2, 3]).toString("base64"),
-        bridgeId,
       }),
     ).resolves.toEqual({ bridgeId, ok: true });
-    await expect(invokeHost(host, { action: "clearAudio", bridgeId })).resolves.toEqual({
+    await expect(invokeBridge(bridge, "clearAudio")).resolves.toEqual({
       bridgeId,
       ok: true,
       clearCount: 1,
     });
     await expect(
-      invokeHost(host, {
-        action: "pushAudio",
+      invokeBridge(bridge, "pushAudio", {
         base64: Buffer.from([4, 5, 6]).toString("base64"),
-        bridgeId,
       }),
     ).resolves.toEqual({ bridgeId, ok: true });
-    expect(originalStdin.write).toHaveBeenCalledOnce();
+    expect(bridge.outputStdin.write).toHaveBeenCalledOnce();
     expect(replacementStdin.write).toHaveBeenCalledOnce();
 
-    await invokeHost(host, { action: "stop", bridgeId });
+    await invokeBridge(bridge, "stop");
   });
 });

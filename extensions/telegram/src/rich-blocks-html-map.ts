@@ -17,6 +17,7 @@ import {
   VOID_TAGS,
   type HtmlNode,
 } from "./rich-blocks-html.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 // Block-level islands the agent contract documents. A supported open tag with a
 // matching close (or a void tag) becomes a typed block; anything else stays text.
 const BLOCK_ISLAND_TAGS = new Set([
@@ -195,7 +196,13 @@ function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlo
   };
 }
 
-const CELL_ALIGN_VALUES = new Set(["left", "center", "right"]);
+function resolveTableCellAlign(value: string | undefined): RichBlockTableCell["align"] {
+  return value === "center" || value === "right" ? value : "left";
+}
+
+function resolveTableCellValign(value: string | undefined): RichBlockTableCell["valign"] {
+  return value === "top" || value === "bottom" ? value : "middle";
+}
 
 function tableCellFromElement(
   node: Extract<HtmlNode, { kind: "element" }>,
@@ -203,17 +210,17 @@ function tableCellFromElement(
 ): RichBlockTableCell {
   const attrs = parseHtmlAttrs(node.raw);
   const text = htmlNodesToRichText(node.children);
-  const colspan = Number.parseInt(attrs.get("colspan") ?? "", 10);
-  const rowspan = Number.parseInt(attrs.get("rowspan") ?? "", 10);
+  const colspan = strictNumber(attrs.get("colspan"), /^\d+$/u) ?? Number.NaN;
+  const rowspan = strictNumber(attrs.get("rowspan"), /^\d+$/u) ?? Number.NaN;
   const align = attrs.get("align")?.toLowerCase();
+  const valign = attrs.get("valign")?.toLowerCase();
   return {
+    align: resolveTableCellAlign(align),
+    valign: resolveTableCellValign(valign),
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
-    ...(Number.isFinite(colspan) && colspan > 1 ? { colspan } : {}),
-    ...(Number.isFinite(rowspan) && rowspan > 1 ? { rowspan } : {}),
-    ...(align && CELL_ALIGN_VALUES.has(align)
-      ? { align: align as RichBlockTableCell["align"] }
-      : {}),
+    ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
+    ...(Number.isSafeInteger(rowspan) && rowspan > 1 ? { rowspan } : {}),
   };
 }
 
@@ -298,9 +305,17 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   if (tableColumnCount(cells) > TABLE_COLUMN_LIMIT) {
     // Mirror the markdown table path: over-wide tables degrade to a readable
     // monospace grid instead of an API-rejected table block.
-    const grid = cells
-      .map((row) => `| ${row.map((cell) => richTextToPlainString(cell.text ?? "")).join(" | ")} |`)
-      .join("\n");
+    const gridRows = cells.map((row) =>
+      row.flatMap((cell) =>
+        // Colspans consume adjacent columns; rowspans stay row-local rather
+        // than growing this fallback into a second table layout engine.
+        Array.from(
+          { length: Math.min(cell.colspan ?? 1, TABLE_COLUMN_LIMIT + 1) },
+          (_value, index) => (index === 0 ? richTextToPlainString(cell.text ?? "") : ""),
+        ),
+      ),
+    );
+    const grid = renderTelegramMonospaceGrid(gridRows);
     return {
       type: "pre",
       text: caption !== undefined ? `${richTextToPlainString(caption)}\n${grid}` : grid,
@@ -317,8 +332,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
 
 // Full-string numeric parse: prefix-tolerant parseFloat would silently map
 // malformed coordinates like "48.8north" to an unintended location.
-function strictNumber(value: string | undefined): number | undefined {
-  if (value === undefined || !/^-?\d+(?:\.\d+)?$/.test(value.trim())) {
+function strictNumber(value: string | undefined, token = /^-?\d+(?:\.\d+)?$/): number | undefined {
+  if (value === undefined || !token.test(value.trim())) {
     return undefined;
   }
   return Number.parseFloat(value);

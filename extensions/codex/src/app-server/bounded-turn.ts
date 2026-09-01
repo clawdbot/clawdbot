@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
@@ -13,9 +16,12 @@ import {
   isTerminalTurnStatus,
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
+import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
@@ -42,16 +48,17 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRingZeroHasNoManagedHooks,
-  attestCodexRingZeroThreadHasNoMcpServers,
+  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 
-const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
+  "agents.enabled": false,
   "features.multi_agent": false,
+  "features.multi_agent_v2": false,
   "features.apps": false,
   "features.plugins": false,
   "features.image_generation": false,
@@ -93,7 +100,10 @@ class CodexBoundedTurnTimeoutError extends Error {
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
+  modelProvider?: string;
   profile?: string;
+  preparedAuth?: CodexAppServerPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   signal?: AbortSignal;
   agentDir?: string;
@@ -107,6 +117,8 @@ type CodexBoundedTurnParams = {
   threadConfig?: JsonObject;
   historyItems?: JsonValue[];
   requireNoExternalCapabilities?: boolean;
+  /** Finalizer-only: preserve a completed turn whose protocol carries no answer item. */
+  allowEmptyText?: boolean;
 };
 
 export async function runBoundedCodexAppServerTurn(
@@ -163,10 +175,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     ? buildPrivateCodexAppServerStartOptions(appServer.start, workspace.codexHome)
     : appServer.start;
   const ownsClient = !params.options.clientFactory;
+  const authSelection = params.preparedAuth
+    ? { preparedAuth: params.preparedAuth }
+    : { authProfileId: params.profile };
   const client = params.options.clientFactory
     ? await params.options.clientFactory({
         startOptions,
-        authProfileId: params.profile,
+        ...authSelection,
+        authRequirement: params.authRequirement,
         agentDir,
         config: params.config,
         timeoutMs,
@@ -176,7 +192,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         createIsolatedCodexAppServerClient({
           startOptions,
           timeoutMs,
-          authProfileId: params.profile,
+          ...authSelection,
+          authRequirement: params.authRequirement,
           agentDir,
           authProfileStore: params.authProfileStore,
           config: params.config,
@@ -218,7 +235,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
 
   let retrySelection = false;
   try {
-    const model = await resolveCodexBoundedTurnModel({
+    const modelSelection = await resolveCodexBoundedTurnModel({
       client,
       selection: params.model,
       requiredModalities: params.requiredModalities,
@@ -229,24 +246,29 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRingZeroHasNoManagedHooks(client, abortController.signal);
+      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+        client,
+        { restrictedToolSurface: true },
+        abortController.signal,
+      );
     }
+    const threadConfig = buildCodexRuntimeThreadConfig(
+      resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+      { nativeCodeModeEnabled: false },
+    );
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
         {
-          model,
-          modelProvider: "openai",
+          model: modelSelection.runtimeModelId,
+          ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
           cwd: workspace.cwd,
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
           ...(params.requireNoExternalCapabilities ? { baseInstructions: "" } : {}),
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(
-            resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
-            { nativeCodeModeEnabled: false },
-          ),
+          config: threadConfig,
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
@@ -262,9 +284,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
-      await attestCodexRingZeroThreadHasNoMcpServers(
+      await attestCodexRestrictedToolSurfaceMcpServersDisabled(
         client,
         thread.thread.id,
+        threadConfig,
         abortController.signal,
       );
     }
@@ -275,21 +298,25 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         { timeoutMs, signal: abortController.signal },
       );
     }
-    const collector = createCodexBoundedTurnCollector(thread.thread.id, params.taskLabel);
+    const collector = createCodexBoundedTurnCollector(
+      thread.thread.id,
+      params.taskLabel,
+      params.allowEmptyText === true,
+    );
     const cleanup = client.addNotificationHandler(collector.handleNotification);
     const requestCleanup = client.addRequestHandler(
       createCodexBoundedApprovalHandler(params.taskLabel),
     );
     try {
       const turn = assertCodexTurnStartResponse(
+        // Inherit the empty thread environment; a cwd override recreates native tools.
         await client.request<unknown>(
           "turn/start",
           {
             threadId: thread.thread.id,
             input: params.input,
-            cwd: workspace.cwd,
             approvalPolicy: "on-request",
-            model,
+            model: modelSelection.runtimeModelId,
             effort: "low",
           } satisfies CodexTurnStartParams,
           { timeoutMs, signal: abortController.signal },
@@ -304,7 +331,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           signal: abortController.signal,
           timeoutError,
         })),
-        model,
+        model: modelSelection.catalogId,
       };
     } finally {
       await interruptPromise;
@@ -329,7 +356,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
     if (ownsClient) {
-      client.close();
+      await closeCodexStartupClientBestEffort(client);
     }
   }
   if (retrySelection) {
@@ -375,6 +402,15 @@ function buildPrivateCodexAppServerStartOptions(
   start: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"],
   codexHome: string,
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
+  // Provider identity and model catalogs must survive isolation; hooks, MCP,
+  // sandbox policy, and other process overrides must not cross that boundary.
+  const providerArgs = readCodexAppServerConfigOptions(start.args).flatMap(({ name, value }) =>
+    (name === "-c" || name === "--config") &&
+    value &&
+    /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(value)
+      ? ["-c", value]
+      : [],
+  );
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
       ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
@@ -386,7 +422,10 @@ function buildPrivateCodexAppServerStartOptions(
   });
   return {
     ...start,
-    args: [...CODEX_PRIVATE_STDIO_ARGS],
+    // A fresh private home has no native account; bridge OpenClaw auth even
+    // when the operator's ordinary harness uses their native Codex home.
+    homeScope: "agent",
+    args: ["app-server", ...providerArgs, "--listen", "stdio://"],
     env: {
       ...privateEnv,
       CODEX_HOME: codexHome,
@@ -416,7 +455,9 @@ function createCodexBoundedApprovalHandler(taskLabel: string) {
       };
     }
     if (request.method === "mcpServer/elicitation/request") {
-      return { action: "decline" };
+      return createCodexElicitationResponse("decline", null, {
+        message: `OpenClaw Codex ${taskLabel} does not support interactive input.`,
+      });
     }
     return undefined;
   };
@@ -428,10 +469,10 @@ async function resolveCodexBoundedTurnModel(params: {
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
-}): Promise<string> {
+}): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: null, cursor: null, includeHidden: false },
+    { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
   );
   const listed = readModelListResult(result).models;
@@ -445,7 +486,7 @@ async function resolveCodexBoundedTurnModel(params: {
         `Codex app-server has no model supporting ${params.requiredModalities.join(" and ")} input.`,
       );
     }
-    return selected.model;
+    return { catalogId: selected.id, runtimeModelId: selected.model };
   }
 
   const model = params.selection.id;
@@ -459,10 +500,14 @@ async function resolveCodexBoundedTurnModel(params: {
   if (params.requiredModalities.includes("text") && !match.inputModalities.includes("text")) {
     throw new Error(`Codex app-server model does not support text: ${model}`);
   }
-  return model;
+  return { catalogId: match.id, runtimeModelId: match.model };
 }
 
-function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
+function createCodexBoundedTurnCollector(
+  threadId: string,
+  taskLabel: string,
+  allowEmptyText: boolean,
+) {
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
@@ -471,10 +516,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
   const assistantItemOrder: string[] = [];
-  let resolveCompletion: (() => void) | undefined;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
+  const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
 
   const rememberAssistantText = (itemId: string, text: string) => {
     if (!text) {
@@ -523,7 +565,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
     if (notification.method === "turn/completed") {
       completedTurn =
         readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
-      resolveCompletion?.();
+      resolveCompletion();
       return;
     }
     if (notification.method === "error") {
@@ -533,7 +575,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
-      resolveCompletion?.();
+      resolveCompletion();
     }
   };
 
@@ -579,7 +621,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
         .join("\n\n")
         .trim();
       const text = (itemText || deltaText).trim();
-      if (!text) {
+      if (!text && !allowEmptyText) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
       return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
@@ -644,9 +686,4 @@ function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): st
     .filter(Boolean)
     .join("\n\n")
     .trim();
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

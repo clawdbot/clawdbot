@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import {
+  createCodeModeNamespaceRuntime,
+  describeCodeModeNamespacesForPrompt,
+} from "./code-mode-namespaces.js";
 
 type McpCatalogEntry = NonNullable<Parameters<typeof createCodeModeNamespaceRuntime>[0]>[number];
 
@@ -69,6 +72,69 @@ describe("Code Mode MCP namespace model", () => {
     expect(executeTool).toHaveBeenCalledWith(
       expect.objectContaining({ catalogId: "github__read_file", toolName: "github__read_file" }),
     );
+  });
+
+  it.each([
+    {
+      name: "enum",
+      items: { type: "string", enum: ["red", "blue"] },
+      declaration: 'Array<"red" | "blue">',
+    },
+    {
+      name: "anyOf",
+      items: { anyOf: [{ type: "string" }, { type: "number" }] },
+      declaration: "Array<string | number>",
+    },
+    {
+      name: "oneOf",
+      items: { oneOf: [{ type: "boolean" }, { type: "null" }] },
+      declaration: "Array<boolean | null>",
+    },
+    {
+      name: "multiple types",
+      items: { type: ["string", "null"] },
+      declaration: "Array<string | null>",
+    },
+    {
+      name: "nested array",
+      items: { type: "array", items: { type: "string", enum: ["red", "blue"] } },
+      declaration: 'Array<Array<"red" | "blue">>',
+    },
+    {
+      name: "simple array",
+      items: { type: "string" },
+      declaration: "Array<string>",
+    },
+    {
+      name: "object",
+      items: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      declaration: "Array<{ id: string }>",
+    },
+  ])("preserves $name item grouping in MCP API declarations", async ({ items, declaration }) => {
+    const parameters = {
+      type: "object",
+      properties: { values: { type: "array", items } },
+      required: ["values"],
+    };
+    const runtime = createCodeModeNamespaceRuntime([
+      mcpCatalogEntry({ id: "github__read_file", parameters }),
+    ]);
+    const executeTool = vi.fn();
+    const api = await runtime.invoke(
+      "mcp",
+      ["github", "$api"],
+      ["readFile", { schema: true }],
+      executeTool,
+    );
+
+    expect(runtime.apiFiles.find((file) => file.path === "mcp/github.d.ts")?.content).toContain(
+      `values: ${declaration};`,
+    );
+    expect(api).toMatchObject({
+      header: expect.stringContaining(`values: ${declaration};`),
+      schemas: { readFile: parameters },
+    });
+    expect(executeTool).not.toHaveBeenCalled();
   });
 
   it.each(["constructor", "toString", "__proto__"])(
@@ -160,5 +226,19 @@ describe("Code Mode MCP namespace model", () => {
       );
     }
     expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not split UTF-16 surrogate pairs in node display names at the 128-char boundary", () => {
+    const displayName = `${"a".repeat(127)}\uD83D\uDCF1`;
+    const catalog = [
+      mcpCatalogEntry({
+        id: "github__read_file",
+        node: { id: "node-1", displayName },
+      }),
+    ];
+    const prompt = describeCodeModeNamespacesForPrompt(catalog);
+
+    expect(prompt).toContain(`visible servers: github (node: ${"a".repeat(127)}).`);
+    expect(prompt).not.toContain("\uD83D");
   });
 });

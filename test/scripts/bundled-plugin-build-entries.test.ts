@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  collectChannelConfigDoctorBuildEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
@@ -26,6 +27,47 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("retains manifest-owned config repairs independently of runtime package exclusions", () => {
+    const cwd = tempDirs.make("openclaw-config-doctor-entries-");
+    const pluginDir = path.join(cwd, "extensions", "external-owner");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        files: ["dist/**", "!dist/extensions/external-owner/**"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/external-owner",
+        openclaw: { build: { bundledDist: false } },
+      }),
+    );
+    const manifest = {
+      id: "external-owner",
+      channels: ["renamed-channel"],
+      doctorContract: { configRepair: true, stateMigrations: true },
+    };
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(() => collectChannelConfigDoctorBuildEntries({ cwd })).toThrow(
+      /Missing config-only doctor entrypoint/,
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "config-doctor-api.ts"),
+      "export const legacyConfigRules = [];\n",
+    );
+    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({
+      "renamed-channel": "extensions/external-owner/config-doctor-api.ts",
+    });
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifest, doctorContract: { stateMigrations: true } }),
+    );
+    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({});
+  });
+
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
   const forEachBundledChannelEntry = (
     visit: (params: { entryPath: string; entry: string; pluginId: string }) => void,
@@ -49,14 +91,11 @@ describe("bundled plugin build entries", () => {
     }
   };
 
-  it("includes manifest-less runtime core support packages in dist build entries", () => {
+  it("includes the manifest-less runtime core support package in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const expectedEntries = {
-      "extensions/image-generation-core/api": "extensions/image-generation-core/api.ts",
       "extensions/image-generation-core/runtime-api":
         "extensions/image-generation-core/runtime-api.ts",
-      "extensions/media-understanding-core/runtime-api":
-        "extensions/media-understanding-core/runtime-api.ts",
     };
 
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
@@ -150,16 +189,12 @@ describe("bundled plugin build entries", () => {
     expect(payload.artifacts).toBeGreaterThan(0);
   });
 
-  it("packs runtime core support packages without requiring plugin manifests", () => {
+  it("packs the runtime core support package without requiring a plugin manifest", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
     expect(artifacts).toContain("dist/extensions/image-generation-core/package.json");
     expect(artifacts).toContain("dist/extensions/image-generation-core/runtime-api.js");
     expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
-    expect(artifacts).toContain("dist/extensions/media-understanding-core/runtime-api.js");
-    expect(artifacts).not.toContain(
-      "dist/extensions/media-understanding-core/openclaw.plugin.json",
-    );
   });
 
   it("packs the Matrix packaged runtime shim", () => {
@@ -183,7 +218,7 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    for (const pluginId of ["qqbot", "whatsapp"]) {
+    for (const pluginId of ["whatsapp"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
@@ -203,7 +238,14 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["copilot", "openshell", "slack", "tokenjuice"]) {
+    for (const pluginId of [
+      "copilot",
+      "diffs",
+      "diffs-language-pack",
+      "openshell",
+      "slack",
+      "tokenjuice",
+    ]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
@@ -214,7 +256,7 @@ describe("bundled plugin build entries", () => {
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     const dockerEnv = {
       ...baselineEnv,
-      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams",
+      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams,whatsapp",
     };
     const entries = listBundledPluginBuildEntries({ env: dockerEnv });
     const baselineArtifacts = listBundledPluginPackArtifacts({ env: baselineEnv });
@@ -222,7 +264,7 @@ describe("bundled plugin build entries", () => {
     const reorderedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "msteams,clickclack slack",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,msteams,clickclack slack",
       },
     });
     const entryKeys = Object.keys(entries);
@@ -231,6 +273,8 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
     expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
     expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/whatsapp/index"]).toBe("extensions/whatsapp/index.ts");
+    expect(entries["extensions/whatsapp/setup-entry"]).toBe("extensions/whatsapp/setup-entry.ts");
     expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
     expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
       entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),
@@ -240,6 +284,7 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
     expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
     expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/whatsapp/");
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
@@ -291,22 +336,6 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("preserves known dependency-only Docker plugin selections", () => {
-    const baselineEnv = { ...process.env };
-    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
-    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
-    const selectedEntries = listBundledPluginBuildEntries({
-      env: {
-        ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,qqbot",
-      },
-    });
-
-    expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/qqbot/");
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
-  });
-
   it("preserves known package-less bundled Docker plugin selections", () => {
     const baselineEnv = { ...process.env };
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
@@ -356,13 +385,24 @@ describe("bundled plugin build entries", () => {
       "mistral",
       "novita",
       "opencode",
-      "opencode-go",
       "xiaomi",
     ]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);
     }
+  });
+
+  it("keeps OpenCode Go bundled until its companion artifact is available", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/opencode-go/index.js",
+        "dist/extensions/opencode-go/openclaw.plugin.json",
+        "dist/extensions/opencode-go/package.json",
+      ]),
+    );
   });
 
   it("excludes the externalized Vydra provider from bundled artifacts", () => {

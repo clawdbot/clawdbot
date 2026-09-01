@@ -15,6 +15,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -23,22 +24,57 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, false);
+}
+
+/** Low-level plugin dispatch must reach queue policy before waiting on the active reply owner. */
+export async function dispatchLowLevelChannelReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+}
+
+async function dispatchReplyFromConfigWithQueuePolicy(
+  params: DispatchFromConfigParams,
+  allowActiveQueueResolution: boolean,
+): Promise<DispatchFromConfigResult> {
+  const ticket = reserveReplyAdmissionTicket([
+    params.ctx.SessionKey,
+    params.ctx.CommandTargetSessionKey,
+  ]);
+  const ticketedParams = ticket
+    ? {
+        ...params,
+        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
+      }
+    : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   try {
-    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    const result = await dispatchReplyFromConfigInner(
+      ticketedParams,
+      messageAuditTerminal,
+      allowActiveQueueResolution,
+    );
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
     messageAuditTerminal?.finishError();
     throw error;
+  } finally {
+    ticket?.release();
   }
 }
 
 async function dispatchReplyFromConfigInner(
   params: DispatchFromConfigParams,
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
+  allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const gathered = await gatherDispatchRequest(params, messageAuditTerminal);
+  const gathered = await gatherDispatchRequest(
+    params,
+    messageAuditTerminal,
+    allowActiveQueueResolution,
+  );
   if (gathered.status === "complete") {
     return gathered.result;
   }
@@ -85,7 +121,7 @@ async function dispatchReplyFromConfigInner(
         return finishReplyOperationAbortedDispatch();
       }
       if (inboundDedupeClaim.status === "claimed") {
-        if (errorState.inboundDedupeReplayUnsafe) {
+        if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
           commitInboundDedupe(inboundDedupeClaim.key);
         } else {
           releaseInboundDedupe(inboundDedupeClaim.key);

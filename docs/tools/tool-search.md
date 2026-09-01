@@ -214,6 +214,40 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_describe`
 - `tool_call`
 
+`tool_search` accepts either the existing single-query shape or a batch of
+independent queries:
+
+```json
+{
+  "query": "today's calendar events",
+  "limit": 3
+}
+```
+
+```json
+{
+  "queries": [
+    { "query": "today's calendar events", "limit": 3 },
+    { "query": "Slack messages needing attention", "limit": 3 }
+  ]
+}
+```
+
+Single-query calls continue to return the compact candidate array directly.
+Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
+query uses the same effective catalog, ranking, filtering, and per-query limit
+as an ordinary search; a candidate may appear in more than one result group.
+Descriptions are compacted before output. If the complete batch would exceed
+the 4,000-character response budget, lower-ranked candidates are removed and
+the response includes `truncated: true`. A result group that lost candidates
+also includes `truncated: true`, so an empty truncated group cannot be mistaken
+for a query that had no matches.
+Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
+batch may request at most 50 candidates in total. A batch accepts at most 16
+queries, with at most 512 characters per query and 512 UTF-8 bytes across the
+serialized query list. Invalid batches fail as one request, while a valid query
+with no matches returns an empty `candidates` array.
+
 Directory mode exposes:
 
 - `tool_search`
@@ -238,6 +272,11 @@ with Node permission mode enabled, an empty environment, no filesystem or
 network grants, and no child-process or worker grants. OpenClaw enforces a
 parent-process wall-clock timeout and kills the subprocess on timeout, including
 after async continuations.
+
+Outstanding bridged tool calls are canceled when the child settles, including
+fatal exits and final results. Failed exits wait for stderr to drain before
+rendering a bounded diagnostic. The error separately reports bytes discarded
+from the 64 KiB retained tail and bytes omitted from its final text preview.
 
 The runtime exposes only:
 
@@ -343,10 +382,10 @@ operation. OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane, not from the runtime.
 
-Regardless of mode, target tool calls are projected into the session transcript
-as normal tool call and tool result pairs, and search, describe, and call
-results carry each tool's `id` and `source`. Session logs therefore still
-answer:
+Regardless of mode, completed target calls persist as bounded, redacted display
+activity in session history without adding synthetic model turns to replay.
+Search, describe, and call results carry each tool's `id` and `source`.
+Session logs therefore still answer:
 
 - how many tool schemas the model saw up front
 - how many search and describe operations it performed
@@ -355,15 +394,16 @@ answer:
 
 ## E2E validation
 
-The QA Lab gateway scenario proves both paths with the OpenClaw runtime:
+The QA Lab gateway scenario proves all three paths with the OpenClaw runtime:
 
 ```bash
 pnpm openclaw qa suite --provider-mode mock-openai --scenario tool-search-gateway-e2e
 ```
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock
-OpenAI provider, starts a Gateway once in direct mode and once with Tool Search
-enabled, then compares provider request payloads and session logs.
+OpenAI provider, then runs the Gateway in direct, code-mode Tool Search, and
+structured Tool Search modes. It compares provider request payloads for direct
+and code mode, then verifies session logs and tool flow across all three lanes.
 
 The regression proves:
 
@@ -373,6 +413,8 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
+7. Structured mode resolves two queries with one `tool_search` call before the
+   selected plugin tool runs through `tool_call`.
 
 ## Failure behavior
 

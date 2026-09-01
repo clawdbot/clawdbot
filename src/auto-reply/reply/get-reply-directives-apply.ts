@@ -1,8 +1,8 @@
 // Applies parsed directives to session state, config overrides, and run options.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -21,6 +21,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -183,10 +184,8 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
-  const canPersistStickyModelSelection = Array.isArray(ctx.GatewayClientScopes)
-    ? ctx.GatewayClientScopes.includes("operator.admin")
-    : command.senderIsOwner;
   const directiveModelState = {
+    modelPolicy: modelState.modelPolicy,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
     policyAliasIndex: modelState.policyAliasIndex,
@@ -194,6 +193,7 @@ export async function applyInlineDirectiveOverrides(params: {
   };
   const createDirectiveHandlingBase = () => ({
     cfg,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,
@@ -212,9 +212,11 @@ export async function applyInlineDirectiveOverrides(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     canPersistStickyModelSelection,
+    ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
   });
 
   let directiveAck: ReplyPayload | undefined;
+  let selectionCatalog = modelState.allowedModelCatalog;
 
   // Fire on the reason, not the boolean: a temporarily-unavailable override
   // surfaces a notice without destroying the pin, so resetModelOverride stays false.
@@ -238,6 +240,47 @@ export async function applyInlineDirectiveOverrides(params: {
     directives = clearInlineDirectives(directives.cleaned);
   }
 
+  // Derive the persistent write target from the directives that survived the
+  // unauthorized-sender clearing above. Reading the pre-clearing value would let
+  // an unauthorized "/model … -a|-g" reach the authority error below instead of
+  // the plain-text path every other directive takes.
+  const modelSelectionScope = resolveStickyModelSelectionScope({
+    cfg,
+    scope: directives.modelScope,
+  });
+  const canWriteModelDefaults = Array.isArray(ctx.GatewayClientScopes)
+    ? ctx.GatewayClientScopes.includes("operator.admin")
+    : command.senderIsOwner;
+  const stickyModelSelectionTarget =
+    canWriteModelDefaults && modelSelectionScope === "agent"
+      ? ("agent" as const)
+      : canWriteModelDefaults && modelSelectionScope === "global"
+        ? ("defaults" as const)
+        : undefined;
+  const canPersistStickyModelSelection = modelSelectionScope !== "session" && canWriteModelDefaults;
+
+  if (directives.modelScopeConflict) {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: { text: "Use only one model scope option.", isError: true },
+    };
+  }
+
+  if (
+    (directives.modelScope === "agent" || directives.modelScope === "global") &&
+    !canWriteModelDefaults
+  ) {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: {
+        text: "Agent and global model defaults require owner authority or operator.admin scope.",
+        isError: true,
+      },
+    };
+  }
+
   if (
     directives.hasModelDirective &&
     effectiveModelDirective &&
@@ -253,6 +296,7 @@ export async function applyInlineDirectiveOverrides(params: {
       defaultProvider,
       defaultModel,
       aliasIndex,
+      modelPolicy: modelState.modelPolicy,
       allowedModelKeys: modelState.allowedModelKeys,
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
@@ -260,7 +304,10 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
-      return { kind: "reply", reply: { text: MODEL_SELECTION_LOCKED_MESSAGE } };
+      return {
+        kind: "reply",
+        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      };
     }
   }
 
@@ -355,6 +402,7 @@ export async function applyInlineDirectiveOverrides(params: {
         defaultProvider,
         defaultModel,
         aliasIndex,
+        modelPolicy: modelState.modelPolicy,
         allowedModelKeys: modelState.allowedModelKeys,
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
@@ -362,7 +410,10 @@ export async function applyInlineDirectiveOverrides(params: {
       });
       if (modelResolution.errorText) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: modelResolution.errorText } };
+        return {
+          kind: "reply",
+          reply: { text: modelResolution.errorText, isError: true },
+        };
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
@@ -374,7 +425,10 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (runtime.kind === "invalid") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: runtime.errorText } };
+          return {
+            kind: "reply",
+            reply: { text: runtime.errorText, isError: true },
+          };
         }
         const applied = await (
           await loadDirectivePersist()
@@ -389,10 +443,11 @@ export async function applyInlineDirectiveOverrides(params: {
           defaultModel,
           currentProvider: provider,
           currentModel: model,
-          allowedModelKeys: modelState.allowedModelKeys,
+          modelPolicy: modelState.modelPolicy,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
+          ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           request: {
             ...modelSelection,
             profileOverride: modelResolution.profileOverride,
@@ -403,20 +458,23 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (applied.status === "rejected") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message } };
+          return { kind: "reply", reply: { text: applied.message, isError: true } };
         }
         if (applied.status === "conflict") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message } };
+          return { kind: "reply", reply: { text: applied.message, isError: true } };
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         // Model change first, then the thinking remap it triggered: the remap is a
         // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
-          modelSelection.isDefault
-            ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias} for this session.`,
+          formatModelSelectionScopeAck({
+            isDefault: modelSelection.isDefault,
+            label: labelWithAlias,
+            configuredDefaultUpdate: applied.configuredDefaultUpdate,
+            ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
+          }),
           applied.thinkingRemap
             ? `Thinking level set to ${applied.thinkingRemap.to} (${applied.thinkingRemap.from} not supported for ${applied.thinkingRemap.provider}/${applied.thinkingRemap.model}).`
             : undefined,
@@ -445,6 +503,7 @@ export async function applyInlineDirectiveOverrides(params: {
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
         cfg,
+        agentId,
         command,
         sessionEntry: targetSessionEntry,
         sessionKey,
@@ -485,25 +544,25 @@ export async function applyInlineDirectiveOverrides(params: {
       typing.cleanup();
       return {
         kind: "reply",
-        reply: { text: persistenceState.outcome.errorText },
+        reply: { text: persistenceState.outcome.errorText, isError: true },
       };
     }
     ({ provider, model } = persistenceState.outcome);
+    selectionCatalog = persistenceState.outcome.modelCatalog ?? selectionCatalog;
   }
 
-  const selectedCatalogEntry = modelState.allowedModelCatalog.find(
+  const selectedCatalogEntry = selectionCatalog.find(
     (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
   );
   contextTokens = resolveContextTokens({
     cfg,
-    agentCfg,
     provider: resolveContextConfigProviderForRuntime({
       provider,
       runtimeId: resolveAgentHarnessPolicy({
         provider,
         modelId: model,
         config: cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId,
         sessionKey,
       }).runtime,
       config: cfg,

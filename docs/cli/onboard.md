@@ -40,6 +40,7 @@ openclaw onboard --tui
 openclaw onboard --classic
 openclaw onboard --modern
 openclaw onboard --flow quickstart
+openclaw onboard --agent-name robby
 openclaw onboard --flow manual
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
@@ -77,27 +78,33 @@ not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
+- `--agent-name <name>`: names the first agent when no roster exists. Interactive
+  onboarding asks **What should we call your first agent?** and suggests `main`;
+  non-interactive onboarding keeps `main` unless this flag is provided. The id
+  `main` is not reserved: if you later recreate it beside a named agent, run
+  `openclaw doctor --fix` first when creation reports legacy-session or
+  shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   token auth by default, and generates a token when no stored or explicit
   credential applies. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
-- `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
-  for port, bind, and auth.
-- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url` and `--remote-token`: prefill the classic remote Gateway step and override stored remote values for this run. Changing the URL does not reuse stored credentials unless you also pass a token. The token stays masked in prompts and follows the wizard's existing plaintext or SecretRef storage choice.
-- `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`: explicitly control whether Tailscale Serve or Funnel configuration is reset when the Gateway exits. Omitting both preserves the current setting during non-interactive reruns.
+- `--flow manual` (alias `advanced`): opens the classic wizard's **Manual
+  setup** flow with full prompts for port, bind, and auth.
+- `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. Credentials stay masked in prompts and follow the wizard's existing plaintext or SecretRef storage choice.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
-  accepts only `--workspace`, `--accept-risk`,
+  accepts only `--workspace`, `--agent-name`, `--accept-risk`,
   `--non-interactive`, and `--json`. Other setup flags are rejected instead of
   being silently ignored.
 
 ## Guided flow
 
 Plain `openclaw onboard` starts the guided flow. It shows the security notice,
-then asks one question up front: **full access** (recommended — setup looks for
+asks for the first agent's name when no roster exists, then asks one discovery
+question up front: **full access** (recommended — setup looks for
 AI apps, keys, and local runtimes automatically) or **ask first** (setup asks
 once before looking around, or lets you configure manually). The
 choice persists as `wizard.accessMode`. With discovery allowed, onboarding
@@ -126,6 +133,9 @@ workspace through their normal setup flow. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.
+For an explicitly managed multi-agent fleet, provider setup updates the configured
+system agent's model and aliases without replacing fleet-wide model defaults or
+another agent's model.
 
 After inference passes, onboarding checks for memories from supported local AI
 tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
@@ -143,13 +153,16 @@ the same plan the conversational `openclaw setup` chat would apply on "yes" —
 then offers plugin and skill recommendations from installed apps; app names
 are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
-In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+When the platform has a supported browser opener, it then opens the authenticated
 Control UI dashboard and waits up to 60 seconds for the browser client to
-connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
-dashboard URL, including an SSH port-forward command for a loopback Gateway,
-and waits up to five minutes. A successful connection continues in the browser;
-an unreachable Gateway or a timeout falls back to the same terminal hatch as
-before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
+connect. The short-lived handoff gives that exact signed browser a durable
+administrator credential. This includes display-less WSL when `wslview` is installed.
+On headless Linux, WSL without an opener, or over SSH without a display, it prints a prominent
+copy-pasteable dashboard URL, including an SSH port-forward command for a
+loopback Gateway, and waits up to five minutes. A successful connection
+continues in the browser; an unreachable Gateway or a timeout falls back to the
+same terminal hatch as before. Pass `--tui` to skip the browser handoff and
+force that terminal hatch.
 If applying setup fails, onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
@@ -185,6 +198,20 @@ state:
   onboarding or OpenClaw. On a configured install, reach OpenClaw with
   `/openclaw` inside the TUI or `openclaw setup`.
 
+Remote setup reuses device pairing for the selected Gateway, including a
+configured remote connection forwarded through loopback. Its readiness probes
+do not create new device pairings. Setup chat keeps a stable authenticated
+caller across replies, including on loopback connections.
+
+When interactive remote setup activates inference and the Gateway requires a
+restart, onboarding waits up to 45 seconds for a new Gateway boot and a successful
+inference check before opening setup chat. A healthy connection to the old
+Gateway does not count. If the restart wait expires or boot identity is missing,
+onboarding reports that the settings were saved and stops rather than trying
+another provider. Check the remote Gateway, then rerun bare `openclaw` in the
+connected terminal. If the error says the Gateway did not provide a boot identity,
+update and restart that Gateway first.
+
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 
 ## Reset
@@ -194,7 +221,18 @@ openclaw onboard --reset
 openclaw onboard --reset --reset-scope full
 ```
 
-`--reset` wipes state before running setup. `--reset-scope` controls how much: `config` (config only), `config+creds+sessions` (default when `--reset` is passed without a scope), or `full` (also resets the workspace). Workspace reset only happens with `--reset-scope full`.
+`--reset` is a destructive pre-dispatch flag, not a choice in the classic
+wizard's **Setup mode** menu. `--reset-scope` controls how much it removes:
+`config` (config only), `config+creds+sessions` (default when `--reset` is
+passed without a scope), or `full` (also resets the workspace). Before moving
+state to Trash, onboarding validates TTY availability, the reset scope, auth
+and Gateway options, migration import options, and the workspace target for a
+full reset. Migration import options cannot be combined with `--reset`; run the
+import without `--reset`. Non-interactive setup also requires `--accept-risk` before reset.
+Interactive classic setup performs reset before showing its risk
+acknowledgement, so invoking `--reset` can move state to Trash before you can
+decline that prompt. After reset, the command runs guided, classic, or
+non-interactive onboarding according to the other flags.
 
 ## Locale
 
@@ -217,8 +255,37 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
+### Required external plugins
+
+`--accept-risk` does not approve plugin capabilities. If local setup needs an
+external provider or runtime plugin, non-interactive onboarding stops when that
+plugin requires a capability review. Review and preinstall the required plugin,
+then rerun the same onboarding command. For the official Codex runtime used by
+OpenAI setup:
+
 ```bash
-openclaw onboard --non-interactive \
+# After reviewing the plugin and its declared capabilities:
+openclaw plugins install codex --accept-capabilities
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref
+```
+
+Set `OPENAI_API_KEY` before running this example. The `codex` selector uses
+OpenClaw's official plugin catalog. If the required plugin is already installed
+but needs approval to enable it, use
+`openclaw plugins enable <plugin-id> --accept-capabilities` instead. The flag
+approves only that plugin operation; it is not a global bypass. The same
+preinstall-and-rerun flow applies to external plugins required by
+`openclaw channels add`. Bundled plugins do not need this review. See
+[Capability consent](/plugins/manage-plugins#capability-consent) and the
+[automation guide](/start/wizard-cli-automation#review-required-plugins).
+
+### Provider setup examples
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --agent-name robby \
   --auth-choice custom-api-key \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
@@ -233,22 +300,20 @@ openclaw onboard --non-interactive \
 LM Studio also has a provider-specific key flag:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice lmstudio \
   --custom-base-url "http://localhost:1234/v1" \
   --custom-model-id "qwen/qwen3.5-9b" \
-  --lmstudio-api-key "$LM_API_TOKEN" \
-  --accept-risk
+  --lmstudio-api-key "$LM_API_TOKEN"
 ```
 
 Non-interactive Ollama:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice ollama \
   --custom-base-url "http://ollama-host:11434" \
-  --custom-model-id "qwen3.5:27b" \
-  --accept-risk
+  --custom-model-id "qwen3.5:27b"
 ```
 
 `--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
@@ -256,40 +321,41 @@ openclaw onboard --non-interactive \
 Store provider keys as refs instead of plaintext:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice openai-api-key \
-  --secret-input-mode ref \
-  --accept-risk
+  --secret-input-mode ref
 ```
 
-With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values: for auth-profile-backed providers this writes `keyRef: { source: "env", provider: "default", id: <envVar> }`; for custom providers it writes `models.providers.<id>.apiKey` the same way (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Contract: set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`) and do not also pass an inline key flag unless that env var is set - a flag value without the matching env var fails fast with guidance.
+With `--secret-input-mode ref`, onboarding stores new credentials as refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
 
 - `--gateway-auth token --gateway-token <token>` stores a plaintext token. `token` is the default auth mode.
 - `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef. Requires a non-empty env var of that name in the onboarding process environment.
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
+- Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.
+- With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
 - With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
-- Local onboarding installs downloadable plugins the chosen setup path requires (for example a Codex or Copilot runtime plugin for those auth choices). Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- Local onboarding ensures the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
 - `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash
 export OPENAI_API_KEY="your-provider-key"
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice openai-api-key \
   --secret-input-mode ref \
   --gateway-auth token \
-  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
-  --accept-risk
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
 ```
 
 ### Local gateway health
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
-- `--install-daemon` starts the managed gateway install path first. Without it, a local gateway must already be running (for example `openclaw gateway run`).
+- `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
+- Explicit `--skip-daemon` or `--no-install-daemon` still probes for an existing gateway. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
@@ -307,7 +373,7 @@ openclaw onboard --non-interactive \
 
 ```bash
 # Promptless endpoint selection
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
@@ -317,7 +383,7 @@ openclaw onboard --non-interactive \
 Mistral:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice mistral-api-key \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
@@ -335,18 +401,21 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node>`.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 
 UI and hook setup: `--skip-ui` (skip Control UI/TUI prompts), `--skip-hooks` (skip webhook/hook setup), `--skip-channels`, `--skip-search`.
 
-Output: `--suppress-gateway-token-output` suppresses token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch) - useful in shared terminals and CI.
+Output: `--suppress-gateway-token-output` disables the automatic Control UI handoff in guided onboarding. Classic onboarding never prints reusable Gateway token values or tokenized URLs; it still prints safe recovery commands.
 
 <Note>
 `--json` does not imply non-interactive mode in guided or classic onboarding.
+Without an interactive terminal, both onboarding modes return a structured
+JSON error; add `--non-interactive --accept-risk` for automation.
 With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
-single result. Use `--non-interactive` for other scripts.
+single result. Use `--non-interactive` for other scripts. Invalid existing
+configuration also returns one JSON failure; repair guidance remains on stderr.
 </Note>
 
 ## Provider prefiltering

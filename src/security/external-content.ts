@@ -1,5 +1,7 @@
 // Wraps external content with source tags and random boundary tokens.
 import { randomBytes } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { escapeRegExp } from "../shared/regexp.js";
 export {
   resolveHookExternalContentSource,
   type HookExternalContentSource,
@@ -140,11 +142,14 @@ const LLM_SPECIAL_TOKEN_LITERALS = [
   "<end_of_turn>",
 ] as const;
 
-const LLM_SPECIAL_TOKEN_PATTERNS = [
-  // Many Hugging Face chat templates reserve token spellings in this form. Exact known
-  // literals above handle the common cases; this catches future reserved-token variants.
-  /<\|reserved_special_token_\d+\|>/g,
-] as const;
+// Token spellings do not overlap, and the replacement cannot create another token.
+// Keep the existing literal set and reserved numeric family in one native scan.
+const LLM_SPECIAL_TOKEN_PATTERN = new RegExp(
+  [...LLM_SPECIAL_TOKEN_LITERALS.map(escapeRegExp), /<\|reserved_special_token_\d+\|>/.source].join(
+    "|",
+  ),
+  "g",
+);
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -209,14 +214,16 @@ function isMarkerIgnorableChar(char: string): boolean {
 
 type FoldedMarkerMatch = {
   folded: string;
-  originalStartByFoldedIndex: number[];
-  originalEndByFoldedIndex: number[];
+  // ASCII folding is identity; all other retained code units need only their source start.
+  originalStartByFoldedIndex?: number[];
 };
 
 function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
+  if (!/[\u0080-\u{10FFFF}]/u.test(input)) {
+    return { folded: input };
+  }
   let folded = "";
   const originalStartByFoldedIndex: number[] = [];
-  const originalEndByFoldedIndex: number[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
     const char = input.charAt(index);
@@ -226,32 +233,30 @@ function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
     const foldedChar = foldMarkerChar(char);
     folded += foldedChar;
     originalStartByFoldedIndex.push(index);
-    originalEndByFoldedIndex.push(index + 1);
   }
 
-  return { folded, originalStartByFoldedIndex, originalEndByFoldedIndex };
+  return { folded, originalStartByFoldedIndex };
 }
 
 function replaceMarkers(content: string): string {
-  const { folded, originalStartByFoldedIndex, originalEndByFoldedIndex } =
-    foldMarkerTextWithIndexMap(content);
+  const { folded, originalStartByFoldedIndex } = foldMarkerTextWithIndexMap(content);
   // Intentionally catch whitespace-delimited spoof variants (space, tab, newline) in addition
   // to the legacy underscore form because LLMs may still parse them as trusted boundary markers.
   if (!/external[\s_]+untrusted[\s_]+content/i.test(folded)) {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  // Match markers with or without id attribute (handles both legacy and spoofed
-  // markers). The id body is an unbounded negated class: any finite cap lets a
+  // Match markers with or without ids, including JSON-escaped quotes. The id
+  // body stays unbounded: any finite cap lets a
   // forged marker with a longer id slip through unsanitized (a real injection
   // bypass), while `[^"]*` stays linear-time with no catastrophic backtracking.
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
-      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
+      regex: /<<<\s*EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id=\\*"[^"]*")?\s*>>>/gi,
       value: "[[MARKER_SANITIZED]]",
     },
     {
-      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id="[^"]*")?\s*>>>/gi,
+      regex: /<<<\s*END[\s_]+EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT(?:\s+id=\\*"[^"]*")?\s*>>>/gi,
       value: "[[END_MARKER_SANITIZED]]",
     },
   ];
@@ -263,11 +268,8 @@ function replaceMarkers(content: string): string {
       const foldedStart = match.index;
       const foldedEnd = match.index + match[0].length;
       replacements.push({
-        start: originalStartByFoldedIndex[foldedStart] ?? foldedStart,
-        end:
-          originalEndByFoldedIndex[foldedEnd - 1] ??
-          originalStartByFoldedIndex[foldedEnd] ??
-          foldedEnd,
+        start: originalStartByFoldedIndex?.[foldedStart] ?? foldedStart,
+        end: (originalStartByFoldedIndex?.[foldedEnd - 1] ?? foldedEnd - 1) + 1,
         value: pattern.value,
       });
     }
@@ -293,14 +295,60 @@ function replaceMarkers(content: string): string {
 }
 
 export function sanitizeModelSpecialTokens(content: string): string {
-  let output = content;
-  for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
-    output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
+  return content.replace(LLM_SPECIAL_TOKEN_PATTERN, SPECIAL_TOKEN_REPLACEMENT);
+}
+
+/** Bound sanitized external prose while preserving its exact retained source prefix. */
+export function truncateSanitizedExternalContent(
+  value: string,
+  maxChars: number,
+): { text: string; truncated: boolean; retainedRawChars: number } {
+  const sanitizePrefix = (candidate: string): { text: string; retainedRawChars: number } => {
+    let retained = candidate;
+    if (retained.length < value.length) {
+      const folded = foldMarkerTextWithIndexMap(retained);
+      // Consume complete markers (including their ids) before locating a clipped
+      // one, or an earlier opening marker can erase all useful wrapped content.
+      const markers =
+        /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT((?:\s+id=\\*"[^"]*")?\s*>>>)?/giu;
+      for (const match of folded.folded.matchAll(markers)) {
+        if (!match[1]) {
+          retained = retained.slice(
+            0,
+            folded.originalStartByFoldedIndex?.[match.index] ?? match.index,
+          );
+          break;
+        }
+      }
+    }
+    return { text: sanitizeExternalContentText(retained), retainedRawChars: retained.length };
+  };
+  const prefix = truncateUtf16Safe(value, maxChars);
+  const sanitized = sanitizePrefix(prefix);
+  if (sanitized.text.length <= maxChars) {
+    return {
+      ...sanitized,
+      truncated: sanitized.retainedRawChars < value.length,
+    };
   }
-  for (const pattern of LLM_SPECIAL_TOKEN_PATTERNS) {
-    output = output.replace(pattern, SPECIAL_TOKEN_REPLACEMENT);
+
+  let lower = 0;
+  let upper = prefix.length;
+  let text = "";
+  let retainedRawChars = 0;
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    const candidate = truncateUtf16Safe(prefix, middle);
+    const safeCandidate = sanitizePrefix(candidate);
+    if (safeCandidate.text.length <= maxChars) {
+      text = safeCandidate.text;
+      retainedRawChars = safeCandidate.retainedRawChars;
+      lower = middle + 1;
+    } else {
+      upper = middle - 1;
+    }
   }
-  return output;
+  return { text, truncated: true, retainedRawChars };
 }
 
 function sanitizeExternalContentText(content: string): string {

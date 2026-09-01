@@ -6,6 +6,22 @@ require_artifact() {
   fi
 }
 
+validate_pr_temp_storage() {
+  local temp_dir="${TMPDIR:-/tmp}"
+  local probe=""
+  if ! probe=$(mktemp "${temp_dir%/}/openclaw-pr.XXXXXX"); then
+    :
+  elif ! printf 'openclaw-pr-temp-probe\n' >"$probe"; then
+    rm -f "$probe" 2>/dev/null || true
+  elif rm -f "$probe"; then
+    return 0
+  fi
+
+  echo "scripts/pr temporary-storage preflight failed under TMPDIR=$temp_dir." >&2
+  echo "Free disk space or set TMPDIR to a writable filesystem, then retry." >&2
+  return 1
+}
+
 path_is_docsish() {
   local path="$1"
   case "$path" in
@@ -20,13 +36,19 @@ file_list_is_docsish_only() {
   local files="$1"
   local saw_any=false
   local path
-  while IFS= read -r path; do
+  while [ -n "$files" ]; do
+    path="${files%%$'\n'*}"
+    if [ "$path" = "$files" ]; then
+      files=""
+    else
+      files="${files#*$'\n'}"
+    fi
     [ -n "$path" ] || continue
     saw_any=true
     if ! path_is_docsish "$path"; then
       return 1
     fi
-  done <<< "$files"
+  done
 
   [ "$saw_any" = "true" ]
 }
@@ -121,6 +143,60 @@ bootstrap_deps_if_needed() {
   if [ ! -x node_modules/.bin/vitest ]; then
     run_quiet_logged "pnpm install --frozen-lockfile" ".local/bootstrap-install.log" pnpm install --frozen-lockfile
   fi
+}
+
+read_pr_view_json() {
+  local pr="$1"
+  local fields="$2"
+  local max_attempts=3
+  local temp_dir
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-view.XXXXXX") || {
+    echo "Unable to create temporary storage for GitHub PR metadata." >&2
+    return 1
+  }
+  local stdout_file="$temp_dir/stdout"
+  local stderr_file="$temp_dir/stderr"
+  local attempt exit_code reason
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    exit_code=0
+    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+      if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
+        cat "$stdout_file"
+        rm -rf "$temp_dir"
+        return 0
+      fi
+      if [ ! -s "$stdout_file" ]; then
+        reason="gh pr view returned empty stdout"
+      else
+        reason="gh pr view did not return one JSON object"
+      fi
+    else
+      exit_code=$?
+      reason="gh pr view exited with status $exit_code"
+    fi
+    [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
+  done
+
+  echo "GitHub API failure while reading PR #$pr: $reason after $max_attempts attempts." >&2
+  [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
+  rm -rf "$temp_dir"
+  return 1
+}
+
+pr_view_string_field() {
+  local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
+  case "$field" in
+    headRefOid) label="a head SHA" ;;
+    baseRefName) label="a base branch" ;;
+    headRefName) label="a head branch" ;;
+    *) label="a non-empty .$field string" ;;
+  esac
+  if ! value=$(printf '%s\n' "$json" | jq -er --arg field "$field" '.[$field] | if type == "string" and length > 0 then . else error("missing string field") end' 2>/dev/null); then
+    echo "GitHub PR metadata for #$pr did not include $label. $remedy" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }
 
 wait_for_pr_head_sha() {
@@ -252,6 +328,28 @@ is_repo_pr_worktree_dir() {
   return 1
 }
 
+has_worktree_merge_output() {
+  local path="$1" capture
+  for capture in "$path/.local/merge-output.log" "$path"/.local/merge-output.*.log; do
+    if [ -e "$capture" ] || [ -L "$capture" ]; then return 0; fi
+  done
+  return 1
+}
+
+require_worktree_cleanup_evidence() (
+  local path="$1" pr
+  has_worktree_merge_output "$path" || return 0
+  # Keep loader state separate from an uninterrupted merge's live outcome owner.
+  # Even an empty capture can be the only evidence of an earlier dispatch.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
+  if pr=$(pr_number_from_worktree_dir "$path") &&
+    merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
+    return 0
+  fi
+  echo "Preserving $path: merge output has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
+  return 1
+)
+
 remove_worktree_if_present() {
   local path="$1"
   local registered_path=""
@@ -277,6 +375,8 @@ remove_worktree_if_present() {
     echo "Warning: refusing to remove non-canonical PR-worktree path $path"
     return 0
   fi
+
+  require_worktree_cleanup_evidence "$path" || return 1
 
   if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     local remove_error
@@ -343,4 +443,17 @@ delete_local_branch_if_safe() {
 
   echo "Warning: failed to delete local branch $branch"
   return 0
+}
+
+cleanup_pr_worktree() {
+  local path="$1" pr branch complete=true
+  pr=$(pr_number_from_worktree_dir "$path") || return 1
+  remove_worktree_if_present "$path" || return 1
+  # Refusal or incomplete removal preserves the branches with the worktree.
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
+    delete_local_branch_if_safe "$branch" || return 1
+    if git show-ref --verify --quiet "refs/heads/$branch"; then complete=false; fi
+  done
+  [ "$complete" = true ]
 }

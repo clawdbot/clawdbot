@@ -515,10 +515,12 @@ extension OpenClawChatViewModel {
         }
         let routeResult = await transport.acquireOutboxRouteLease()
         guard isCurrentSession(draft.session) else { return .stop }
-        guard case let .unavailable(reason) = routeResult,
-              reason == OpenClawChatTransportUpgradeMessage.routingContract
-        else {
+        guard case let .unavailable(reason, allowsLiveSend) = routeResult else {
             return .persistIfAvailable
+        }
+        guard allowsLiveSend else {
+            errorText = "Could not verify this attachment's delivery route. Reconnect, then try again."
+            return .stop
         }
         guard hasRestoredOutboxMessages else {
             errorText = "Restoring queued messages. Try again in a moment."
@@ -527,7 +529,7 @@ extension OpenClawChatViewModel {
         guard !mustPreserveOutboxOrder else {
             // A legacy gateway cannot drain the existing durable rows, so keep
             // this new attachment in the composer behind them.
-            errorText = reason
+            errorText = reason ?? OpenClawChatTransportUpgradeMessage.routingContract
             return .stop
         }
         // Older healthy gateways can send attachments live but cannot safely
@@ -545,7 +547,6 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(runId) pending=\(pendingRunCount)")
         pendingToolCallsById = [:]
         updateStreamingAssistantText(nil)
-        clearPlan()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
@@ -627,17 +628,31 @@ extension OpenClawChatViewModel {
 
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
+        var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
         do {
-            await waitForPendingSessionSettings(in: sessionKey)
+            if let settingsError = await waitForCapabilitySettingsBarrier(in: sessionKey) {
+                await self.handleLiveSendFailure(
+                    NSError(
+                        domain: "OpenClawChatCapabilitySettings",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: settingsError]),
+                    attempt: attempt,
+                    canPreserveInOutbox: false)
+                return
+            }
             guard isCurrentSession(attempt.draft.session) else { return }
+            let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
+            durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
             logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
                     + "localRunId=\(attempt.runId)")
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
-                agentID: attempt.draft.session.deliveryAgentID,
-                expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
+                target: OpenClawChatSendTarget(
+                    agentID: attempt.draft.session.deliveryAgentID,
+                    expectedSessionRoutingContract: attempt.draft.session.sessionRoutingContract,
+                    expectedSessionSettings: sendSessionSettingsExpectation),
                 message: attempt.draft.outgoingMessageText,
                 thinking: thinkingLevel,
                 idempotencyKey: attempt.runId,
@@ -645,7 +660,10 @@ extension OpenClawChatViewModel {
             guard isCurrentSession(attempt.draft.session) else { return }
             await self.handleLiveSendResponse(response, attempt: attempt)
         } catch {
-            await self.handleLiveSendFailure(error, attempt: attempt)
+            await self.handleLiveSendFailure(
+                error,
+                attempt: attempt,
+                durableSessionSettingsExpectation: durableSessionSettingsExpectation)
         }
     }
 
@@ -725,9 +743,18 @@ extension OpenClawChatViewModel {
         return reusedRunAlreadyFinal
     }
 
-    private func handleLiveSendFailure(_ error: Error, attempt: LiveSendAttempt) async {
+    private func handleLiveSendFailure(
+        _ error: Error,
+        attempt: LiveSendAttempt,
+        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil,
+        canPreserveInOutbox: Bool = true) async
+    {
         guard isCurrentSession(attempt.draft.session) else { return }
-        if attempt.encodedAttachments.isEmpty, !(error is GatewayResponseError) {
+        if canPreserveInOutbox,
+           let durableSessionSettingsExpectation,
+           attempt.encodedAttachments.isEmpty,
+           !(error is GatewayResponseError)
+        {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
             let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError)
@@ -737,6 +764,7 @@ extension OpenClawChatViewModel {
                 thinking: effectiveThinkingLevelForSend(attempt.storedThinkingLevel),
                 messageID: attempt.userMessageID,
                 session: attempt.draft.session,
+                expectedSessionSettings: durableSessionSettingsExpectation,
                 deliveryIsAmbiguous: deliveryIsAmbiguous)
             if preserved {
                 self.finishAcceptedComposerSend(attempt.draft)

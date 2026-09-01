@@ -1,4 +1,4 @@
-import { jsonResult, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -18,30 +18,34 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { Type } from "typebox";
+import { asFiniteNumber, asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  DEFAULT_INFERENCE_TIMEOUT_MS,
+  DEFAULT_MAX_TOKENS,
+  DISCOVERY_TRANSPORT_TIMEOUT_MS,
+  MAX_INFERENCE_TIMEOUT_MS,
+  MAX_PROMPT_CHARS,
+  MAX_SYSTEM_PROMPT_CHARS,
+  MAX_TOKENS,
+  OLLAMA_CHAT_COMMAND,
+  OLLAMA_MODELS_COMMAND,
+  OLLAMA_NODE_INFERENCE_CAPABILITY,
+  OLLAMA_NODE_INFERENCE_COMMANDS,
+  OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
+  ollamaNodeInferenceToolDefinition,
+} from "./node-inference-contract.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   enrichOllamaCompletionModels,
   enrichOllamaModelsWithContext,
+  fetchLoadedOllamaModelNames,
   fetchOllamaModels,
-  isOllamaCloudModel,
+  isOllamaRemoteModel,
   resolveOllamaApiBase,
   throwIfOllamaRequestAborted,
 } from "./provider-models.js";
 
-const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
-const OLLAMA_MODELS_COMMAND = "ollama.models";
-const OLLAMA_CHAT_COMMAND = "ollama.chat";
-const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
-
-const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_TOKENS = 512;
-const DISCOVERY_TRANSPORT_TIMEOUT_MS = 90_000;
-const MAX_INFERENCE_TIMEOUT_MS = 10 * 60_000;
-const MAX_TOKENS = 8192;
-const MAX_PROMPT_CHARS = 128_000;
-const MAX_SYSTEM_PROMPT_CHARS = 32_000;
 const MAX_ERROR_BODY_BYTES = 500;
 
 type NodeModel = {
@@ -79,17 +83,11 @@ type NodeSummary = Awaited<
   ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>
 >["nodes"][number];
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readNodeCommandParams(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON) {
     return {};
   }
-  const parsed = asRecord(JSON.parse(paramsJSON));
+  const parsed = asNullableRecord(JSON.parse(paramsJSON));
   if (!parsed) {
     throw new Error("node inference params must be a JSON object");
   }
@@ -101,10 +99,6 @@ function durationMs(value: unknown): number | undefined {
     return undefined;
   }
   return Math.round((value / 1_000_000) * 100) / 100;
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 async function requestOllamaJson<T>(params: {
@@ -141,7 +135,7 @@ async function requestOllamaJson<T>(params: {
       const body = (await readResponseTextLimited(response, MAX_ERROR_BODY_BYTES)).trim();
       let detail = body;
       try {
-        const parsed = asRecord(JSON.parse(body));
+        const parsed = asNullableRecord(JSON.parse(body));
         detail = typeof parsed?.error === "string" ? parsed.error : body;
       } catch {
         // Keep the bounded response text when Ollama returns a non-JSON error.
@@ -156,32 +150,6 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function fetchLoadedModelNames(baseUrl: string, signal?: AbortSignal): Promise<Set<string>> {
-  try {
-    const data = await requestOllamaJson<{ models?: Array<{ name?: unknown; model?: unknown }> }>({
-      baseUrl,
-      path: "/api/ps",
-      timeoutMs: 5000,
-      ...(signal ? { signal } : {}),
-    });
-    return new Set(
-      (data.models ?? [])
-        .map((model) =>
-          typeof model.name === "string"
-            ? model.name.trim()
-            : typeof model.model === "string"
-              ? model.model.trim()
-              : "",
-        )
-        .filter(Boolean),
-    );
-  } catch {
-    throwIfOllamaRequestAborted(signal);
-    // Model discovery still works against Ollama versions without /api/ps.
-    return new Set();
-  }
-}
-
 async function discoverOllamaNodeModels(
   baseUrl = OLLAMA_DEFAULT_BASE_URL,
   signal?: AbortSignal,
@@ -191,10 +159,10 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models.filter(
-    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
-  );
-  const loadedNames = await fetchLoadedModelNames(apiBase, signal);
+  const localModels = discovered.models.filter((model) => !isOllamaRemoteModel(model));
+  const loaded = await fetchLoadedOllamaModelNames(apiBase, signal ? { signal } : undefined);
+  // Model discovery still works against Ollama versions without /api/ps.
+  const loadedNames = new Set(loaded.models);
   // Probe loaded models before the bounded catalog can hide already-runnable node models.
   const prioritizedModels = localModels.toSorted(
     (left, right) => Number(loadedNames.has(right.name)) - Number(loadedNames.has(left.name)),
@@ -270,8 +238,7 @@ async function runOllamaNodeChat(params: {
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const localModel = discovered.models.find(
-    (model) =>
-      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+    (model) => model.name === params.model && !isOllamaRemoteModel(model),
   );
   const [model] = localModel
     ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
@@ -326,8 +293,8 @@ async function runOllamaNodeChat(params: {
       `Ollama stopped after reaching maxTokens (${params.maxTokens}); retry with a larger maxTokens value`,
     );
   }
-  const promptTokens = optionalNumber(data.prompt_eval_count);
-  const completionTokens = optionalNumber(data.eval_count);
+  const promptTokens = asFiniteNumber(data.prompt_eval_count);
+  const completionTokens = asFiniteNumber(data.eval_count);
   const loadMs = durationMs(data.load_duration);
   const totalMs = durationMs(data.total_duration);
   return {
@@ -401,7 +368,7 @@ export function createOllamaNodeHostCommands(options?: {
 export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   return {
     commands: [...OLLAMA_NODE_INFERENCE_COMMANDS],
-    defaultPlatforms: ["macos", "linux", "windows"],
+    defaultPlatforms: [...OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS],
     handle: async (ctx) => await ctx.invokeNode(),
   };
 }
@@ -422,10 +389,10 @@ function findNode(nodes: NodeSummary[], query: string): NodeSummary {
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {
-  const result = asRecord(raw);
-  let payload = asRecord(result?.payload);
+  const result = asNullableRecord(raw);
+  let payload = asNullableRecord(result?.payload);
   if (!payload && typeof result?.payloadJSON === "string") {
-    payload = asRecord(JSON.parse(result.payloadJSON));
+    payload = asNullableRecord(JSON.parse(result.payloadJSON));
   }
   if (!payload) {
     throw new Error("node returned an invalid Ollama inference payload");
@@ -453,36 +420,12 @@ async function invokeNode(
   return parseInvokePayload(raw);
 }
 
-const ollamaNodeInferenceToolDefinition = {
-  name: "node_inference",
-  label: "Node Inference",
-  description:
-    "Discover and run chat-capable Ollama models installed on paired desktop/server nodes. Use action=discover first, then action=run with a node and model from that result. Inference stays on the selected node.",
-  parameters: Type.Object(
-    {
-      action: stringEnum(["discover", "run"] as const),
-      node: Type.Optional(
-        Type.String({ description: "Connected node id or display name. Required when ambiguous." }),
-      ),
-      model: Type.Optional(
-        Type.String({ description: "Exact local model name returned by discover." }),
-      ),
-      prompt: Type.Optional(Type.String({ description: "Prompt for action=run." })),
-      system: Type.Optional(Type.String({ description: "Optional system prompt for action=run." })),
-      temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
-      maxTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TOKENS })),
-      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_INFERENCE_TIMEOUT_MS })),
-    },
-    { additionalProperties: false },
-  ),
-} as const;
-
 export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
   return {
     ...ollamaNodeInferenceToolDefinition,
     execute: async (_toolCallId, args, signal) => {
       throwIfOllamaRequestAborted(signal);
-      const params = asRecord(args) ?? {};
+      const params = asNullableRecord(args) ?? {};
       const action = readStringParam(params, "action", { required: true });
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });

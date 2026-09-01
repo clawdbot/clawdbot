@@ -2,7 +2,7 @@
  * Brave web-search provider factory. It builds the agent tool definition and
  * lazy-loads HTTP execution only when a search is run.
  */
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,
@@ -82,9 +82,13 @@ function createBraveToolDefinition(
         ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: BraveSearchSchema,
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executeBraveSearch } = await loadBraveWebSearchRuntime();
-      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
+      return await executeBraveSearch(args, searchConfig, {
+        diagnosticsEnabled,
+        signal: context?.signal,
+      });
     },
   };
 }

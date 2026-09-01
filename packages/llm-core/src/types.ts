@@ -1,6 +1,7 @@
+import type { TSchema } from "typebox";
 // LLM Core type module defines shared TypeScript contracts.
-export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
+export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
 /** Provider API families with first-class request/stream adapters in OpenClaw. */
 export type KnownApi =
@@ -128,11 +129,6 @@ export interface StreamOptions {
    */
   timeoutMs?: number;
   /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
-  maxRetries?: number;
-  /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
    * with an error containing the requested delay, allowing higher-level retry logic
@@ -250,6 +246,21 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
+/** Opaque provider-owned state that must survive transcript replay without being rendered. */
+export interface ProviderReplayState {
+  v: 1;
+  type: string;
+  id?: string;
+  data: string;
+  replayIndex?: number;
+  provider: Provider;
+  api: Api;
+  model: string;
+  baseUrlHash?: string;
+  sessionHash?: string;
+  authProfileHash?: string;
+}
+
 /** Base64 image content block with MIME type metadata. */
 export interface ImageContent {
   type: "image";
@@ -293,8 +304,30 @@ export interface Usage {
   };
 }
 
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelCostRates & {
+  /** `[start]` is an open-ended upper tier. */
+  range: [number, number] | [number];
+};
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
+
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+/** Stable error codes for provider outcomes that cannot be replayed safely. */
+export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
+export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
 
 /** User turn in a text-model conversation. */
 export interface UserMessage {
@@ -313,14 +346,35 @@ export interface UserMessage {
 }
 
 /** Assistant turn, including provider identity and final stop state. */
+export type AssistantDeliveryTtsFacts = {
+  tagged: true;
+  text?: string;
+  directives?: Array<{
+    provider?: string;
+    values: Record<string, string>;
+  }>;
+};
+
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  openclawDelivery?: {
+    audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
+    replyToCurrent?: true;
+    replyToId?: string;
+    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    textPhaseRequiresTerminal?: true;
+    /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
+    tts?: AssistantDeliveryTtsFacts;
+  };
   api: Api;
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
@@ -371,8 +425,6 @@ export interface AssistantImages {
   errorMessage?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
-
-import type { TSchema } from "typebox";
 
 /** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
@@ -495,6 +547,8 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -630,13 +684,8 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
-  contextWindow: number;
+  cost: RawModelCostConfig;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a

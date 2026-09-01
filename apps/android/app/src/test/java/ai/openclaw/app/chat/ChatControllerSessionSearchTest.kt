@@ -49,17 +49,18 @@ class ChatControllerSessionSearchTest {
       ?.content
 
   @Test
-  fun filterSessionEntriesMatchesDisplayNameLabelAndKey() {
+  fun filterSessionEntriesMatchesDisplayNameLabelCategoryAndKey() {
     val sessions =
       listOf(
         ChatSessionEntry(key = "agent:main:topic-a", updatedAtMs = 2, displayName = "Trip planning"),
-        ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries"),
+        ChatSessionEntry(key = "agent:main:topic-b", updatedAtMs = 1, displayName = "Groceries", category = "Team Planning"),
         ChatSessionEntry(key = "agent:main:trip-notes", updatedAtMs = 3, displayName = "Notes"),
       )
     assertEquals(
       listOf("agent:main:topic-a", "agent:main:trip-notes"),
       filterSessionEntries(sessions, "TRIP").map { it.key },
     )
+    assertEquals(listOf("agent:main:topic-b"), filterSessionEntries(sessions, "TEAM PLANNING").map { it.key })
     assertEquals(sessions, filterSessionEntries(sessions, "  "))
   }
 
@@ -85,6 +86,42 @@ class ChatControllerSessionSearchTest {
       val searchCall = gateway.calls.last { it.method == "sessions.list" }
       assertEquals("trip", paramField(searchCall.paramsJson, "search"))
       assertEquals("200", paramField(searchCall.paramsJson, "limit"))
+    }
+
+  @Test
+  fun fetchSessionListPreservesGatewayClassificationFacts() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") {
+        buildJsonObject {
+          put(
+            "sessions",
+            JsonArray(
+              listOf(
+                buildJsonObject {
+                  put("key", JsonPrimitive("agent:main:telegram:main:direct:491234567890"))
+                  put("updatedAt", JsonPrimitive(100))
+                  put("agentId", JsonPrimitive("main"))
+                  put("classification", JsonPrimitive("direct"))
+                  put("accountId", JsonPrimitive("main"))
+                  put("peerKind", JsonPrimitive("direct"))
+                  put("isMain", JsonPrimitive(false))
+                  put("isBackground", JsonPrimitive(false))
+                },
+              ),
+            ),
+          )
+        }.toString()
+      }
+      val controller = newController(gateway)
+
+      val row = controller.fetchSessionList(search = null, archived = false).single()
+      assertEquals("main", row.ownerAgentId)
+      assertEquals("direct", row.classification)
+      assertEquals("main", row.accountId)
+      assertEquals("direct", row.peerKind)
+      assertEquals(false, row.isMain)
+      assertEquals(false, row.isBackground)
     }
 
   @Test

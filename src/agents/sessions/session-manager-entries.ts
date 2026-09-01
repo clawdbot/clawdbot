@@ -1,9 +1,19 @@
+import {
+  readActiveTranscriptEntryAnchor,
+  type TranscriptEntryAnchor,
+} from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
   buildSessionContext as buildCoreSessionContext,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  getCodeModeSourceAppend,
+  copyCodeModeSourceAppendOptions,
+} from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -29,37 +39,60 @@ import type {
 } from "./session-manager-types.js";
 
 export class SessionManagerEntries extends SessionManagerPersistence {
-  protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+  protected appendEntry(
+    entry: SessionEntry,
+    options?: AppendPersistenceOptions,
+  ): TranscriptEntryAnchor | undefined {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
     const canonicalEntry = JSON.parse(JSON.stringify(entry)) as SessionEntry;
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
+    if (entry.type === "message" && canonicalEntry.type === "message") {
+      copyCodeModeSourceAppend(
+        entry.message,
+        canonicalEntry.message,
+        getCodeModeSourceAppend(options),
+        (source) => source,
+      );
+    }
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
       !isSessionTranscriptSideAppendEntry(canonicalEntry);
-    const persistenceResult = this.persist(canonicalEntry, {
-      ...options,
-      ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
-    });
+    const persistenceResult = this.persist(
+      canonicalEntry,
+      copyCodeModeSourceAppendOptions(options, {
+        ...options,
+        ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
+      }),
+    );
     if (persistenceResult && typeof persistenceResult === "object") {
-      this.reloadPersistedTranscript();
-      const adoptedMessageId =
-        canonicalEntry.type === "message"
-          ? this.resolveCurrentKeyedUserId(canonicalEntry.message)
-          : undefined;
-      if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
-        throw new Error(`Session transcript parent entry was not persisted: ${canonicalEntry.id}`);
+      if (persistenceResult.adoptedMessageId) {
+        this.reloadPersistedTranscript();
+        const adoptedMessageId =
+          canonicalEntry.type === "message"
+            ? this.resolveCurrentKeyedUserId(canonicalEntry.message)
+            : undefined;
+        if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
+          throw new Error(
+            `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
+          );
+        }
+        this.pendingDeliberateAppend = false;
+        return persistenceResult.anchor;
       }
-      this.pendingDeliberateAppend = false;
-      return;
     }
-    const effectiveParentId = persistenceResult;
+    const effectiveParentId =
+      persistenceResult && typeof persistenceResult === "object"
+        ? persistenceResult.effectiveParentId
+        : persistenceResult;
     if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
       this.reloadPersistedTranscript();
       this.pendingDeliberateAppend = false;
-      return;
+      return persistenceResult && typeof persistenceResult === "object"
+        ? persistenceResult.anchor
+        : undefined;
     }
     if (
       !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
@@ -74,12 +107,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.pendingDeliberateAppend = false;
     if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
       this.appendMode = "side";
-      this.promptReleasedSideBranchParentId = canonicalEntry.id;
     } else {
       this.leafId = canonicalEntry.id;
       this.appendMode = undefined;
-      this.promptReleasedSideBranchParentId = undefined;
     }
+    return persistenceResult && typeof persistenceResult === "object"
+      ? persistenceResult.anchor
+      : undefined;
   }
 
   private resolveCurrentKeyedUserId(message: SessionMessageEntry["message"]): string | undefined {
@@ -93,7 +127,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
     let remainingAncestors = this.byId.size;
-    while (parent && remainingAncestors-- > 0 && isSessionContextMetadataEntry(parent)) {
+    // Compaction rewrites context without consuming the current user turn.
+    // Stop at message and reset boundaries so old keyed turns stay closed.
+    while (
+      parent &&
+      remainingAncestors-- > 0 &&
+      (isSessionContextMetadataEntry(parent) || parent.type === "compaction")
+    ) {
       parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
     }
     if (
@@ -111,29 +151,49 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
+    return this.appendMessageWithTranscriptAnchor(message, options).entryId;
+  }
+
+  appendMessageWithTranscriptAnchor(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): { entryId: string; anchor?: TranscriptEntryAnchor } {
+    if (message.role === "assistant") {
+      applyAssistantDeliveryDirectives(message);
+    }
     if (options?.idempotencyLookup !== "caller-checked") {
       const currentUserId = this.resolveCurrentKeyedUserId(message);
       if (currentUserId) {
-        // Session setup may insert context-free metadata after the ingress-persisted user.
-        // Keep that metadata as the append parent while adopting the canonical user once.
-        return currentUserId;
+        const anchor = this.persistenceTarget
+          ? readActiveTranscriptEntryAnchor({
+              ...this.persistenceTarget,
+              entryId: currentUserId,
+            })
+          : undefined;
+        if (this.persistenceTarget && !anchor) {
+          throw new Error(`Session transcript anchor was not returned: ${currentUserId}`);
+        }
+        return { entryId: currentUserId, ...(anchor ? { anchor } : {}) };
       }
     }
     const entry: SessionMessageEntry = {
       type: "message",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry, options);
-    return this.resolveCurrentKeyedUserId(message) ?? entry.id;
+    const anchor = this.appendEntry(entry, options);
+    return {
+      entryId: this.resolveCurrentKeyedUserId(message) ?? entry.id,
+      ...(anchor ? { anchor } : {}),
+    };
   }
 
   appendThinkingLevelChange(thinkingLevel: string): string {
     const entry: ThinkingLevelChangeEntry = {
       type: "thinking_level_change",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       thinkingLevel,
@@ -145,7 +205,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendModelChange(provider: string, modelId: string): string {
     const entry: ModelChangeEntry = {
       type: "model_change",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       provider,
@@ -164,7 +224,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   ): string {
     const entry: CompactionEntry = {
       type: "compaction",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       summary,
@@ -176,19 +236,25 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
   appendResetBoundary(reason: ResetReason, firstKeptEntryId?: string): string {
     const entry: ResetEntry = {
       type: "reset",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       reason,
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     };
     this.appendEntry(entry);
+    if (this.persistedBoundaryCount !== undefined) {
+      this.persistedBoundaryCount += 1;
+    }
     return entry.id;
   }
 
@@ -197,7 +263,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       type: "custom",
       customType,
       data,
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
@@ -208,7 +274,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendSessionInfo(name: string): string {
     const entry: SessionInfoEntry = {
       type: "session_info",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       name: name.replace(/[\r\n]+/g, " ").trim(),
@@ -238,7 +304,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       content,
       display,
       details,
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
@@ -278,8 +344,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = params.targetId;
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
-    this.promptReleasedSideBranchParentId =
-      params.appendMode === "side" ? params.appendParentId : undefined;
     this.pendingDeliberateAppend = false;
     return entry;
   }
@@ -314,7 +378,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     const entry: LabelEntry = {
       type: "label",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       targetId,
@@ -355,8 +419,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   getBoundaryCount(): number {
-    return this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
-      .length;
+    return (
+      this.persistedBoundaryCount ??
+      this.getBranch().filter((entry) => entry.type === "compaction" || entry.type === "reset")
+        .length
+    );
   }
 
   getHeader(): SessionHeader | null {
@@ -408,6 +475,9 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   }
 
   branch(branchFromId: string): void {
+    if (!this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
@@ -415,7 +485,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 
@@ -423,7 +492,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
   }
 
@@ -433,13 +501,16 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     details?: unknown,
     fromHook?: boolean,
   ): string {
+    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+      this.ensureCompletePersistedHistory();
+    }
     const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
-      id: generateSessionEntryId(this.byId),
+      id: generateSessionEntryId(),
       parentId: branchTargetId,
       timestamp: new Date().toISOString(),
       fromId: branchTargetId ?? "root",

@@ -1,22 +1,56 @@
 // Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  ReplyToModeSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-export { z };
+import { FEISHU_EXTERNAL_KEY_PATTERN } from "./external-keys.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+export { z };
 
 const ChannelActionsSchema = z
   .object({
     reactions: z.boolean().optional(),
+    sticker: z.boolean().optional(),
   })
   .strict()
   .optional();
+
+const MAX_STICKER_SETS = 32;
+const MAX_STICKERS_PER_SET = 256;
+
+function canonicalTextPattern(maxLength: number): RegExp {
+  // Quantifiers enforce the same scalar bound in Zod and exported JSON Schema;
+  // maxLength alone differs between their UTF-16 and grapheme counting rules.
+  return new RegExp(`^(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cs}]{1,${maxLength}}$`, "u");
+}
+
+const FeishuStickerSetSchema = z
+  .record(
+    z.string().regex(FEISHU_EXTERNAL_KEY_PATTERN),
+    z
+      .array(z.string().regex(canonicalTextPattern(64)))
+      .min(1)
+      .max(8),
+  )
+  .refine((set) => Object.keys(set).length <= MAX_STICKERS_PER_SET, {
+    message: `At most ${MAX_STICKERS_PER_SET} stickers per bot set are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKERS_PER_SET });
+
+const FeishuStickerSetsSchema = z
+  .record(z.string().regex(canonicalTextPattern(128)), FeishuStickerSetSchema)
+  .refine((sets) => Object.keys(sets).length <= MAX_STICKER_SETS, {
+    message: `At most ${MAX_STICKER_SETS} bot sticker sets are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKER_SETS });
 
 const FeishuGroupPolicySchema = z.union([
   GroupPolicySchema,
@@ -28,6 +62,12 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const FeishuWebhookPathSchema = z
+  .string()
+  .refine((value) => normalizeFeishuWebhookPath(value) === value, {
+    message:
+      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+  });
 const TtsOverrideSchema = z
   .object({
     auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
@@ -197,6 +237,9 @@ const FeishuSharedConfigShape = {
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
+  replyToMode: ReplyToModeSchema.optional(),
+  responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: FeishuGroupPolicySchema.optional(),
@@ -238,7 +281,7 @@ export const FeishuAccountConfigSchema = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
-    webhookPath: z.string().optional(),
+    webhookPath: FeishuWebhookPathSchema.optional(),
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
@@ -249,6 +292,7 @@ const FeishuConfigSchemaBase = z
   .object({
     enabled: z.boolean().optional(),
     defaultAccount: z.string().optional(),
+    stickerSets: FeishuStickerSetsSchema.optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
@@ -256,7 +300,7 @@ const FeishuConfigSchemaBase = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
-    webhookPath: z.string().optional().default("/feishu/events"),
+    webhookPath: FeishuWebhookPathSchema.optional().default(DEFAULT_FEISHU_WEBHOOK_PATH),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),

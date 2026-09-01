@@ -1,7 +1,6 @@
 // Target resolver combines plugin id heuristics, cached directory searches,
 // live fallback lookups, and normalized fallback targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelDirectoryEntry,
@@ -11,8 +10,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
+  missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
@@ -74,8 +75,12 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
 /** Clears cached directory entries for all channels or one channel/account scope. */
-export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
-  if (!params?.channel) {
+export function resetDirectoryCache(params?: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}) {
+  if (!params) {
     directoryCache.clear();
     return;
   }
@@ -89,11 +94,17 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
       return true;
     }
     return key.startsWith(`${channelKey}:${accountKey}:`);
-  });
+  }, params.cfg);
 }
 
 function normalizeQuery(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
+}
+
+// Message CLI actions run against a scoped registry handle without process-root
+// activation, so bare getChannelPlugin cannot see installed channel plugins there.
+function resolveTargetChannelPlugin(channel: ChannelId) {
+  return getRuntimeVisibleChannelPlugin(channel);
 }
 
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
@@ -122,7 +133,7 @@ export function formatTargetDisplay(params: {
   display?: string;
   kind?: ChannelDirectoryEntryKind;
 }): string {
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = resolveTargetChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
@@ -185,7 +196,9 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
-  const inferredChatType = (plugin ?? getChannelPlugin(channel))?.messaging?.inferTargetChatType?.({
+  const inferredChatType = (
+    plugin ?? resolveTargetChannelPlugin(channel)
+  )?.messaging?.inferTargetChatType?.({
     to: raw,
   });
   if (inferredChatType === "direct") {
@@ -285,7 +298,7 @@ async function listDirectoryEntries(params: {
   source: "cache" | "live";
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const directory = plugin?.directory;
   if (!directory) {
     return [];
@@ -421,9 +434,16 @@ async function resolveMessagingTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    return { ok: false, error: new Error("Target is required") };
+    const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
+    return {
+      ok: false,
+      error: missingTargetError(
+        plugin?.meta?.label ?? params.channel,
+        plugin?.messaging?.targetResolver?.hint,
+      ),
+    };
   }
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);

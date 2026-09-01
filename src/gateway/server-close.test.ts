@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -12,6 +13,8 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -21,11 +24,16 @@ const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAllCodeModeRuns: vi.fn(),
   disposeAgentHarnesses: vi.fn(async () => undefined),
+  closeProviderTransportDispatcherPool: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
-  clearSessionSuspensionTimers: vi.fn(() => 0),
+  stopGmailWatcher: vi.fn(async () => undefined),
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
+  getAcpSessionManager: vi.fn(() => ({})),
+  fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
+  closePluginStateDatabase: vi.fn(async () => undefined),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -33,6 +41,7 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
+const AGENT_HARNESS_CLOSE_GRACE_MS = 5_000;
 
 vi.mock("../channels/plugins/index.js", async () => ({
   ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
@@ -42,7 +51,7 @@ vi.mock("../channels/plugins/index.js", async () => ({
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
-  stopGmailWatcher: vi.fn(async () => undefined),
+  stopGmailWatcher: mocks.stopGmailWatcher,
 }));
 
 vi.mock("../hooks/internal-hooks.js", async () => {
@@ -61,6 +70,10 @@ vi.mock("../agents/harness/registry.js", () => ({
 
 vi.mock("../agents/code-mode-state.js", () => ({
   disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
+}));
+
+vi.mock("../agents/provider-transport-dispatcher-pool.js", () => ({
+  closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
 }));
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
@@ -82,7 +95,23 @@ vi.mock("./embeddings-http.js", () => ({
 }));
 
 vi.mock("../agents/session-suspension.js", () => ({
-  clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
+  fenceSessionSuspensionWritesForGatewayShutdown:
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown,
+}));
+
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: mocks.disposeAcpSessionManagerInstance,
+}));
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: mocks.getAcpSessionManager,
+}));
+
+vi.mock("../plugin-state/plugin-state-store.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugin-state/plugin-state-store.js")>(
+    "../plugin-state/plugin-state-store.js",
+  )),
+  closePluginStateDatabase: mocks.closePluginStateDatabase,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -126,18 +155,27 @@ function createGatewayCloseTestDeps(
     tailscaleCleanup: null,
     stopChannel: vi.fn(async () => undefined),
     pluginServices: null,
+    disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
+    drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
+    stopGmailWatcher: mocks.stopGmailWatcher,
+    disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
+    closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
     cron: { stop: vi.fn() },
     heartbeatRunner: { stop: vi.fn() } as never,
     updateCheckStop: null,
     stopTaskRegistryMaintenance: null,
     nodePresenceTimers: new Map(),
     broadcast: vi.fn(),
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
-    mediaCleanup: null,
-    worktreeCleanup: null,
-    skillCuratorCleanup: vi.fn(),
+    maintenance: {
+      tickInterval: setInterval(() => undefined, 60_000),
+      healthInterval: setInterval(() => undefined, 60_000),
+      dedupeCleanup: setInterval(() => undefined, 60_000),
+      startMediaCleanup: vi.fn(),
+      stopMediaCleanup: vi.fn(async () => "drained" as const),
+      worktreeCleanup: setInterval(() => undefined, 60_000),
+      skillUsageCleanup: vi.fn(),
+    },
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
     agentUnsub: null,
     taskUnsub: null,
     heartbeatUnsub: null,
@@ -184,8 +222,16 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
     mocks.drainRetainedEmbeddingProviders.mockClear();
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
-    mocks.clearSessionSuspensionTimers.mockReset();
-    mocks.clearSessionSuspensionTimers.mockReturnValue(0);
+    mocks.stopGmailWatcher.mockClear();
+    mocks.stopGmailWatcher.mockResolvedValue(undefined);
+    mocks.closeProviderTransportDispatcherPool.mockClear();
+    mocks.closeProviderTransportDispatcherPool.mockResolvedValue(undefined);
+    mocks.disposeAcpSessionManagerInstance.mockReset();
+    mocks.disposeAcpSessionManagerInstance.mockResolvedValue(undefined);
+    mocks.getAcpSessionManager.mockClear();
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockReset();
+    mocks.closePluginStateDatabase.mockReset();
+    mocks.closePluginStateDatabase.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -230,21 +276,182 @@ describe("createGatewayCloseHandler", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+    expect(deps.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for in-flight media cleanup before shutdown completes", async () => {
+    let releaseMediaCleanup = () => {};
+    const stopMediaCleanup = vi.fn(
+      () =>
+        new Promise<"drained">((resolve) => {
+          releaseMediaCleanup = () => resolve("drained");
+        }),
+    );
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
+
+    let closed = false;
+    const closing = close({ reason: "test" }).then(() => {
+      closed = true;
+    });
+    await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
+    expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    expect(closed).toBe(false);
+
+    releaseMediaCleanup();
+    await closing;
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledTimes(1);
+    expect(closed).toBe(true);
+  });
+
+  it("retains shared state when media cleanup times out", async () => {
+    const stopMediaCleanup = vi.fn(async () => "timed-out" as const);
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
+
+    const result = await close({ reason: "test" });
+
+    expect(stopMediaCleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    expect(result.warnings).toContain("media-cleanup");
+  });
+
   it("clears the process-root plugin registry after teardown", async () => {
+    const lifecycleSlot = resolveGlobalMap<string, number>(
+      Symbol.for("openclaw.test.gatewayCloseLifecycleSlot"),
+      (state) => state.clear(),
+    );
+    lifecycleSlot.set("stale", 1);
     setActivePluginRegistry(createEmptyPluginRegistry());
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
     await close({ reason: "test" });
 
+    expect(lifecycleSlot.size).toBe(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("rejects close when an ambient lifecycle owner cannot drain", async () => {
+    const drainError = new Error("owner drain failed");
+    let rejectDrain = true;
+    resolveGlobalSingleton(
+      Symbol("openclaw.test.gatewayCloseFailedLifecycleOwner"),
+      () => ({}),
+      () => {
+        if (rejectDrain) {
+          rejectDrain = false;
+          throw drainError;
+        }
+      },
+    );
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }),
+    );
+
+    await expect(close({ reason: "test" })).rejects.toThrow(
+      "Failed to reset global singleton lifecycle state",
+    );
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates supervised process trees before Gateway close returns",
+    async () => {
+      const previousServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+      process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      const supervisor = getProcessSupervisor();
+      let output = "";
+      let run: ManagedRun | undefined;
+
+      try {
+        run = await supervisor.spawn({
+          mode: "child",
+          argv: [
+            "/bin/sh",
+            "-c",
+            'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+          ],
+          stdinMode: "pipe-closed",
+          sessionId: "gateway-close-test",
+          backendId: "gateway-close-test",
+          onStdout: (chunk) => {
+            output += chunk;
+          },
+        });
+        await vi.waitFor(() => expect(output).toMatch(/^\d+ \d+/u));
+        const match = /^(\d+) (\d+)/u.exec(output);
+        const rootPid = Number(match?.[1]);
+        const descendantPid = Number(match?.[2]);
+        expect(isProcessAlive(rootPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+        await close({ reason: "test" });
+
+        expect(isProcessAlive(rootPid)).toBe(false);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+        expect(getProcessSupervisor()).not.toBe(supervisor);
+      } finally {
+        run?.cancel();
+        await run?.waitForExtinction?.().catch(() => undefined);
+        if (previousServiceMarker === undefined) {
+          delete process.env.OPENCLAW_SERVICE_MARKER;
+        } else {
+          process.env.OPENCLAW_SERVICE_MARKER = previousServiceMarker;
+        }
+      }
+    },
+  );
+
+  it("replaces the process supervisor after a concurrent adapter startup failure", async () => {
+    let markEmbeddingDrainStarted!: () => void;
+    const embeddingDrainStarted = new Promise<void>((resolve) => {
+      markEmbeddingDrainStarted = resolve;
+    });
+    let releaseEmbeddingDrain!: () => void;
+    const embeddingDrainReleased = new Promise<void>((resolve) => {
+      releaseEmbeddingDrain = resolve;
+    });
+    const supervisor = getProcessSupervisor();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        drainRetainedOpenAiEmbeddingProviders: async () => {
+          markEmbeddingDrainStarted();
+          await embeddingDrainReleased;
+        },
+      }),
+    );
+    const closing = close({ reason: "test" });
+    await embeddingDrainStarted;
+
+    const failedStart = supervisor.spawn({
+      mode: "child",
+      argv: [`/openclaw-missing-adapter-${process.pid}`],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-startup-failure",
+      backendId: "gateway-close-startup-failure",
+    });
+    releaseEmbeddingDrain();
+
+    await expect(failedStart).rejects.toThrow();
+    await closing;
+    const nextSupervisor = getProcessSupervisor();
+    const run = await nextSupervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", ""],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-fresh-supervisor",
+      backendId: "gateway-close-fresh-supervisor",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+    expect(nextSupervisor).not.toBe(supervisor);
   });
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {
     const events: string[] = [];
-    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
       events.push("session-suspension-timers");
       return 1;
     });
@@ -259,11 +466,6 @@ describe("createGatewayCloseHandler", () => {
         events.push("reload:stopped");
       }),
     };
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar:stopped");
-      }),
-    };
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugins:stopped");
@@ -276,7 +478,6 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         channelIds: ["discord"],
         configReloader,
-        postReadySidecars: [postReadySidecar],
         pluginServices: pluginServices as never,
         stopChannel,
       }),
@@ -286,7 +487,6 @@ describe("createGatewayCloseHandler", () => {
     await vi.waitFor(() => {
       expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
     });
-    expect(postReadySidecar.stop).not.toHaveBeenCalled();
     expect(pluginServices.stop).not.toHaveBeenCalled();
     expect(stopChannel).not.toHaveBeenCalled();
 
@@ -297,14 +497,16 @@ describe("createGatewayCloseHandler", () => {
       "session-suspension-timers",
       "reload:stopping",
       "reload:stopped",
-      "sidecar:stopped",
       "plugins:stopped",
       "channel:stopped",
     ]);
   });
 
-  it("stops plugin services before channel runtimes", async () => {
+  it("disposes ACP sessions before plugin services and channel runtimes", async () => {
     const events: string[] = [];
+    mocks.disposeAcpSessionManagerInstance.mockImplementation(async () => {
+      events.push("acp-sessions");
+    });
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugin-services");
@@ -323,9 +525,54 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "test" });
 
-    expect(events).toEqual(["plugin-services", "channel:discord"]);
+    expect(events).toEqual(["acp-sessions", "plugin-services", "channel:discord"]);
+    expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledWith(
+      expect.anything(),
+      "gateway-shutdown",
+    );
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledWith("discord");
+  });
+
+  it("continues plugin shutdown when ACP session disposal fails", async () => {
+    mocks.disposeAcpSessionManagerInstance.mockRejectedValue(new Error("ACP close failed"));
+    const pluginServices = { stop: vi.fn(async () => undefined) };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
+    );
+
+    const result = await close({ reason: "test" });
+
+    expect(pluginServices.stop).toHaveBeenCalledOnce();
+    expect(result.warnings).toContain("acp-session-manager");
+  });
+
+  it("keeps plugin services alive until a slow ACP session disposal settles", async () => {
+    vi.useFakeTimers();
+    let releaseDisposal!: () => void;
+    mocks.disposeAcpSessionManagerInstance.mockReturnValue(
+      new Promise<undefined>((resolve) => {
+        releaseDisposal = () => resolve(undefined);
+      }),
+    );
+    const pluginServices = { stop: vi.fn(async () => undefined) };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ pluginServices: pluginServices as never }),
+    );
+
+    try {
+      const closePromise = close({ reason: "test" });
+      await vi.advanceTimersByTimeAsync(5_001);
+
+      expect(mocks.disposeAcpSessionManagerInstance).toHaveBeenCalledOnce();
+      expect(pluginServices.stop).not.toHaveBeenCalled();
+
+      releaseDisposal();
+      await closePromise;
+      expect(pluginServices.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears the secrets runtime snapshot only after channels stop (#112681)", async () => {
@@ -367,58 +614,12 @@ describe("createGatewayCloseHandler", () => {
     expect(result.warnings).toContain("channel/telegram");
   });
 
-  it("awaits post-ready sidecars before plugin services and channels", async () => {
+  it("clears session suspension timers before plugin services and channels stop", async () => {
     const events: string[] = [];
-    let releaseSidecar!: () => void;
-    const sidecarReleased = new Promise<void>((resolve) => {
-      releaseSidecar = resolve;
-    });
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar:start");
-        await sidecarReleased;
-        events.push("sidecar:end");
-      }),
-    };
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugin-services");
-      }),
-    };
-    const stopChannel = vi.fn(async (channelId: string) => {
-      events.push(`channel:${channelId}`);
-    });
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        postReadySidecars: [postReadySidecar],
-        pluginServices: pluginServices as never,
-        stopChannel,
-      }),
-    );
-
-    const closePromise = close({ reason: "test" });
-    await vi.waitFor(() => {
-      expect(events).toEqual(["sidecar:start"]);
-    });
-    releaseSidecar();
-    await closePromise;
-
-    expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
-    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears session suspension timers before sidecars, plugin services, and channels stop", async () => {
-    const events: string[] = [];
-    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
       events.push("session-suspension-timers");
       return 1;
     });
-    const postReadySidecar = {
-      stop: vi.fn(async () => {
-        events.push("sidecar");
-      }),
-    };
     const pluginServices = {
       stop: vi.fn(async () => {
         events.push("plugin-services");
@@ -430,7 +631,6 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         channelIds: ["discord"],
-        postReadySidecars: [postReadySidecar],
         pluginServices: pluginServices as never,
         stopChannel,
       }),
@@ -438,13 +638,8 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "test shutdown" });
 
-    expect(mocks.clearSessionSuspensionTimers).toHaveBeenCalledOnce();
-    expect(events).toEqual([
-      "session-suspension-timers",
-      "sidecar",
-      "plugin-services",
-      "channel:discord",
-    ]);
+    expect(mocks.fenceSessionSuspensionWritesForGatewayShutdown).toHaveBeenCalledOnce();
+    expect(events).toEqual(["session-suspension-timers", "plugin-services", "channel:discord"]);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {
@@ -761,6 +956,30 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("marks pending reply work after its chat run registration is gone", async () => {
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        getPendingReplyCount: () => 1,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [],
+        reason: "gateway restart shutdown",
+      }),
+    );
+  });
+
   it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -769,7 +988,7 @@ describe("createGatewayCloseHandler", () => {
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
     run.deltaSentAt = Date.now();
-    run.deltaLastBroadcastLen = 3;
+    run.assistantScope = { itemId: "assistant-1", prefix: "" };
     run.deltaLastBroadcastText = "par";
     run.agentText = {
       assistant: {
@@ -832,7 +1051,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
-    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.assistantScope).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
@@ -1122,12 +1341,6 @@ describe("createGatewayCloseHandler", () => {
     expect(events[0]).toBe("marker");
     const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
     expect(markerCall?.[0]?.reason).toBe("gateway restart shutdown");
-    expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
-      new Set(["agent:main:main", "agent:main:test:direct:source"]),
-    );
-    expect(markerCall?.[0]?.sessionIds).toStrictEqual(
-      new Set(["current-session-id-1", "session-id-2"]),
-    );
     expect(markerCall?.[0]?.activeRuns).toEqual([
       {
         runId: "run-1",
@@ -1266,7 +1479,7 @@ describe("createGatewayCloseHandler", () => {
     expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 
-  it("awaits terminal persistence before deciding restart recovery", async () => {
+  it("awaits terminal persistence before deferring restart recovery to its owner", async () => {
     const controller = new AbortController();
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
     const chatAbortControllers = new Map([
@@ -1300,7 +1513,11 @@ describe("createGatewayCloseHandler", () => {
       drainTimeoutMs: 0,
     });
 
-    expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [],
+      }),
+    );
     expect(controller.signal.aborted).toBe(true);
     expect(chatAbortControllers.size).toBe(0);
   });
@@ -1451,6 +1668,7 @@ describe("createGatewayCloseHandler", () => {
           controller,
           sessionId: "session-id-1",
           sessionKey: "agent:main:main",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
         },
@@ -1560,6 +1778,9 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAgentHarnesses.mockImplementation(async () => {
       closeOrder.push("agent-harnesses");
     });
+    mocks.closeProviderTransportDispatcherPool.mockImplementation(async () => {
+      closeOrder.push("provider-transport-dispatchers");
+    });
     mocks.disposeAllSessionMcpRuntimes.mockImplementation(async () => {
       closeOrder.push("bundle-mcp");
     });
@@ -1569,12 +1790,16 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
       closeOrder.push("embedding-providers");
     });
+    const tailscaleCleanup = vi.fn(async () => {
+      closeOrder.push("tailscale");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
+        tailscaleCleanup,
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
         taskUnsub,
@@ -1603,11 +1828,51 @@ describe("createGatewayCloseHandler", () => {
     expect(closeOrder).toEqual([
       "code-mode-runs",
       "agent-harnesses",
+      "provider-transport-dispatchers",
       "bundle-mcp",
       "bundle-lsp",
       "http-server",
+      "tailscale",
       "embedding-providers",
     ]);
+  });
+
+  it("continues listener teardown when agent harness disposal never settles", async () => {
+    vi.useFakeTimers();
+    let releaseHarnessDisposal: (() => void) | undefined;
+    const harnessDisposal = new Promise<undefined>((resolve) => {
+      releaseHarnessDisposal = () => resolve(undefined);
+    });
+    mocks.disposeAgentHarnesses.mockReturnValue(harnessDisposal);
+    const httpClose = vi.fn((callback: (err?: Error | null) => void) => callback(null));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServer: {
+          close: httpClose,
+          closeIdleConnections: vi.fn(),
+        } as never,
+      }),
+    );
+    const closePromise = close({ reason: "test shutdown" });
+
+    try {
+      await vi.waitFor(() => expect(mocks.disposeAgentHarnesses).toHaveBeenCalledOnce());
+      expect(httpClose).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(AGENT_HARNESS_CLOSE_GRACE_MS);
+      const result = await closePromise;
+
+      expect(result.warnings).toContain("agent-harnesses");
+      expect(httpClose).toHaveBeenCalledOnce();
+      expect(
+        mocks.logWarn.mock.calls.some(([message]) =>
+          String(message).includes("agent-harnesses runtime disposal exceeded 5000ms"),
+        ),
+      ).toBe(true);
+    } finally {
+      releaseHarnessDisposal?.();
+      await closePromise;
+    }
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {
@@ -1811,14 +2076,17 @@ describe("createGatewayCloseHandler", () => {
   it("fails shutdown when http server close still hangs after force close", async () => {
     vi.useFakeTimers();
 
+    const closeHttpServer = vi.fn(() => undefined);
     const closeAllConnections = vi.fn();
+    const tailscaleCleanup = vi.fn(async () => undefined);
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         httpServer: {
-          close: () => undefined,
+          close: closeHttpServer,
           closeAllConnections,
           closeIdleConnections: vi.fn(),
         } as never,
+        tailscaleCleanup,
       }),
     );
 
@@ -1826,15 +2094,48 @@ describe("createGatewayCloseHandler", () => {
     const closeExpectation = expect(closePromise).rejects.toThrow(
       "http-server close still pending after forced connection shutdown (5000ms)",
     );
-    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
+    await vi.waitFor(() => expect(closeHttpServer).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS);
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_FORCE_WAIT_MS);
     await closeExpectation;
 
-    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(tailscaleCleanup).toHaveBeenCalledTimes(1);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("http-server close exceeded 1000ms"),
       ),
     ).toBe(true);
+  });
+
+  it("attempts every HTTP listener before rejecting a stuck close", async () => {
+    vi.useFakeTimers();
+
+    const stuckServer = {
+      close: vi.fn(() => undefined),
+      closeAllConnections: vi.fn(),
+      closeIdleConnections: vi.fn(),
+    };
+    const laterServer = {
+      close: vi.fn((cb: (err?: Error | null) => void) => cb(null)),
+      closeIdleConnections: vi.fn(),
+    };
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        httpServers: [stuckServer as never, laterServer as never],
+      }),
+    );
+
+    const closePromise = close({ reason: "test shutdown" });
+    const closeExpectation = expect(closePromise).rejects.toThrow(
+      "http-server[0] close still pending after forced connection shutdown (5000ms)",
+    );
+    await vi.waitFor(() => expect(stuckServer.close).toHaveBeenCalledOnce());
+    expect(laterServer.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
+    await closeExpectation;
+
+    expect(stuckServer.closeAllConnections).toHaveBeenCalledOnce();
   });
 
   it("labels warnings for multiple HTTP servers with their index", async () => {
@@ -1883,10 +2184,9 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "  upgrade  ", restartExpectedMs: Number.NaN });
 
-    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", {
-      reason: "upgrade",
-      restartExpectedMs: null,
-    });
+    // Non-restart shutdowns omit restartExpectedMs entirely: the schema declares
+    // an optional integer and clients key the restart presentation on presence.
+    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", { reason: "upgrade" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

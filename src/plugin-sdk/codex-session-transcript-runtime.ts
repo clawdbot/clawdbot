@@ -3,13 +3,47 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
+import {
+  runWithSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "../config/sessions/session-transcript-read-fence.js";
+import type {
+  TranscriptTurnAdmission,
+  TranscriptEntryAnchor,
+} from "../config/sessions/transcript-entry-anchor.js";
 import type { AgentMessage } from "./agent-core.js";
 import {
   withProjectedSessionTranscriptWriteLock,
   type InternalSessionTranscriptWriteLockContext,
   type InternalSessionTranscriptWriteLockParams,
 } from "./session-transcript-lock-runtime.js";
-import { publishSessionTranscriptUpdateByIdentity } from "./session-transcript-runtime.js";
+import {
+  publishSessionTranscriptUpdateByIdentity,
+  readSessionTranscriptEvents,
+  resolveSessionTranscriptIdentity,
+  type SessionTranscriptTargetParams,
+} from "./session-transcript-runtime.js";
+
+/** Reads the bundled Codex mirror strictly before one admitted user row. */
+export async function readCodexSessionTranscriptEventsBeforeAdmission(
+  params: SessionTranscriptTargetParams,
+  admission: TranscriptTurnAdmission,
+) {
+  const target = await resolveSessionTranscriptIdentity(params);
+  if (
+    target.agentId !== admission.agentId ||
+    target.sessionId !== admission.sessionId ||
+    target.sessionKey !== admission.sessionKey
+  ) {
+    throw new SessionTranscriptReadFenceError(
+      "Current-turn transcript admission belongs to a different transcript target",
+    );
+  }
+  return await runWithSessionTranscriptReadFence(
+    admission,
+    async () => await readSessionTranscriptEvents(params),
+  );
+}
 
 export type CodexSessionTranscriptMirrorWriteLockContext =
   InternalSessionTranscriptWriteLockContext & {
@@ -20,6 +54,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext =
       result: TranscriptMessageAppendResult<TMessage> | undefined;
     }>;
     readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+      anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
       existingIdempotencyKeys: Set<string>;
       messagesByIdempotencyKey: Map<string, AgentMessage>;
     }>;

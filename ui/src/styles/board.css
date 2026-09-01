@@ -95,7 +95,7 @@ openclaw-board-view {
   border: 0;
   border-radius: 7px;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
   display: inline-flex;
   justify-content: center;
   user-select: none;
@@ -114,12 +114,12 @@ openclaw-board-view {
 
 .board-tabs__overflow::part(menu),
 .board-widget__menu::part(menu) {
-  background: var(--panel);
-  border: 1px solid var(--board-line);
-  border-radius: 10px;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 32%);
   min-width: 190px;
-  padding: 6px;
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
 }
 
 .board-tabs__overflow-item {
@@ -127,12 +127,22 @@ openclaw-board-view {
 }
 
 .board-grid {
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   grid-auto-rows: 56px;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   min-width: 0;
   position: relative;
+}
+
+@container (max-width: 560px) {
+  /* Keep desktop sizes canonical; only placement changes on narrow boards.
+     CSS order preserves the keyed frame nodes when persisted order changes. */
+  .board-widget {
+    grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
+    order: var(--board-widget-order);
+  }
 }
 
 .board-grid__append-zone {
@@ -307,229 +317,11 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__frame {
-  background: transparent;
+  background: var(--board-surface);
   border: 0;
   display: block;
   height: 100%;
   width: 100%;
-}
-
-.observer-widget {
-  box-sizing: border-box;
-  display: grid;
-  gap: 12px;
-  height: 100%;
-  overflow: auto;
-  padding: 12px;
-}
-
-.observer-widget__current {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  border: 1px solid var(--board-line);
-  border-left: 3px solid var(--muted);
-  border-radius: 9px;
-  display: grid;
-  gap: 8px;
-  padding: 10px 11px;
-}
-
-.observer-widget__current[data-health="on-track"],
-.observer-widget__current[data-health="done"],
-.observer-widget__current[data-health="wrapping-up"] {
-  border-left-color: var(--ok);
-}
-
-.observer-widget__current[data-health="grinding"] {
-  border-left-color: var(--warn);
-}
-
-.observer-widget__current[data-health="stuck"],
-.observer-widget__current[data-health="waiting-on-user"],
-.observer-widget__current[data-health="failed"] {
-  border-left-color: var(--danger);
-}
-
-.observer-widget__current-heading {
-  align-items: start;
-  display: grid;
-  gap: 9px;
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.observer-widget__current-heading > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.observer-widget__eyebrow,
-.observer-widget__timeline-title,
-.observer-widget__run {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.observer-widget__current-heading strong {
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.observer-widget__assessment {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.45;
-  margin: 0 0 0 19px;
-}
-
-.observer-widget__progress {
-  align-items: center;
-  color: var(--muted);
-  display: grid;
-  font-size: 9px;
-  gap: 7px;
-  grid-template-columns: auto auto minmax(48px, 1fr);
-  margin-left: 19px;
-}
-
-.observer-widget__progress strong {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.observer-widget__progress-track {
-  background: color-mix(in srgb, var(--text) 9%, transparent);
-  border-radius: 999px;
-  height: 3px;
-  overflow: hidden;
-}
-
-.observer-widget__progress-track > span {
-  background: var(--accent);
-  display: block;
-  height: 100%;
-}
-
-.observer-widget__timeline {
-  display: grid;
-  gap: 2px;
-}
-
-.observer-widget__timeline-title {
-  margin-bottom: 3px;
-}
-
-.observer-widget__run {
-  align-items: baseline;
-  border-top: 1px solid var(--board-line);
-  display: flex;
-  gap: 7px;
-  justify-content: space-between;
-  margin-top: 5px;
-  padding: 8px 3px 3px;
-}
-
-.observer-widget__run:first-of-type {
-  border-top: 0;
-  margin-top: 0;
-  padding-top: 3px;
-}
-
-.observer-widget__run[data-current="true"] > span {
-  color: var(--text);
-}
-
-.observer-widget__run code {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: none;
-  white-space: nowrap;
-}
-
-.observer-widget__timeline-row {
-  align-items: center;
-  border-radius: 6px;
-  display: grid;
-  gap: 7px;
-  grid-template-columns: 58px auto 66px minmax(0, 1fr);
-  min-height: 27px;
-  padding: 3px 5px;
-}
-
-.observer-widget__timeline-row--transition {
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  box-shadow: inset 2px 0 color-mix(in srgb, currentcolor 48%, transparent);
-}
-
-.observer-widget__timeline-row > time,
-.observer-widget__health-label {
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.observer-widget__timeline-headline {
-  color: var(--text);
-  font-size: 10.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.observer-widget__health-dot {
-  background: var(--muted);
-  border-radius: 50%;
-  height: 8px;
-  margin-top: 3px;
-  width: 8px;
-}
-
-.observer-widget__health-dot[data-health="on-track"],
-.observer-widget__health-dot[data-health="done"],
-.observer-widget__health-dot[data-health="wrapping-up"] {
-  background: var(--ok);
-}
-
-.observer-widget__health-dot[data-health="grinding"] {
-  background: var(--warn);
-}
-
-.observer-widget__health-dot[data-health="stuck"],
-.observer-widget__health-dot[data-health="waiting-on-user"],
-.observer-widget__health-dot[data-health="failed"] {
-  background: var(--danger);
-}
-
-.observer-widget__unread-boundary {
-  align-items: center;
-  color: var(--accent);
-  display: grid;
-  font-size: 8px;
-  gap: 8px;
-  grid-template-columns: 1fr auto 1fr;
-  letter-spacing: 0.08em;
-  margin: 3px 0;
-  text-transform: uppercase;
-}
-
-.observer-widget__unread-boundary::before,
-.observer-widget__unread-boundary::after {
-  border-top: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
-  content: "";
-}
-
-@media (max-width: 720px) {
-  .observer-widget__timeline-row {
-    grid-template-columns: 52px auto minmax(0, 1fr);
-  }
-
-  .observer-widget__health-label {
-    display: none;
-  }
 }
 
 .board-widget__plugin-loading,
@@ -552,9 +344,12 @@ openclaw-board-widget-cell {
 }
 
 openclaw-workboard-card-widget,
-openclaw-workboard-mini-widget {
+openclaw-workboard-mini-widget,
+openclaw-workboard-board-widget {
   display: block;
+  max-width: 100%;
   min-height: 100%;
+  min-width: 0;
 }
 
 .workboard-widget-card,
@@ -677,6 +472,75 @@ openclaw-workboard-mini-widget {
   justify-content: flex-start;
 }
 
+.workboard-widget-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.workboard-widget-board__header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workboard-widget-board__header strong {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-widget-board__header span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.workboard-widget-board__header a {
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.workboard-widget-board .workboard-board {
+  flex: 1;
+  grid-auto-columns: minmax(240px, 1fr);
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.workboard-widget-board .workboard-column,
+.workboard-widget-board .workboard-board--compact .workboard-column {
+  max-width: none;
+  min-height: 0;
+  min-width: 240px;
+  overflow: hidden;
+  width: auto;
+}
+
+.workboard-widget-board .workboard-column__cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workboard-card__actions--widget {
+  justify-content: stretch;
+}
+
 .board-widget__mcp-app {
   display: grid;
   min-height: 100%;
@@ -751,11 +615,8 @@ openclaw-workboard-mini-widget {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  /* Chrome is a compact top-left pill, not a full-width strip: widgets put
-     their own actions top-right, so that corner must stay visible and
-     clickable even while host chrome is revealed. The 30px pill height is
-     overlay-only; coarse pointers keep the base 38px in-flow grid row that
-     BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
+  /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
+     in-flow row that BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
   .board-widget__bar {
     backdrop-filter: blur(6px);
     background: color-mix(in srgb, var(--board-surface) 92%, transparent);
@@ -763,17 +624,15 @@ openclaw-workboard-mini-widget {
     border-radius: 999px;
     box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
     height: 30px;
-    left: 7px;
-    /* Reserve a widget-owned top-right action region: the interactive pill may
-       never stretch across the card, or it re-intercepts the exact corner this
-       chrome exists to keep clickable. The 88px floor keeps the drag handle and
-       menu usable on very narrow widgets; below 184px the container query strips
-       the pill to that irreducible pair so the reservation stays maximal. */
-    max-width: max(88px, calc(100% - 96px));
+    left: 50%;
+    /* Centered widgets reserve 88px for actions in both top corners. Narrow
+       cards fall back to the prior left placement below. */
+    max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
     position: absolute;
     top: 7px;
+    transform: translateX(-50%);
     transition:
       opacity 100ms ease,
       visibility 0s linear 100ms;
@@ -798,11 +657,18 @@ openclaw-workboard-mini-widget {
     overflow: hidden;
   }
 
-  /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the
-     pill sheds its display-only pieces and keeps just move + menu — the two
-     controls without which a widget cannot be managed. The card's aria-label
-     and the drag handle tooltip still carry the title. */
-  @container (max-width: 184px) {
+  @container (max-width: 264px) {
+    .board-widget__bar {
+      left: 7px;
+      max-width: max(88px, calc(100% - 96px));
+      transform: none;
+    }
+  }
+
+  /* Until centered chrome has room for its display fields, keep only move +
+     menu — the controls required to manage a widget. The card's aria-label and
+     drag handle tooltip still carry the title. */
+  @container (max-width: 376px) {
     .board-widget__bar > .board-widget__title,
     .board-widget__bar > .board-widget__kind,
     .board-widget__bar > .board-widget__capabilities {

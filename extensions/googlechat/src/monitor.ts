@@ -1,11 +1,16 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Googlechat plugin module implements monitor behavior.
 import {
+  formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
   type ChannelBotLoopProtectionFacts,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -33,6 +38,7 @@ import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
+  GoogleChatStatusSink,
   WebhookTarget,
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
@@ -61,14 +67,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
     return "project-number";
   }
   return undefined;
-}
-
-function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
-  if (!eventTime) {
-    return undefined;
-  }
-  const parsed = Date.parse(eventTime);
-  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function resolveGoogleChatBotLoopProtection(params: {
@@ -162,7 +160,7 @@ async function processGoogleChatEvent(
  * Resolve bot display name with fallback chain:
  * 1. Account config name
  * 2. Agent name from config
- * 3. "OpenClaw" as generic fallback
+ * 3. Agent identity name, then "OpenClaw"
  */
 function resolveBotDisplayName(params: {
   accountName?: string;
@@ -173,11 +171,11 @@ function resolveBotDisplayName(params: {
   if (accountName?.trim()) {
     return accountName.trim();
   }
-  const agent = config.agents?.list?.find((a) => a.id === agentId);
+  const agent = resolveAgentConfig(config, agentId);
   if (agent?.name?.trim()) {
     return agent.name.trim();
   }
-  return "OpenClaw";
+  return agent?.identity?.name?.trim() || "OpenClaw";
 }
 
 async function processMessageWithPipeline(params: {
@@ -186,7 +184,7 @@ async function processMessageWithPipeline(params: {
   config: OpenClawConfig;
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: GoogleChatStatusSink;
   mediaMaxMb: number;
   turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
 }): Promise<void> {
@@ -224,10 +222,20 @@ async function processMessageWithPipeline(params: {
 
   const messageText = (message.argumentText ?? message.text ?? "").trim();
   const attachments = message.attachment ?? [];
-  const rawBody = messageText;
+  let rawBody = messageText;
   if (!rawBody && attachments.length === 0) {
     return;
   }
+
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    cfg: config,
+    channel: "googlechat",
+    accountId: account.accountId,
+    peer: {
+      kind: isGroup ? ("group" as const) : ("direct" as const),
+      id: spaceId,
+    },
+  });
 
   const access = await applyGoogleChatInboundAccessPolicy({
     account,
@@ -240,6 +248,12 @@ async function processMessageWithPipeline(params: {
     senderName,
     senderEmail,
     rawBody,
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(message.name ? { messageId: message.name } : {}),
+      inboundEventKind: "user_request",
+    },
     statusSink,
     logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
@@ -266,31 +280,46 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config,
-    channel: "googlechat",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? ("group" as const) : ("direct" as const),
-      id: spaceId,
-    },
-  });
-
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
   }));
   const first = attachments.at(0);
   if (first) {
-    const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
-    if (attachmentData) {
-      mediaInputs[0] = {
-        path: attachmentData.path,
-        url: attachmentData.path,
-        contentType: attachmentData.contentType ?? first.contentType,
-      };
+    try {
+      const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
+      if (attachmentData) {
+        mediaInputs[0] = {
+          path: attachmentData.path,
+          url: attachmentData.path,
+          contentType: attachmentData.contentType ?? first.contentType,
+        };
+      } else {
+        const reason = first.driveDataRef
+          ? "Google Drive files are not downloadable"
+          : "unsupported attachment source";
+        const notice = `[Google Chat attachment unavailable: ${reason}; upload the file directly]`;
+        rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+        runtime.error?.(`[${account.accountId}] ${notice}`);
+      }
+    } catch (error) {
+      if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
+        throw error;
+      }
+      // Adopt permanent size failures after authorizing the original text; retrying
+      // them would block every later durable message in the same conversation.
+      const notice = `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
+      rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+      runtime.error?.(
+        `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
+      );
     }
   }
-  const media = await toInboundMediaFactsWithMetadata(mediaInputs);
+  const additionalCount = attachments.length - 1;
+  if (additionalCount > 0) {
+    const notice = `[Google Chat: ${additionalCount} additional ${additionalCount === 1 ? "attachment was" : "attachments were"} not processed; only the first attachment is supported]`;
+    rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
+  }
+  const media = mediaInputs.length === 0 ? [] : await toInboundMediaFactsWithMetadata(mediaInputs);
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
@@ -305,6 +334,7 @@ async function processMessageWithPipeline(params: {
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: access.channelIngress,
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,
@@ -495,6 +525,19 @@ async function monitorGoogleChatProvider(
 
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
   const audience = options.account.config.audience?.trim();
+  if (!audienceType || !audience) {
+    const error =
+      "Google Chat webhook authentication requires channels.googlechat.audienceType and channels.googlechat.audience.";
+    options.runtime.error?.(`[${options.account.accountId}] ${error}`);
+    options.statusSink?.(
+      channelBlockedPatch(error, {
+        running: true,
+        connected: false,
+        webhookPath: undefined,
+      }),
+    );
+    return async () => {};
+  }
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
 
   warnAppPrincipalMisconfiguration({
@@ -528,6 +571,7 @@ async function monitorGoogleChatProvider(
   let unregisterTarget: (() => void) | undefined;
   try {
     unregisterTarget = registerGoogleChatWebhookTarget(target);
+    options.statusSink?.(channelReadyPatch());
   } catch (error) {
     await ingress.stop();
     throw error;

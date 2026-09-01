@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
@@ -53,6 +54,22 @@ type LabFeatureState = {
   overridden: boolean;
 };
 
+function readConfiguredFeatureEnabled(
+  raw: unknown,
+  activeValues: readonly LabFeatureValue[],
+): boolean {
+  if (typeof raw === "boolean" || typeof raw === "string") {
+    return activeValues.includes(raw);
+  }
+  if (!isRecord(raw)) {
+    return false;
+  }
+  const enabled = raw.enabled;
+  return typeof enabled === "boolean" || typeof enabled === "string"
+    ? activeValues.includes(enabled)
+    : Object.keys(raw).some((key) => key !== "enabled");
+}
+
 const LOCAL_MODEL_LEAN_FEATURE_ID = "localModelLean";
 const LOCAL_MODEL_LEAN_AUTO_MODEL_PATH = ["wizard", "localModelLeanAutoModel"] as const;
 
@@ -63,23 +80,12 @@ export const LAB_FEATURES = [
     description: () => t("labsPage.codeMode.description"),
     docsUrl: "https://docs.openclaw.ai/tools/code-mode",
     configPath: ["tools", "codeMode", "enabled"],
-    // The on position writes the shipped "auto" tier, never `true`: Labs offers
+    // The on position writes the "auto" tier, never `true`: Labs offers
     // Auto/Off, and force-on for unevaluated models stays a config-only choice.
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    // Mirrors resolveCodeModeConfig: the shipped default is "auto", so an unset
-    // gate reads as on; only an explicit `false` (shorthand or leaf) reads off.
-    // `true` remains a valid config-only force-on and must also read as on.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        return (raw as Record<string, unknown>).enabled !== false;
-      }
-      return true;
-    },
+    readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -111,18 +117,7 @@ export const LAB_FEATURES = [
     // and an object configuring anything besides `enabled` is already on.
     // Reading only the `enabled` leaf would show `{ mode: "tools" }` as off and
     // let a click replace that operator's mode with ours.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        return false;
-      }
-      const node = raw as Record<string, unknown>;
-      return typeof node.enabled === "boolean"
-        ? node.enabled
-        : Object.keys(node).some((key) => key !== "enabled");
-    },
+    readEnabled: (raw) => readConfiguredFeatureEnabled(raw, [true]),
     // resolveToolSearchConfig defaults an unset mode to "code" even in object
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
@@ -161,6 +156,20 @@ export const LAB_FEATURES = [
     restartHint: null,
   },
   {
+    id: "cliAgents",
+    title: () => t("labsPage.cliAgents.title"),
+    description: () => t("labsPage.cliAgents.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#gateway",
+    configPath: ["gateway", "cliAgents", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    restartHint: null,
+  },
+  {
     id: "auditMessages",
     title: () => t("labsPage.auditMessages.title"),
     description: () => t("labsPage.auditMessages.description"),
@@ -179,15 +188,45 @@ export const LAB_FEATURES = [
     // the recorder, so this outlives the reload plan's `logging: none` rule.
     restartHint: () => t("labsPage.restartRequired"),
   },
+  {
+    id: "hostDesktop",
+    title: () => t("labsPage.hostDesktop.title"),
+    description: () => t("labsPage.hostDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/configuration-reference#desktop",
+    configPath: ["desktop", "host", "enabled"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
+  {
+    id: "workerDesktop",
+    title: () => t("labsPage.workerDesktop.title"),
+    description: () => t("labsPage.workerDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
+    configPath: ["cloudWorkers", "desktop"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
 ] as const satisfies readonly LabFeature[];
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {
   let current: unknown = config;
   for (const segment of path) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
+    if (!isRecord(current)) {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[segment];
+    current = current[segment];
   }
   return current;
 }
@@ -197,10 +236,10 @@ function defaultModelRef(config: Record<string, unknown>): string | undefined {
   if (typeof model === "string") {
     return model;
   }
-  if (!model || typeof model !== "object" || Array.isArray(model)) {
+  if (!isRecord(model)) {
     return undefined;
   }
-  const primary = (model as Record<string, unknown>).primary;
+  const primary = model.primary;
   return typeof primary === "string" ? primary : undefined;
 }
 
@@ -224,15 +263,15 @@ function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   if (feature.readEnabled) {
     return feature.readEnabled(parent);
   }
-  // Feature gates accept the shipped boolean shorthand as well as the object
-  // form. A registry path ending in `enabled` must reflect either shape.
-  if (key === "enabled" && typeof parent === "boolean") {
-    return parent;
+  // Feature gates can accept a boolean or mode shorthand as well as the object
+  // form. A registry path ending in `enabled` must reflect every active shape.
+  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
+    return feature.activeValues.includes(parent);
   }
-  if (!parent || typeof parent !== "object" || Array.isArray(parent) || !key) {
+  if (!isRecord(parent) || !key) {
     return false;
   }
-  return feature.activeValues.includes((parent as Record<string, unknown>)[key] as LabFeatureValue);
+  return feature.activeValues.includes(parent[key] as LabFeatureValue);
 }
 
 function labFeatureOverridePath(
@@ -257,12 +296,7 @@ function labFeatureOverridePath(
   ) {
     return parentPath;
   }
-  if (
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent) &&
-    Object.hasOwn(parent, key)
-  ) {
+  if (isRecord(parent) && Object.hasOwn(parent, key)) {
     return feature.configPath;
   }
   return null;
@@ -285,13 +319,7 @@ export function resolveLabFeatureState(
   let defaultParent = parent;
   if (overridePath?.length === parentPath.length) {
     defaultParent = undefined;
-  } else if (
-    overridePath &&
-    key &&
-    parent &&
-    typeof parent === "object" &&
-    !Array.isArray(parent)
-  ) {
+  } else if (overridePath && key && isRecord(parent)) {
     defaultParent = { ...(parent as Record<string, unknown>) };
     delete (defaultParent as Record<string, unknown>)[key];
   }

@@ -1,4 +1,5 @@
 // Covers native approval runtime delivery and resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
 import {
@@ -62,12 +63,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   const arg = mock.mock.calls[index]?.[0];
@@ -163,6 +159,59 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
 });
 
 describe("createChannelNativeApprovalRuntime", () => {
+  it("selects and expires system-agent approval targets through the native lifecycle", async () => {
+    const deliverTarget = vi.fn().mockResolvedValue({ chatId: "123", messageId: "m1" });
+    const finalizeExpired = vi.fn().mockResolvedValue(undefined);
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/system-agent-native-runtime",
+      clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      accountId: "default",
+      eventKinds: ["system-agent"],
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "origin",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: false,
+        }),
+        resolveOriginTarget: () => ({ to: "123" }),
+      },
+      isConfigured: () => true,
+      shouldHandle: vi.fn().mockReturnValue(true),
+      buildPendingContent: vi.fn().mockResolvedValue({ text: "pending" }),
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { chatId: plannedTarget.target.to },
+      }),
+      deliverTarget,
+      finalizeResolved: vi.fn().mockResolvedValue(undefined),
+      finalizeExpired,
+    });
+
+    await runtime.handleRequested({
+      id: "system-agent:native-1",
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "a".repeat(64),
+        allowedDecisions: ["allow-once", "deny"],
+        sessionId: "delegation-1",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 2_000,
+    });
+
+    expect(deliverTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+    await runtime.handleExpired("system-agent:native-1");
+    expect(finalizeExpired).toHaveBeenCalledOnce();
+  });
+
   it("passes the resolved approval kind and pending content through native delivery hooks", async () => {
     const describeDeliveryCapabilities = vi.fn().mockReturnValue({
       enabled: true,
@@ -292,11 +341,12 @@ describe("createChannelNativeApprovalRuntime", () => {
       createdAtMs: 0,
       expiresAtMs: 60_000,
     } as const;
+    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
     await runtime.handleRequested(request);
 
-    expect(resolveApprovalKind).toHaveBeenCalledWith(request);
+    expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
     expect(buildPendingContent).toHaveBeenCalledWith(
-      expect.objectContaining({ request, approvalKind: "exec" }),
+      expect.objectContaining({ request: normalizedRequest, approvalKind: "exec" }),
     );
   });
 

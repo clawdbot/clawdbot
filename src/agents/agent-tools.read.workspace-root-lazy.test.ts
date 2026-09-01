@@ -26,8 +26,8 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
 
 // Capture the operations object handed to the underlying write/edit tools so the
 // regression can drive a single workspace write operation directly.
-vi.mock("./sessions/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sessions/index.js")>();
+vi.mock("./sessions/tools/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sessions/tools/index.js")>();
   const stub = (name: string) => ({
     name,
     description: `test ${name} tool`,

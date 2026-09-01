@@ -4,7 +4,10 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
+  resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLegacyIds,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 
@@ -19,6 +22,29 @@ function resolveClawHubSpecPackageName(spec: string | undefined): string | undef
 function resolveExactNpmPackageName(value: string): string | undefined {
   const packageName = resolveNpmSpecPackageName(value);
   return packageName && value.trim() === packageName ? packageName : undefined;
+}
+
+function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
+  if (record.source !== "npm") {
+    return undefined;
+  }
+  const packageNames: string[] = [];
+  const fields = [
+    [record.spec, resolveNpmSpecPackageName],
+    [record.resolvedName, resolveExactNpmPackageName],
+    [record.resolvedSpec, resolveNpmSpecPackageName],
+  ] as const;
+  for (const [value, resolvePackageName] of fields) {
+    if (value === undefined) {
+      continue;
+    }
+    const packageName = resolvePackageName(value);
+    if (!packageName) {
+      return undefined;
+    }
+    packageNames.push(packageName);
+  }
+  return packageNames.length > 0 && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
 }
 
 function resolveOfficialPackageNames(params: {
@@ -81,11 +107,7 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
 export function resolveTrustedOfficialClawHubPackageName(
   record: PluginInstallRecord,
 ): string | undefined {
-  if (
-    record.source !== "clawhub" ||
-    record.clawhubChannel !== "official" ||
-    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") !== "https://clawhub.ai"
-  ) {
+  if (!isOfficialClawHubInstallRecord(record)) {
     return undefined;
   }
   const packageNames = resolveRecordedClawHubPackageNames(record);
@@ -93,6 +115,44 @@ export function resolveTrustedOfficialClawHubPackageName(
     return undefined;
   }
   return packageNames[0];
+}
+
+/** Binds official trust to the actual package and consistent recorded source identity. */
+export function isTrustedOfficialPluginInstallRecord(params: {
+  pluginId: string;
+  packageName?: string;
+  record: PluginInstallRecord;
+}): boolean {
+  const packageName = params.packageName?.trim();
+  const entry = packageName
+    ? getOfficialExternalPluginCatalogEntryForPackage(packageName)
+    : undefined;
+  if (
+    !entry ||
+    (resolveOfficialExternalPluginId(entry) !== params.pluginId &&
+      !resolveOfficialExternalPluginLegacyIds(entry).includes(params.pluginId))
+  ) {
+    return false;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  const record = params.record;
+  if (record.source === "npm") {
+    // Local npm-pack archives also persist source="npm". Catalog identity alone
+    // cannot turn a local artifact or conflicting source record into official trust.
+    return (
+      record.artifactKind === undefined &&
+      record.sourcePath === undefined &&
+      resolveNpmSpecPackageName(install?.npmSpec) === packageName &&
+      resolveUnanimousRecordedNpmPackageName(record) === packageName &&
+      (record.clawhubPackage === undefined ||
+        resolveExactNpmPackageName(record.clawhubPackage) === packageName)
+    );
+  }
+  return (
+    Boolean(install?.clawhubSpec || install?.npmSpec) &&
+    (record.clawhubPackage !== undefined || record.spec !== undefined) &&
+    resolveTrustedOfficialClawHubPackageName(record) === packageName
+  );
 }
 
 function hasTrustedClawHubSourceAuthority(
@@ -114,29 +174,85 @@ function hasTrustedClawHubSourceAuthority(
   );
 }
 
-/** Resolves the official npm spec when an install record matches the trusted catalog package. */
-export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
+type TrustedSourceLinkedOfficialNpmInstall = {
+  npmSpec: string;
+  pluginId: string;
+  replacementPluginId?: string;
+};
+
+/** Resolves exact package-bound official npm identity and any declared id migration. */
+export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
-}): string | undefined {
+}): TrustedSourceLinkedOfficialNpmInstall | undefined {
   if (params.record.source !== "npm") {
     return undefined;
   }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  const canonicalEntry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (canonicalEntry) {
+    const officialSpec = resolveOfficialExternalPluginInstall(canonicalEntry)?.npmSpec;
+    const packageName = resolveNpmSpecPackageName(officialSpec);
+    const recordedPackageNames = [
+      params.record.resolvedName,
+      resolveNpmSpecPackageName(params.record.spec),
+      resolveNpmSpecPackageName(params.record.resolvedSpec),
+    ].filter((value): value is string => Boolean(value));
+    if (officialSpec && packageName && recordedPackageNames.includes(packageName)) {
+      return {
+        npmSpec: officialSpec,
+        pluginId: params.pluginId,
+      };
+    }
+  }
+
+  // Replacing a legacy id is more sensitive than refreshing a canonical record:
+  // every populated package identity must be valid and agree on the catalog package.
+  const packageName = resolveUnanimousRecordedNpmPackageName(params.record);
+  const entry = packageName
+    ? getOfficialExternalPluginCatalogEntryForPackage(packageName)
+    : undefined;
   if (!entry) {
     return undefined;
   }
   const officialSpec = resolveOfficialExternalPluginInstall(entry)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  if (!officialSpec || !officialPackageName) {
+  const canonicalPluginId = resolveOfficialExternalPluginId(entry);
+  if (
+    !packageName ||
+    !officialSpec ||
+    officialPackageName !== packageName ||
+    !canonicalPluginId ||
+    params.pluginId === canonicalPluginId ||
+    !resolveOfficialExternalPluginLegacyIds(entry).includes(params.pluginId)
+  ) {
     return undefined;
   }
-  const recordedPackageNames = [
-    params.record.resolvedName,
-    resolveNpmSpecPackageName(params.record.spec),
-    resolveNpmSpecPackageName(params.record.resolvedSpec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
+  return {
+    npmSpec: officialSpec,
+    pluginId: canonicalPluginId,
+    replacementPluginId: canonicalPluginId,
+  };
+}
+
+/** Resolves the official npm spec when an install record matches the trusted catalog package. */
+export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+}): string | undefined {
+  return resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
+}
+
+export function hasOfficialNpmIdReplacement(params: {
+  pluginId: string;
+  record?: PluginInstallRecord;
+}): boolean {
+  return (
+    params.record !== undefined &&
+    resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
+  );
 }
 
 /** Resolves the official ClawHub spec when a trusted-source install record matches. */

@@ -1,14 +1,13 @@
-import "../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
   lobsterLookStyle,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -147,9 +146,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="about-sr-only" role="status" aria-live="polite"
-        >${copyStatus(props.copyState)}</span
-      >
+      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
     </span>
   `;
 }

@@ -5,6 +5,7 @@ import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/fi
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -13,15 +14,16 @@ import {
 } from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
-import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
-import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
+import { saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -77,10 +79,14 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Require HTTPS for the initial URL and every redirect target. */
+  requireHttps?: boolean;
   /** Abort the complete guarded fetch and body operation after this deadline (ms). */
   timeoutMs?: number;
   /** Abort if final response headers have not arrived by this deadline (ms). */
@@ -280,14 +286,24 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
+function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
+  return new MediaFetchError(
+    "fetch_failed",
+    `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(cause)}`,
+    { cause },
+  );
+}
+
 async function fetchGuardedMediaResponse(
   options: FetchMediaOptions,
 ): Promise<GuardedMediaResponse> {
   const {
     url,
     fetchImpl,
+    beforeRequest,
     requestInit,
     maxRedirects,
+    requireHttps,
     timeoutMs,
     responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
@@ -318,8 +334,10 @@ async function fetchGuardedMediaResponse(
         : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
+        ...(beforeRequest ? { beforeRequest } : {}),
         init: requestInit,
         maxRedirects,
+        ...(requireHttps !== undefined ? { requireHttps } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,
@@ -375,13 +393,7 @@ async function fetchGuardedMediaResponse(
     };
   } catch (err) {
     responseHeaderDeadline.cleanup();
-    throw new MediaFetchError(
-      "fetch_failed",
-      `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
-      {
-        cause: err,
-      },
-    );
+    throw createMediaFetchFailure(sourceUrl, err);
   }
 }
 
@@ -393,7 +405,7 @@ async function assertMediaResponseOk(params: {
   readIdleTimeoutMs?: number;
 }): Promise<void> {
   const { res, url, finalUrl, sourceUrl, readIdleTimeoutMs } = params;
-  if (res.ok) {
+  if (res.ok && res.body) {
     return;
   }
   const statusText = res.statusText ? ` ${res.statusText}` : "";
@@ -414,16 +426,17 @@ async function assertMediaResponseOk(params: {
   );
 }
 
-async function assertMediaContentLength(params: {
+// Caller-provided responses may already be partially read; discard their remaining bytes too.
+function assertMediaContentLength(params: {
   res: Response;
   sourceUrl: string;
   maxBytes: number;
-}): Promise<void> {
+}): void {
   let length: number | null;
   try {
     length = parseMediaContentLength(params.res.headers.get("content-length"));
   } catch (err) {
-    await discardIgnoredResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "http_error",
       `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
@@ -434,23 +447,11 @@ async function assertMediaContentLength(params: {
     return;
   }
   if (length > params.maxBytes) {
-    await discardIgnoredResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "max_bytes",
       `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
     );
-  }
-}
-
-async function discardIgnoredResponseBody(res: Response): Promise<void> {
-  const body = res.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
   }
 }
 
@@ -532,7 +533,8 @@ async function* responseBodyChunks(
     }
   } finally {
     if (!completed) {
-      await reader.cancel().catch(() => undefined);
+      // Let the file writer close its handle and the request owner abort any capture tee.
+      void reader.cancel().catch(() => undefined);
     }
     try {
       reader.releaseLock();
@@ -555,7 +557,7 @@ async function saveOkMediaResponse(params: {
   subdir?: string;
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
-  await assertMediaContentLength({
+  assertMediaContentLength({
     res: params.res,
     sourceUrl: params.sourceUrl,
     maxBytes: params.maxBytes,
@@ -573,23 +575,15 @@ async function saveOkMediaResponse(params: {
     ? (params.filePathHint ?? fileName)
     : undefined;
   try {
-    const saved = params.res.body
-      ? await saveMediaStream(
-          responseBodyChunks(params.res.body, params.readIdleTimeoutMs),
-          contentType ?? undefined,
-          params.subdir ?? "inbound",
-          params.maxBytes,
-          params.originalFilename,
-          detectionFilePathHint,
-        )
-      : await saveMediaBuffer(
-          Buffer.alloc(0),
-          contentType ?? undefined,
-          params.subdir ?? "inbound",
-          params.maxBytes,
-          params.originalFilename,
-          detectionFilePathHint,
-        );
+    const body = expectDefined(params.res.body, "media response body");
+    const saved = await saveMediaStream(
+      responseBodyChunks(body, params.readIdleTimeoutMs),
+      contentType ?? undefined,
+      params.subdir ?? "inbound",
+      params.maxBytes,
+      params.originalFilename,
+      detectionFilePathHint,
+    );
     return { ...saved, ...(fileName ? { fileName } : {}) };
   } catch (err) {
     if (err instanceof MediaFetchError) {
@@ -602,11 +596,7 @@ async function saveOkMediaResponse(params: {
         { cause: err },
       );
     }
-    throw new MediaFetchError(
-      "fetch_failed",
-      `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
-      { cause: err },
-    );
+    throw createMediaFetchFailure(params.sourceUrl, err);
   }
 }
 
@@ -637,12 +627,17 @@ async function withMediaFetchRetry<T>(
   if (!retry) {
     return await fn();
   }
-  const callerShouldRetry = retry.shouldRetry;
   return await retryAsync(fn, {
     label: "media:fetch",
     ...retry,
     shouldRetry: (err, attempt) =>
-      callerShouldRetry ? callerShouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep:
+      retry.sleep ??
+      ((delay) =>
+        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
+          throw createMediaFetchFailure(redactMediaUrl(options.url), cause);
+        })),
   });
 }
 
@@ -727,7 +722,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     });
 
     const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
-    await assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
+    assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
@@ -742,11 +737,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       if (err instanceof MediaFetchError) {
         throw err;
       }
-      throw new MediaFetchError(
-        "fetch_failed",
-        `Failed to fetch media from ${redactMediaUrl(res.url || options.url)}: ${formatErrorMessage(err)}`,
-        { cause: err },
-      );
+      throw createMediaFetchFailure(redactMediaUrl(res.url || options.url), err);
     }
     let fileName = resolveRemoteFileName({
       res,

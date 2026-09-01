@@ -120,7 +120,10 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       typeof document !== "undefined" && document.visibilityState === "hidden"
         ? []
         : visibleSessionKeys();
-    const signature = JSON.stringify(sessionKeys);
+    const agentId = sessionKeys.some((key) => !key.startsWith("agent:"))
+      ? snapshot.assistantAgentId
+      : undefined;
+    const signature = JSON.stringify({ agentId, sessionKeys });
     if (snapshot.hello === lastHello && signature === lastSignature) {
       if (
         !isActive() &&
@@ -140,7 +143,10 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       snapshot.hello === lastHello &&
       signature === lastSignature;
     retry.cancel();
-    const request = client.request(SESSION_VIEWERS_SET_METHOD, { sessionKeys });
+    const request = client.request(SESSION_VIEWERS_SET_METHOD, {
+      ...(agentId ? { agentId } : {}),
+      sessionKeys,
+    });
     void request
       .then(() => {
         if (isCurrentRequest()) {

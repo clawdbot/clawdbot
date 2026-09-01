@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveBundledChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-bundled.js";
+import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -18,6 +18,10 @@ import {
 } from "./codex-route-model-ref.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
+import {
+  modelEntryWithRuntimePolicy,
+  selectedCanonicalModelRefsForRuntimePolicy,
+} from "./legacy-runtime-model-policy.js";
 import {
   legacyRuntimeModelAliasRequiresRuntimePolicy,
   listLegacyRuntimeModelProviderAliases,
@@ -150,8 +154,11 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     const promotion = resolveSingleAccountPromotion({
       channelKey: channelId,
       channel: rawChannel,
-      resolveBundledSurface: resolveBundledChannelSetupPromotionSurface,
+      resolveBundledSurface: (key) => resolveDiscoveredChannelSetupPromotionSurface(key, cfg),
     });
+    if (promotion.kind === "preserve-root") {
+      continue;
+    }
     // Defer only undeclared keys outside generic + legacy coverage. A partial
     // accounts.default would make later runs skip and permanently strand them at root.
     if (promotion.shouldDeferPromotion) {
@@ -262,6 +269,15 @@ function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
     : undefined;
 }
 
+function migrateUnblockedLegacyRuntimeModelRef(
+  modelRef: string,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+) {
+  return isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities })
+    ? null
+    : migrateLegacyRuntimeModelRef(modelRef);
+}
+
 function migratedRuntimeRequiresPolicy(legacyProvider: string): boolean {
   return legacyRuntimeModelAliasRequiresRuntimePolicy(legacyProvider);
 }
@@ -300,9 +316,7 @@ function normalizeLegacyRuntimeAgentModelConfig(
   selectedRefs: SelectedRuntimeRef[];
 } {
   if (typeof raw === "string") {
-    const migrated = isBlockedLegacyCodexModelRef({ modelRef: raw, blockedModelIdentities })
-      ? null
-      : migrateLegacyRuntimeModelRef(raw);
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(raw, blockedModelIdentities);
     return migrated
       ? {
           value: migrated.ref,
@@ -324,9 +338,8 @@ function normalizeLegacyRuntimeAgentModelConfig(
   }
 
   const migratedPrimary =
-    typeof raw.primary === "string" &&
-    !isBlockedLegacyCodexModelRef({ modelRef: raw.primary, blockedModelIdentities })
-      ? migrateLegacyRuntimeModelRef(raw.primary)
+    typeof raw.primary === "string"
+      ? migrateUnblockedLegacyRuntimeModelRef(raw.primary, blockedModelIdentities)
       : null;
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
@@ -348,12 +361,10 @@ function normalizeLegacyRuntimeAgentModelConfig(
       if (typeof fallback !== "string") {
         return fallback;
       }
-      const migratedFallback = isBlockedLegacyCodexModelRef({
-        modelRef: fallback,
+      const migratedFallback = migrateUnblockedLegacyRuntimeModelRef(
+        fallback,
         blockedModelIdentities,
-      })
-        ? null
-        : migrateLegacyRuntimeModelRef(fallback);
+      );
       if (
         migratedFallback &&
         (migratedFallback.runtime === selectedRuntime ||
@@ -390,20 +401,6 @@ function runtimeNeedsExplicitModelPolicy(runtime: string | undefined): runtime i
   return Boolean(runtime && runtime !== "codex");
 }
 
-function modelEntryWithRuntimePolicy(entry: unknown, runtime: string): Record<string, unknown> {
-  const base = isRecord(entry) ? { ...entry } : {};
-  const currentRuntime = isRecord(base.agentRuntime)
-    ? normalizeOptionalLowercaseString(base.agentRuntime.id)
-    : undefined;
-  if (!currentRuntime || currentRuntime === "auto") {
-    base.agentRuntime = {
-      ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
-      id: runtime,
-    };
-  }
-  return base;
-}
-
 function mergeModelEntryWithRuntimePolicy(
   legacyEntry: unknown,
   currentEntry: unknown,
@@ -411,13 +408,16 @@ function mergeModelEntryWithRuntimePolicy(
   requiresRuntimePolicy = runtimeNeedsExplicitModelPolicy(runtime),
 ): unknown {
   const merged = mergeModelEntry(legacyEntry, currentEntry);
-  return runtime && requiresRuntimePolicy ? modelEntryWithRuntimePolicy(merged, runtime) : merged;
+  return runtime && requiresRuntimePolicy
+    ? modelEntryWithRuntimePolicy(merged, runtime).entry
+    : merged;
 }
 
 function normalizeLegacyRuntimeAllowlistModels(
   rawModels: unknown,
   selectedRuntime: string | undefined,
   selectedRuntimeRequiresPolicy: boolean,
+  policyRuntimes: ReadonlySet<string>,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): {
   value?: unknown;
@@ -436,19 +436,19 @@ function normalizeLegacyRuntimeAllowlistModels(
     requiresRuntimePolicy: boolean;
   }> = [];
   for (const [rawKey, entry] of Object.entries(rawModels)) {
-    const migrated = isBlockedLegacyCodexModelRef({
-      modelRef: rawKey,
-      blockedModelIdentities,
-    })
-      ? null
-      : migrateLegacyRuntimeModelRef(rawKey);
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(rawKey, blockedModelIdentities);
     if (
       migrated &&
       (migrated.runtime === selectedRuntime ||
-        migrated.legacyProvider === LEGACY_CODEX_CLI_RUNTIME_ID)
+        migrated.legacyProvider === LEGACY_CODEX_CLI_RUNTIME_ID ||
+        policyRuntimes.has(migrated.runtime))
     ) {
       changed = true;
-      next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+      // Legacy keys only feed the implicit allowlist; once an explicit allowlist
+      // names this runtime, the canonical key replaces them outright.
+      if (!policyRuntimes.has(migrated.runtime)) {
+        next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+      }
       legacyEntries.push({
         migratedKey: migrated.ref,
         entry,
@@ -470,6 +470,44 @@ function normalizeLegacyRuntimeAllowlistModels(
   return { value: next, changed };
 }
 
+function normalizeLegacyRuntimeModelPolicy(
+  rawPolicy: unknown,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): {
+  value?: unknown;
+  runtimes: ReadonlySet<string>;
+  selectedRefs: readonly SelectedRuntimeRef[];
+} {
+  if (!isRecord(rawPolicy) || !Array.isArray(rawPolicy.allow)) {
+    return { value: rawPolicy, runtimes: new Set(), selectedRefs: [] };
+  }
+
+  const runtimes = new Set<string>();
+  const selectedRefs: SelectedRuntimeRef[] = [];
+  const allow = rawPolicy.allow.map((entry) => {
+    if (typeof entry !== "string") {
+      return entry;
+    }
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(entry, blockedModelIdentities);
+    if (!migrated) {
+      return entry;
+    }
+    runtimes.add(migrated.runtime);
+    selectedRefs.push({
+      ref: migrated.ref,
+      runtime: migrated.runtime,
+      requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
+    });
+    return migrated.ref;
+  });
+
+  return {
+    value: runtimes.size > 0 ? { ...rawPolicy, allow } : rawPolicy,
+    runtimes,
+    selectedRefs,
+  };
+}
+
 function ensureSelectedModelRuntimePolicies(
   rawModels: unknown,
   selectedRefs: readonly SelectedRuntimeRef[],
@@ -485,50 +523,13 @@ function ensureSelectedModelRuntimePolicies(
     }
     const current = next[ref];
     const updated = modelEntryWithRuntimePolicy(current, runtime);
-    if (JSON.stringify(updated) !== JSON.stringify(current ?? {})) {
-      next[ref] = updated;
-      changed = true;
+    if (!updated.changed) {
+      continue;
     }
+    next[ref] = updated.entry;
+    changed = true;
   }
   return { value: next, changed };
-}
-
-function selectedCanonicalModelRefsForRuntimePolicy(
-  rawModel: unknown,
-  provider: string,
-  runtime: string,
-  requiresRuntimePolicy: boolean,
-): SelectedRuntimeRef[] {
-  const refs: SelectedRuntimeRef[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const trimmed = rawRef.trim();
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash >= trimmed.length - 1) {
-      return;
-    }
-    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
-      return;
-    }
-    refs.push({ ref: trimmed, runtime, requiresRuntimePolicy });
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  if (!isRecord(rawModel)) {
-    return refs;
-  }
-  addRef(rawModel.primary);
-  if (Array.isArray(rawModel.fallbacks)) {
-    for (const fallback of rawModel.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
 }
 
 function normalizeLegacyCodexCliRuntimePinsInModels(
@@ -580,16 +581,25 @@ function normalizeLegacyRuntimeAgentContainer(
     );
   }
 
+  const modelPolicy = normalizeLegacyRuntimeModelPolicy(raw.modelPolicy, blockedModelIdentities);
   const models = normalizeLegacyRuntimeAllowlistModels(
     raw.models,
     model.selectedRuntime,
     model.selectedRuntimeRequiresPolicy,
+    modelPolicy.runtimes,
     blockedModelIdentities,
   );
   if (models.changed) {
     next.models = models.value;
     changed = true;
     changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
+  }
+
+  const policyRuntimes = ensureSelectedModelRuntimePolicies(next.models, modelPolicy.selectedRefs);
+  if (policyRuntimes.changed) {
+    next.models = policyRuntimes.value;
+    changed = true;
+    changes.push(`Preserved runtime policy for ${path}.modelPolicy.allow entries.`);
   }
 
   if (model.selectedRuntime) {
@@ -602,12 +612,14 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   if (legacyWholeAgentRuntime) {
-    const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(
+    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
       next.model ?? raw.model,
       legacyWholeAgentRuntime.provider,
-      legacyWholeAgentRuntime.runtime,
-      legacyWholeAgentRuntime.requiresRuntimePolicy,
-    );
+    ).map((ref) => ({
+      ref,
+      runtime: legacyWholeAgentRuntime.runtime,
+      requiresRuntimePolicy: legacyWholeAgentRuntime.requiresRuntimePolicy,
+    }));
     const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
     if (modelRuntimes.changed) {
       next.models = modelRuntimes.value;
@@ -616,6 +628,12 @@ function normalizeLegacyRuntimeAgentContainer(
         `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
       );
     }
+  }
+
+  if (modelPolicy.runtimes.size > 0) {
+    next.modelPolicy = modelPolicy.value;
+    changed = true;
+    changes.push(`Moved ${path}.modelPolicy.allow legacy runtime refs to canonical provider refs.`);
   }
 
   const codexCliRuntimePins = normalizeLegacyCodexCliRuntimePinsInModels(
@@ -747,6 +765,28 @@ export function normalizeLegacyRuntimeModelRefs(
     });
     if (changed) {
       nextAgents.list = nextList;
+    }
+  }
+
+  if (isRecord(rawAgents.entries)) {
+    let nextEntries: Record<string, unknown> | undefined;
+    for (const [agentId, entry] of Object.entries(rawAgents.entries)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const agent = normalizeLegacyRuntimeAgentContainer(
+        entry,
+        `agents.entries.${sanitizeForLog(agentId)}`,
+        changes,
+        blockedModelIdentities,
+      );
+      if (agent.changed) {
+        (nextEntries ??= { ...rawAgents.entries })[agentId] = agent.value;
+      }
+    }
+    if (nextEntries) {
+      nextAgents.entries = nextEntries;
+      changed = true;
     }
   }
 

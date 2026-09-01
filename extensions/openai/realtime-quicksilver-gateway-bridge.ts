@@ -1,17 +1,16 @@
 // Gateway-owned GPT-Live WebRTC bridge: werift media peer plus OpenAI sideband control.
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
-  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
-import { appendOpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
-import {
-  buildOpenAIQuicksilverDelegationPrompt,
-  type OpenAIQuicksilverTranscriptEntry,
-} from "./realtime-quicksilver-instructions.js";
+import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import type {
   OpenAIQuicksilverAudioPeerCallbacks,
   OpenAIQuicksilverAudioPeerContract,
@@ -26,14 +25,9 @@ import {
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
 import {
-  boundOpenAIQuicksilverContextItems,
-  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSession,
-  chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
-  parseOpenAIQuicksilverEvent,
   type OpenAIQuicksilverAuth,
-  type OpenAIQuicksilverInboundEvent,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
 
@@ -41,10 +35,6 @@ const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
 const QUICKSILVER_CONNECT_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
 
 function isAbortLikeError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -76,24 +66,6 @@ type ActiveSideband = {
   socket: OpenAIQuicksilverSocket;
   requestIds: OpenAIQuicksilverRequestIds;
 };
-
-type PendingDelegation = {
-  delegationId: string;
-  prompt: string;
-};
-
-const CONSULT_FAILURE_TEXT =
-  "The agent task failed. Tell the user it did not complete and offer to try again.";
-
-function decodeTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
 
 function normalizeSidebandCloseReason(reason: Buffer | string | undefined): string {
   const text = typeof reason === "string" ? reason : (reason?.toString("utf8") ?? "");
@@ -127,28 +99,10 @@ function waitForConnectStep<T>(promise: Promise<T>, signal: AbortSignal): Promis
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toError(error));
+        reject(toErrorObject(error, "OpenAI GPT-Live gateway relay failed"));
       },
     );
   });
-}
-
-function sendDelegationAppend(params: {
-  socket: OpenAIQuicksilverSocket;
-  delegationId: string;
-  text: string;
-  channel: "speakable" | "commentary";
-}): void {
-  for (const chunk of chunkOpenAIQuicksilverAppendText(params.text)) {
-    params.socket.send(
-      JSON.stringify({
-        type: "delegation.context.append",
-        delegation_item_id: params.delegationId,
-        channel: params.channel,
-        content: [{ type: "input_text", text: chunk }],
-      }),
-    );
-  }
 }
 
 /** Realtime voice bridge used only when a Gateway relay injects the agent runner. */
@@ -157,22 +111,48 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultSuppression = false;
 
   private abortController = new AbortController();
-  private activeDelegationId: string | undefined;
   private connectPromise: Promise<void> | undefined;
-  private consultController: AbortController | undefined;
-  private pendingDelegation: PendingDelegation | undefined;
+  private delegations: OpenAIQuicksilverDelegationController | undefined;
   private connected = false;
   private closed = false;
   private closeNotified = false;
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
-  private pendingAudio: Buffer = Buffer.alloc(0);
+  private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private ready = false;
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
-  private partialTranscriptRole: "user" | "assistant" | undefined;
 
-  constructor(private readonly config: OpenAIQuicksilverBridgeConfig) {}
+  constructor(private readonly config: OpenAIQuicksilverBridgeConfig) {
+    if (config.runAgentConsult) {
+      this.delegations = new OpenAIQuicksilverDelegationController({
+        getSocket: () => this.sideband?.socket,
+        isCanceledError: isAbortLikeError,
+        logger: config.logger,
+        onError: config.onError,
+        onFatalError: (error) => this.fail(error),
+        onSessionStarted: (expiresAt) => {
+          if (expiresAt !== undefined) {
+            this.scheduleExpiry(
+              Math.min(QUICKSILVER_SESSION_TTL_MS, Math.max(0, expiresAt * 1000 - Date.now())),
+            );
+          }
+          if (!this.ready) {
+            this.ready = true;
+            this.config.onReady?.();
+          }
+        },
+        onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
+        onWireEventType: (eventType) => {
+          this.config.onEvent?.({ direction: "server", type: eventType });
+          if (eventType === "output_audio_buffer.cleared") {
+            this.config.onClearAudio("barge-in");
+          }
+        },
+        runAgentConsult: config.runAgentConsult,
+        signal: this.abortController.signal,
+      });
+    }
+  }
 
   connect(): Promise<void> {
     if (this.closed) {
@@ -187,19 +167,14 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       this.peer.sendAudio(audio);
     } else if (!this.closed && !this.abortController.signal.aborted) {
       // Relay capture starts before asynchronous peer creation and may recycle its input buffers.
-      this.pendingAudio = appendOpenAIQuicksilverPendingAudio(this.pendingAudio, audio);
+      this.pendingAudio.append(audio);
     }
   }
 
   setMediaTimestamp(_ts: number): void {}
 
   sendUserMessage(text: string): void {
-    const delegationId = this.activeDelegationId;
-    const socket = this.sideband?.socket;
-    if (!delegationId || !socket || socket.readyState !== WEBSOCKET_OPEN || !text.trim()) {
-      return;
-    }
-    sendDelegationAppend({ socket, delegationId, text: text.trim(), channel: "speakable" });
+    this.delegations?.sendToActiveDelegation(text, "speakable");
   }
 
   submitToolResult(): void {
@@ -208,8 +183,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
 
   acknowledgeMark(): void {}
 
-  close(): void {
-    this.teardown("completed");
+  close(options?: RealtimeVoiceCloseOptions): void {
+    this.teardown("completed", undefined, options?.disposition ?? "abort");
   }
 
   isConnected(): boolean {
@@ -263,8 +238,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       );
       this.peer = await waitForConnectStep(peerPromise, connectSignal);
       if (this.pendingAudio.length > 0) {
-        this.peer.sendAudio(this.pendingAudio);
-        this.pendingAudio = Buffer.alloc(0);
+        const pendingAudio = this.pendingAudio;
+        // Detach synchronously before adoption so bridge teardown can only clear
+        // the new owner and no capture can interleave with the transfer.
+        this.pendingAudio = new OpenAIQuicksilverPendingAudio();
+        this.peer.adoptPendingAudio(pendingAudio);
       }
       const offerSdp = await waitForConnectStep(this.peer.createOffer(), connectSignal);
       const auth = await waitForConnectStep(this.config.resolveAuth(), connectSignal);
@@ -323,8 +301,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw new Error(describeSidebandClose(terminalEvent.code, reason));
       }
     } catch (error) {
-      this.releaseResources();
-      throw toError(error);
+      this.releaseResources("abort");
+      throw toErrorObject(error, "OpenAI GPT-Live gateway relay failed");
     }
   }
 
@@ -345,174 +323,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private handleSidebandFrame(data: RawData, isBinary: boolean): void {
-    if (isBinary) {
-      this.fail(new Error("OpenAI GPT-Live sideband returned an unexpected binary frame"));
-      return;
-    }
-    const payload = decodeTextFrame(data);
-    let eventType: string | undefined;
-    try {
-      const decoded = JSON.parse(payload) as Record<string, unknown>;
-      eventType = typeof decoded.type === "string" ? decoded.type : undefined;
-    } catch {
-      return;
-    }
-    if (eventType) {
-      // Audio belongs to the negotiated RTP track. Sideband audio is observable for proof,
-      // but never delivered twice into the relay sink.
-      this.config.onEvent?.({ direction: "server", type: eventType });
-      if (eventType === "output_audio_buffer.cleared") {
-        this.config.onClearAudio("barge-in");
-      }
-    }
-    const event = parseOpenAIQuicksilverEvent(payload);
-    if (event) {
-      this.handleSidebandEvent(event);
-    }
-  }
-
-  private handleSidebandEvent(event: OpenAIQuicksilverInboundEvent): void {
-    if (event.kind === "ignored") {
-      return;
-    }
-    if (event.kind === "unknown") {
-      this.config.logger.debug?.(`OpenAI GPT-Live ignored sideband event: ${event.eventType}`);
-      return;
-    }
-    if (event.kind === "session-started") {
-      if (event.expiresAt !== undefined) {
-        this.scheduleExpiry(
-          Math.min(QUICKSILVER_SESSION_TTL_MS, Math.max(0, event.expiresAt * 1000 - Date.now())),
-        );
-      }
-      if (!this.ready) {
-        this.ready = true;
-        this.config.onReady?.();
-      }
-      return;
-    }
-    if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
-      this.appendTranscript(event);
-      this.config.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
-      return;
-    }
-    if (event.kind === "error") {
-      const error = new Error(`OpenAI GPT-Live sideband error: ${event.message}`);
-      if (event.fatalAuth) {
-        this.fail(error);
-      } else {
-        this.config.logger.warn(error.message);
-      }
-      return;
-    }
-    if (event.kind === "audio") {
-      // The negotiated RTP track owns audio delivery; sideband audio would duplicate it.
-      return;
-    }
-    this.startDelegation(event.id, event.prompt);
-  }
-
-  private appendTranscript(
-    event: Extract<OpenAIQuicksilverInboundEvent, { kind: "transcript-delta" | "transcript-done" }>,
-  ): void {
-    const last = this.transcript.at(-1);
-    if (event.kind === "transcript-delta") {
-      if (last?.role === event.role && this.partialTranscriptRole === event.role) {
-        last.text += event.text;
-      } else {
-        this.transcript.push({ role: event.role, text: event.text });
-      }
-      this.partialTranscriptRole = event.role;
-    } else {
-      if (last?.role === event.role && this.partialTranscriptRole === event.role) {
-        last.text = event.text;
-      } else {
-        this.transcript.push({ role: event.role, text: event.text });
-      }
-      this.partialTranscriptRole = undefined;
-    }
-    this.transcript = boundOpenAIQuicksilverContextItems(this.transcript);
-  }
-
-  private startDelegation(delegationId: string, input: string): void {
-    if (this.closed || !input.trim()) {
-      return;
-    }
-    const transcript = this.transcript;
-    this.transcript = [];
-    this.partialTranscriptRole = undefined;
-    const prompt = buildOpenAIQuicksilverDelegationPrompt({ input, transcript });
-    this.activeDelegationId = delegationId;
-    if (this.consultController) {
-      this.pendingDelegation = { delegationId, prompt };
-      this.consultController.abort(new Error("GPT-Live delegation superseded"));
-      return;
-    }
-    this.launchDelegation({ delegationId, prompt });
-  }
-
-  private launchDelegation(delegation: PendingDelegation): void {
-    if (this.closed) {
-      return;
-    }
-    const runAgentConsult = this.config.runAgentConsult as RealtimeVoiceAgentConsultRunner;
-    const controller = new AbortController();
-    this.consultController = controller;
-    this.activeDelegationId = delegation.delegationId;
-    const signal = AbortSignal.any([this.abortController.signal, controller.signal]);
-    void this.runDelegation({
-      delegationId: delegation.delegationId,
-      prompt: delegation.prompt,
-      runAgentConsult,
-      signal,
-    }).finally(() => {
-      if (this.consultController === controller) {
-        this.consultController = undefined;
-        const pending = this.pendingDelegation;
-        this.pendingDelegation = undefined;
-        if (pending) {
-          this.launchDelegation(pending);
-        } else {
-          this.activeDelegationId = undefined;
-        }
-      }
-    });
-  }
-
-  private async runDelegation(params: {
-    delegationId: string;
-    prompt: string;
-    runAgentConsult: RealtimeVoiceAgentConsultRunner;
-    signal: AbortSignal;
-  }): Promise<void> {
-    let text: string;
-    try {
-      const result = await params.runAgentConsult({ prompt: params.prompt, signal: params.signal });
-      if (params.signal.aborted) {
-        return;
-      }
-      text = boundOpenAIQuicksilverDelegationResult(result.text);
-    } catch (error) {
-      // Host steering aborts the runner's registered chat signal, not this bridge-owned signal.
-      // Abort-shaped rejection is therefore the runner boundary's cancellation marker.
-      if (params.signal.aborted || isAbortLikeError(error)) {
-        return;
-      }
-      this.config.logger.warn(
-        `OpenAI GPT-Live delegation consult failed: ${toError(error).message}`,
-      );
-      text = CONSULT_FAILURE_TEXT;
-    }
-    const socket = this.sideband?.socket;
-    if (!socket || socket.readyState !== WEBSOCKET_OPEN) {
-      return;
-    }
-    sendDelegationAppend({
-      socket,
-      delegationId: params.delegationId,
-      text,
-      channel: "speakable",
-    });
+    this.delegations?.handleFrame(data, isBinary);
   }
 
   private scheduleExpiry(ttlMs: number): void {
@@ -527,14 +338,18 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     this.teardown("error", () => this.config.onError?.(error));
   }
 
-  private teardown(reason: "completed" | "error", beforeClose?: () => void): void {
+  private teardown(
+    reason: "completed" | "error",
+    beforeClose?: () => void,
+    disposition: RealtimeVoiceCloseDisposition = "abort",
+  ): void {
     if (this.closed) {
       return;
     }
     // Claim terminal ownership and release resources before callbacks so reentrant close
     // cannot replace the outcome, while finally preserves error-before-close ordering.
     this.closed = true;
-    this.releaseResources();
+    this.releaseResources(disposition);
     try {
       beforeClose?.();
     } finally {
@@ -545,15 +360,16 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private releaseResources(): void {
+  private releaseResources(disposition: RealtimeVoiceCloseDisposition): void {
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
-    this.pendingAudio = Buffer.alloc(0);
+    this.pendingAudio.clear();
+    if (disposition === "detach") {
+      this.delegations?.detach();
+    } else {
+      this.delegations?.stop(new Error("GPT-Live delegation stopped"));
+    }
     this.abortController.abort(new Error("GPT-Live gateway relay bridge closed"));
-    this.consultController?.abort(new Error("GPT-Live delegation stopped"));
-    this.consultController = undefined;
-    this.pendingDelegation = undefined;
-    this.activeDelegationId = undefined;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;

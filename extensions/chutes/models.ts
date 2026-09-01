@@ -3,7 +3,7 @@
  */
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
@@ -14,8 +14,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { normalizeChutesModelPricing } from "./pricing-api.js";
 
 const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
 
@@ -36,13 +36,10 @@ function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefin
 }
 
 /** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
-export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = CHUTES_MANIFEST_CATALOG.models.map(
-  buildManifestModelDefinition({
-    providerId: "chutes",
-    catalog: CHUTES_MANIFEST_CATALOG,
-    decorate: decorateChutesModelDefinition,
-  }),
-);
+export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "chutes",
+  catalog: CHUTES_MANIFEST_CATALOG,
+}).models.map(decorateChutesModelDefinition);
 
 interface ChutesModelEntry {
   id: string;
@@ -50,12 +47,9 @@ interface ChutesModelEntry {
   supported_features?: string[];
   input_modalities?: string[];
   context_length?: number;
+  max_model_len?: number;
   max_output_length?: number;
-  pricing?: {
-    prompt?: number;
-    completion?: number;
-    input_cache_read?: number;
-  };
+  pricing?: unknown;
   [key: string]: unknown;
 }
 
@@ -87,13 +81,17 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
       input: (entry.input_modalities || ["text"]).filter(
         (item): item is "text" | "image" => item === "text" || item === "image",
       ),
-      cost: {
-        input: entry.pricing?.prompt || 0,
-        output: entry.pricing?.completion || 0,
-        cacheRead: entry.pricing?.input_cache_read || 0,
+      // Runtime requires a cost object; unknown pricing must not retain partial paid rates.
+      cost: normalizeChutesModelPricing(entry.pricing) ?? {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
         cacheWrite: 0,
       },
-      contextWindow: asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+      contextWindow:
+        asPositiveSafeInteger(entry.context_length) ??
+        asPositiveSafeInteger(entry.max_model_len) ??
+        CHUTES_DEFAULT_CONTEXT_WINDOW,
       maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
       compat: { supportsUsageInStreaming: false },
     });
@@ -103,9 +101,6 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
 
 /** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
-  if (isChutesModelDiscoveryTestEnvironment()) {
-    return structuredClone(CHUTES_MODEL_CATALOG);
-  }
   const provider = await buildLiveModelProviderConfig({
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,

@@ -7,8 +7,6 @@ import {
   type BackgroundTasksHost,
 } from "./chat-background-tasks.ts";
 
-const openSession = { onOpenSession: () => {} };
-
 function flushAsync() {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
@@ -70,11 +68,11 @@ async function refreshingHost(tasks: TaskSummary[], initial = false) {
     hello: null,
     requestUpdate: vi.fn(),
   };
-  createBackgroundTasksProps(host, openSession);
+  createBackgroundTasksProps(host);
   if (!initial) {
     await flushAsync();
     deferRefresh = true;
-    createBackgroundTasksProps(host, openSession).onRefresh();
+    createBackgroundTasksProps(host).onRefresh();
   }
   return {
     host,
@@ -93,6 +91,141 @@ afterEach(() => {
 });
 
 describe("background tasks concurrent snapshots", () => {
+  it("keeps global owner switches separate through canonical acknowledgments and late responses", async () => {
+    const mainTask = makeTask({ id: "main-task", sessionKey: "global" });
+    const workTask = makeTask({ id: "work-task", sessionKey: "global", agentId: "work" });
+    let resolveMain!: (value: { tasks: TaskSummary[] }) => void;
+    const mainPage = new Promise<{ tasks: TaskSummary[] }>((resolve) => {
+      resolveMain = resolve;
+    });
+    let deferMain = true;
+    const request = vi.fn((_method: string, params: { agentId?: string }) =>
+      params.agentId === "work"
+        ? Promise.resolve({ tasks: [workTask] })
+        : deferMain
+          ? mainPage
+          : Promise.resolve({ tasks: [mainTask] }),
+    );
+    const host = {
+      sessionKey: "agent:main:main",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+    } satisfies BackgroundTasksHost;
+    const previousProps = createBackgroundTasksProps(host);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ sessionKey: "global", agentId: "main" });
+
+    host.sessionKey = "agent:work:main";
+    host.assistantAgentId = "work";
+    expect(createBackgroundTasksProps(host).tasks).toBeNull();
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    host.sessionKey = "global";
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    previousProps.onRefresh();
+    previousProps.onLoadDetail?.(mainTask);
+    previousProps.onCancel(mainTask.id);
+    expect(request).toHaveBeenCalledTimes(4);
+
+    resolveMain({ tasks: [mainTask] });
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([workTask]);
+    deferMain = false;
+    host.assistantAgentId = "main";
+    expect(createBackgroundTasksProps(host).tasks).toBeNull();
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([mainTask]);
+    expect(request).toHaveBeenCalledTimes(6);
+  });
+
+  it("uses scoped snapshots for unseen bare requester events without adopting the executor owner", async () => {
+    const task = makeTask({
+      id: "cross-owner-task",
+      agentId: "work",
+      sessionKey: "global",
+      ownerKey: "global",
+      childSessionKey: "agent:work:subagent:child",
+    });
+    let listed = false;
+    const request = vi.fn((_method: string, params: { agentId?: string; sessionKey?: string }) =>
+      Promise.resolve({
+        tasks:
+          listed && (params.agentId === "main" || params.sessionKey === task.childSessionKey)
+            ? [task]
+            : [],
+      }),
+    );
+    const host = (assistantAgentId: string, sessionKey = "global") => ({
+      sessionKey,
+      assistantAgentId,
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+    });
+    const main = host("main");
+    const work = host("work");
+    const child = host("work", task.childSessionKey);
+    for (const pane of [main, work, child]) {
+      createBackgroundTasksProps(pane);
+    }
+    await flushAsync();
+    listed = true;
+    for (const pane of [main, work, child]) {
+      handleBackgroundTasksEvent(pane, { action: "upserted", task });
+    }
+    expect(createBackgroundTasksProps(work).tasks).toEqual([]);
+    await flushAsync();
+    expect(createBackgroundTasksProps(main).tasks).toEqual([task]);
+    expect(createBackgroundTasksProps(work).tasks).toEqual([]);
+    expect(createBackgroundTasksProps(child).tasks).toEqual([task]);
+
+    const completed = { ...task, status: "completed", updatedAt: 3_000 };
+    const callsBefore = request.mock.calls.length;
+    handleBackgroundTasksEvent(main, { action: "upserted", task: completed });
+    expect(createBackgroundTasksProps(main).tasks?.[0]?.status).toBe("completed");
+    expect(request).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it.each([false, true])(
+    "keeps ambiguous events out of an in-flight snapshot (presented=%s)",
+    async (presented) => {
+      const task = makeTask({ id: "new-global-task", sessionKey: "global", agentId: "work" });
+      let resolveInitial!: (value: { tasks: TaskSummary[] }) => void;
+      const initial = new Promise<{ tasks: TaskSummary[] }>((resolve) => {
+        resolveInitial = resolve;
+      });
+      let listed = false;
+      const request = vi.fn(() => (listed ? Promise.resolve({ tasks: [task] }) : initial));
+      const host = {
+        sessionKey: "global",
+        assistantAgentId: "main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        hello: null,
+      };
+      createBackgroundTasksProps(host);
+      listed = true;
+      handleBackgroundTasksEvent(host, { action: "upserted", task }, presented);
+      handleBackgroundTasksEvent(host, { action: "upserted", task }, presented);
+      expect(createBackgroundTasksProps(host, { presented: false }).tasks).toBeNull();
+      expect(request).toHaveBeenCalledTimes(2);
+      resolveInitial({ tasks: [] });
+      await flushAsync();
+      if (!presented) {
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(createBackgroundTasksProps(host, { presented: false }).tasks).toBeNull();
+      }
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(createBackgroundTasksProps(host).tasks).toEqual([task]);
+    },
+  );
+
   it.each([
     {
       name: "a terminal event",
@@ -124,7 +257,7 @@ describe("background tasks concurrent snapshots", () => {
   ])("replays $name during the initial load without a stale second load", async (test) => {
     const refresh = await refreshingHost(test.stale, true);
     expect(refresh.request).toHaveBeenCalledTimes(2);
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks).toBeNull();
+    expect(createBackgroundTasksProps(refresh.host).tasks).toBeNull();
 
     handleBackgroundTasksEvent(refresh.host, test.event);
     handleBackgroundTasksEvent(refresh.host, {
@@ -142,10 +275,7 @@ describe("background tasks concurrent snapshots", () => {
 
     expect(refresh.request).toHaveBeenCalledTimes(2);
     expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => [
-        task.id,
-        task.status,
-      ]),
+      createBackgroundTasksProps(refresh.host).tasks?.map((task) => [task.id, task.status]),
     ).toEqual(test.expected);
   });
 
@@ -166,12 +296,35 @@ describe("background tasks concurrent snapshots", () => {
     refresh.resolveRecent({ tasks: stale });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(refresh.host, openSession);
+    const props = createBackgroundTasksProps(refresh.host);
     expect(props.error).toBe("Initial task snapshot unavailable");
     expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([
       ["task-snapshot-failed", "completed"],
     ]);
     expect(refresh.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches after a hidden registry restore invalidates the initial snapshot", async () => {
+    const stale = [makeTask({ id: "task-before-restore" })];
+    const replacement = [makeTask({ id: "task-after-restore", updatedAt: 4_000 })];
+    const refresh = await refreshingHost(stale, true);
+    refresh.setFallbackTasks(replacement);
+
+    handleBackgroundTasksEvent(refresh.host, { action: "restored" }, false);
+    refresh.resolveActive({ tasks: stale });
+    refresh.resolveRecent({ tasks: stale });
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(refresh.host, { presented: false }).tasks).toBeNull();
+    expect(refresh.request).toHaveBeenCalledTimes(2);
+
+    createBackgroundTasksProps(refresh.host);
+    await flushAsync();
+
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-after-restore",
+    ]);
+    expect(refresh.request).toHaveBeenCalledTimes(4);
   });
 
   it("preserves all ten unopened task completions after both stale pages resolve", async () => {
@@ -193,7 +346,7 @@ describe("background tasks concurrent snapshots", () => {
     refresh.resolveRecent({ tasks });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(refresh.host, openSession);
+    const props = createBackgroundTasksProps(refresh.host);
     expect(props.tasks).toHaveLength(10);
     expect(new Set(props.tasks?.map((task) => task.id)).size).toBe(10);
     expect(props.tasks?.every((task) => task.status === "completed")).toBe(true);
@@ -207,19 +360,15 @@ describe("background tasks concurrent snapshots", () => {
     const tasks = [makeTask({ id: "task-cancelled" })];
     const refresh = await refreshingHost(tasks);
 
-    createBackgroundTasksProps(refresh.host, openSession).onCancel("task-cancelled");
+    createBackgroundTasksProps(refresh.host).onCancel("task-cancelled");
     await flushAsync();
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks?.[0]?.status).toBe(
-      "cancelled",
-    );
+    expect(createBackgroundTasksProps(refresh.host).tasks?.[0]?.status).toBe("cancelled");
 
     refresh.resolveActive({ tasks });
     refresh.resolveRecent({ tasks });
     await flushAsync();
 
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks?.[0]?.status).toBe(
-      "cancelled",
-    );
+    expect(createBackgroundTasksProps(refresh.host).tasks?.[0]?.status).toBe("cancelled");
   });
 
   it("discards an in-flight snapshot after a same-client connection-epoch change", async () => {
@@ -229,19 +378,19 @@ describe("background tasks concurrent snapshots", () => {
     refresh.setFallbackTasks(replacement);
     refresh.host.connectionEpoch = 2;
 
-    createBackgroundTasksProps(refresh.host, openSession);
+    createBackgroundTasksProps(refresh.host);
     await flushAsync();
-    expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => task.id),
-    ).toEqual(["task-new-account"]);
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-new-account",
+    ]);
 
     refresh.resolveActive({ tasks: stale });
     refresh.resolveRecent({ tasks: stale });
     await flushAsync();
 
-    expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => task.id),
-    ).toEqual(["task-new-account"]);
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-new-account",
+    ]);
     expect(refresh.request).toHaveBeenCalledTimes(4);
   });
 });

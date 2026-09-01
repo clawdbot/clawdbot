@@ -1,15 +1,13 @@
 // Fixture Config tests cover fixture config script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fixturePath = path.resolve("scripts/e2e/lib/fixture.mjs");
 
-function makeTempRoot(): string {
-  return mkdtempSync(path.join(tmpdir(), "openclaw-fixture-config-"));
-}
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function runFixture(
   root: string,
@@ -32,124 +30,69 @@ function runFixture(
 }
 
 describe("scripts/e2e/lib/fixture.mjs config commands", () => {
-  it("rejects loose gateway port env values instead of parsing prefixes", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "config-reload", [], { PORT: "18789tcp" });
+  it.each<[string, string[], Record<string, string>, string]>([
+    ["config-reload", [], { PORT: "18789tcp" }, "invalid PORT: 18789tcp"],
+    ["config-reload", [], { PORT: "65536" }, "invalid PORT: 65536"],
+    ["browser-cdp", [], { CDP_PORT: "19222http" }, "invalid CDP_PORT: 19222http"],
+    ["browser-cdp", [], { CDP_PORT: "65536" }, "invalid CDP_PORT: 65536"],
+    [
+      "openwebui-config",
+      ["test-key"],
+      { OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: "300s" },
+      "invalid OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: 300s",
+    ],
+  ])("rejects %s arguments %j and env %j", (command, args, env, message) => {
+    const root = tempRoots.make("openclaw-fixture-config-");
+    const result = runFixture(root, command, args, env);
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid PORT: 18789tcp");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects out-of-range gateway port env values", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "config-reload", [], { PORT: "65536" });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid PORT: 65536");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
   });
 
   it("writes strict positive browser CDP ports into generated config", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "19223", PORT: "19000" });
+    const root = tempRoots.make("openclaw-fixture-config-");
+    const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "19223", PORT: "19000" });
 
-      expect(result.status).toBe(0);
-      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-      expect(config.gateway.port).toBe(19000);
-      expect(config.browser.noSandbox).toBe(true);
-      expect(config.browser.extraArgs).toEqual([
-        "--remote-debugging-address=127.0.0.1",
-        "about:blank",
-      ]);
-      expect(config.browser.profiles["docker-cdp"].cdpUrl).toBe("http://127.0.0.1:19223");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects loose browser CDP port env values", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "19222http" });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid CDP_PORT: 19222http");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects out-of-range browser CDP port env values", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "65536" });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid CDP_PORT: 65536");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects loose Open WebUI provider timeout values", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "openwebui-config", ["test-key"], {
-        OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: "300s",
-      });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: 300s");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(result.status).toBe(0);
+    const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+    expect(config.gateway.port).toBe(19000);
+    expect(config.browser.noSandbox).toBe(true);
+    expect(config.browser.extraArgs).toEqual([
+      "--remote-debugging-address=127.0.0.1",
+      "about:blank",
+    ]);
+    expect(config.browser.profiles["docker-cdp"].cdpUrl).toBe("http://127.0.0.1:19223");
   });
 
   it("writes strict positive Open WebUI provider timeouts into generated config", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "openwebui-config", ["test-key"], {
-        OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: "300",
-      });
+    const root = tempRoots.make("openclaw-fixture-config-");
+    const result = runFixture(root, "openwebui-config", ["test-key"], {
+      OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS: "300",
+    });
 
-      expect(result.status).toBe(0);
-      const batch = JSON.parse(readFileSync(path.join(root, "batch.json"), "utf8"));
-      expect(
-        batch.find(
-          (entry: { path: string }) => entry.path === "models.providers.openai.timeoutSeconds",
-        )?.value,
-      ).toBe(300);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(result.status).toBe(0);
+    const batch = JSON.parse(readFileSync(path.join(root, "batch.json"), "utf8"));
+    expect(
+      batch.find(
+        (entry: { path: string }) => entry.path === "models.providers.openai.timeoutSeconds",
+      )?.value,
+    ).toBe(300);
   });
 
   it("writes OpenAI web-search minimal config for the package scenario", () => {
-    const root = makeTempRoot();
-    try {
-      const result = runFixture(root, "openai-web-search-minimal-config");
+    const root = tempRoots.make("openclaw-fixture-config-");
+    const result = runFixture(root, "openai-web-search-minimal-config");
 
-      expect(result.status).toBe(0);
-      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-      expect(config.agents.defaults.model.primary).toBe("openai/gpt-5");
-      expect(config.models.providers.openai).toMatchObject({
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        request: { allowPrivateNetwork: true },
-      });
-      expect(config.tools.web.search).toEqual({ enabled: true, maxResults: 3 });
-      expect(config.plugins.entries.openai).toEqual({ enabled: true });
-      expect(config.gateway.auth).toEqual({ mode: "token", token: "test-token" });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(result.status).toBe(0);
+    const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+    expect(config.agents.defaults.model.primary).toBe("openai/gpt-5");
+    expect(config.models.providers.openai).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      request: { allowPrivateNetwork: true },
+    });
+    expect(config.tools.web.search).toEqual({ enabled: true, maxResults: 3 });
+    expect(config.plugins.entries.openai).toEqual({ enabled: true });
+    expect(config.gateway.auth).toEqual({ mode: "token", token: "test-token" });
   });
 });

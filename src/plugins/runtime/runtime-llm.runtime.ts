@@ -1,19 +1,30 @@
 // Runtime LLM helpers adapt plugin provider hooks into the core model runtime.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeBuiltInProviderModelId,
+  stripSelfProviderModelPrefix,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { modelKey } from "../../agents/model-ref-shared.js";
-import { normalizeModelRef } from "../../agents/model-selection.js";
-import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
+import { normalizeModelRef } from "../../agents/model-ref-shared.js";
+import type { UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugin-usage-provenance.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { modelKey } from "../../shared/model-key.js";
+import {
+  estimateAggregateUsageCost,
+  estimateUsageCost,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
   isIsolatedAgentRuntimeRequest,
@@ -21,7 +32,6 @@ import {
 } from "./runtime-llm-isolated.js";
 import type {
   LlmCompleteCaller,
-  LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmCompleteResult,
   LlmCompleteUsage,
@@ -92,19 +102,6 @@ function normalizeCaller(
   };
 }
 
-function completionError(
-  code: LlmCompleteErrorCode,
-  message: string,
-  cause?: unknown,
-): Error & { code: LlmCompleteErrorCode } {
-  const error = new Error(message, cause === undefined ? undefined : { cause }) as Error & {
-    code: LlmCompleteErrorCode;
-  };
-  error.name = "LlmCompleteError";
-  error.code = code;
-  return error;
-}
-
 function resolveTrustedCaller(authority?: RuntimeLlmAuthority): LlmCompleteCaller {
   if (authority?.caller?.kind === "context-engine") {
     return normalizeCaller(authority.caller);
@@ -159,8 +156,8 @@ async function resolveAgentId(params: {
     }
     return requestedAgentId;
   }
-  const { resolveDefaultAgentId } = await import("../../agents/agent-scope.js");
-  return resolveDefaultAgentId(params.cfg);
+  const { resolveAmbientOwnerAgentId } = await import("../../agents/agent-scope.js");
+  return resolveAmbientOwnerAgentId(params.cfg);
 }
 
 function buildSystemPrompt(params: LlmCompleteParams): string | undefined {
@@ -206,7 +203,7 @@ function buildMessages(params: {
 }
 
 function readFiniteNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
@@ -226,37 +223,79 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   );
 }
 
-function buildUsage(params: {
-  rawUsage: unknown;
-  normalized: NormalizedUsage | undefined;
+function finalizeCompletion(params: {
   cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): LlmCompleteUsage {
+  hostPluginId?: string;
+  suppressUsage?: boolean;
+  rawUsage: unknown;
+  logger: RuntimeLogger;
+  result: Omit<LlmCompleteResult, "usage">;
+}): LlmCompleteResult {
+  const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
   const costConfig = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
+    provider: params.result.provider,
+    model: params.result.model,
     config: params.cfg,
   });
+  // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
+  const estimateCost =
+    params.result.execution.mode === "direct-provider"
+      ? estimateUsageCost
+      : estimateAggregateUsageCost;
   const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
-  return {
-    ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
-    ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
-    ...(params.normalized?.cacheRead !== undefined
-      ? { cacheReadTokens: params.normalized.cacheRead }
-      : {}),
-    ...(params.normalized?.cacheWrite !== undefined
-      ? { cacheWriteTokens: params.normalized.cacheWrite }
-      : {}),
-    ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
+    readExplicitCostUsd(params.rawUsage) ?? estimateCost({ usage: normalized, cost: costConfig });
+  const usage: LlmCompleteUsage = {
+    ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),
+    ...(normalized?.output !== undefined ? { outputTokens: normalized.output } : {}),
+    ...(normalized?.cacheRead !== undefined ? { cacheReadTokens: normalized.cacheRead } : {}),
+    ...(normalized?.cacheWrite !== undefined ? { cacheWriteTokens: normalized.cacheWrite } : {}),
+    ...(normalized?.total !== undefined ? { totalTokens: normalized.total } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
   };
-}
-
-function finiteOption(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
+  params.logger.info("plugin llm completion", {
+    caller: params.result.audit.caller,
+    purpose: params.result.audit.purpose,
+    sessionKey: params.result.audit.sessionKey,
+    agentId: params.result.agentId,
+    provider: params.result.provider,
+    model: params.result.model,
+    executionMode: params.result.execution.mode,
+    executionOwner: params.result.execution.owner,
+    usage,
+  });
+  const input = normalized?.input ?? 0;
+  const output = normalized?.output ?? 0;
+  const cacheRead = normalized?.cacheRead ?? 0;
+  const cacheWrite = normalized?.cacheWrite ?? 0;
+  const promptTokens = input + cacheRead + cacheWrite;
+  const total = normalized?.total ?? promptTokens + output;
+  const hasPositiveUsage = [input, output, cacheRead, cacheWrite, total, usage.costUsd].some(
+    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  if (params.suppressUsage !== true && isDiagnosticsEnabled(params.cfg) && hasPositiveUsage) {
+    emitTrustedDiagnosticEvent(
+      markHostPluginUsageDiagnosticEvent(
+        {
+          type: "model.usage",
+          ...(params.result.audit.sessionKey ? { sessionKey: params.result.audit.sessionKey } : {}),
+          agentId: params.result.agentId,
+          provider: params.result.provider,
+          model: params.result.model,
+          usage: {
+            input,
+            output,
+            cacheRead,
+            cacheWrite,
+            promptTokens,
+            total,
+          },
+          ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+        },
+        params.hostPluginId,
+      ),
+    );
+  }
+  return { ...params.result, usage };
 }
 
 function normalizeAllowedModelRef(raw: string): string | null {
@@ -271,8 +310,13 @@ function normalizeAllowedModelRef(raw: string): string | null {
   if (!parsed) {
     return null;
   }
-  const normalized = normalizeModelRef(parsed.provider, parsed.modelId);
-  return modelKey(normalized.provider, normalized.model);
+  // Operator allowlists already name canonical targets; keep policy checks independent
+  // of plugin metadata and provider-runtime discovery.
+  const modelId = normalizeBuiltInProviderModelId(
+    parsed.provider,
+    stripSelfProviderModelPrefix(parsed.provider, parsed.modelId),
+  );
+  return modelKey(parsed.provider, modelId);
 }
 
 function normalizeModelAllowlist(params: {
@@ -522,6 +566,11 @@ export function createRuntimeLlm(
       const pluginPolicy = resolvePluginLlmPolicy(cfg, pluginPolicyId);
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
       const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
+      const audit = {
+        caller,
+        ...(params.purpose ? { purpose: params.purpose } : {}),
+        ...(options.authority?.sessionKey ? { sessionKey: options.authority.sessionKey } : {}),
+      };
       const agentId = await resolveAgentId({
         request: params,
         cfg,
@@ -592,38 +641,20 @@ export function createRuntimeLlm(
           authProfileId:
             executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
         });
-        const normalizedUsage = normalizeUsage(result.usage as UsageLike | undefined);
-        const usage = buildUsage({
-          rawUsage: result.usage,
-          normalized: normalizedUsage,
+        return finalizeCompletion({
           cfg,
-          provider: result.provider,
-          model: result.model,
-        });
-        logger.info("plugin llm completion", {
-          caller,
-          purpose: params.purpose,
-          sessionKey: options.authority?.sessionKey,
-          agentId,
-          provider: result.provider,
-          model: result.model,
-          executionMode: params.execution.mode,
-          executionOwner: result.owner,
-          usage,
-        });
-        return {
-          text: result.text,
-          provider: result.provider,
-          model: result.model,
-          agentId,
-          usage,
-          execution: { mode: params.execution.mode, owner: result.owner },
-          audit: {
-            caller,
-            ...(params.purpose ? { purpose: params.purpose } : {}),
-            ...(options.authority?.sessionKey ? { sessionKey: options.authority.sessionKey } : {}),
+          hostPluginId: pluginPolicyId,
+          rawUsage: result.usage,
+          logger,
+          result: {
+            text: result.text,
+            provider: result.provider,
+            model: result.model,
+            agentId,
+            execution: { mode: params.execution.mode, owner: result.owner },
+            audit,
           },
-        };
+        });
       }
 
       const prepared = await prepareSimpleCompletionModelForAgent({
@@ -656,8 +687,8 @@ export function createRuntimeLlm(
         cfg,
         context,
         options: {
-          maxTokens: finiteOption(params.maxTokens),
-          temperature: finiteOption(params.temperature),
+          maxTokens: asFiniteNumber(params.maxTokens),
+          temperature: asFiniteNumber(params.temperature),
           ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },
@@ -667,43 +698,25 @@ export function createRuntimeLlm(
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
         .map((c) => c.text)
         .join("");
-      const normalizedUsage = normalizeUsage(result.usage as UsageLike | undefined);
-      const usage = buildUsage({
-        rawUsage: result.usage,
-        normalized: normalizedUsage,
+      return finalizeCompletion({
         cfg,
-        provider: prepared.selection.provider,
-        model: prepared.selection.modelId,
-      });
-
-      logger.info("plugin llm completion", {
-        caller,
-        purpose: params.purpose,
-        sessionKey: options.authority?.sessionKey,
-        agentId,
-        provider: prepared.selection.provider,
-        model: prepared.selection.modelId,
-        executionMode: "direct-provider",
-        executionOwner: { kind: "provider", id: prepared.selection.provider },
-        usage,
-      });
-
-      return {
-        text,
-        provider: prepared.selection.provider,
-        model: prepared.selection.modelId,
-        agentId,
-        usage,
-        execution: {
-          mode: "direct-provider",
-          owner: { kind: "provider", id: prepared.selection.provider },
+        hostPluginId: pluginPolicyId,
+        // Provider failures resolve as messages; only visible successful output owns usage.
+        suppressUsage: !text.trim() || !["stop", "length", "toolUse"].includes(result.stopReason),
+        rawUsage: result.usage,
+        logger,
+        result: {
+          text,
+          provider: prepared.selection.provider,
+          model: prepared.selection.modelId,
+          agentId,
+          execution: {
+            mode: "direct-provider",
+            owner: { kind: "provider", id: prepared.selection.provider },
+          },
+          audit,
         },
-        audit: {
-          caller,
-          ...(params.purpose ? { purpose: params.purpose } : {}),
-          ...(options.authority?.sessionKey ? { sessionKey: options.authority.sessionKey } : {}),
-        },
-      };
+      });
     },
   };
 }

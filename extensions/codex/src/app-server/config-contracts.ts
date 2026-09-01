@@ -20,7 +20,7 @@ export type OpenClawExecApprovalFloorsForCodexAppServer = {
   ask?: OpenClawExecAsk;
 };
 export type OpenClawExecPolicyForCodexAppServer = {
-  mode?: OpenClawExecMode;
+  mode: OpenClawExecMode;
   security: OpenClawExecSecurity;
   ask: OpenClawExecAsk;
   touched: boolean;
@@ -29,12 +29,13 @@ export type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
 export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 export type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
-  approvalPolicy?: CodexAppServerApprovalPolicy;
+  approvalPolicy?: CodexAppServerManagedApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request";
+export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -47,9 +48,8 @@ export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "as
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
-export type CodexPluginMarketplaceName =
-  | typeof CODEX_PLUGINS_MARKETPLACE_NAME
-  | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
+export const CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+export type CodexPluginMarketplaceName = string;
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -210,6 +210,8 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
+  /** Prepared boundary for an explicit session permission mode. */
+  sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
@@ -222,6 +224,7 @@ export type CodexModelBackedReviewerContext = {
   agentDir?: string;
   codexConfigToml?: string | null;
   homeScope?: CodexAppServerHomeScope;
+  codexArgs?: readonly string[];
 };
 
 export type CodexPluginConfig = {

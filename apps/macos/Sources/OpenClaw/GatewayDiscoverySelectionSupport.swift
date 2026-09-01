@@ -23,18 +23,6 @@ enum GatewayDiscoverySelectionSupport {
             state.remoteUrl = self.sshTunnelGatewayUrl(current: state.remoteUrl)
         }
         state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
-
-        if preferredTransport == .direct {
-            OpenClawConfigFile.setRemoteGatewayTransport(AppState.RemoteTransport.direct.rawValue)
-            if !state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                OpenClawConfigFile.setRemoteGatewayUrlString(state.remoteUrl)
-            } else {
-                OpenClawConfigFile.clearRemoteGatewayUrl()
-            }
-        } else {
-            OpenClawConfigFile.setRemoteGatewayTransport(AppState.RemoteTransport.ssh.rawValue)
-            OpenClawConfigFile.setRemoteGatewayUrlString(state.remoteUrl)
-        }
     }
 
     private static func sshTunnelGatewayUrl(current: String) -> String {

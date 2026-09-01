@@ -7,10 +7,15 @@ import {
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
+  type ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createLazyRuntimeModule,
   createLazyRuntimeNamedExport,
@@ -72,7 +77,7 @@ type ZaloMonitorOptions = {
   webhookSecret?: string;
   webhookPath?: string;
   fetcher?: ZaloFetch;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: ZaloStatusSink;
 };
 
 const ZALO_TEXT_LIMIT = 2000;
@@ -82,7 +87,15 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
-type ZaloStatusSink = (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+type ZaloStatusSink = (patch: {
+  connected?: boolean;
+  lifecycle?: "ready" | "recovering";
+  terminalDisconnect?: boolean;
+  lastConnectedAt?: number;
+  lastError?: string | null;
+  lastInboundAt?: number;
+  lastOutboundAt?: number;
+}) => void;
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -105,8 +118,6 @@ type ZaloPollingLoopParams = ZaloProcessingContext & {
 type ZaloUpdateProcessingParams = ZaloProcessingContext & {
   update: ZaloUpdate;
 };
-const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
-
 function resolveZaloTimestampMs(date: number | undefined): number | undefined {
   if (!date) {
     return undefined;
@@ -127,34 +138,19 @@ const loadZaloWebhookModule = createLazyRuntimeModule(async () => ({
   ...(await loadZaloWebhookIngressRuntime()),
 }));
 
-function releaseSharedHostedMediaRouteRef(routePath: string): void {
-  const current = hostedMediaRouteRefs.get(routePath);
-  if (!current) {
-    return;
-  }
-  if (current.count > 1) {
-    current.count -= 1;
-    return;
-  }
-  hostedMediaRouteRefs.delete(routePath);
-  for (const unregisterHandle of current.unregisters) {
-    unregisterHandle();
-  }
-}
-
 function registerSharedHostedMediaRoute(params: {
   path: string;
-  accountId: string;
   log?: (message: string) => void;
 }): () => void {
-  const unregister = registerPluginHttpRoute({
+  return registerPluginHttpRoute({
     auth: "plugin",
     match: "prefix",
     path: params.path,
     pluginId: "zalo",
     source: "zalo-hosted-media",
-    accountId: params.accountId,
     log: params.log,
+    reuseExistingSameOwner: true,
+    throwOnFailure: true,
     handler: async (req, res) => {
       const handled = await tryHandleHostedZaloMediaRequest(req, res);
       if (!handled && !res.headersSent) {
@@ -164,16 +160,6 @@ function registerSharedHostedMediaRoute(params: {
       }
     },
   });
-
-  const existing = hostedMediaRouteRefs.get(params.path);
-  if (existing) {
-    existing.count += 1;
-    existing.unregisters.push(unregister);
-    return () => releaseSharedHostedMediaRouteRef(params.path);
-  }
-
-  hostedMediaRouteRefs.set(params.path, { count: 1, unregisters: [unregister] });
-  return () => releaseSharedHostedMediaRouteRef(params.path);
 }
 
 type ZaloMessagePipelineParams = ZaloProcessingContext & {
@@ -189,6 +175,10 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
   message: ZaloMessage;
 };
 type ZaloMessageAuthorizationResult = {
+  channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
   chatId: string;
   commandAuthorized: boolean | undefined;
   isGroup: boolean;
@@ -276,6 +266,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       if (isStopped() || abortSignal.aborted) {
         return undefined;
       }
+      if (response.ok) {
+        statusSink?.(channelReadyPatch());
+      }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
         await processUpdate({
@@ -287,7 +280,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
-        runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
+        const error = formatZaloError(err);
+        runtime.error?.(`[${account.accountId}] Zalo polling error: ${error}`);
+        statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
         // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
         await sleepWithAbort(5000, abortSignal).catch(() => undefined);
       }
@@ -447,30 +442,33 @@ async function authorizeZaloMessage(
     defaultGroupPolicy,
   });
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
-  const access = await resolveStableChannelMessageIngress({
-    channelId: "zalo",
-    accountId: account.accountId,
-    identity: {
-      key: "zalo-user-id",
-      normalize: normalizeZaloAllowEntry,
-      sensitivity: "pii",
-      entryIdPrefix: "zalo-entry",
-    },
-    cfg: config,
-    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
-    subject: { stableId: senderId },
-    conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: chatId,
-    },
-    providerMissingFallbackApplied,
-    dmPolicy,
-    groupPolicy,
-    policy: { groupAllowFromFallbackToAllowFrom: true },
-    allowFrom: normalizeStringEntries(account.config.allowFrom),
-    groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
-    command: shouldComputeAuth ? {} : undefined,
-  });
+  const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
+    await resolveStableChannelMessageIngress({
+      channelId: "zalo",
+      accountId: account.accountId,
+      identity: {
+        key: "zalo-user-id",
+        normalize: normalizeZaloAllowEntry,
+        sensitivity: "pii",
+        entryIdPrefix: "zalo-entry",
+      },
+      cfg: config,
+      readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+      subject: { stableId: senderId },
+      conversation: {
+        kind: isGroup ? "group" : "direct",
+        id: chatId,
+      },
+      contextBinding,
+      providerMissingFallbackApplied,
+      dmPolicy,
+      groupPolicy,
+      policy: { groupAllowFromFallbackToAllowFrom: true },
+      allowFrom: normalizeStringEntries(account.config.allowFrom),
+      groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
+      command: shouldComputeAuth ? {} : undefined,
+    });
+  const access = await resolveChannelIngress();
   const senderAccess = access.senderAccess;
   if (isGroup) {
     warnMissingProviderGroupPolicyFallbackOnce({
@@ -538,6 +536,8 @@ async function authorizeZaloMessage(
   }
 
   return {
+    channelIngress: access,
+    resolveChannelIngress,
     chatId,
     commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
     isGroup,
@@ -574,7 +574,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   if (!authorization) {
     return;
   }
-  const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
+  const { isGroup, chatId, senderId, senderName, rawBody } = authorization;
   const agentBody = agentBodyOverride ?? rawBody;
 
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
@@ -586,6 +586,19 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       id: chatId,
     },
   });
+  const channelIngress = await authorization.resolveChannelIngress({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    messageId: message_id,
+    inboundEventKind: "user_request",
+  });
+  if (!channelIngress.senderAccess.allowed) {
+    logVerbose(core, runtime, `zalo: authorization changed before dispatch for ${senderId}`);
+    return;
+  }
+  const commandAuthorized = channelIngress.commandAccess.requested
+    ? channelIngress.commandAccess.authorized
+    : undefined;
 
   if (
     isGroup &&
@@ -606,6 +619,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   });
 
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress,
     channel: "zalo",
     accountId: route.accountId,
     messageId: message_id,
@@ -844,7 +858,14 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   } = options;
 
   const core = getZaloRuntime();
-  const effectiveMediaMaxMb = account.config.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
+  // A non-positive cap cannot bound a transfer, so treat it as unset: `??` alone
+  // keeps 0/negatives and turns every inbound download and hosted outbound send
+  // into a 0-byte limit the media core rejects.
+  const configuredMediaMaxMb = account.config.mediaMaxMb;
+  const effectiveMediaMaxMb =
+    typeof configuredMediaMaxMb === "number" && configuredMediaMaxMb > 0
+      ? configuredMediaMaxMb
+      : DEFAULT_MEDIA_MAX_MB;
   const fetcher = fetcherOverride ?? resolveZaloProxyFetch(account.config.proxy);
   const mode = useWebhook ? "webhook" : "polling";
   const effectiveWebhookUrl = normalizeWebhookUrl(webhookUrl ?? account.config.webhookUrl);
@@ -904,7 +925,6 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     if (hostedMediaRoutePath) {
       const unregisterHostedMediaRoute = registerSharedHostedMediaRoute({
         path: hostedMediaRoutePath,
-        accountId: account.accountId,
         log: runtime.log,
       });
       stopHandlers.push(unregisterHostedMediaRoute);
@@ -971,6 +991,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
             source: "zalo-webhook",
             accountId: account.accountId,
             log: runtime.log,
+            throwOnFailure: true,
             handler: async (req, res) => {
               const handled = await handleZaloWebhookRequest(req, res);
               if (!handled && !res.headersSent) {
@@ -988,6 +1009,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         { url: effectiveWebhookUrl, secret_token: webhookSecret }, // pragma: allowlist secret
         fetcher,
       );
+      statusSink?.(channelReadyPatch());
       let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
         if (!webhookCleanupPromise) {
@@ -1061,9 +1083,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
     await waitForAbortSignal(abortSignal);
   } catch (err) {
-    runtime.error?.(
-      `[${account.accountId}] Zalo provider startup failed mode=${mode}: ${formatZaloError(err)}`,
-    );
+    const error = formatZaloError(err);
+    runtime.error?.(`[${account.accountId}] Zalo provider startup failed mode=${mode}: ${error}`);
+    // Zalo does not expose a stable structured auth-terminal contract at this boundary yet;
+    // keep startup failures recovering until that owner-specific classifier exists.
+    statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
     throw err;
   } finally {
     abortSignal.removeEventListener("abort", stopOnAbort);

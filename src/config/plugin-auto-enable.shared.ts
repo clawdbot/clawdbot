@@ -16,9 +16,9 @@ import {
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import {
-  hasBundledChannelConfiguredState,
-  listBundledChannelIdsWithConfiguredState,
-} from "../channels/plugins/configured-state.js";
+  hasBundledChannelPackageState,
+  listBundledChannelIdsForPackageState,
+} from "../channels/plugins/package-state-probes.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -31,10 +31,8 @@ import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
-import {
-  collectConfiguredWorkerProviderIds,
-  listBundledWorkerProviderOwners,
-} from "../plugins/worker-provider-registry.js";
+import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
+import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -42,6 +40,7 @@ import type {
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
+import { resolveConfiguredTalkRealtimeProviderId } from "./talk.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
@@ -300,7 +299,9 @@ function collectConfiguredChannelIds(
   discovery?: PluginDiscoveryResult,
   ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
+  const configuredStateChannelIds = new Set(
+    listBundledChannelIdsForPackageState("configuredState", discovery),
+  );
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
     discovery,
@@ -334,7 +335,8 @@ function isAutoEnableConfiguredChannelSignal(params: {
   if (
     params.source === "env" &&
     params.configuredStateChannelIds.has(params.channelId) &&
-    !hasBundledChannelConfiguredState({
+    !hasBundledChannelPackageState({
+      metadataKey: "configuredState",
       channelId: params.channelId,
       cfg: params.cfg,
       env: params.env,
@@ -355,8 +357,10 @@ function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {
   );
 }
 
-function hasConfiguredSpeechProviderSelection(cfg: OpenClawConfig): boolean {
-  return collectConfiguredSpeechProviderIds(cfg).size > 0;
+function hasConfiguredVoiceProviderSelection(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    collectConfiguredSpeechProviderIds(cfg).size || resolveConfiguredTalkRealtimeProviderId(cfg),
+  );
 }
 
 function hasConfiguredPluginConfigEntry(
@@ -535,7 +539,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
-  if (hasConfiguredSpeechProviderSelection(cfg)) {
+  if (hasConfiguredVoiceProviderSelection(cfg)) {
     return true;
   }
   if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
@@ -586,7 +590,7 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
-  if (hasConfiguredSpeechProviderSelection(cfg)) {
+  if (hasConfiguredVoiceProviderSelection(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
   if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
@@ -700,6 +704,20 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
+  const realtimeProviderId = resolveConfiguredTalkRealtimeProviderId(params.config);
+  if (realtimeProviderId) {
+    for (const plugin of params.registry.plugins) {
+      if (!plugin.contracts?.realtimeVoiceProviders?.includes(realtimeProviderId.toLowerCase())) {
+        continue;
+      }
+      changes.push({
+        pluginId: plugin.id,
+        kind: "setup-auto-enable",
+        reason: `${realtimeProviderId} realtime voice provider selected`,
+      });
+    }
+  }
+
   for (const { pluginId, providerId } of listBundledWorkerProviderOwners(
     params.registry,
     collectConfiguredWorkerProviderIds(params.config),
@@ -781,6 +799,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       config: params.config,
       env: params.env,
       pluginIds: setupPluginIds,
+      manifestRegistry: params.registry,
     })) {
       changes.push({
         pluginId: entry.pluginId,
@@ -824,6 +843,14 @@ function disableImplicitPreferredOverPlugin(params: {
   manifestRegistry: PluginManifestRegistry;
 }): OpenClawConfig {
   if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
+    return params.config;
+  }
+  // A built-in channel id can remain in the static channel catalog after its
+  // bundled plugin has been externalized. Do not synthesize a disabled entry
+  // for that owner unless it is still present in the runtime manifest set.
+  // Otherwise registry alias normalization can fold the stale channel id back
+  // onto the external owner and override its explicit enabled entry.
+  if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
     return params.config;
   }
   if (

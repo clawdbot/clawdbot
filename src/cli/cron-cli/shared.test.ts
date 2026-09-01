@@ -2,11 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { GatewayClientRequestError } from "../../gateway/client.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
+  handleCronCliError,
   parseAt,
   parseCronToolsAllow,
   parsePositiveCronDurationMs,
@@ -25,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
   const runtime = {
-    log: (msg: string) => logs.push(msg),
+    log: (msg: string) => logs.push(...msg.split("\n")),
     error: () => {},
     exit: () => {},
   } as RuntimeEnv;
@@ -38,6 +41,29 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("handleCronCliError", () => {
+  it("renders typed automation lookup misses with the cron list recovery command", () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "transport-neutral lookup miss",
+      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
+    });
+    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+
+    expect(() => handleCronCliError(error)).toThrow("exit 1");
+    expect(errorOutput).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
+      ),
+    );
+    errorOutput.mockRestore();
+    exit.mockRestore();
+  });
 });
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
@@ -89,6 +115,37 @@ describe("printCronList", () => {
 
     printCronList([jobWithTarget], runtime);
     expectLogsToInclude(logs, "isolated");
+  });
+
+  it.each([
+    [59_999, "<1m"],
+    [60_000, "1m"],
+    [3_569_000, "59m"],
+    [3_570_000, "1h"],
+    [84_599_000, "23h"],
+    [84_600_000, "1d"],
+  ])("renders %i ms as %s across cron list and show", (deltaMs, expected) => {
+    vi.useFakeTimers();
+    const now = new Date("2026-08-02T12:00:00.000Z");
+    vi.setSystemTime(now);
+    const job = createBaseJob({
+      id: "rounding-job",
+      state: {
+        nextRunAtMs: now.getTime() + deltaMs,
+        lastRunAtMs: now.getTime() - deltaMs,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain(`in ${expected}`);
+    expect(row).toContain(`${expected} ago`);
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`next: in ${expected}`);
+    expect(show.logs).toContain(`last: ${expected} ago`);
   });
 
   it("truncates and aligns names by sanitized terminal display width", () => {
@@ -213,6 +270,38 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "last delivery error: offline");
   });
 
+  it("sanitizes every stored cron show value at the terminal boundary", () => {
+    const control = "\u001B]0;cron-show-injection\u0007";
+    const injected = (value: string) => `${control}${value}\r\nforged-row\tfield`;
+    const job = createBaseJob({
+      id: injected("job-id"),
+      declarationKey: injected("declaration"),
+      name: injected("name 🦞"),
+      displayName: injected("display"),
+      owner: { agentId: injected("owner"), sessionKey: injected("owner-session") },
+      agentId: injected("agent"),
+      sessionTarget: injected("session") as CronJob["sessionTarget"],
+      payload: { kind: "agentTurn", message: "test", model: injected("model") },
+      state: {
+        lastError: injected("last-error"),
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: injected("delivery-error"),
+        lastDiagnosticSummary: injected("diagnostic"),
+      },
+    });
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    printCronShow(job, runtime, {
+      deliveryPreview: { label: injected("delivery"), detail: injected("detail") },
+    });
+
+    const output = logs.join("\n");
+    expect(output).not.toContain("\u001B");
+    expect(output).not.toContain("\nforged-row");
+    expect(output).toContain("\\r\\nforged-row\\tfield");
+    expect(output).toContain("name 🦞");
+  });
+
   it("tolerates malformed rows in human-readable output", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const malformedJob = {
@@ -264,6 +353,50 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
   });
 
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it("shows disabled stream sources and their actionable failure reason", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "not-delivered",
+        deliverySuppressionReason: "silent",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain("disabled");
+    expect(row).not.toContain("idle");
+    expect(row).not.toContain("ok (suppressed)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+  });
+
   it("shows on-exit schedules in list and show output", () => {
     const job = createBaseJob({
       id: "on-exit-job",
@@ -303,6 +436,186 @@ describe("printCronList", () => {
     const singleLine = logs.find((line) => line.includes("single-failure-job")) ?? "";
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
+  });
+
+  it.each([
+    { label: "required", bestEffort: false },
+    { label: "best-effort", bestEffort: true },
+    { label: "default", bestEffort: undefined },
+  ])(
+    "makes $label undelivered automation output visible without changing JSON status",
+    ({ bestEffort }) => {
+      const job = createBaseJob({
+        id: "undelivered-job",
+        delivery: {
+          mode: "announce",
+          ...(bestEffort === undefined ? {} : { bestEffort }),
+        },
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          lastDeliveryError: "primary route rejected",
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (not delivered)");
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, "status: ok (not delivered)");
+      expectLogsToInclude(show.logs, "last delivery error: primary route rejected");
+
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: { lastRunStatus: "ok", lastDeliveryStatus: "not-delivered" },
+      });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: "ok" }],
+      });
+    },
+  );
+
+  it.each(["empty", "silent", "heartbeat", "channel_transform"] as const)(
+    "shows recorded %s suppression without changing JSON delivery status",
+    (deliverySuppressionReason) => {
+      const job = createBaseJob({
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
+          deliverySuppressionReason,
+        },
+      });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (suppressed)");
+      expect(list.logs.join("\n")).not.toContain("ok (not delivered)");
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, "status: ok (suppressed)");
+      expectLogsToInclude(show.logs, "last delivery: not-delivered");
+      expectLogsToInclude(show.logs, `last delivery suppression: ${deliverySuppressionReason}`);
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: {
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
+          deliverySuppressionReason,
+        },
+      });
+    },
+  );
+
+  it.each(
+    [
+      {
+        label: "disabled",
+        enabled: false,
+        running: false,
+        runStatus: "ok" as const,
+        expectedStatus: "disabled",
+      },
+      {
+        label: "running",
+        enabled: true,
+        running: true,
+        runStatus: "ok" as const,
+        expectedStatus: "running",
+      },
+      {
+        label: "paused but force-running",
+        enabled: false,
+        running: true,
+        runStatus: "ok" as const,
+        expectedStatus: "running",
+      },
+      {
+        label: "failed",
+        enabled: true,
+        running: false,
+        runStatus: "error" as const,
+        expectedStatus: "error",
+      },
+    ].flatMap((entry) => [
+      { ...entry, deliverySuppressionReason: undefined },
+      { ...entry, deliverySuppressionReason: "silent" as const },
+    ]),
+  )(
+    "does not let prior non-delivery ($deliverySuppressionReason) override a $label automation",
+    ({ enabled, running, runStatus, expectedStatus, deliverySuppressionReason }) => {
+      const job = createBaseJob({
+        enabled,
+        state: {
+          lastRunStatus: runStatus,
+          lastDeliveryStatus: "not-delivered",
+          deliverySuppressionReason,
+          ...(running ? { runningAtMs: Date.now() } : {}),
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
+      expect(show.logs.join("\n")).not.toContain("status: ok (suppressed)");
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: expectedStatus }],
+      });
+    },
+  );
+
+  it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
+    const runFailures = createBaseJob({
+      id: "auto-disabled-runs",
+      name: "Auto-disabled runs",
+      enabled: false,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: Date.now(),
+          consecutiveErrors: 10,
+        },
+      },
+    });
+    const scheduleErrors = createBaseJob({
+      id: "auto-disabled-schedule",
+      name: "Auto-disabled schedule",
+      enabled: false,
+      state: {
+        scheduleErrorCount: 3,
+        autoDisabled: {
+          reason: "schedule-errors",
+          atMs: Date.now(),
+          consecutiveErrors: 3,
+        },
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([runFailures, scheduleErrors], list.runtime);
+    expectLogsToInclude(list.logs, "disabled (10x)");
+    expectLogsToInclude(list.logs, "disabled (schedule)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(runFailures, show.runtime);
+    expectLogsToInclude(show.logs, "status: disabled (10x)");
+
+    expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
+      status: "disabled",
+      state: {
+        autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
+      },
+    });
   });
 
   it("caps the failure count so the status column never overflows", () => {
@@ -477,6 +790,8 @@ describe("printCronList", () => {
 
 describe("parseAt", () => {
   it.each([
+    ["2026-03-23", "Asia/Shanghai", "2026-03-22T16:00:00.000Z"],
+    ["2026-03-23", "America/New_York", "2026-03-23T04:00:00.000Z"],
     ["2026-03-23T00:00:00", "UTC", "2026-03-23T00:00:00.000Z"],
     ["2026-03-23T00:30:00.250", "UTC", "2026-03-23T00:30:00.250Z"],
     ["2026-03-23T00:30:00", "Europe/Oslo", "2026-03-22T23:30:00.000Z"],
@@ -484,6 +799,9 @@ describe("parseAt", () => {
     ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
     ["2026-03-29T01:30:00", "Europe/Oslo", "2026-03-29T00:30:00.000Z"],
     ["2026-03-29T02:30:00", "Europe/Oslo", null],
+    ["2026-10-25T02:30:00", "Europe/Oslo", "2026-10-25T00:30:00.000Z"],
+    ["2026-11-01T01:30:00", "America/New_York", "2026-11-01T05:30:00.000Z"],
+    ["2026-04-05T01:45:00", "Australia/Lord_Howe", "2026-04-04T14:45:00.000Z"],
     ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
     ["2027-02-28t24:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
     ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
@@ -492,6 +810,20 @@ describe("parseAt", () => {
     ["2027-09-04t24:00", "America/Santiago", null],
   ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
     expect(parseAt(input, timezone)).toBe(expected);
+    if (expected !== null) {
+      expect(resolveCronCreateScheduleFromArgs({ at: input, tz: timezone })).toEqual({
+        kind: "at",
+        at: expected,
+      });
+    }
+  });
+
+  it("keeps date-only one-shot schedules in UTC without an explicit timezone", () => {
+    expect(parseAt("2026-03-23")).toBe("2026-03-23T00:00:00.000Z");
+    expect(resolveCronCreateScheduleFromArgs({ at: "2026-03-23" })).toEqual({
+      kind: "at",
+      at: "2026-03-23T00:00:00.000Z",
+    });
   });
 
   it("accepts leading plus relative durations for cron add --at", () => {
@@ -522,9 +854,9 @@ describe("parseAt", () => {
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+  it("falls back to a channel plugin id placeholder when no plugins are loaded", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+    expect(getCronChannelOptions()).toBe("last|<channel-plugin-id>");
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {

@@ -22,7 +22,8 @@ import {
 } from "./agent-tools.params.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { execSchema } from "./bash-tools.schemas.js";
+import { createProcessTool } from "./bash-tools.process.js";
+import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
@@ -49,16 +50,110 @@ describe("direct exec tool schema", () => {
     const descriptions = Object.values(fields).map((field) => field.description ?? "");
 
     expect(descriptions.join("").length).toBeLessThan(550);
-    expect(describeField("workdir")).toContain("Blank/whitespace");
+    expect(describeField("workdir")).toContain("empty string");
+    expect(describeField("workdir")).toContain("whitespace-only");
     expect(describeField("yieldMs")).toContain("Milliseconds");
-    expect(describeField("timeout")).toContain("seconds");
+    expect(describeField("timeoutSeconds")).toContain("seconds");
     expect(describeField("pty")).toContain("PTY");
     expect(describeField("elevated")).toContain("if allowed");
-    expect(describeField("security")).toContain("tools.exec.security");
-    expect(describeField("security")).toContain("host approvals");
-    expect(describeField("ask")).toContain("tools.exec.ask");
+    expect(describeField("ask")).toContain("tools.exec.mode");
     expect(describeField("ask")).toContain("channel-origin");
     expect(describeField("ask")).toContain("ask=off");
+  });
+});
+
+describe("direct process tool schema", () => {
+  it("keeps the action enum canonical at the agent-loop boundary", () => {
+    expect(processSchema.properties.action.type).toBe("string");
+    const actionEnum = processSchema.properties.action as Type.TString & { enum?: string[] };
+    expect(actionEnum.enum?.join("|")).toBe(
+      "list|poll|log|write|send-keys|submit|paste|kill|clear|remove",
+    );
+    expect(() =>
+      validateToolArguments(createProcessTool(), {
+        type: "toolCall",
+        id: "call-invalid-process-action",
+        name: "process",
+        arguments: { action: "delete" },
+      }),
+    ).toThrow('Validation failed for tool "process"');
+  });
+
+  it("rejects unknown process actions without starting execution", async () => {
+    const processTool = createProcessTool();
+    const execute = vi.spyOn(processTool, "execute");
+    const events: AgentEvent[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-unknown-process-action",
+                    name: "process",
+                    arguments: { action: "delete" },
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "inspect processes", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [processTool] },
+      {
+        model: {
+          id: "faux-1",
+          name: "Faux",
+          provider: "faux",
+          api: "faux",
+          baseUrl: "http://localhost:0",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 1024,
+        },
+        convertToLlm: (agentMessages) => agentMessages as never,
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    const toolResult = messages.find((message) => message.role === "toolResult");
+    expect(JSON.stringify(toolResult)).toContain('Validation failed for tool \\"process\\"');
+    expect(events.find((event) => event.type === "tool_execution_end")).toMatchObject({
+      executionStarted: false,
+      errorKind: "argument-validation",
+    });
   });
 });
 
@@ -860,6 +955,58 @@ describe("normalizeToolParameterSchema", () => {
     expect(parentId?.anyOf).toBeUndefined();
     expect(count?.oneOf).toBeUndefined();
   });
+
+  // Regression for #128743: a root-level union whose branches carry their own
+  // properties must not replace the root properties. Root `required` entries
+  // (e.g. thread_id) must remain declared in `properties`, otherwise the schema
+  // becomes unsatisfiable when `additionalProperties` is false.
+  it.each(["anyOf", "oneOf"] as const)(
+    "preserves root properties and constraints when flattening root-level %s (#128743)",
+    (unionKey) => {
+      const schema = {
+        type: "object",
+        title: "MessagesReplyInput",
+        additionalProperties: false,
+        required: ["thread_id"],
+        properties: {
+          thread_id: { type: "string", minLength: 1, maxLength: 128 },
+          body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          task_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          turn_grant_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        },
+        [unionKey]: [
+          { required: ["body"], properties: { body: { type: "string" } } },
+          { required: ["body_file"], properties: { body_file: { type: "string" } } },
+        ],
+      } as Record<string, unknown>;
+
+      const normalized = normalizeToolParameterSchema(schema) as Record<string, unknown>;
+      const properties = (normalized.properties as Record<string, unknown>) ?? {};
+      const required = (normalized.required as string[] | undefined) ?? [];
+
+      // The root composition keyword is flattened for portability, but the root
+      // declared properties must survive the merge.
+      expect(Object.keys(properties)).toEqual(
+        expect.arrayContaining(["thread_id", "body", "body_file", "task_id", "turn_grant_id"]),
+      );
+      expect(normalized.additionalProperties).toBe(false);
+      // Every required field must be a declared property, otherwise the schema is
+      // unsatisfiable by construction (required + additionalProperties:false).
+      for (const field of required) {
+        expect(Object.hasOwn(properties, field)).toBe(true);
+      }
+      expect(properties.thread_id).toEqual({ type: "string", minLength: 1, maxLength: 128 });
+      expect(properties.body).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        default: null,
+      });
+      expect(properties.body_file).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        default: null,
+      });
+    },
+  );
 });
 
 function makeTool(parameters: TSchema): AnyAgentTool {

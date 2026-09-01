@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+import { wrapExternalContent } from "../security/external-content.js";
 
 // Recognize a provider-docked send tool by name (only "telegram" here) so the
 // volatility strip applies to it without pulling in the channel-plugin registry; the
@@ -20,6 +21,8 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+import { protectNetworkToolExecutionError } from "./tool-result-error.js";
+import { jsonResult } from "./tools/common.js";
 
 const TOOL_CALL_HISTORY_SIZE = 30;
 const WARNING_THRESHOLD = 10;
@@ -78,6 +81,24 @@ function recordFailedCall(
     toolCallId,
     error,
   });
+}
+
+function createExecLoopResult(params: {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  output: string;
+  aggregated?: string;
+  timedOut?: boolean;
+}) {
+  return {
+    content: [{ type: "text", text: params.output }],
+    details: {
+      status: params.status,
+      exitCode: params.exitCode,
+      aggregated: params.aggregated ?? params.output,
+      ...(params.timedOut === undefined ? {} : { timedOut: params.timedOut }),
+    },
+  };
 }
 
 function recordRepeatedSuccessfulCalls(params: {
@@ -427,6 +448,202 @@ describe("tool-loop-detection", () => {
         expect(loopResult.message).toContain("identical outcomes");
       }
     });
+
+    it.each(["thrown", "returned", 0, 1, 2, 3, 4] as const)(
+      "blocks repeated external outcomes with fresh nonces (%s)",
+      (shape) => {
+        const state = createState();
+        const params = { action: "act", request: { kind: "press", key: "NotAKey" } };
+        const delivered = new Set<string>();
+        for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+          const payload = 'keyboard.press: Unknown key: "NotAKey"';
+          if (shape === "thrown") {
+            const error = protectNetworkToolExecutionError(new Error(payload), "Failed");
+            delivered.add((error as Error).message);
+            recordFailedCall(state, "browser", params, error, index);
+          } else {
+            let text = wrapExternalContent(payload, { source: "browser" });
+            delivered.add(text);
+            if (typeof shape === "number") {
+              for (let depth = 0; depth < shape; depth += 1) {
+                text = JSON.stringify({ text });
+              }
+            }
+            const result =
+              shape === "returned"
+                ? { content: [{ type: "text", text }], details: { ok: false } }
+                : jsonResult({ text, fetchedAt: "2026-08-26T00:00:00Z", tookMs: 10 });
+            recordSuccessfulCall(state, "browser", params, result, index);
+          }
+        }
+        expect(delivered.size).toBe(CRITICAL_THRESHOLD);
+        expect(
+          detectToolCallLoop(state, "browser", params, enabledLoopDetectionConfig),
+        ).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+        });
+        const [first, second] = [...delivered];
+        expect(recordArgsHash("browser", { text: first })).not.toBe(
+          recordArgsHash("browser", { text: second }),
+        );
+      },
+    );
+
+    it.each([
+      ["payload", (index: number) => ({ text: `page ${index}` })],
+      ["status", (index: number) => ({ status: index === 0 ? "loading" : "ready" })],
+      ["timestamp", (index: number) => ({ fetchedAt: `2026-08-26T00:00:0${index}Z` })],
+      ["duration", (index: number) => ({ tookMs: index })],
+      ["ordinary id", (index: number) => ({ id: `${index}`.repeat(16) })],
+      [
+        "malformed marker",
+        (index: number) => ({ text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}">>>` }),
+      ],
+      [
+        "uppercase nonce",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index}ABCDEF012345678">>>`,
+        }),
+      ],
+      ["unrelated id text", (index: number) => ({ text: `id="${index.toString().repeat(16)}"` })],
+      [
+        "unpaired start marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "unpaired end marker",
+        (index: number) => ({
+          text: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "mismatched marker pair",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id="abcdef0123456789">>>`,
+        }),
+      ],
+      [
+        "intervening marker",
+        (index: number) => ({
+          text: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>before<<<EXTERNAL_UNTRUSTED_CONTENT>>>after<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+      [
+        "markers split across fields",
+        (index: number) => ({
+          start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+          end: `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${index.toString().repeat(16)}">>>`,
+        }),
+      ],
+    ] as const)("retains changing %s in outcome hashes", (_label, details) => {
+      const hashes = [0, 1].map((index) => {
+        const state = createState();
+        return recordToolCallOutcome(state, {
+          toolName: "web_fetch",
+          toolParams: { url: "https://example.test" },
+          result: jsonResult({
+            content: wrapExternalContent("same page", { source: "web_fetch" }),
+            ...details(index),
+          }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).not.toBe(hashes[1]);
+    });
+
+    it.each([0, 1, 2, 3, 4])(
+      "preserves marker pairs split across encoded JSON fields (depth %s)",
+      (depth) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          let text = JSON.stringify({
+            start: `<<<EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>\nSource: Browser\n---\npayload`,
+            end: `\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="${id}">>>`,
+          });
+          for (let level = 0; level < depth; level += 1) {
+            text = JSON.stringify({ text });
+          }
+          return recordToolCallOutcome(createState(), {
+            toolName: "browser",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
+
+    it("preserves long backslash payloads while normalizing paired wrapper nonces", () => {
+      const hashes = ["same", "same", "changed"].map((suffix) => {
+        const text = wrapExternalContent(`${"\\".repeat(20_000)}"${suffix}"`, {
+          source: "browser",
+        });
+        return recordToolCallOutcome(createState(), {
+          toolName: "browser",
+          toolParams: {},
+          result: jsonResult({ text: JSON.stringify({ text }) }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).toBe(hashes[1]);
+      expect(hashes[0]).not.toBe(hashes[2]);
+    });
+
+    it.each([0, 1, 2, 3, 4])("distinguishes malformed empty-ID envelopes (depth %s)", (depth) => {
+      const valid = wrapExternalContent("same page", { source: "browser" });
+      const malformed = valid.replace(/id="[a-f0-9]{16}"/g, 'id=""');
+      const zero = valid.replace(/id="[a-f0-9]{16}"/g, 'id="0000000000000000"');
+      const hashes = [valid, malformed, zero].map((sourceText) => {
+        let text = sourceText;
+        for (let level = 0; level < depth; level += 1) {
+          text = JSON.stringify({ text });
+        }
+        return recordToolCallOutcome(createState(), {
+          toolName: "read",
+          toolParams: {},
+          result: jsonResult({ text }),
+        })?.resultHash;
+      });
+      expect(hashes[0]).not.toBe(hashes[1]);
+      expect(hashes[0]).toBe(hashes[2]);
+    });
+
+    it.each([2, 4, 5, 6, 8, 14])(
+      "preserves malformed marker quote escaping (%s slashes)",
+      (count) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(count) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>payload<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
+
+    it.each([1, 3, 7])(
+      "preserves shallower quotes after encoded backslashes (%s marker slashes)",
+      (escapeCount) => {
+        const hashes = [0, 1].map((index) => {
+          const id = index.toString().repeat(16);
+          const quote = "\\".repeat(escapeCount) + '"';
+          const boundary = "\\".repeat(escapeCount + 1) + '"';
+          const text = `<<<EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>before${boundary}after<<<END_EXTERNAL_UNTRUSTED_CONTENT id=${quote}${id}${quote}>>>`;
+          return recordToolCallOutcome(createState(), {
+            toolName: "read",
+            toolParams: {},
+            result: jsonResult({ text }),
+          })?.resultHash;
+        });
+        expect(hashes[0]).not.toBe(hashes[1]);
+      },
+    );
 
     it("warns for known polling no-progress loops", () => {
       const { params, result } = createNoProgressPollFixture("sess-1");
@@ -955,6 +1172,395 @@ describe("tool-loop-detection", () => {
       );
 
       expect(loopResult.stuck).toBe(false);
+    });
+
+    it.each([
+      {
+        label: "completed normal process failures",
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      },
+      {
+        label: "failed non-executable commands",
+        status: "failed",
+        exitCode: 126,
+        output: "Command not executable (permission denied)",
+        aggregated: "",
+      },
+      {
+        label: "failed missing commands",
+        status: "failed",
+        exitCode: 127,
+        output: "Command not found",
+        aggregated: "",
+      },
+    ] as const)("blocks repeated $label across changing exec arguments", (testCase) => {
+      const state = createState();
+      const result = createExecLoopResult(testCase);
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "ISO timestamps",
+        output: (index: number) => `failed at 2026-08-30T10:20:${10 + index}Z`,
+      },
+      { label: "clock timestamps", output: (index: number) => `failed at 12:00:${10 + index}` },
+      { label: "attempt counters", output: (index: number) => `failed on attempt ${index}` },
+      { label: "retry counters", output: (index: number) => `failed on retry=${index}` },
+      { label: "elapsed durations", output: (index: number) => `failed after ${index + 1}ms` },
+      { label: "short elapsed durations", output: (index: number) => `failed after ${index + 1}s` },
+      { label: "process ids", output: (index: number) => `failed in pid=${1000 + index}` },
+    ])("blocks terminal exec failures with drifting $label", ({ output }) => {
+      const state = createState();
+      const params = { command: "node retry.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({ status: "completed", exitCode: 1, output: output(index) }),
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "exit code",
+        beforeExitCode: 1,
+        beforeOutput: () => "command failed",
+        afterExitCode: 2,
+        afterOutput: "command failed",
+      },
+      {
+        label: "diagnostic text",
+        beforeExitCode: 1,
+        beforeOutput: () => "dependency missing",
+        afterExitCode: 1,
+        afterOutput: "syntax error",
+      },
+      {
+        label: "diagnostic number",
+        beforeExitCode: 1,
+        beforeOutput: (index: number) => `errno 111 at 12:00:${10 + index}`,
+        afterExitCode: 1,
+        afterOutput: "errno 113 at 12:00:39",
+      },
+      {
+        label: "calendar date",
+        beforeExitCode: 1,
+        beforeOutput: () => "certificate becomes valid on 2026-08-30",
+        afterExitCode: 1,
+        afterOutput: "certificate becomes valid on 2026-08-31",
+      },
+    ])(
+      "resets a drifting terminal-failure streak after a new $label",
+      ({ beforeExitCode, beforeOutput, afterExitCode, afterOutput }) => {
+        const state = createState();
+        const params = { command: "node retry.js" };
+
+        for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            createExecLoopResult({
+              status: "completed",
+              exitCode: beforeExitCode,
+              output: beforeOutput(index),
+            }),
+            index,
+          );
+        }
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: afterExitCode,
+            output: afterOutput,
+          }),
+          CRITICAL_THRESHOLD,
+        );
+
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "warning",
+            detector: "generic_repeat",
+          },
+        );
+      },
+    );
+
+    it("keeps an intervening command as a reset after the first command resumes", () => {
+      const state = createState();
+      const first = { command: "node first.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          first,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: 1,
+            output: `failed in pid=${1000 + index}`,
+          }),
+          index,
+        );
+      }
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "node second.js" },
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=2000" }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+
+      recordSuccessfulCall(
+        state,
+        "exec",
+        first,
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=3000" }),
+        CRITICAL_THRESHOLD + 1,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+      for (let index = CRITICAL_THRESHOLD; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "critical",
+            detector: "generic_repeat",
+            count: index,
+          },
+        );
+        expect(
+          recordToolCallOutcome(state, {
+            toolName: "exec",
+            toolParams: params,
+            toolCallId: `exec-veto-${index}`,
+            result: {
+              content: [{ type: "text", text: "blocked" }],
+              details: { status: "blocked", deniedReason: "tool-loop" },
+            },
+            config: enabledLoopDetectionConfig,
+          }),
+        ).toMatchObject({ outcomeKind: "tool-loop-veto", resultHash: undefined });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python final-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "synthetic exit-code-only output",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "successful command batches",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "timed-out executions",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "non-finite exit codes",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: Number.POSITIVE_INFINITY,
+          output: "process failed",
+        }),
+      },
+      {
+        label: "failures without an exit code",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: null,
+          output: "process failed before spawning",
+        }),
+      },
+    ])("does not semantically block $label", ({ result }) => {
+      const state = createState();
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `grep target-${index}` }, result, index);
+      }
+
+      expect(state.toolCallHistory?.every((record) => record.outcomeKind === undefined)).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "grep next-target" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it.each([
+      {
+        label: "a distinct terminal failure",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: different package\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "a successful execution",
+        toolName: "exec",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "a timed-out execution",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "another tool",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "read complete" }], details: { ok: true } },
+      },
+    ])("resets the semantic exec failure tail after $label", ({ toolName, result }) => {
+      const state = createState();
+      const failure = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, failure, index);
+      }
+      recordSuccessfulCall(state, toolName, { command: "interruption" }, result, 19);
+      recordSuccessfulCall(state, "exec", { command: "python latest.py" }, failure, 20);
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("does not carry semantic exec failures into another run", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        const toolCallId = `exec-old-run-${index}`;
+        recordToolCall(state, "exec", params, toolCallId, enabledLoopDetectionConfig, {
+          runId: "old-run",
+        });
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result,
+          config: enabledLoopDetectionConfig,
+          runId: "old-run",
+        });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+          { runId: "new-run" },
+        ),
+      ).toEqual({ stuck: false });
     });
 
     it("blocks repeated completed exec calls despite volatile runtime details", () => {

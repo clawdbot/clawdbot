@@ -12,17 +12,13 @@ import {
   MeetingPlatformAdapter,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
+  type MeetingBrowserRequestCaller,
   type MeetingRealtimeAudioEngineHandle,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
-import {
-  GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
-  outputMentionsBlackHole2ch,
-} from "./chrome-audio-device.js";
 import {
   callBrowserProxyOnNode,
   resolveChromeNode,
@@ -40,6 +36,13 @@ type ChromeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   inputCommand: string[];
   outputCommand: string[];
 };
+type MeetingAudioBackend = "blackhole-2ch" | "pipewire-pulse";
+type MeetingAudioRuntime = {
+  backend: MeetingAudioBackend;
+  deviceLabel: string;
+  inputCommand: string[];
+  outputCommand: string[];
+};
 
 type ChromeNodeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   type: "node-command-pair";
@@ -53,35 +56,35 @@ function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig
   );
 }
 
-export async function assertBlackHole2chAvailable(params: {
+async function prepareGoogleMeetAudioRuntime(params: {
   runtime: PluginRuntime;
+  config: GoogleMeetConfig;
+  timeoutMs: number;
+}): Promise<MeetingAudioRuntime> {
+  const audio = MeetingPlatformAdapter.resolveAudioRuntimeForFormat({
+    backend: params.config.chrome.audioBackend,
+    bufferBytes: params.config.chrome.audioBufferBytes,
+    format: params.config.chrome.audioFormat,
+    inputCommand: params.config.chrome.audioInputCommandOverride,
+    outputCommand: params.config.chrome.audioOutputCommandOverride,
+  });
+  await MeetingPlatformAdapter.ensureAudioBackend({
+    backend: audio.backend,
+    timeoutMs: params.timeoutMs,
+    run: async (argv, timeoutMs) => {
+      const result = await params.runtime.system.runCommandWithTimeout(argv, { timeoutMs });
+      return { ...result, code: result.code ?? 1 };
+    },
+  });
+  return audio;
+}
+
+export async function assertGoogleMeetAudioAvailable(params: {
+  runtime: PluginRuntime;
+  config: GoogleMeetConfig;
   timeoutMs: number;
 }): Promise<void> {
-  if (process.platform !== "darwin") {
-    throw new Error("Chrome Meet transport with blackhole-2ch audio is currently macOS-only");
-  }
-
-  const result = await params.runtime.system.runCommandWithTimeout(
-    [GOOGLE_MEET_SYSTEM_PROFILER_COMMAND, "SPAudioDataType"],
-    { timeoutMs: params.timeoutMs },
-  );
-  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  if (result.code !== 0 || !outputMentionsBlackHole2ch(output)) {
-    const hint =
-      params.runtime.system.formatNativeDependencyHint?.({
-        packageName: "BlackHole 2ch",
-        downloadCommand: "brew install blackhole-2ch",
-      }) ?? "";
-    throw new Error(
-      [
-        "BlackHole 2ch audio device not found.",
-        "Install BlackHole 2ch and route Chrome input/output through the OpenClaw audio bridge.",
-        hint,
-      ]
-        .filter(Boolean)
-        .join(" "),
-    );
-  }
+  await prepareGoogleMeetAudioRuntime(params);
 }
 
 export async function launchChromeMeet(params: {
@@ -95,18 +98,21 @@ export async function launchChromeMeet(params: {
   logger: RuntimeLogger;
 }): Promise<{
   launched: boolean;
+  audioBackend?: MeetingAudioBackend;
   audioBridge?:
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
   tab?: GoogleMeetBrowserTab;
 }> {
+  let audio: MeetingAudioRuntime | undefined;
   const checkRealtimeAudioPrerequisites = async () => {
     if (!MeetingPlatformAdapter.isTalkBackMode(params.mode)) {
       return;
     }
-    await assertBlackHole2chAvailable({
+    audio = await prepareGoogleMeetAudioRuntime({
       runtime: params.runtime,
+      config: params.config,
       timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
     });
 
@@ -153,9 +159,12 @@ export async function launchChromeMeet(params: {
         "Chrome talk-back mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
       );
     }
+    if (!audio) {
+      throw new Error("Google Meet audio backend was not prepared.");
+    }
     const transport = createLocalMeetingRealtimeAudioTransport({
-      inputCommand: params.config.chrome.audioInputCommand,
-      outputCommand: params.config.chrome.audioOutputCommand,
+      inputCommand: audio.inputCommand,
+      outputCommand: audio.outputCommand,
       audioFormat: params.config.chrome.audioFormat,
       bargeInInputCommand: params.config.chrome.bargeInInputCommand,
       bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
@@ -196,8 +205,8 @@ export async function launchChromeMeet(params: {
           });
     return {
       type: "command-pair",
-      inputCommand: params.config.chrome.audioInputCommand,
-      outputCommand: params.config.chrome.audioOutputCommand,
+      inputCommand: audio.inputCommand,
+      outputCommand: audio.outputCommand,
       ...engine,
     };
   };
@@ -205,9 +214,30 @@ export async function launchChromeMeet(params: {
   await checkRealtimeAudioPrerequisites();
 
   if (!params.config.chrome.launch) {
-    // An external owner supplies the already-open call, so no browser health exists to gate on.
-    // Configuring this mode explicitly authorizes its realtime bridge to start immediately.
-    return { launched: false, audioBridge: await startRealtimeAudioBridge() };
+    const recovered = await recoverMeetingBrowserTab({
+      adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
+      allowSessionAdoption: true,
+      autoJoin: params.config.chrome.autoJoin,
+      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
+      config: params.config.chrome,
+      locationLabel: "in local Chrome",
+      meetingSessionId: params.meetingSessionId,
+      mode: params.mode,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.url,
+      trackedTargetId: undefined,
+    });
+    const audioBridge = MeetingPlatformAdapter.isRealtimeRouteReady(params.mode, recovered.browser)
+      ? await startRealtimeAudioBridge()
+      : undefined;
+    return {
+      launched: false,
+      audioBackend: audio?.backend,
+      audioBridge,
+      browser: recovered.browser,
+      tab: recovered.targetId ? { targetId: recovered.targetId, openedByPlugin: false } : undefined,
+    };
   }
 
   const result = await openMeetingWithBrowser({
@@ -221,18 +251,18 @@ export async function launchChromeMeet(params: {
       url: params.url,
     },
   });
-  const shouldStartRealtimeBridge =
-    MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
-    result.browser?.inCall === true &&
-    result.browser.micMuted === false &&
-    result.browser.manualAction === undefined;
+  const shouldStartRealtimeBridge = MeetingPlatformAdapter.isRealtimeRouteReady(
+    params.mode,
+    result.browser,
+  );
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
-  return { ...result, audioBridge };
+  return { ...result, audioBackend: audio?.backend, audioBridge };
 }
 
 function parseNodeStartResult(raw: unknown): {
   launched?: boolean;
   bridgeId?: string;
+  audioBackend?: MeetingAudioBackend;
   audioBridge?: { type?: string; outputGeneration?: boolean };
   browser?: GoogleMeetChromeHealth;
 } {
@@ -246,6 +276,7 @@ function parseNodeStartResult(raw: unknown): {
   return value as {
     launched?: boolean;
     bridgeId?: string;
+    audioBackend?: MeetingAudioBackend;
     audioBridge?: { type?: string; outputGeneration?: boolean };
     browser?: GoogleMeetChromeHealth;
   };
@@ -365,17 +396,39 @@ async function openMeetWithBrowserProxy(params: {
   meetingSessionId: string;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
+  const callBrowser: MeetingBrowserRequestCaller = async (request) =>
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId: params.nodeId,
+      method: request.method,
+      path: request.path,
+      body: request.body,
+      timeoutMs: request.timeoutMs,
+    });
+  if (!params.config.chrome.launch) {
+    const recovered = await recoverMeetingBrowserTab({
+      adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
+      allowSessionAdoption: true,
+      autoJoin: params.config.chrome.autoJoin,
+      callBrowser,
+      captureCaptions: params.captureCaptions,
+      config: params.config.chrome,
+      locationLabel: "on the selected Chrome node",
+      meetingSessionId: params.meetingSessionId,
+      mode: params.mode,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.url,
+      trackedTargetId: undefined,
+    });
+    return {
+      launched: false,
+      browser: recovered.browser,
+      tab: recovered.targetId ? { targetId: recovered.targetId, openedByPlugin: false } : undefined,
+    };
+  }
   return await openMeetingWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: async (request) =>
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
-        method: request.method,
-        path: request.path,
-        body: request.body,
-        timeoutMs: request.timeoutMs,
-      }),
+    callBrowser,
     config: params.config.chrome,
     session: {
       captureCaptions: params.captureCaptions,
@@ -481,6 +534,7 @@ export async function launchChromeMeetOnNode(params: {
 }): Promise<{
   nodeId: string;
   launched: boolean;
+  audioBackend?: MeetingAudioBackend;
   audioBridge?:
     | { type: "external-command" }
     | ({ type: "node-command-pair" } & ChromeNodeRealtimeAudioBridgeHandle);
@@ -509,6 +563,27 @@ export async function launchChromeMeetOnNode(params: {
       }`,
     );
   }
+  const setup = MeetingPlatformAdapter.isTalkBackMode(params.mode)
+    ? parseNodeStartResult(
+        await params.runtime.nodes.invoke({
+          nodeId,
+          command: GOOGLE_MEET_NODE_COMMAND,
+          params: {
+            action: "setup",
+            audioBackend: params.config.chrome.audioBackend,
+            audioFormat: params.config.chrome.audioFormat,
+            audioBufferBytes: params.config.chrome.audioBufferBytes,
+            ...(params.config.chrome.audioInputCommandOverride
+              ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+              : {}),
+            ...(params.config.chrome.audioOutputCommandOverride
+              ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+              : {}),
+          },
+          timeoutMs: 12_000,
+        }),
+      )
+    : undefined;
   const browserControl = await openMeetWithBrowserProxy({
     runtime: params.runtime,
     nodeId,
@@ -521,15 +596,13 @@ export async function launchChromeMeetOnNode(params: {
   // launch:false explicitly delegates call state to an already-open session.
   // Browser-managed joins require explicit unmuted health before node audio starts.
   if (
-    params.config.chrome.launch &&
     MeetingPlatformAdapter.isTalkBackMode(params.mode) &&
-    (browserControl.browser?.inCall !== true ||
-      browserControl.browser.micMuted !== false ||
-      browserControl.browser.manualAction)
+    !MeetingPlatformAdapter.isRealtimeRouteReady(params.mode, browserControl.browser)
   ) {
     return {
       nodeId,
       launched: browserControl.launched,
+      audioBackend: setup?.audioBackend,
       browser: browserControl.browser,
       tab: browserControl.tab,
     };
@@ -544,8 +617,15 @@ export async function launchChromeMeetOnNode(params: {
       launch: false,
       browserProfile: params.config.chrome.browserProfile,
       joinTimeoutMs: params.config.chrome.joinTimeoutMs,
-      audioInputCommand: params.config.chrome.audioInputCommand,
-      audioOutputCommand: params.config.chrome.audioOutputCommand,
+      audioBackend: params.config.chrome.audioBackend,
+      audioFormat: params.config.chrome.audioFormat,
+      audioBufferBytes: params.config.chrome.audioBufferBytes,
+      ...(params.config.chrome.audioInputCommandOverride
+        ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+        : {}),
+      ...(params.config.chrome.audioOutputCommandOverride
+        ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+        : {}),
       audioBridgeCommand: params.config.chrome.audioBridgeCommand,
       audioBridgeHealthCommand: params.config.chrome.audioBridgeHealthCommand,
     },
@@ -614,6 +694,7 @@ export async function launchChromeMeetOnNode(params: {
     return {
       nodeId,
       launched: browserControl.launched || result.launched === true,
+      audioBackend: result.audioBackend ?? setup?.audioBackend,
       audioBridge: bridge,
       browser: browserControl.browser ?? result.browser,
       tab: browserControl.tab,
@@ -623,6 +704,7 @@ export async function launchChromeMeetOnNode(params: {
     return {
       nodeId,
       launched: browserControl.launched || result.launched === true,
+      audioBackend: result.audioBackend ?? setup?.audioBackend,
       audioBridge: { type: "external-command" },
       browser: browserControl.browser ?? result.browser,
       tab: browserControl.tab,
@@ -631,6 +713,7 @@ export async function launchChromeMeetOnNode(params: {
   return {
     nodeId,
     launched: browserControl.launched || result.launched === true,
+    audioBackend: result.audioBackend ?? setup?.audioBackend,
     browser: browserControl.browser ?? result.browser,
     tab: browserControl.tab,
   };

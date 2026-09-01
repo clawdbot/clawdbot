@@ -191,16 +191,13 @@ tmp_dir="$(mktemp -d)"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
-if [ -d /app/dist-runtime/extensions/codex ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
-elif [ -d /app/dist/extensions/codex ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
-elif [ -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
-else
+if [ ! -f "$tmp_dir/extensions/codex/openclaw.plugin.json" ]; then
   echo "ERROR: staged Codex plugin not found for live harness." >&2
   exit 1
 fi
+# Source Gateway and plugin must share one prepared-runtime owner; built artifacts own a
+# separate lifecycle and are validated by the packaged-plugin Docker lane instead.
+export OPENCLAW_BUNDLED_PLUGINS_DIR="$tmp_dir/extensions"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 if [ -n "${OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR:-}" ] && [ -d "$OPENCLAW_LIVE_CODEX_TRUSTED_HARNESS_DIR" ]; then
   for harness_file in src/gateway/gateway-codex-harness.live-helpers.ts; do
@@ -235,7 +232,7 @@ run_codex_harness_target() {
   export OPENCLAW_LIVE_CODEX_HARNESS_MODEL="$model"
   export OPENCLAW_LIVE_CODEX_HARNESS_THINKING="$thinking"
   echo "==> Codex harness target: model=$model thinking=$thinking"
-  node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+  openclaw_live_run_staged_script scripts/test-live -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
 }
 if [ -n "${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" ]; then
   IFS=',' read -r -a harness_targets <<<"$OPENCLAW_LIVE_CODEX_HARNESS_TARGETS"
@@ -283,6 +280,7 @@ echo "==> Docker run timeout: $CODEX_HARNESS_DOCKER_RUN_TIMEOUT"
 echo "==> Chat image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE:-0}"
 echo "==> Image probe: ${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}"
 echo "==> MCP probe: ${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}"
+echo "==> Multi-session probe: ${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}"
 echo "==> Subagent probe: ${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE:-1}"
 echo "==> Subagent count: ${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT:-1}"
 echo "==> Subagent-only fast path: ${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-auto}"
@@ -333,6 +331,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES="${OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES:-300000}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE:-1}" \
+  -e OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_MODEL="${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-openai/gpt-5.6-luna}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_TARGETS="${OPENCLAW_LIVE_CODEX_HARNESS_TARGETS:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_THINKING="${OPENCLAW_LIVE_CODEX_HARNESS_THINKING:-low}" \

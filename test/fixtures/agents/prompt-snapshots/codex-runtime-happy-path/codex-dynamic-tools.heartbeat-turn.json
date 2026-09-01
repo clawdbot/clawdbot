@@ -6,7 +6,7 @@
       "name": "openclaw_direct",
       "tools": [
         {
-          "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
+          "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -31,7 +31,7 @@
                 "type": "string"
               },
               "scratch": {
-                "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
+                "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
                 "type": "string"
               },
               "summary": {
@@ -45,10 +45,15 @@
           "type": "function"
         },
         {
-          "description": "End turn after subagent spawn; results arrive next message.",
+          "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
           "inputSchema": {
             "properties": {
+              "acknowledgment": {
+                "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+                "type": "string"
+              },
               "message": {
+                "description": "Private context for the resumed turn; not sent to the user.",
                 "type": "string"
               }
             },

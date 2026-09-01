@@ -85,15 +85,15 @@ async function readChunkWithAbort(
     return await reader.read();
   }
   if (signal.aborted) {
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
     throw toAbortError(signal, fallbackMessage);
   }
 
   let removeAbortListener: (() => void) | undefined;
   const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
     const onAbort = () => {
+      reject(toAbortError(signal, fallbackMessage)); // Cancel resolves pending reads.
       void reader.cancel().catch(() => undefined);
-      reject(toAbortError(signal, fallbackMessage));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -144,7 +144,8 @@ async function readResponsePrefix(
           length += remaining;
         }
         truncated = true;
-        await reader.cancel().catch(() => undefined);
+        // A capture tee can retain cancellation until the request owner releases.
+        void reader.cancel().catch(() => undefined);
         break;
       }
 
@@ -191,7 +192,7 @@ async function readResponseTextWithLimit(
 
       const nextLength = length + value.length;
       if (nextLength > maxBytes) {
-        await reader.cancel().catch(() => undefined);
+        void reader.cancel().catch(() => undefined);
         throw responseTooLarge(errorPrefix, nextLength, maxBytes);
       }
 
@@ -212,7 +213,7 @@ async function cancelResponseBody(res: Response): Promise<void> {
   if (!body || typeof body.cancel !== "function") {
     return;
   }
-  await body.cancel().catch(() => undefined);
+  void body.cancel().catch(() => undefined);
 }
 
 function parseContentLength(raw: string | null, errorPrefix: string): number | undefined {

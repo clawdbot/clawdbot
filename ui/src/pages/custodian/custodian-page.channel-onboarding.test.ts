@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import { channelSnapshotEntryIsActive, createChannelCapability } from "../../lib/channels/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -98,6 +100,136 @@ describe("custodian channel onboarding", () => {
 
     expect(context.channels.refresh).toHaveBeenCalledTimes(2);
     expect(context.channels.refresh).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it("awaits fresh channel status after reconnecting with a stale successful snapshot and error", async () => {
+    const freshStatus = createDeferred<ChannelsStatusSnapshot>();
+    let statusRequestCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "channels.status") {
+        statusRequestCount += 1;
+        if (statusRequestCount === 1) {
+          return Promise.resolve(channelSnapshot());
+        }
+        if (statusRequestCount === 2) {
+          return Promise.reject(new Error("status unavailable"));
+        }
+        return freshStatus.promise;
+      }
+      return Promise.resolve({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Ready.",
+        action: "none",
+      });
+    });
+    const { context, setGatewaySnapshot } = createContext(request);
+    const channels = createChannelCapability(context.gateway);
+    Object.assign(context, { channels });
+    await channels.refresh();
+    await channels.refresh();
+    expect(channels.state.channelsSnapshot).not.toBeNull();
+    expect(channels.state.channelsError).toBe("status unavailable");
+    const { page } = await mountPage(context, { onboarding: true });
+
+    setGatewaySnapshot({ phase: "reconnecting" });
+    setGatewaySnapshot({ phase: "connected" });
+
+    await waitForFast(() => expect(statusRequestCount).toBe(3));
+    expect(channels.state.channelsSnapshot).toBeNull();
+    expect(channels.state.channelsLoading).toBe(true);
+    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
+
+    freshStatus.resolve(
+      channelSnapshot({
+        channels: { telegram: { configured: true, running: true, connected: true } },
+      }),
+    );
+    await waitForFast(() => expect(channels.state.channelsLoading).toBe(false));
+    expect(channelSnapshotEntryIsActive(channels.state.channelsSnapshot, "telegram")).toBe(true);
+    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
+    channels.dispose();
+  });
+
+  it("shows an error instead of a healthy nudge when refresh fails with a stale snapshot", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Ready.",
+      action: "none",
+    });
+    const { context, setChannelsError } = createContext(request, ["openclaw.chat"], {
+      channelsSnapshot: channelSnapshot(),
+    });
+    const { page } = await mountPage(context, { onboarding: true });
+
+    setChannelsError("status unavailable");
+    await page.updateComplete;
+
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Channel status is unavailable",
+    );
+    expect(page.textContent).not.toContain("The web app already works");
+  });
+
+  it("keeps retry feedback visible until a deferred channel refresh succeeds", async () => {
+    const retryStatus = createDeferred<ChannelsStatusSnapshot>();
+    let statusRequestCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "channels.status") {
+        statusRequestCount += 1;
+        return statusRequestCount === 1
+          ? Promise.reject(new Error("status unavailable"))
+          : retryStatus.promise;
+      }
+      return Promise.resolve({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Ready.",
+        action: "none",
+      });
+    });
+    const { context } = createContext(request);
+    const channels = createChannelCapability(context.gateway);
+    Object.assign(context, { channels });
+    await channels.refresh();
+    const { page } = await mountPage(context, { onboarding: true });
+
+    const retry = page.querySelector<HTMLButtonElement>(".custodian__nudge-cta");
+    expect(retry?.textContent).toContain("Retry");
+    retry?.click();
+
+    await waitForFast(() => expect(statusRequestCount).toBe(2));
+    await page.updateComplete;
+    expect(channels.state.channelsLoading).toBe(true);
+    expect(channels.state.channelsError).toBe("status unavailable");
+    expect(page.querySelector('[role="alert"]')).not.toBeNull();
+    expect(page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.disabled).toBe(true);
+    expect(page.querySelector(".custodian__nudge-cta")?.textContent).toContain("Loading");
+
+    retryStatus.resolve(
+      channelSnapshot({
+        channels: { telegram: { configured: true, running: true, connected: true } },
+      }),
+    );
+    await waitForFast(() => expect(channels.state.channelsLoading).toBe(false));
+    expect(channels.state.channelsError).toBeNull();
+    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
+    channels.dispose();
+  });
+
+  it("does not refresh after the channel prompt is dismissed", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Ready.",
+      action: "none",
+    });
+    const { context, setChannelsConnected } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: true });
+    await waitForFast(() => expect(context.channels.refresh).toHaveBeenCalledOnce());
+
+    page.store.dismissChannelOnboardingNudge();
+    setChannelsConnected(false);
+    setChannelsConnected(true);
+
+    expect(context.channels.refresh).toHaveBeenCalledOnce();
   });
 
   it.each([

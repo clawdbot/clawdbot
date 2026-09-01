@@ -3,20 +3,41 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
-import type {
-  PluginManifestCatalog,
-  PluginManifestChannelConfig,
-  PluginManifestContracts,
-  PluginManifestProviderEndpoint,
-  PluginPackageInstall,
-} from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
+import type {
+  OfficialExternalChannelSecretContract,
+  OfficialExternalPluginCatalogManifest,
+  OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogInstallCandidate,
+  OfficialExternalPluginCatalogSourceProfile,
+  OfficialExternalPluginCatalogFeedVerification,
+  OfficialExternalPluginCatalogFeedSigningKey,
+  OfficialExternalPluginCatalogProfileConfig,
+  OfficialExternalPluginCatalogFeed,
+  HostedOfficialExternalPluginCatalogSnapshot,
+  HostedOfficialExternalPluginCatalogSnapshotStore,
+  HostedOfficialExternalPluginCatalogTrustState,
+  HostedOfficialExternalPluginCatalogLoadResult,
+} from "./official-external-plugin-catalog.types.js";
+import type { PluginPackageInstall } from "./package-manifest.types.js";
+import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
-type ManifestKey = typeof MANIFEST_KEY;
+export type {
+  OfficialExternalProviderAuthChoice,
+  OfficialExternalWebSearchProvider,
+  OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogFeed,
+  HostedOfficialExternalPluginCatalogMetadata,
+  HostedOfficialExternalPluginCatalogSnapshot,
+  HostedOfficialExternalPluginCatalogSnapshotStore,
+  HostedOfficialExternalPluginCatalogTrustState,
+  HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
+  HostedOfficialExternalPluginCatalogLoadResult,
+} from "./official-external-plugin-catalog.types.js";
 
 class HostedCatalogSnapshotWriteError extends Error {
   readonly originalError: unknown;
@@ -28,186 +49,6 @@ class HostedCatalogSnapshotWriteError extends Error {
   }
 }
 
-export type OfficialExternalProviderAuthChoice = {
-  method?: string;
-  choiceId?: string;
-  deprecatedChoiceIds?: readonly string[];
-  choiceLabel?: string;
-  choiceHint?: string;
-  assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
-  groupId?: string;
-  groupLabel?: string;
-  groupHint?: string;
-  optionKey?: string;
-  cliFlag?: string;
-  cliOption?: string;
-  cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
-};
-
-type OfficialExternalProviderCatalogProvider = {
-  id?: string;
-  aliases?: readonly string[];
-  name?: string;
-  docs?: string;
-  categories?: readonly string[];
-  envVars?: readonly string[];
-  authChoices?: readonly OfficialExternalProviderAuthChoice[];
-};
-
-export type OfficialExternalWebSearchProvider = {
-  id?: string;
-  label?: string;
-  hint?: string;
-  onboardingScopes?: readonly "text-inference"[];
-  requiresCredential?: boolean;
-  credentialLabel?: string;
-  envVars?: readonly string[];
-  placeholder?: string;
-  signupUrl?: string;
-  docsUrl?: string;
-  credentialPath?: string;
-  autoDetectOrder?: number;
-};
-
-/** Manifest-like metadata stored in official external catalog entries. */
-type OfficialExternalPluginCatalogManifest = {
-  plugin?: {
-    id?: string;
-    label?: string;
-  };
-  catalog?: PluginManifestCatalog;
-  channel?: {
-    id?: string;
-    label?: string;
-    envVars?: readonly string[];
-  };
-  providers?: readonly OfficialExternalProviderCatalogProvider[];
-  /**
-   * Mirrors the plugin manifest's providerEndpoints so endpoint classification
-   * keeps working when the plugin is not installed (dist excludes it).
-   */
-  providerEndpoints?: readonly PluginManifestProviderEndpoint[];
-  webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
-  install?: PluginPackageInstall & { sourceRef?: string };
-  contracts?: PluginManifestContracts;
-  channelConfigs?: Record<string, PluginManifestChannelConfig>;
-};
-
-/** Raw official external catalog entry loaded from generated catalog JSON. */
-export type OfficialExternalPluginCatalogEntry = {
-  id?: string;
-  title?: string;
-  type?: string;
-  state?: string;
-  publisher?: {
-    id?: string;
-    trust?: string;
-  };
-  name?: string;
-  version?: string;
-  description?: string;
-  icon?: string;
-  source?: string;
-  kind?: string;
-  featured?: boolean;
-  featuredAt?: number;
-  install?: {
-    candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
-  };
-} & Partial<Record<ManifestKey, OfficialExternalPluginCatalogManifest>>;
-
-type OfficialExternalPluginCatalogInstallCandidate = {
-  sourceRef?: string;
-  package?: string;
-  version?: string;
-  integrity?: string;
-  repo?: string;
-  path?: string;
-  commit?: string;
-};
-
-type OfficialExternalPluginCatalogSourceProfile =
-  | {
-      type: "npm";
-      registry?: string;
-    }
-  | {
-      type: "clawhub";
-      baseUrl?: string;
-    }
-  | {
-      type: "git";
-      baseUrl?: string;
-    };
-
-type OfficialExternalPluginCatalogFeedProfile = {
-  url: string;
-  feedId?: string;
-  verification?: OfficialExternalPluginCatalogFeedVerification;
-};
-
-type OfficialExternalPluginCatalogFeedVerification =
-  | {
-      mode: "unsigned";
-    }
-  | {
-      mode: "signed";
-      keys: readonly OfficialExternalPluginCatalogFeedSigningKey[];
-      threshold?: number;
-    };
-
-type OfficialExternalPluginCatalogFeedSigningKey = {
-  keyId: string;
-  publicKey: string;
-};
-
-type OfficialExternalPluginCatalogProfileConfig = {
-  feeds?: Record<string, OfficialExternalPluginCatalogFeedProfile>;
-  sources?: Record<string, OfficialExternalPluginCatalogSourceProfile>;
-};
-
-/** Feed-shaped wrapper used by the bundled external plugin catalog fallback. */
-export type OfficialExternalPluginCatalogFeed = {
-  schemaVersion: 1 | 2;
-  id: string;
-  generatedAt: string;
-  expiresAt?: string;
-  sequence: number;
-  description?: string;
-  entries: readonly OfficialExternalPluginCatalogEntry[];
-};
-
-export type HostedOfficialExternalPluginCatalogMetadata = {
-  url: string;
-  status: number;
-  etag?: string;
-  lastModified?: string;
-  checksum: string;
-};
-
-export type HostedOfficialExternalPluginCatalogSnapshot = {
-  body: string;
-  metadata: HostedOfficialExternalPluginCatalogMetadata;
-  savedAt: string;
-  trust?: HostedOfficialExternalPluginCatalogTrustState;
-  monotonic?: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
-};
-
-export type HostedOfficialExternalPluginCatalogSnapshotStore = {
-  read: (url: string) => Promise<HostedOfficialExternalPluginCatalogSnapshot | null | undefined>;
-  write: (snapshot: HostedOfficialExternalPluginCatalogSnapshot) => Promise<void>;
-};
-
-export type HostedOfficialExternalPluginCatalogTrustState = {
-  mode: "signed";
-  signedBy: string;
-  signatureCount: number;
-  threshold: number;
-  verifiedAt: string;
-};
-
 export class HostedCatalogSignedFeedMonotonicityError extends Error {
   constructor(message: string) {
     super(message);
@@ -215,44 +56,11 @@ export class HostedCatalogSignedFeedMonotonicityError extends Error {
   }
 }
 
-export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
-  mode: "signed-feed";
-  sequence: number;
-  generatedAt?: string;
-};
-
-export type HostedOfficialExternalPluginCatalogLoadResult =
-  | {
-      source: "hosted";
-      entries: OfficialExternalPluginCatalogEntry[];
-      feed: OfficialExternalPluginCatalogFeed;
-      metadata: HostedOfficialExternalPluginCatalogMetadata;
-      trust?: HostedOfficialExternalPluginCatalogTrustState;
-    }
-  | {
-      source: "hosted-snapshot";
-      entries: OfficialExternalPluginCatalogEntry[];
-      feed: OfficialExternalPluginCatalogFeed;
-      metadata: HostedOfficialExternalPluginCatalogMetadata;
-      snapshot: HostedOfficialExternalPluginCatalogSnapshot;
-      trust?: HostedOfficialExternalPluginCatalogTrustState;
-      error: string;
-    }
-  | {
-      source: "bundled-fallback";
-      entries: OfficialExternalPluginCatalogEntry[];
-      error: string;
-      metadata?: Omit<HostedOfficialExternalPluginCatalogMetadata, "checksum"> & {
-        checksum?: string;
-      };
-    };
-
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type OfficialExternalProviderContract =
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "webFetchProviders";
 
@@ -1326,15 +1134,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       now: currentTime(),
     });
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
     await release?.().catch(() => undefined);
   }
-}
-
-function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
 function formatFeedInstallCandidateSpec(
@@ -1451,7 +1253,29 @@ export function resolveOfficialExternalPluginId(
   );
 }
 
-function resolveOfficialExternalPluginLookupIds(
+/** Returns legacy plugin ids used only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
+      .map((pluginId) => normalizeOptionalString(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+}
+
+/** Returns the host-owned setup migration selected for an external channel cutover. */
+export function resolveOfficialExternalChannelCompatibilityMigration(
+  channelId: string,
+): string | undefined {
+  const entry = getOfficialExternalPluginCatalogEntry(channelId);
+  return normalizeOptionalString(
+    getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
+      ?.compatibilityMigration,
+  );
+}
+
+export function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
@@ -1517,7 +1341,7 @@ export function resolveOfficialExternalPluginInstall(
   const npmSpec =
     manifestNpmSpec ?? (hasFeedInstallCandidates ? undefined : normalizeOptionalString(entry.name));
   const defaultChoice =
-    normalizeDefaultChoice(install?.defaultChoice) ??
+    normalizePluginInstallDefaultChoice(install?.defaultChoice) ??
     (npmSpec ? "npm" : clawhubSpec ? "clawhub" : localPath ? "local" : undefined);
   if (!clawhubSpec && !npmSpec && !localPath) {
     return null;
@@ -1680,12 +1504,81 @@ export function listOfficialExternalChannelEnvVars(): Array<{
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
     const envVars = uniqueStrings(
-      (channel?.envVars ?? [])
+      [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ]
         .map((envVar) => normalizeOptionalString(envVar))
         .filter((envVar): envVar is string => Boolean(envVar)),
     );
     return channelId && envVars.length > 0 ? [{ channelId, envVars }] : [];
   });
+}
+
+const CHANNEL_SECRET_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
+const CHANNEL_SECRET_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+/** Returns a validated host fallback secret contract for one external channel. */
+export function getOfficialExternalChannelSecretContract(
+  channelId: string,
+): OfficialExternalChannelSecretContract | undefined {
+  const normalizedChannelId = normalizeOptionalString(channelId)?.toLowerCase();
+  if (!normalizedChannelId) {
+    return undefined;
+  }
+  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
+    const id = normalizeOptionalString(
+      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+    )?.toLowerCase();
+    return id === normalizedChannelId;
+  });
+  const fields = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelSecrets?.fields;
+  if (!fields) {
+    return undefined;
+  }
+  const normalizedFields = fields.flatMap((field) => {
+    const fieldName = normalizeOptionalString(field.field);
+    const activationField = normalizeOptionalString(field.activationField);
+    const activationEnv = normalizeOptionalString(field.activationEnv);
+    if (
+      !fieldName ||
+      !CHANNEL_SECRET_FIELD_PATTERN.test(fieldName) ||
+      (activationField !== undefined && !CHANNEL_SECRET_FIELD_PATTERN.test(activationField)) ||
+      (activationEnv !== undefined && !CHANNEL_SECRET_ENV_PATTERN.test(activationEnv))
+    ) {
+      return [];
+    }
+    return [
+      {
+        field: fieldName,
+        ...(activationField ? { activationField } : {}),
+        ...(activationEnv ? { activationEnv } : {}),
+      },
+    ];
+  });
+  return normalizedFields.length > 0
+    ? { channelId: normalizedChannelId, fields: normalizedFields }
+    : undefined;
+}
+
+/** Returns trusted host validation clauses for one official external channel. */
+export function getOfficialExternalChannelHostSchemaAllOf(
+  channelId: string,
+): readonly Record<string, unknown>[] {
+  const normalizedChannelId = normalizeOptionalString(channelId)?.toLowerCase();
+  if (!normalizedChannelId) {
+    return [];
+  }
+  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
+    const id = normalizeOptionalString(
+      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+    )?.toLowerCase();
+    return id === normalizedChannelId;
+  });
+  const clauses = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
+    ?.schemaAllOf;
+  return Array.isArray(clauses) ? clauses.filter(isRecord) : [];
 }
 
 export function listOfficialExternalProviderCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

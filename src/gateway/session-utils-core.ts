@@ -1,20 +1,24 @@
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../agents/subagent-registry-read.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
-} from "../agents/subagent-run-liveness.js";
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   type ModelCostConfig,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
@@ -25,16 +29,6 @@ import {
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-
-function formatSessionIdPrefix(sessionId: string, updatedAt?: number | null): string {
-  const prefix = sessionId.slice(0, 8);
-  if (updatedAt && updatedAt > 0) {
-    const d = new Date(updatedAt);
-    const date = d.toISOString().slice(0, 10);
-    return `${prefix} (${date})`;
-  }
-  return prefix;
-}
 
 function truncateTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) {
@@ -82,27 +76,28 @@ export function deriveSessionTitle(
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
 
-  if (entry.sessionId) {
-    return formatSessionIdPrefix(entry.sessionId, entry.updatedAt);
-  }
-
+  // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
+  // which an id prefix here would mask.
   return undefined;
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asPositiveFiniteNumber(value);
 }
 
 export function deriveSessionUnread(
   entry?: Pick<
     SessionEntry,
-    "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
+    "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
   >,
 ): boolean {
+  // Creation starts unread tracking for modern rows without lighting up legacy
+  // rows that predate durable creation provenance.
+  const unreadBaselineAt = entry?.lastReadAt ?? entry?.createdAt;
   return (
     entry?.markedUnreadAt !== undefined ||
-    (entry?.lastReadAt !== undefined &&
-      Math.max(entry.lastInteractionAt ?? 0, entry.lastActivityAt ?? 0) > entry.lastReadAt)
+    (unreadBaselineAt !== undefined &&
+      Math.max(entry?.lastInteractionAt ?? 0, entry?.lastActivityAt ?? 0) > unreadBaselineAt)
   );
 }
 
@@ -206,7 +201,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
-  const explicitCostUsd = resolveNonNegativeNumber(
+  const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
   if (explicitCostUsd !== undefined) {
@@ -233,7 +228,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   if (!cost) {
     return undefined;
   }
-  const estimated = estimateUsageCost({
+  const estimated = estimateAggregateUsageCost({
     usage: {
       ...(input !== undefined ? { input } : {}),
       ...(output !== undefined ? { output } : {}),
@@ -242,7 +237,7 @@ export function resolveEstimatedSessionCostUsd(params: {
     },
     cost,
   });
-  return resolveNonNegativeNumber(estimated);
+  return asNonNegativeFiniteNumber(estimated);
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
@@ -289,17 +284,12 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
     singleRowChildSessionCandidateCache.delete(storePath);
   }
   singleRowChildSessionCandidateCache.set(storePath, entry);
-  if (singleRowChildSessionCandidateCache.size <= SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = singleRowChildSessionCandidateCache.keys().next().value;
-  if (oldestKey) {
-    singleRowChildSessionCandidateCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(singleRowChildSessionCandidateCache, SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES);
 }
 
 function buildStoreChildSessionCandidateIndex(
   store: Record<string, SessionEntry> | null | undefined,
+  selectedParents?: ReadonlySet<string>,
 ): Map<string, string[]> {
   const childSessionsByKey = new Map<string, string[]>();
   if (!store) {
@@ -314,7 +304,9 @@ function buildStoreChildSessionCandidateIndex(
       normalizeOptionalString(entry.parentSessionKey),
     ].filter((value): value is string => Boolean(value) && value !== key);
     for (const parentKey of parentKeys) {
-      addChildSessionKey(childSessionsByKey, parentKey, key);
+      if (!selectedParents || selectedParents.has(parentKey)) {
+        addChildSessionKey(childSessionsByKey, parentKey, key);
+      }
     }
   }
   return childSessionsByKey;
@@ -344,8 +336,8 @@ export function getSingleRowChildSessionCandidates(params: {
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    // Exact read-only lookups rebuild a sparse record but borrow stable entry objects
-    // from the SQLite snapshot. Compare those identities so the derived index survives.
+    // Full-store snapshots can retain entry identities between short-list projections.
+    // Exact reads own fresh JSON and do not use this cache.
     entriesByKey: new Map(Object.entries(params.store)),
     childSessionCandidatesByParentKey,
   });
@@ -423,92 +415,72 @@ export function isCurrentSessionChildOwner(params: {
   );
 }
 
-export function buildStoreChildSessionIndex(
-  store: Record<string, SessionEntry>,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): Map<string, string[]> {
-  const childSessionsByKey = new Map<string, string[]>();
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const parentKeys = [
-      normalizeOptionalString(entry.spawnedBy),
-      normalizeOptionalString(entry.parentSessionKey),
-    ].filter((value): value is string => Boolean(value) && value !== key);
-    if (parentKeys.length === 0) {
-      continue;
-    }
-    const latest = subagentRuns
-      ? subagentRuns.getDisplaySubagentRun(key)
-      : getSessionDisplaySubagentRunByChildSessionKey(key);
-    let latestControllerSessionKey: string | undefined;
-    if (latest) {
-      latestControllerSessionKey =
-        normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns
-            ? subagentRuns.countActiveDescendantRuns(key)
-            : countActiveDescendantRuns(key),
-          now,
-        })
-      ) {
-        continue;
-      }
-    } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
-      continue;
-    }
-    for (const parentKey of parentKeys) {
-      if (
-        latestControllerSessionKey &&
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: parentKey,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
-        continue;
-      }
-      addChildSessionKey(childSessionsByKey, parentKey, key);
+/** Prepare only selected parents; a supplied candidate map belongs to the full-store caller. */
+export function buildStoreChildSessionIndex(params: {
+  store: Record<string, SessionEntry>;
+  keys: readonly string[];
+  now: number;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  candidates?: ReadonlyMap<string, readonly string[]>;
+  excludedChildKeys?: ReadonlySet<string>;
+  requireCurrentController?: boolean;
+}): Map<string, string[]> {
+  const children = new Map<string, string[]>();
+  if (params.keys.length === 0) {
+    return children;
+  }
+  const candidates =
+    params.candidates ?? buildStoreChildSessionCandidateIndex(params.store, new Set(params.keys));
+  for (const key of params.keys) {
+    const childKeys = resolveStoreChildSessionKeysFromCandidates({ ...params, key, candidates });
+    if (childKeys) {
+      children.set(key, childKeys);
     }
   }
-  return childSessionsByKey;
+  return children;
 }
 
-export function resolveStoreChildSessionKeysFromCandidates(params: {
+function resolveStoreChildSessionKeysFromCandidates(params: {
   store: Record<string, SessionEntry>;
   key: string;
   now: number;
   candidates: ReadonlyMap<string, readonly string[]>;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  excludedChildKeys?: ReadonlySet<string>;
+  requireCurrentController?: boolean;
 }): string[] | undefined {
   const childSessionKeys: string[] = [];
   for (const childKey of params.candidates.get(params.key) ?? []) {
+    if (params.excludedChildKeys?.has(childKey)) {
+      continue;
+    }
     const entry = params.store[childKey];
     if (!entry) {
       continue;
     }
-    const latest = getSessionDisplaySubagentRunByChildSessionKey(childKey);
+    const latest = params.subagentRuns
+      ? params.subagentRuns.getDisplaySubagentRun(childKey)
+      : getSessionDisplaySubagentRunByChildSessionKey(childKey);
     if (latest) {
       const latestControllerSessionKey =
         normalizeOptionalString(latest.controllerSessionKey) ||
         normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: params.key,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
+      const matchesOwner = isCurrentSessionChildOwner({
+        entry,
+        ownerSessionKey: params.key,
+        controllerSessionKey: latestControllerSessionKey,
+      });
+      if (params.requireCurrentController && !matchesOwner) {
         continue;
       }
       if (
         !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: countActiveDescendantRuns(childKey),
+          activeDescendants: params.subagentRuns
+            ? params.subagentRuns.countActiveDescendantRuns(childKey)
+            : countActiveDescendantRuns(childKey),
           now: params.now,
-        })
+        }) ||
+        (latestControllerSessionKey && !matchesOwner)
       ) {
         continue;
       }

@@ -6,6 +6,15 @@ import { createDirectRoomTracker } from "./direct.js";
 
 type MockStateEvents = Record<string, Record<string, unknown>>;
 
+const DEFAULT_DIRECT_CHECK = {
+  roomId: "!room:example.org",
+  senderId: "@alice:example.org",
+};
+
+function checkDefaultRoom(tracker: ReturnType<typeof createDirectRoomTracker>) {
+  return tracker.isDirectMessage(DEFAULT_DIRECT_CHECK);
+}
+
 function createMockClient(params: {
   isDm?: boolean;
   members?: string[];
@@ -88,12 +97,7 @@ describe("createDirectRoomTracker", () => {
     const client = createMockClient({ isDm: true });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
@@ -104,12 +108,7 @@ describe("createDirectRoomTracker", () => {
       isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
     });
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.dms.update).not.toHaveBeenCalled();
     expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
@@ -121,12 +120,7 @@ describe("createDirectRoomTracker", () => {
       isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
     });
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.dms.update).not.toHaveBeenCalled();
     expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
@@ -139,12 +133,7 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
@@ -153,12 +142,7 @@ describe("createDirectRoomTracker", () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: true });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
@@ -169,12 +153,7 @@ describe("createDirectRoomTracker", () => {
       canPromoteUnmappedStrictRoom: () => true,
     });
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
       "@alice:example.org": ["!room:example.org"],
@@ -187,12 +166,7 @@ describe("createDirectRoomTracker", () => {
       canPromoteUnmappedStrictRoom: () => false,
     });
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
@@ -201,12 +175,7 @@ describe("createDirectRoomTracker", () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: false });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
@@ -215,18 +184,8 @@ describe("createDirectRoomTracker", () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: false });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     expect(client.dms.update).toHaveBeenCalledTimes(1);
   });
@@ -239,12 +198,7 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.getRoomStateEvent).not.toHaveBeenCalled();
   });
@@ -259,12 +213,7 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("treats self is_direct member state as a DM signal", async () => {
@@ -276,12 +225,7 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
   });
 
   it("treats self is_direct false member state as a non-DM signal", async () => {
@@ -294,12 +238,7 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("treats strict rooms from recent invites as DMs after the dm cache has seeded", async () => {
@@ -307,12 +246,7 @@ describe("createDirectRoomTracker", () => {
     const tracker = createDirectRoomTracker(client);
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
       "@alice:example.org": ["!room:example.org"],
@@ -325,12 +259,7 @@ describe("createDirectRoomTracker", () => {
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
     tracker.invalidateRoom("!room:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
   });
 
   it("still rejects recent invite candidates when self member state is_direct is false", async () => {
@@ -344,12 +273,7 @@ describe("createDirectRoomTracker", () => {
     const tracker = createDirectRoomTracker(client);
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("does not promote recent invite candidates when local vetoes mark the room as non-DM", async () => {
@@ -362,12 +286,7 @@ describe("createDirectRoomTracker", () => {
     });
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     expect(client.setAccountData).not.toHaveBeenCalled();
   });
@@ -381,12 +300,7 @@ describe("createDirectRoomTracker", () => {
     const tracker = createDirectRoomTracker(client);
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
   });
 
   it("keeps locally promoted direct rooms stable after repair failures", async () => {
@@ -400,23 +314,13 @@ describe("createDirectRoomTracker", () => {
     const tracker = createDirectRoomTracker(client);
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     tracker.invalidateRoom("!room:example.org");
 
     vi.setSystemTime(new Date("2026-03-30T23:01:00Z"));
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
   });
 
   it("drops locally promoted direct rooms when room metadata later vetoes promotion", async () => {
@@ -434,22 +338,12 @@ describe("createDirectRoomTracker", () => {
     });
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     keepLocalPromotion = false;
     vi.setSystemTime(new Date("2026-03-30T23:01:00Z"));
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
@@ -460,56 +354,31 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("does not re-enable the strict 2-member fallback after the dm cache has seeded", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: true });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
 
     client.dms.update.mockResolvedValue(false);
     tracker.invalidateRoom("!room:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("re-checks room membership after invalidation when fallback membership changes", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: false });
     const tracker = createDirectRoomTracker(client);
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(true);
 
     client.setMembersForTest(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
     tracker.invalidateRoom("!room:example.org");
 
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
+    await expect(checkDefaultRoom(tracker)).resolves.toBe(false);
   });
 
   it("bounds joined-room membership cache size", async () => {
@@ -537,24 +406,15 @@ describe("createDirectRoomTracker", () => {
     const client = createMockClient({ isDm: true });
     const tracker = createDirectRoomTracker(client);
 
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
+    await checkDefaultRoom(tracker);
+    await checkDefaultRoom(tracker);
 
     expect(client.dms.update).toHaveBeenCalledTimes(1);
     expect(client.getJoinedRoomMembers).toHaveBeenCalledTimes(1);
 
     vi.setSystemTime(new Date("2026-03-12T10:00:31Z"));
 
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
+    await checkDefaultRoom(tracker);
 
     expect(client.dms.update).toHaveBeenCalledTimes(2);
     expect(client.getJoinedRoomMembers).toHaveBeenCalledTimes(2);
@@ -572,23 +432,14 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
+    await checkDefaultRoom(tracker);
+    await checkDefaultRoom(tracker);
 
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(1);
 
     vi.setSystemTime(new Date("2026-03-12T10:00:31Z"));
 
-    await tracker.isDirectMessage({
-      roomId: "!room:example.org",
-      senderId: "@alice:example.org",
-    });
+    await checkDefaultRoom(tracker);
 
     expect(client.getRoomStateEvent).toHaveBeenCalledTimes(2);
   });

@@ -1,4 +1,6 @@
 // Media parse tests cover media reference parsing from text and payloads.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
@@ -36,6 +38,7 @@ describe("splitMediaFromOutput", () => {
 
   function expectAcceptedMediaPathCase(expectedPath: string, input: string) {
     expectParsedMediaOutputCase(input, { mediaUrls: [expectedPath] });
+    expect(splitMediaFromOutput(input).segments).toEqual([{ type: "media", url: expectedPath }]);
   }
 
   function expectRejectedMediaPathCase(input: string) {
@@ -87,13 +90,69 @@ describe("splitMediaFromOutput", () => {
       String.raw`MEDIA:/path/to/image.png\"}],\"details\":{\"provider\":\"openai\"}`,
     ],
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
-    ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
-    ["/tmp/generated.png", "MEDIA:file:///tmp/generated.png"],
-    ["/Users/pete/My File.png", "MEDIA:FILE:///Users/pete/My File.png"],
-    ["/Users/pete/My File.png", "MEDIA:file:///Users/pete/My File.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });
+
+  const nativeFilePath = path.resolve("media", "café 100% image.png");
+  const nativeFileUrl = pathToFileURL(nativeFilePath).href;
+  it.each([
+    nativeFileUrl,
+    nativeFileUrl.replace(/^file:\/\//u, "FILE:"),
+    nativeFileUrl.replace(/^file:/u, "FILE:"),
+    nativeFileUrl.replace(/^file:\/\//u, "file://localhost"),
+    nativeFileUrl.replace(/%20/gu, " "),
+  ])("preserves file URLs for native media loading: %s", (fileUrl) => {
+    expectAcceptedMediaPathCase(fileUrl, `MEDIA:${fileUrl}`);
+  });
+
+  it.each([nativeFileUrl, nativeFilePath])("keeps file URL siblings separate from %s", (first) => {
+    const secondPath = path.resolve("media", "second image.png");
+    expectParsedMediaOutputCase(`MEDIA:${first} ${pathToFileURL(secondPath).href}`, {
+      mediaUrls: [first, pathToFileURL(secondPath).href],
+    });
+  });
+
+  it.each([
+    ["bare image", "Generated image\nMEDIA:image.png", ["image.png"]],
+    ["bare audio", "Generated audio\nMEDIA:voice.ogg", ["voice.ogg"]],
+    ["bare document", "Generated document\nMEDIA:report.pdf", ["report.pdf"]],
+    ["caption after bare filename", "MEDIA:image.png\nGenerated image", ["image.png"]],
+    ["quoted bare filename", 'Generated image\nMEDIA:"image.png"', ["image.png"]],
+    [
+      "quoted bare filename with spaces",
+      'Generated image\nMEDIA:"render final.png"',
+      ["render final.png"],
+    ],
+    ["unquoted bare filename with spaces", "MEDIA:render final.png", ["render final.png"]],
+    [
+      "remote followed by bare filename",
+      "MEDIA:https://example.com/remote.png\nMEDIA:image.png",
+      ["https://example.com/remote.png", "image.png"],
+    ],
+    [
+      "bare filenames surrounding remote media",
+      "MEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
+      ["image.png", "https://example.com/remote.png", "voice.ogg"],
+    ],
+    ["explicit relative sibling", "MEDIA:./image.png", ["./image.png"]],
+    ["absolute sibling", "MEDIA:/tmp/image.png", ["/tmp/image.png"]],
+    [
+      "multiple paths on one directive",
+      "MEDIA:/tmp/image.png /tmp/voice.ogg",
+      ["/tmp/image.png", "/tmp/voice.ogg"],
+    ],
+  ] as const)(
+    "projects every accepted media URL into ordered segments: %s",
+    (_name, input, urls) => {
+      const result = splitMediaFromOutput(input);
+
+      expect(result.mediaUrls).toEqual(urls);
+      expect(result.segments?.filter((segment) => segment.type === "media")).toEqual(
+        urls.map((url) => ({ type: "media", url })),
+      );
+    },
+  );
 
   it.each([
     ["MEDIA:/tmp/a.png /tmp/b.png", ["/tmp/a.png", "/tmp/b.png"]],
@@ -113,10 +172,6 @@ describe("splitMediaFromOutput", () => {
       "MEDIA:/tmp/project screenshots/shot.png media\\second.png",
       ["/tmp/project screenshots/shot.png", "media\\second.png"],
     ],
-    [
-      "MEDIA:/tmp/project screenshots/shot.png file:///tmp/second.png",
-      ["/tmp/project screenshots/shot.png", "/tmp/second.png"],
-    ],
     ["MEDIA:C:\\Users\\First Last\\..\\secret.png D:\\safe\\second.png", ["D:\\safe\\second.png"]],
     ["MEDIA:/tmp/project screenshots/../../.env /tmp/safe/second.png", ["/tmp/safe/second.png"]],
   ] as const)("keeps separate media items on one directive line: %s", (input, mediaUrls) => {
@@ -131,6 +186,7 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:./foo/../../../etc/shadow",
     "MEDIA:C:\\Users\\First Last\\..\\secret.png",
     "MEDIA:/tmp/project screenshots/../../.env",
+    "MEDIA:file:///tmp/../secret.png",
   ] as const)("rejects traversal and unsupported home-dir path: %s", (input) => {
     expectRejectedMediaPathCase(input);
   });
@@ -337,6 +393,17 @@ describe("splitMediaFromOutput", () => {
         mediaUrls: ["https://example.com/chart.png"],
       },
       extractMarkdownImages,
+    );
+  });
+
+  it("extracts only exact allowlisted Markdown image targets", () => {
+    expectParsedMediaOutputCase(
+      "Before ![selected](/tmp/selected.png) after ![remote](https://example.com/remote.png)",
+      {
+        text: "Before after ![remote](https://example.com/remote.png)",
+        mediaUrls: ["file:///tmp/selected.png"],
+      },
+      { markdownImageAllowlist: ["file:///tmp/selected.png"] },
     );
   });
 

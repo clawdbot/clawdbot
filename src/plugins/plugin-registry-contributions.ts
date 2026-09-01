@@ -2,7 +2,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfigWithResolverCore,
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
@@ -13,6 +13,7 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
@@ -62,13 +63,17 @@ type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
 };
 
-type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
+type ManifestContractLookupParams = LoadPluginRegistryParams & {
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
+type ResolveManifestContractPluginIdsParams = ManifestContractLookupParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 };
 
-type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
+type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams & {
   contract: PluginManifestContractListKey;
   value: string | undefined;
   origin?: PluginOrigin;
@@ -99,16 +104,44 @@ function listManifestContractValues(
   return plugin.contracts?.[contract] ?? [];
 }
 
-function loadManifestContractRegistry(
-  params: LoadPluginRegistryParams & {
+function loadManifestContractRecords(
+  params: ManifestContractLookupParams & {
     onlyPluginIds?: readonly string[];
   },
-): PluginManifestRegistry {
-  return loadPluginManifestRegistryForPluginRegistry({
-    ...params,
-    pluginIds: params.onlyPluginIds,
-    includeDisabled: true,
-  });
+): readonly PluginManifestRecord[] {
+  let records = params.manifestRecords;
+  if (!records) {
+    const requiresExplicitRegistry =
+      params.index !== undefined ||
+      params.preferPersisted === false ||
+      params.allowCurrent === false ||
+      params.stateDir !== undefined ||
+      params.filePath !== undefined ||
+      params.pluginIndexFilePath !== undefined ||
+      params.installRecords !== undefined ||
+      params.candidates !== undefined ||
+      params.diagnostics !== undefined ||
+      params.discovery !== undefined ||
+      params.now !== undefined;
+    if (requiresExplicitRegistry) {
+      return loadPluginManifestRegistryForPluginRegistry({
+        ...params,
+        pluginIds: params.onlyPluginIds,
+        includeDisabled: true,
+      }).plugins;
+    }
+    records = resolvePluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
+    }).plugins;
+  }
+  if (params.onlyPluginIds === undefined) {
+    return records;
+  }
+  const pluginIds = new Set(params.onlyPluginIds);
+  return records.filter((record) => pluginIds.has(record.id));
 }
 
 function listManifestContributionIds(
@@ -143,12 +176,15 @@ function resolveContributionPluginIds(params: {
   index: PluginRegistrySnapshot;
   includeDisabled?: boolean;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): readonly string[] {
   if (params.includeDisabled) {
     return params.index.plugins.map((plugin) => plugin.pluginId);
   }
   return params.index.plugins
-    .filter((plugin) => isInstalledPluginEnabled(params.index, plugin.pluginId, params.config))
+    .filter((plugin) =>
+      isInstalledPluginEnabled(params.index, plugin.pluginId, params.config, params.env),
+    )
     .map((plugin) => plugin.pluginId);
 }
 
@@ -167,6 +203,7 @@ function loadContributionManifestRegistry(
       index: params.index,
       includeDisabled: params.includeDisabled,
       config: params.config,
+      env: params.env,
     }),
     includeDisabled: true,
   });
@@ -184,6 +221,7 @@ function listContributionManifestPlugins(
         index: params.index,
         includeDisabled: params.includeDisabled,
         config: params.config,
+        env: params.env,
       }),
     );
     return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
@@ -192,49 +230,6 @@ function listContributionManifestPlugins(
     ...params,
     index: params.index,
   }).plugins;
-}
-
-function resolveContributionOwnerMap(
-  table: PluginLookUpTable,
-  contribution: PluginRegistryContributionKey,
-): ReadonlyMap<string, readonly string[]> | undefined {
-  switch (contribution) {
-    case "channels":
-      return table.owners.channels;
-    case "channelConfigs":
-      return table.owners.channelConfigs;
-    case "providers":
-      return table.owners.providers;
-    case "modelCatalogProviders":
-      return table.owners.modelCatalogProviders;
-    case "cliBackends":
-      return table.owners.cliBackends;
-    case "setupProviders":
-      return table.owners.setupProviders;
-    case "commandAliases":
-      return table.owners.commandAliases;
-    case "contracts":
-      return table.owners.contracts;
-  }
-  return undefined;
-}
-
-function filterContributionOwnerIds(params: {
-  owners: readonly string[];
-  index: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
-  config?: OpenClawConfig;
-}): readonly string[] {
-  const enabledPluginIds = new Set(
-    resolveContributionPluginIds({
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-      config: params.config,
-    }),
-  );
-  return normalizeSortedUniqueStringEntries(
-    params.owners.filter((owner) => enabledPluginIds.has(owner)),
-  );
 }
 
 export function loadPluginManifestRegistryForPluginRegistry(
@@ -260,7 +255,7 @@ export function normalizePluginsConfigWithRegistry(
   index: PluginRegistrySnapshot,
   options: PluginRegistryIdNormalizerOptions = {},
 ): NormalizedPluginsConfig {
-  return normalizePluginsConfigWithResolver(
+  return normalizePluginsConfigWithResolverCore(
     config,
     createPluginRegistryIdNormalizer(index, options),
   );
@@ -281,17 +276,21 @@ export function resolvePluginContributionOwners(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   if (params.lookUpTable && typeof params.matches === "string") {
-    const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
-    const owners = ownerMap?.get(params.matches);
-    if (owners) {
-      return filterContributionOwnerIds({
-        owners,
+    const owners = params.lookUpTable.owners[params.contribution].get(params.matches);
+    if (!owners) {
+      return [];
+    }
+    const enabledPluginIds = new Set(
+      resolveContributionPluginIds({
         index,
         includeDisabled: params.includeDisabled,
         config: params.config,
-      });
-    }
-    return [];
+        env: params.env,
+      }),
+    );
+    return normalizeSortedUniqueStringEntries(
+      owners.filter((owner) => enabledPluginIds.has(owner)),
+    );
   }
   const matcher =
     typeof params.matches === "string"
@@ -308,8 +307,8 @@ export function resolvePluginContributionOwners(
 export function resolveManifestContractPluginIds(
   params: ResolveManifestContractPluginIdsParams,
 ): string[] {
-  return loadManifestContractRegistry(params)
-    .plugins.filter(
+  return loadManifestContractRecords(params)
+    .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
@@ -325,7 +324,7 @@ export function resolveManifestContractOwnerPluginId(
   if (!normalizedValue) {
     return undefined;
   }
-  return loadManifestContractRegistry(params).plugins.find(
+  return loadManifestContractRecords(params).find(
     (plugin) =>
       (!params.origin || plugin.origin === params.origin) &&
       listManifestContractValues(plugin, params.contract).some(

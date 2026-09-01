@@ -8,15 +8,14 @@ import type {
   WAMessageKey,
   proto,
 } from "baileys";
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { formatCliCommand, VERSION } from "openclaw/plugin-sdk/cli-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   createNodeProxyAgent,
 } from "openclaw/plugin-sdk/fetch-runtime";
-import { danger, success } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, success, getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
@@ -550,10 +549,7 @@ export async function waitForWaConnection(
         cleanup();
         const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
-          toLintErrorObject(
-            disconnectError ?? new Error("Connection closed"),
-            "Non-Error rejection",
-          ),
+          toErrorObject(disconnectError ?? new Error("Connection closed"), "Non-Error rejection"),
         );
       }
     };
@@ -573,20 +569,6 @@ export async function waitForWaConnection(
 
 export function newConnectionId() {
   return randomUUID();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 function createConnectionTimeoutError(timeoutMs: number): Error {

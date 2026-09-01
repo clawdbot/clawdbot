@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
+import "./workboard-board.ts";
 import "./workboard-card.ts";
 import "./workboard-mini.ts";
 
@@ -42,7 +43,7 @@ const cards = [
   },
 ] as const;
 
-function pluginWidget(pluginKind: string, props: Record<string, unknown>): BoardViewWidget {
+function pluginWidget(pluginKind: string, props: Record<string, unknown>): BoardWidget {
   return {
     name: pluginKind.replace(":", "-"),
     tabId: "main",
@@ -359,6 +360,67 @@ describe("Workboard plugin widgets", () => {
     expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
   });
 
+  it.each([
+    {
+      name: "scopes to boardId",
+      props: { boardId: "ops" },
+      expectedTitles: ["Ready card", "Running card", "Done card"],
+      omittedTitle: "Product card",
+    },
+    {
+      name: "shows all boards by default",
+      props: {},
+      expectedTitles: ["Ready card", "Running card", "Done card", "Product card"],
+      omittedTitle: null,
+    },
+  ])("renders real board columns and $name", async ({ props, expectedTitles, omittedTitle }) => {
+    const productCard = {
+      ...cards[0],
+      id: "card-product",
+      title: "Product card",
+      metadata: { automation: { boardId: "product" } },
+    };
+    const request = vi.fn(async () => ({
+      cards: [...cards, productCard],
+      statuses: ["ready", "running", "done"],
+    }));
+    const element = document.createElement("openclaw-workboard-board-widget");
+    element.widget = pluginWidget("workboard:board", props);
+    element.sessionKey = "agent:main:test";
+
+    await mount(element, createContext(request), request);
+
+    expect(element.querySelectorAll(".workboard-column")).toHaveLength(3);
+    for (const title of expectedTitles) {
+      expect(element.textContent).toContain(title);
+    }
+    if (omittedTitle) {
+      expect(element.textContent).not.toContain(omittedTitle);
+    }
+  });
+
+  it("keeps every board status control read-only without mutation access", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return { cards, statuses: ["ready", "running", "done"] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const element = document.createElement("openclaw-workboard-board-widget");
+    element.widget = pluginWidget("workboard:board", { boardId: "ops" });
+    element.sessionKey = "agent:main:test";
+    element.canMutate = false;
+
+    await mount(element, createContext(request), request);
+
+    const selects = [...element.querySelectorAll("select")];
+    expect(selects).toHaveLength(cards.length);
+    expect(selects.every((select) => select.disabled)).toBe(true);
+    selects[0]!.value = "running";
+    selects[0]!.dispatchEvent(new Event("change"));
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+  });
+
   it("ignores a stale card move after the gateway connection changes", async () => {
     const staleMove = deferred<unknown>();
     const staleRequest = vi.fn(async (method: string) => {
@@ -549,6 +611,72 @@ describe("Workboard plugin widgets", () => {
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(element.textContent).toContain("Running card"));
+  });
+
+  it("pauses hidden work and refreshes once when reactivated", async () => {
+    const refreshedCards = cards.map((card) =>
+      card.id === "card-ready" ? { ...card, title: "Reactivated ready card" } : card,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "workboard.cards.list") {
+        return {
+          cards: request.mock.calls.length === 1 ? cards : refreshedCards,
+          statuses: ["ready", "running", "done"],
+        };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: { ...cards[0], status: "running", position: 3000 } };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const events: {
+      listener?: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0];
+    } = {};
+    const hostRequestUpdate = vi.fn();
+    const element = document.createElement("openclaw-workboard-card-widget");
+    element.widget = pluginWidget("workboard:card", { cardId: "card-ready" });
+    element.hostRequestUpdate = hostRequestUpdate;
+    await mount(element, createContext(request, events), request);
+    const retained = document.querySelector("openclaw-workboard-card-widget");
+    expect(retained).toBe(element);
+
+    element.active = false;
+    await element.updateComplete;
+    hostRequestUpdate.mockClear();
+    events.listener?.({
+      type: "event",
+      event: "plugin.workboard.changed",
+      payload: { epoch: "epoch-hidden", revision: 2 },
+    });
+    (Reflect.get(element, "retryLoad") as () => void).call(element);
+    const select = element.querySelector("select");
+    expect(select).not.toBeNull();
+    select!.value = "running";
+    select!.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request.mock.calls.filter(([method]) => method === "workboard.cards.list")).toHaveLength(
+      1,
+    );
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.move", expect.anything());
+    expect(hostRequestUpdate).not.toHaveBeenCalled();
+
+    element.active = true;
+    await element.updateComplete;
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
+      ).toHaveLength(2),
+    );
+    await vi.waitFor(() => expect(element.textContent).toContain("Reactivated ready card"));
+
+    expect(document.querySelector("openclaw-workboard-card-widget")).toBe(retained);
+    expect(element.isConnected).toBe(true);
+    expect(hostRequestUpdate).toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "workboard.cards.list")).toHaveLength(
+      2,
+    );
   });
 
   it("queues a second refresh when a change arrives during an active list request", async () => {

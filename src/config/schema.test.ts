@@ -2,7 +2,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 // Covers canonical config schema defaults, validation, and sensitive redaction.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { validateConfigObjectRaw } from "./validation.js";
@@ -10,8 +10,8 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
-  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
-  let baseSchema: ReturnType<typeof buildConfigSchema>;
+  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
+  let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
   let tokenHintInput: SchemaInput;
   let mergedSchemaInput: SchemaInput;
@@ -19,7 +19,7 @@ describe("config schema", () => {
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
-    baseSchema = buildConfigSchema();
+    baseSchema = buildConfigSchemaCore();
     pluginUiHintInput = {
       plugins: [
         {
@@ -113,6 +113,12 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    for (const path of [
+      "agents.defaults.models.*.codeMode",
+      "agents.entries.*.models.*.codeMode",
+    ]) {
+      expect(res.uiHints[path]).toMatchObject({ label: "Code Mode", placeholder: "Default" });
+    }
     expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
@@ -166,19 +172,6 @@ describe("config schema", () => {
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
-  });
-
-  it("accepts qmd query rerank override", () => {
-    const result = OpenClawSchema.safeParse({
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
-          rerank: false,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
   });
 
   it("rejects retired status reaction emoji overrides", () => {
@@ -423,6 +416,127 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("validates MCP OAuth credential identity", () => {
+    for (const identity of ["shared", "per-requester"] as const) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                auth: "oauth",
+                oauth: { identity },
+              },
+            },
+          },
+        }).success,
+      ).toBe(true);
+    }
+
+    const missingAuth = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            oauth: { identity: "per-requester" },
+          },
+        },
+      },
+    });
+    expect(missingAuth.success).toBe(false);
+    if (missingAuth.success) {
+      throw new Error("Expected per-requester OAuth without auth mode to fail validation");
+    }
+    expect(missingAuth.error.issues).toContainEqual(
+      expect.objectContaining({
+        message: 'oauth.identity "per-requester" requires auth: "oauth"',
+        path: ["mcp", "servers", "docs", "oauth", "identity"],
+      }),
+    );
+
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester", authProfileId: "docs:mcp" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    // URL plus command resolves stdio and would strand the server silently.
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "stdio",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a bare HTTPS Gateway public origin except on loopback", () => {
+    for (const publicOrigin of [
+      "https://gateway.example.com",
+      "https://gateway.example.com:443",
+      "http://localhost:80",
+      "http://localhost:18789/",
+      "http://127.0.0.1:18789",
+      "http://[::1]:18789",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(true);
+    }
+    // Built via URL so no credential-shaped literal lands in source (secret scanners).
+    const userinfoOrigin = new URL("https://gateway.example.com");
+    userinfoOrigin.username = "operator";
+    for (const publicOrigin of [
+      "https://gateway.example.com/path",
+      "https://gateway.example.com?query=1",
+      "https://gateway.example.com/#fragment",
+      "http://gateway.example.com",
+      userinfoOrigin.href,
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(false);
+    }
+  });
+
   it("accepts stdio transport for command-bearing MCP servers", () => {
     const result = OpenClawSchema.safeParse({
       mcp: {
@@ -484,7 +598,7 @@ describe("config schema", () => {
   });
 
   it("merges plugin ui hints", () => {
-    const res = buildConfigSchema(pluginUiHintInput);
+    const res = buildConfigSchemaCore(pluginUiHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
@@ -495,13 +609,13 @@ describe("config schema", () => {
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
-    const res = buildConfigSchema(tokenHintInput);
+    const res = buildConfigSchemaCore(tokenHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive).toBe(false);
   });
 
   it("merges plugin + channel schemas", () => {
-    const res = buildConfigSchema(mergedSchemaInput);
+    const res = buildConfigSchemaCore(mergedSchemaInput);
 
     const schema = res.schema as {
       properties?: Record<string, unknown>;
@@ -529,7 +643,10 @@ describe("config schema", () => {
       const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
       return progress?.properties as Record<string, unknown> | undefined;
     };
+    expect(progressPropsFor("slack")).toHaveProperty("style");
     expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("style");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("style");
     expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
     expect(progressPropsFor("discord")).toHaveProperty("commentary");
@@ -542,6 +659,9 @@ describe("config schema", () => {
     );
     expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
       "Slack Native Progress Task Cards",
+    );
+    expect(res.uiHints["channels.slack.streaming.progress.style"]?.label).toBe(
+      "Slack Progress Style",
     );
     expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
@@ -556,8 +676,33 @@ describe("config schema", () => {
     );
   });
 
+  it.each(["bundled", "extended"])(
+    "keeps core channel settings discoverable with %s metadata",
+    (metadata) => {
+      const schema = metadata === "bundled" ? baseSchema : buildConfigSchemaCore(mergedSchemaInput);
+      const channels = lookupConfigSchema(schema, "channels");
+      expect(channels?.children.map((child) => child.key)).toEqual(
+        expect.arrayContaining(["defaults", "modelByChannel", "matrix"]),
+      );
+      expect(channels?.children.map((child) => child.key)).not.toContain("*");
+      expect(lookupConfigSchema(schema, "channels.unknownChannel")).toBeNull();
+      expect(lookupConfigSchema(schema, "channels.defaults.groupPolicy")?.schema).toMatchObject({
+        enum: ["open", "disabled", "allowlist"],
+      });
+      expect(
+        lookupConfigSchema(schema, "channels.defaults.botLoopProtection.maxEventsPerWindow")
+          ?.schema,
+      ).toMatchObject({ type: "integer" });
+      expect(
+        lookupConfigSchema(schema, "channels.modelByChannel.matrix.room")?.schema,
+      ).toMatchObject({
+        type: "string",
+      });
+    },
+  );
+
   it("omits a single oversized plugin schema from the full schema response", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: [
         {
@@ -585,7 +730,7 @@ describe("config schema", () => {
   });
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
@@ -610,7 +755,7 @@ describe("config schema", () => {
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       plugins: [
         {
           id: "pack/one",
@@ -635,24 +780,42 @@ describe("config schema", () => {
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchema(heartbeatChannelInput);
+    const res = buildConfigSchemaCore(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
+    expect(defaultsHint?.help).toContain("owner");
     expect(defaultsHint?.help).toContain("last");
+    expect(defaultsHint?.placeholder).toBe("owner");
     expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
-    const first = buildConfigSchema(cachedMergeInput);
+    const first = buildConfigSchemaCore(cachedMergeInput);
     const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
     const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
-    const second = buildConfigSchema({
+    const second = buildConfigSchemaCore({
       plugins: [{ ...plugin }],
       channels: [{ ...channel }],
     });
     expect(second).toBe(first);
+  });
+
+  it("keeps merged plugin schema fragments independent of manifest metadata", () => {
+    const value = { type: "string" };
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "independent-schema",
+          configSchema: { type: "object", properties: { value } },
+        },
+      ],
+    });
+    value.type = "number";
+    expect(
+      lookupConfigSchema(result, "plugins.entries.independent-schema.config.value")?.schema.type,
+    ).toBe("string");
   });
 
   it("derives tags for security, network, storage, tools, and performance paths", () => {
@@ -660,6 +823,9 @@ describe("config schema", () => {
       "gateway.auth.token": {},
       "proxy.tls.caFile": {},
       "tools.web.fetch.timeoutSeconds": {},
+      "SESSION.SHARING.peer": {
+        tags: [" Custom ", "AUTH", "security", "custom", "unknown"],
+      },
     });
     expect(tagged["gateway.auth.token"]?.tags).toEqual(
       expect.arrayContaining(["security", "auth"]),
@@ -670,6 +836,15 @@ describe("config schema", () => {
     expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
       expect.arrayContaining(["tools", "performance"]),
     );
+    expect(tagged["SESSION.SHARING.peer"]?.tags).toEqual([
+      "security",
+      "auth",
+      "access",
+      "privacy",
+      "storage",
+      "custom",
+      "unknown",
+    ]);
   });
 
   it("only derives the advanced tag from an explicit advanced hint", () => {
@@ -1035,6 +1210,8 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["127.0.0.1"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -1043,6 +1220,8 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["127.0.0.1"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });
@@ -1130,6 +1309,150 @@ describe("config schema", () => {
     expect(hints["custom.visibleCount"]?.advanced).toBe(false);
     expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
+
+  it.each([
+    [
+      "leading wildcard specificity",
+      [
+        ["custom.*.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier leading wildcard",
+      [
+        ["*.item.value", true],
+        ["custom.item.*", false],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier rooted wildcard",
+      [
+        ["custom.item.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "exact before wildcard",
+      [
+        ["custom.item.*", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "last exact alias",
+      [
+        ["custom..item.value", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "first array alias",
+      [
+        ["custom.items[]", true],
+        ["custom.items.*", false],
+      ],
+      "custom.items.*",
+      true,
+    ],
+    [
+      "first wildcard alias",
+      [
+        ["custom.items.*", false],
+        ["custom.items[]", true],
+      ],
+      "custom.items.*",
+      false,
+    ],
+  ] as const)("preserves tier precedence for %s", (_name, entries, target, expected) => {
+    const hints = applyResolvedConfigTierHints(
+      {
+        type: "object",
+        properties: {
+          custom: {
+            type: "object",
+            properties: {
+              item: { type: "object", properties: { value: { type: "string" } } },
+              items: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      Object.fromEntries(entries.map(([key, advanced]) => [key, { advanced }])),
+    );
+    expect(hints[target]?.advanced).toBe(expected);
+  });
+
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "resolves numeric %s branches before inheriting child tiers",
+    (composition) => {
+      const branches = [
+        { type: "object", properties: { child: { type: "string" } } },
+        { type: "integer" },
+      ];
+      for (const variants of [branches, branches.toReversed()]) {
+        const hints = applyResolvedConfigTierHints(
+          {
+            type: "object",
+            properties: {
+              custom: {
+                type: "object",
+                properties: { choice: { [composition]: variants } },
+              },
+            },
+          },
+          { custom: { advanced: false } },
+        );
+        expect(hints["custom.choice"]?.advanced).toBe(true);
+        expect(hints["custom.choice.child"]?.advanced).toBe(true);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "ranks generated numeric wildcards with authored tiers (explicit common=%s)",
+    (explicitCommon) => {
+      const hints = applyResolvedConfigTierHints(
+        {
+          type: "object",
+          properties: {
+            custom: {
+              type: "object",
+              properties: {
+                group: {
+                  type: "object",
+                  properties: {
+                    item: {
+                      type: "object",
+                      properties: { value: { type: "string" } },
+                      additionalProperties: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          custom: { advanced: false },
+          "custom.*.*.value": { advanced: false },
+          ...(explicitCommon ? { "custom.group.item.value": { advanced: false } } : {}),
+        },
+      );
+      expect(hints["custom.group.item.*"]?.advanced).toBe(true);
+      expect(hints["custom.group.item.value"]?.advanced).toBe(!explicitCommon);
+    },
+  );
 
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");

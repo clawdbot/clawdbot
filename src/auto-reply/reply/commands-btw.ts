@@ -1,7 +1,8 @@
 /** Handles /btw side-question commands against the active session context. */
 import { randomUUID } from "node:crypto";
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -30,16 +31,18 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply("⚠️ /btw requires an active session with existing context.");
     }
 
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
-    const agentDir =
-      (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
+    const sessionAgentId = params.agentId;
+    const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, sessionAgentId);
 
-    if (!agentDir) {
-      return commandReply(
-        "⚠️ /btw is unavailable because the active agent directory could not be resolved.",
-      );
+    if (toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /btw cannot enforce this conversation's tool policy. Ask in the main conversation or switch this session to the embedded runtime.",
+          btw: { question },
+          isError: true,
+        },
+      };
     }
 
     try {
@@ -52,6 +55,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       const chatType = normalizeChatType(params.ctx.ChatType);
       const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
       const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
+      const authorityRunId = `btw-${randomUUID()}`;
       const currentChannelProvider = normalizeAnyChannelId(params.ctx.Provider);
       const capabilitySessionKey = params.ctx.RuntimePolicySessionKey ?? params.sessionKey;
       const messageActionTurnCapability =
@@ -62,11 +66,14 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
         currentChannelId
           ? mintMessageActionTurnCapability({
               agentId: sessionAgentId,
-              runId,
+              runId: authorityRunId,
               sessionKey: capabilitySessionKey,
               sessionId: targetSessionEntry.sessionId,
               requesterAccountId: params.ctx.AccountId,
               requesterSenderId: params.ctx.SenderId ?? params.command.senderId,
+              requesterSenderName: params.ctx.SenderName,
+              requesterSenderUsername: params.ctx.SenderUsername,
+              requesterSenderE164: params.ctx.SenderE164,
               toolContext: {
                 currentChannelId,
                 currentChatType: chatType,
@@ -80,6 +87,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       try {
         reply = await runBtwSideQuestion({
           cfg: params.cfg,
+          agentId: sessionAgentId,
           agentDir,
           provider: params.provider,
           model: params.model,
@@ -87,6 +95,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           sessionEntry: targetSessionEntry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,
+          allowGatewaySubagentBinding: true,
           ...(params.ctx.RuntimePolicySessionKey
             ? { sandboxSessionKey: params.ctx.RuntimePolicySessionKey }
             : {}),
@@ -135,6 +144,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           ...(params.ctx.SenderE164 ? { senderE164: params.ctx.SenderE164 } : {}),
           senderIsOwner: params.command.senderIsOwner,
           ...(currentChannelId ? { currentChannelId } : {}),
+          authorityRunId,
         });
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);

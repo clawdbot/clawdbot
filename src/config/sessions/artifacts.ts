@@ -7,15 +7,18 @@ import { stripSessionArchiveCompressionSuffix } from "./archive-compression.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+const ARCHIVE_SUFFIX_RE =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z)(?:\.([0-9a-f]{32}))?$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+const PRE_DOCTOR_REPAIR_RE =
+  /\.jsonl\.pre-doctor-(?:branch|openai-codex)-repair-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.bak$/u;
 const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
   /^(.+)\.checkpoint\.([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   // Compressed archives carry a trailing .zst; strip it so every classifier
-  // sees one canonical `<id>.jsonl.<reason>.<timestamp>` shape.
+  // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
   const marker = `.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
@@ -23,7 +26,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
     return false;
   }
   const raw = normalized.slice(index + marker.length);
-  return ARCHIVE_TIMESTAMP_RE.test(raw);
+  return ARCHIVE_SUFFIX_RE.test(raw);
 }
 
 /** Returns true for archived session artifacts and legacy store backup names. */
@@ -38,14 +41,18 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
-/** Returns true for retained reset/delete transcript archives counted by the session budget. */
+/** Returns true for retained archives and disposable legacy compact backups pruned at high water. */
 export function isRetainedSessionTranscriptArchiveName(fileName: string): boolean {
-  return hasArchiveSuffix(fileName, "deleted") || hasArchiveSuffix(fileName, "reset");
+  return (
+    hasArchiveSuffix(fileName, "deleted") ||
+    hasArchiveSuffix(fileName, "reset") ||
+    hasArchiveSuffix(fileName, "bak")
+  );
 }
 
 /** Returns true for migration rollback archives retained beside their legacy source. */
 export function isMigrationArchiveArtifactName(fileName: string): boolean {
-  return MIGRATION_ARCHIVE_RE.test(fileName);
+  return MIGRATION_ARCHIVE_RE.test(fileName) || PRE_DOCTOR_REPAIR_RE.test(fileName);
 }
 
 // Compiled-pattern cache keyed by store basename. A disk sweep calls the matcher
@@ -132,10 +139,7 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
 
 /** Returns true for transcript files counted in usage, including reset/deleted archives. */
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
-  if (isPrimarySessionTranscriptFileName(fileName)) {
-    return true;
-  }
-  return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
+  return parseUsageCountedSessionIdFromFileName(fileName) !== null;
 }
 
 /** Extracts the session id from a usage-counted transcript filename. */
@@ -148,7 +152,8 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
     const marker = `.jsonl.${reason}.`;
     const index = normalized.lastIndexOf(marker);
     if (index > 0 && hasArchiveSuffix(normalized, reason)) {
-      return normalized.slice(0, index);
+      const sessionId = normalized.slice(0, index);
+      return isPrimarySessionTranscriptFileName(`${sessionId}.jsonl`) ? sessionId : null;
     }
   }
   return null;
@@ -181,9 +186,10 @@ export function parseSessionArchiveTimestamp(
   if (!raw) {
     return null;
   }
-  if (!ARCHIVE_TIMESTAMP_RE.test(raw)) {
+  const timestampRaw = ARCHIVE_SUFFIX_RE.exec(raw)?.[1];
+  if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(raw));
+  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
   return Number.isNaN(timestamp) ? null : timestamp;
 }

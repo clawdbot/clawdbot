@@ -3,25 +3,17 @@ import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.ty
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  copyReplyPayloadMetadata,
-  getReplyPayloadMetadata,
-  setReplyPayloadMetadata,
-} from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
+import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
 import {
-  resolveOriginAccountId,
-  resolveOriginMessageProvider,
-  resolveOriginMessageTo,
-} from "./origin-routing.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  resolveMessagingToolPayloadDedupe,
-} from "./reply-payloads.js";
-import { createReplyDeliveryContext, resolveReplyToMode } from "./reply-threading.js";
+  createReplyDeliveryContext,
+  createReplyToModeFilterForChannel,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 
 /** Strips empty/heartbeat payloads, applies threading, and dedupes message-tool sends. */
 export function resolveFollowupDeliveryPayloads(params: {
@@ -53,9 +45,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       params.originatingAccountId,
       params.originatingChatType,
     );
-  const accountId = resolveOriginAccountId({
-    originatingAccountId: params.originatingAccountId,
-  });
+  const accountId = params.originatingAccountId;
   const replyDelivery = createReplyDeliveryContext(replyToMode, params.originatingChatType);
   const replyDeliverySource = replyMessageProvider
     ? {
@@ -84,59 +74,26 @@ export function resolveFollowupDeliveryPayloads(params: {
       sanitizedPayloads.push(sanitized);
     }
   }
-  const replyTaggedPayloads = applyReplyThreading({
-    payloads: sanitizedPayloads,
-    replyToMode,
-    replyToChannel,
-  }).map((payload) =>
-    setReplyPayloadMetadata(payload, {
-      replyDelivery,
-      ...(replyDeliverySource ? { replyDeliverySource } : {}),
-    }),
-  );
-  const sentMediaUrlFallback = params.sentMediaUrls ?? [];
-  const sentTextFallback = params.sentTexts ?? [];
-  const originatingTo = resolveOriginMessageTo({
-    originatingTo: params.originatingTo,
-  });
-  const dedupedPayloads: ReplyPayload[] = [];
-  for (const payload of replyTaggedPayloads) {
-    const decision = resolveMessagingToolPayloadDedupe({
+  const originatingTo = params.originatingTo;
+  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  return sanitizedPayloads.flatMap((payload) =>
+    filterMessagingToolReplyPayload({
+      payload: applyReplyToMode.preview(
+        setReplyPayloadMetadata(applyReplyTagsToPayload(payload), {
+          replyDelivery,
+          ...(replyDeliverySource ? { replyDeliverySource } : {}),
+        }),
+      ),
       config: params.cfg,
       messageProvider: replyMessageProvider,
       messagingToolSentTargets: params.sentTargets,
       originatingTo,
       originatingThreadId: params.originatingThreadId,
-      replyToId: payload.replyToId,
-      replyToIsExplicit: Boolean(
-        getReplyPayloadMetadata(payload)?.replyToIdExplicit ||
-        payload.replyToTag ||
-        payload.replyToCurrent,
-      ),
-      replyDelivery: getReplyPayloadMetadata(payload)?.replyDelivery,
       accountId,
-    });
-    if (!decision.shouldDedupePayloads) {
-      dedupedPayloads.push(payload);
-      continue;
-    }
-    const sentMediaUrls =
-      decision.matchingRoute && !decision.useGlobalSentMediaUrlEvidenceFallback
-        ? decision.routeSentMediaUrls
-        : sentMediaUrlFallback;
-    const sentTexts =
-      decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
-        ? decision.routeSentTexts
-        : sentTextFallback;
-    const mediaFiltered = filterMessagingToolMediaDuplicates({
-      payloads: [payload],
-      sentMediaUrls,
-    });
-    const textFiltered = filterMessagingToolDuplicates({
-      payloads: mediaFiltered,
-      sentTexts,
-    });
-    dedupedPayloads.push(...textFiltered);
-  }
-  return dedupedPayloads;
+      sentMediaUrls: params.sentMediaUrls,
+      sentTexts: params.sentTexts,
+    })
+      .filter(isRenderablePayload)
+      .map(applyReplyToMode),
+  );
 }

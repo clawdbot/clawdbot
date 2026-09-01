@@ -1,5 +1,7 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type StreamableTransportOptions = {
@@ -17,7 +19,9 @@ const {
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
-  oauthBearerMock: vi.fn((params: { fetchFn: unknown }) => params.fetchFn),
+  oauthBearerMock: vi.fn(
+    (params: { fetchFn: unknown; identity: McpOAuthIdentity }) => params.fetchFn,
+  ),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
 }));
@@ -320,10 +324,60 @@ describe("resolveMcpTransport", () => {
     expect(options.requestInit).toBeUndefined();
     expect(oauthBearerMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        serverName: "probe",
-        resourceUrl: "https://mcp.example.com/mcp",
+        identity: expect.objectContaining({
+          serverName: "probe",
+          serverUrl: "https://mcp.example.com/mcp",
+        }),
       }),
     );
+  });
+
+  it("selects distinct requester OAuth identities for the same configured server", () => {
+    const server = {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      oauth: { identity: "per-requester" },
+    };
+    for (const requesterSenderId of ["alice", "bob"]) {
+      resolveMcpTransport("probe", server, {
+        requesterScope: {
+          messageChannel: "telegram",
+          agentAccountId: "bot",
+          requesterSenderId,
+        },
+      });
+    }
+
+    const identities = oauthBearerMock.mock.calls.slice(-2).map(([params]) => params.identity);
+    expect(identities.map((identity) => identity.principal)).toEqual(["requester", "requester"]);
+    expect(identities[0]?.storeKey).not.toBe(identities[1]?.storeKey);
+    expect(identities.map((identity) => identity.serverUrl)).toEqual([
+      "https://mcp.example.com/mcp",
+      "https://mcp.example.com/mcp",
+    ]);
+
+    const partition = partitionMcpServersByConnectionScope({
+      shared: { command: "true" },
+      calendar: server,
+    });
+    expect(Object.keys(partition.staticServers)).toEqual(["shared"]);
+    expect(partition.requesterScopedServerNames).toEqual(["calendar"]);
+    expect(partition.oauthRequesterServerNames).toEqual(["calendar"]);
+    expect(partition.resolverRequesterServerNames).toEqual([]);
+  });
+
+  it("does not create an operator transport for per-requester OAuth", () => {
+    const transport = resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      oauth: { identity: "per-requester" },
+    });
+
+    expect(transport).toBeNull();
+    expect(oauthBearerMock).not.toHaveBeenCalled();
+    expect(streamableTransportConstructorMock).not.toHaveBeenCalled();
   });
 
   it("keeps OAuth runtime headers scoped to the MCP resource origin", async () => {

@@ -8,9 +8,11 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { NormalizedUsage } from "../usage.js";
 
 type PromptCacheChangeCode =
+  | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -169,10 +171,7 @@ function setTracker(key: string, tracker: PromptCacheTracker): void {
   if (trackers.has(key)) {
     trackers.delete(key);
   } else if (trackers.size >= MAX_TRACKERS) {
-    const oldestKey = trackers.keys().next().value;
-    if (typeof oldestKey === "string") {
-      trackers.delete(oldestKey);
-    }
+    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   }
   trackers.set(key, tracker);
 }
@@ -310,6 +309,25 @@ export function beginPromptCacheObservation(params: {
     changes,
     previousCacheRead: previous?.lastCacheRead ?? null,
   };
+}
+
+export function recordAggregateTruncation(params: {
+  sessionId: string;
+  promptCacheKey?: string;
+  sessionKey?: string;
+}): void {
+  const tracker = trackers.get(buildTrackerKey(params));
+  const changes = tracker?.pendingChanges ?? [];
+  if (!tracker || changes.some((change) => change.code === "aggregateToolResultTruncation")) {
+    return;
+  }
+  tracker.pendingChanges = [
+    ...changes,
+    {
+      code: "aggregateToolResultTruncation",
+      detail: "aggregate tool-result truncation changed provider prompt",
+    },
+  ];
 }
 
 export function completePromptCacheObservation(params: {

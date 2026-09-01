@@ -8,26 +8,31 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.CopyOnWriteArrayList
 
 internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
 
 internal fun CoroutineScope.createChatController(
   requestGatewayForGateway: (suspend (gatewayId: String, method: String, paramsJson: String?) -> String)? = null,
-  captureSettingsRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
+  captureRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
   transcriptCache: ChatTranscriptCache? = null,
   cacheScope: () -> ChatCacheScope? = { null },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
+  gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
 ): ChatController {
   val scopedRequest =
     requestGatewayForGateway ?: { _, method, paramsJson -> requestGateway(method, paramsJson) }
   val settingsLease =
-    captureSettingsRequestLease ?: { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+    captureRequestLease ?: { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+        withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)
         } else {
@@ -40,14 +45,17 @@ internal fun CoroutineScope.createChatController(
     json = chatControllerTestJson,
     requestGateway = requestGateway,
     requestGatewayForGateway = scopedRequest,
-    captureSettingsRequestLease = settingsLease,
+    captureRequestLease = settingsLease,
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
+    gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+    gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 }
 
@@ -56,6 +64,8 @@ internal class ChatControllerTestSetup(
 ) {
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { null }
+  var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -77,6 +87,8 @@ internal class ChatControllerTestSetup(
   val controller: ChatController by lazy {
     scope.createChatController(
       cacheScope = cacheScope,
+      gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+      gatewayAdvertisesCapability = gatewayAdvertisesCapability,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson
@@ -115,7 +127,9 @@ internal class ScriptedGateway(
     val paramsJson: String?,
   )
 
-  val calls = mutableListOf<Call>()
+  // Controllers can retry from a background dispatcher while tests inspect calls.
+  // Snapshot iteration keeps assertions from racing concurrent request recording.
+  val calls = CopyOnWriteArrayList<Call>()
   private val handlers = mutableMapOf<String, suspend (paramsJson: String?) -> String>()
 
   /** Client-generated run id captured from the latest chat.send params. */
@@ -127,6 +141,7 @@ internal class ScriptedGateway(
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
+    respondWith("progressCard.get", """{"card":null}""")
   }
 
   fun respond(
@@ -197,7 +212,6 @@ internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
   inFlightRun: Pair<String, String>? = null,
-  inFlightPlan: ChatPlanSnapshot? = null,
   hasActiveRun: Boolean? = inFlightRun?.let { true },
   activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
 ): String =
@@ -209,34 +223,6 @@ internal fun historyResponse(
         buildJsonObject {
           put("runId", JsonPrimitive(inFlightRun.first))
           put("text", JsonPrimitive(inFlightRun.second))
-          if (inFlightPlan != null) {
-            put(
-              "plan",
-              buildJsonObject {
-                put(
-                  "steps",
-                  JsonArray(
-                    inFlightPlan.steps.map { step ->
-                      buildJsonObject {
-                        put("step", JsonPrimitive(step.step))
-                        put(
-                          "status",
-                          JsonPrimitive(
-                            when (step.status) {
-                              ChatPlanStepStatus.Pending -> "pending"
-                              ChatPlanStepStatus.InProgress -> "in_progress"
-                              ChatPlanStepStatus.Completed -> "completed"
-                            },
-                          ),
-                        )
-                      }
-                    },
-                  ),
-                )
-                inFlightPlan.explanation?.let { put("explanation", JsonPrimitive(it)) }
-              },
-            )
-          }
         },
       )
     }
@@ -358,3 +344,18 @@ internal fun chunkPreservingCodePoints(
   }
   return chunks
 }
+
+internal suspend fun ChatCommandOutbox.recordTranscriptTip(
+  gatewayId: String,
+  scope: ChatOutboxScope,
+  leafEntryId: String,
+  previousState: ChatOutboxBranchState,
+): Boolean =
+  reconcileBranchScope(
+    gatewayId,
+    scope,
+    ChatOutboxBranchEvidence.History(previousState),
+    leafEntryId,
+    setOf(leafEntryId),
+    OUTBOX_BRANCH_CHANGED_ERROR,
+  ) != null

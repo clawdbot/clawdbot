@@ -1,18 +1,20 @@
 // Process-local retry scheduler for the durable session delivery queue.
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
 import {
-  drainPendingSessionDeliveries,
-  loadPendingSessionDeliveries,
-  loadPendingSessionDelivery,
+  drainPendingSessionDelivery,
   type DeliverSessionDeliveryFn,
-  type QueuedSessionDelivery,
   type SessionDeliveryRecoveryLogger,
   type SettleSessionDeliveryFn,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-recovery.js";
+import {
+  loadPendingSessionDeliveries,
+  loadPendingSessionDelivery,
+  type QueuedSessionDelivery,
+} from "./session-delivery-queue-storage.js";
 
 type SessionDeliveryRuntime = {
   deliver: DeliverSessionDeliveryFn;
-  drain?: typeof drainPendingSessionDeliveries;
+  drain?: typeof drainPendingSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
   reloadPending?: typeof loadPendingSessionDelivery;
   listPending?: typeof loadPendingSessionDeliveries;
@@ -50,18 +52,29 @@ function armPendingScan(generation: number): void {
 
 function resolveRetryDelayMs(entry: QueuedSessionDelivery): number {
   const claimDelayMs = Math.max(0, (entry.availableAt ?? 0) - Date.now());
+  const deadlineDelayMs =
+    entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"
+      ? Math.max(0, entry.owner.deadlineAt - Date.now())
+      : Number.POSITIVE_INFINITY;
   if (entry.retryCount <= 0) {
-    return claimDelayMs;
+    return Math.min(claimDelayMs, deadlineDelayMs);
+  }
+  if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
+    return Math.min(deadlineDelayMs, claimDelayMs);
   }
   const attemptedAt = entry.lastAttemptAt ?? entry.enqueuedAt;
-  return Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - Date.now());
+  return Math.min(
+    deadlineDelayMs,
+    Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - Date.now()),
+  );
 }
 
 function armSessionDeliveryId(id: string, delayMs: number, generation: number): void {
   if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  const dueAt = Date.now() + delayMs;
+  // Native timers measure elapsed time, so preemption deadlines must ignore wall-clock jumps.
+  const dueAt = performance.now() + delayMs;
   const existing = scheduledEntries.get(id);
   if (existing && existing.dueAt <= dueAt) {
     return;
@@ -101,33 +114,27 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
   runningEntries.set(id, generation);
   let pending: QueuedSessionDelivery | null = null;
   try {
-    await (activeRuntime.drain ?? drainPendingSessionDeliveries)({
-      drainKey: `runtime:${id}`,
+    pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
+      id,
       logLabel: "session delivery",
       log: activeRuntime.log,
       deliver: activeRuntime.deliver,
       onSettled: activeRuntime.onSettled,
-      selectEntry: (entry) => ({ match: entry.id === id }),
     });
   } catch (error) {
     activeRuntime.log.error(`session delivery: runtime drain failed for ${id}: ${String(error)}`);
-  }
-  try {
-    if (!runtime || generation !== runtimeGeneration) {
-      return;
-    }
-    const reloadPending = activeRuntime.reloadPending ?? loadPendingSessionDelivery;
-    pending = await reloadPending(id).catch((error: unknown) => {
-      activeRuntime.log.error(`session delivery: failed to reload ${id}: ${String(error)}`);
-      // The durable row may still be pending. Retry the lookup so one transient
-      // database error cannot orphan it until the next gateway restart.
+    if (runtime && generation === runtimeGeneration) {
+      // The durable row may still be pending. Retry the exact drain so one
+      // transient database error cannot orphan it until the next restart.
       armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, generation);
-      return null;
-    });
+    }
   } finally {
     if (runningEntries.get(id) === generation) {
       runningEntries.delete(id);
     }
+  }
+  if (!runtime || generation !== runtimeGeneration) {
+    return;
   }
   if (pending) {
     // Any still-pending row means the drain deferred, failed, or was owned

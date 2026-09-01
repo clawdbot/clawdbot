@@ -31,6 +31,12 @@ describe("resolveSlackChannelAllowlist", () => {
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.conversationsList).toHaveBeenCalledOnce();
+    expect(slackClientMocks.conversationsList).toHaveBeenCalledWith({
+      types: "public_channel,private_channel",
+      exclude_archived: false,
+      limit: 1000,
+      cursor: undefined,
+    });
   });
 
   it("returns stable channel ids without listing a workspace", async () => {
@@ -42,6 +48,21 @@ describe("resolveSlackChannelAllowlist", () => {
     });
 
     expect(res.map((entry) => entry.id)).toEqual(["C123", "G456", "C789"]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("preserves workspace-qualified channel ids without listing a workspace", async () => {
+    const list = vi.fn();
+    const res = await resolveSlackChannelAllowlist({
+      token: "xoxb-test",
+      entries: ["team:T11111111:channel:C01234567", "team:T22222222:channel:C01234567"],
+      client: { conversations: { list } } as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual([
+      "team:T11111111:channel:C01234567",
+      "team:T22222222:channel:C01234567",
+    ]);
     expect(list).not.toHaveBeenCalled();
   });
 

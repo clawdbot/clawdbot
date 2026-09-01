@@ -1,13 +1,17 @@
-// Session entry projection contract tests cover plugin session entry projection behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
+// Session entry projection contract tests cover plugin session entry projection behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -20,12 +24,7 @@ import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 async function expectOkResult(promise: Promise<unknown>, label: string) {
   const result = requireRecord(await promise, label);
@@ -50,7 +49,7 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -316,10 +315,32 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "transcriptPath",
         });
         api.registerSessionExtension({
+          namespace: "custom-icon",
+          description: "reserved custom icon",
+          sessionEntrySlotKey: "icon",
+        });
+        api.registerSessionExtension({
+          namespace: "context-window-source",
+          description: "reserved context window provenance",
+          sessionEntrySlotKey: "contextTokensSource",
+        });
+        api.registerSessionExtension({
+          namespace: "sandbox-policy",
+          description: "reserved creation-only sandbox requirement",
+          sessionEntrySlotKey: "sandbox",
+        });
+        api.registerSessionExtension({
           namespace: "pending-final-text",
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
         });
+        for (const field of ["execSecurity", "execAsk"]) {
+          api.registerSessionExtension({
+            namespace: `retired-${field.toLowerCase()}`,
+            description: "retired session exec policy",
+            sessionEntrySlotKey: field,
+          });
+        }
       },
     });
 
@@ -349,7 +370,27 @@ describe("plugin session extension SessionEntry projection", () => {
       },
       {
         pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: icon",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: contextTokensSource",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: sandbox",
+      },
+      {
+        pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: execSecurity",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: execAsk",
       },
     ]);
   });

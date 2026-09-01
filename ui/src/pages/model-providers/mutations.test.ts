@@ -1,12 +1,19 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { modelProviderErrorMessage } from "./config-mutation.ts";
 import {
-  buildDefaultModelsPatch,
+  buildDefaultsPatch,
   buildProviderApiKeyPatch,
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
 
 describe("model provider config patches", () => {
+  it("redacts secrets in displayed mutation failures", () => {
+    expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
+      "OPENAI_API_KEY=sk-123...cdef",
+    );
+  });
+
   it("sets and removes provider API keys with minimal merge patches", () => {
     expect(buildProviderApiKeyPatch("openai", "new-key")).toEqual({
       models: { providers: { openai: { apiKey: "new-key" } } },
@@ -16,12 +23,37 @@ describe("model provider config patches", () => {
     });
   });
 
-  it("batches primary, fallbacks, and utility into one patch", () => {
-    expect(buildDefaultModelsPatch("openai/gpt-5", [], null)).toEqual({
-      agents: { defaults: { model: "openai/gpt-5", utilityModel: null } },
+  it("batches model and behavior defaults into one patch", () => {
+    expect(
+      buildDefaultsPatch({
+        primary: "openai/gpt-5",
+        fallbacks: [],
+        utilityModel: null,
+        thinkingLevel: "high",
+        thinkingOverridden: true,
+        fastMode: false,
+        fastModeOverridden: true,
+      }),
+    ).toEqual({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          utilityModel: null,
+          thinkingDefault: "high",
+          fastModeDefault: false,
+        },
+      },
     });
     expect(
-      buildDefaultModelsPatch("openai/gpt-5", ["anthropic/claude-sonnet-4-5"], "openai/gpt-5-mini"),
+      buildDefaultsPatch({
+        primary: "openai/gpt-5",
+        fallbacks: ["anthropic/claude-sonnet-4-5"],
+        utilityModel: "openai/gpt-5-mini",
+        thinkingLevel: undefined,
+        thinkingOverridden: false,
+        fastMode: undefined,
+        fastModeOverridden: false,
+      }),
     ).toEqual({
       agents: {
         defaults: {
@@ -30,11 +62,10 @@ describe("model provider config patches", () => {
             fallbacks: ["anthropic/claude-sonnet-4-5"],
           },
           utilityModel: "openai/gpt-5-mini",
+          thinkingDefault: null,
+          fastModeDefault: null,
         },
       },
-    });
-    expect(buildDefaultModelsPatch("openai/gpt-5", [], "")).toEqual({
-      agents: { defaults: { model: "openai/gpt-5", utilityModel: "" } },
     });
   });
 

@@ -8,6 +8,8 @@ struct CritterStatusLabel: View {
     var blinkTick: Int
     var sendCelebrationTick: Int
     var gatewayStatus: GatewayProcessManager.Status
+    var connectionMode: AppState.ConnectionMode
+    var controlChannelState: ControlChannel.ConnectionState
     var animationsEnabled: Bool
     var iconState: IconState
     var voiceWakeMeterActive: Bool = false

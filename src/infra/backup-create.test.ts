@@ -7,8 +7,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { backupVerifyCommand } from "../commands/backup-verify.js";
+import { backupRestoreCommand } from "../commands/backup-restore.js";
+import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -33,6 +35,7 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
@@ -255,7 +258,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).",
     ]);
   });
 });
@@ -368,6 +371,37 @@ describe("writeTarArchiveWithRetry", () => {
     ).rejects.toThrow(/Backup archive write failed/);
     expect(runTar).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("reports the actual attempt count when bailing out before the retry limit", async () => {
+    const nonEofErr = new Error("permission denied");
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const singleAttempt = vi.fn<() => Promise<void>>().mockRejectedValue(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: singleAttempt,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 1 attempt\)/);
+    expect(singleAttempt).toHaveBeenCalledOnce();
+
+    const twoAttempts = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: twoAttempts,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 2 attempts\)/);
+    expect(twoAttempts).toHaveBeenCalledTimes(2);
   });
 
   it("retries on EOF-class errors and eventually succeeds", async () => {
@@ -572,6 +606,534 @@ describe("createBackupVolatileStatCache", () => {
 });
 
 describe("createBackupArchive", () => {
+  it.runIf(process.platform !== "win32").each([
+    {
+      layout: "direct",
+      linkSegments: ["demo"],
+      linkTargetSegments: ["demo"],
+      skillSegments: ["demo"],
+    },
+    {
+      layout: "grouped",
+      linkSegments: ["team", "demo"],
+      linkTargetSegments: ["demo"],
+      skillSegments: ["demo"],
+    },
+    {
+      layout: "group link",
+      linkSegments: ["team"],
+      linkTargetSegments: ["team"],
+      skillSegments: ["team", "demo"],
+    },
+  ])(
+    "archives a $layout external managed-skill target and verifies its payload",
+    async ({ linkSegments, linkTargetSegments, skillSegments }) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const externalRoot = path.join(await fs.realpath(state.root), "agents-skills");
+          const skillTarget = path.join(externalRoot, ...skillSegments);
+          await fs.mkdir(skillTarget, { recursive: true });
+          await fs.writeFile(
+            path.join(skillTarget, "SKILL.md"),
+            "---\nname: demo\ndescription: Symlinked managed skill\n---\n",
+            "utf8",
+          );
+          await fs.writeFile(path.join(skillTarget, "operator-data.txt"), "keep me\n", "utf8");
+          const linkPath = state.statePath("skills", ...linkSegments);
+          const linkTarget = path.join(externalRoot, ...linkTargetSegments);
+          await fs.mkdir(path.dirname(linkPath), { recursive: true });
+          // Operator-managed roots support relative directory links outside the state root.
+          await fs.symlink(path.relative(path.dirname(linkPath), linkTarget), linkPath, "dir");
+
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+          });
+          const entries = await listArchiveEntries(archive.archivePath);
+          const skillSuffix = path.posix.join("/agents-skills", ...skillSegments, "SKILL.md");
+          expect(entries.some((entry) => entry.endsWith(skillSuffix))).toBe(true);
+          expect(
+            entries.some((entry) =>
+              entry.endsWith(
+                path.posix.join("/agents-skills", ...skillSegments, "operator-data.txt"),
+              ),
+            ),
+          ).toBe(true);
+
+          await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
+            ok: true,
+          });
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not promote a managed-skill link to its state ancestor into an archive root",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-ancestor-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          await fs.writeFile(
+            path.join(await fs.realpath(state.root), "SKILL.md"),
+            "---\nname: broad\ndescription: Broad target\n---\n",
+            "utf8",
+          );
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          // Relative ancestor link: `../..` from <stateDir>/skills resolves to
+          // the directory holding the state asset.
+          await fs.symlink(path.join("..", ".."), state.statePath("skills", "escape"), "dir");
+
+          // An ancestor must not become a declared root: that would let the
+          // covered dedupe swallow the state asset and tar the whole ancestor
+          // tree. The planner declines, so the archive write stays fail-closed.
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not promote a managed-skill target containing another backup owner",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-owner-ancestor-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const broadTarget = path.join(await fs.realpath(state.root), "broad-skill");
+          const configPath = path.join(broadTarget, "openclaw.json");
+          state.envVars.OPENCLAW_CONFIG_PATH = configPath;
+          state.applyEnv();
+          await fs.mkdir(broadTarget, { recursive: true });
+          await fs.writeFile(
+            path.join(broadTarget, "SKILL.md"),
+            "---\nname: broad\ndescription: Broad target\n---\n",
+            "utf8",
+          );
+          await fs.writeFile(configPath, "{}\n", "utf8");
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "..", "broad-skill"),
+            state.statePath("skills", "broad"),
+            "dir",
+          );
+
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not declare an external managed-skill target with incomplete metadata",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-symlink-unbounded-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const broadTarget = path.join(await fs.realpath(state.root), "broad");
+          await fs.mkdir(broadTarget, { recursive: true });
+          await fs.writeFile(path.join(broadTarget, "SKILL.md"), "---\nname: broad\n---\n", "utf8");
+          await fs.writeFile(path.join(broadTarget, "unrelated.txt"), "do not archive\n", "utf8");
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "..", "broad"),
+            state.statePath("skills", "broad"),
+            "dir",
+          );
+
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not declare an external managed-skill target whose SKILL.md escapes into the state asset",
+    async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-skill-metadata-escape-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const skillTarget = path.join(await fs.realpath(state.root), "agents-skills", "escaped");
+          await fs.mkdir(skillTarget, { recursive: true });
+          await fs.writeFile(state.statePath("payload.md"), "state payload\n", "utf8");
+          // A final metadata symlink is not a valid managed skill: an existence
+          // check that follows it would admit the broad external
+          // target, and the archive guard accepts the cross-asset link because
+          // both ends resolve to declared assets.
+          await fs.symlink(
+            path.relative(skillTarget, state.statePath("payload.md")),
+            path.join(skillTarget, "SKILL.md"),
+            "file",
+          );
+          await fs.mkdir(state.statePath("skills"), { recursive: true });
+          await fs.symlink(
+            path.join("..", "..", "agents-skills", "escaped"),
+            state.statePath("skills", "escaped"),
+            "dir",
+          );
+
+          // The planner declines the escaping metadata, so the state asset's
+          // external link has no declared target and the write stays fail-closed.
+          await expect(
+            createBackupArchive({
+              output: state.path("backup.tar.gz"),
+              includeWorkspace: false,
+            }),
+          ).rejects.toThrow(/symbolic link is outside the declared backup assets/iu);
+        },
+      );
+    },
+  );
+
+  it("includes a configured external agent directory when workspaces are excluded", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-external-agent-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = path.join(await fs.realpath(state.root), "external-agent");
+        const pluginSkillsDir = state.statePath("plugin-skills");
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.mkdir(pluginSkillsDir, { recursive: true });
+        await fs.writeFile(path.join(agentDir, "durable-agent-state.json"), "{}\n", "utf8");
+        await fs.writeFile(path.join(pluginSkillsDir, "generated-skill.md"), "generated\n", "utf8");
+        await state.writeConfig({
+          agents: {
+            entries: { main: { default: true, agentDir } },
+          },
+        });
+
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+        expect(archive.assets).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ kind: "agent", sourcePath: agentDir }),
+          ]),
+        );
+        const entries = await listArchiveEntries(archive.archivePath);
+        expect(
+          entries.some((entry) => entry.endsWith("/external-agent/durable-agent-state.json")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.includes("/plugin-skills/"))).toBe(false);
+
+        const extractDir = state.path("manifest-extract");
+        await fs.mkdir(extractDir, { recursive: true });
+        await tar.x({ file: archive.archivePath, gzip: true, cwd: extractDir });
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(extractDir, archive.archiveRoot, "manifest.json"), "utf8"),
+        ) as {
+          paths: { agentRoots: Array<{ agentId: string; sourcePath: string }> };
+          skipped: Array<Record<string, unknown>>;
+        };
+        expect(manifest.paths.agentRoots).toContainEqual({ agentId: "main", sourcePath: agentDir });
+        expect(manifest.skipped).toEqual(
+          archive.skipped.map(({ kind, sourcePath, reason, coveredBy }) =>
+            Object.assign({ kind, sourcePath, reason }, coveredBy ? { coveredBy } : {}),
+          ),
+        );
+      },
+    );
+  });
+
+  it.each([
+    { name: "external agent asset", placement: "external", includeWorkspace: false },
+    { name: "agent covered by a workspace", placement: "workspace", includeWorkspace: true },
+    { name: "agent under a managed state root", placement: "managed", includeWorkspace: false },
+    {
+      name: "custom agent nested in the default agent layout",
+      placement: "default-layout",
+      includeWorkspace: false,
+    },
+  ] as const)(
+    "safely snapshots, verifies, and restores a configured $name",
+    async ({ placement, includeWorkspace }) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-owned-agent-sqlite-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const agentDir =
+            placement === "workspace"
+              ? path.join(state.workspaceDir, "custom-agent")
+              : placement === "managed"
+                ? state.statePath("tmp", "custom-agent")
+                : placement === "default-layout"
+                  ? state.statePath("agents", "main", "agent", "custom-agent")
+                  : state.path("custom-agent");
+          const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+          const durableAgentDirectories = [
+            "tmp",
+            ".tmp",
+            "runtime-home/tmp",
+            "runtime-home/.tmp",
+            "tmp-data",
+            ".tmp-data",
+          ];
+          await fs.mkdir(agentDir, { recursive: true });
+          await state.writeConfig({
+            agents: {
+              entries: {
+                main: {
+                  default: true,
+                  agentDir,
+                  ...(includeWorkspace ? { workspace: state.workspaceDir } : {}),
+                },
+              },
+            },
+          });
+          for (const dirname of durableAgentDirectories) {
+            await fs.mkdir(path.join(agentDir, dirname), { recursive: true });
+            await fs.writeFile(path.join(agentDir, dirname, "durable.txt"), "keep\n", "utf8");
+          }
+          createOwnedSqliteDatabase({ sqlitePath: dbPath, role: "agent", agentId: "main" });
+
+          const sqlite = requireNodeSqlite();
+          const db = new sqlite.DatabaseSync(dbPath);
+          const deletedMarker = "EXTERNAL_AGENT_DELETED_SECRET_84b5f1";
+          let archive: BackupCreateResult;
+          try {
+            db.exec(`
+              PRAGMA journal_mode = WAL;
+              PRAGMA wal_autocheckpoint = 0;
+              PRAGMA secure_delete = OFF;
+              CREATE TABLE durable_records (value TEXT NOT NULL);
+            `);
+            db.prepare("INSERT INTO durable_records (value) VALUES (?)").run(
+              `${deletedMarker}-${"x".repeat(16_384)}`,
+            );
+            db.prepare("INSERT INTO durable_records (value) VALUES (?)").run("checkpointed");
+            db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            db.prepare("DELETE FROM durable_records WHERE value LIKE ?").run(`${deletedMarker}%`);
+            db.prepare("INSERT INTO durable_records (value) VALUES (?)").run("committed-in-wal");
+            expect((await fs.readFile(dbPath)).includes(Buffer.from(deletedMarker))).toBe(true);
+            await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+
+            archive = await createBackupArchive({
+              output: state.path("owned-agent.tar.gz"),
+              includeWorkspace,
+            });
+          } finally {
+            db.close();
+          }
+
+          const entries = await listArchiveEntries(archive.archivePath);
+          const archivedDbEntry = expectDefined(
+            entries.find((entry) => entry.endsWith("/custom-agent/openclaw-agent.sqlite")),
+            "configured agent database snapshot",
+          );
+          expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-wal"))).toBe(false);
+          expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-shm"))).toBe(false);
+          for (const dirname of durableAgentDirectories) {
+            expect(
+              entries.some((entry) => entry.endsWith(`/custom-agent/${dirname}/durable.txt`)),
+            ).toBe(true);
+          }
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const restore = await backupRestoreCommand(runtime, {
+            archive: archive.archivePath,
+            target: state.path("restored"),
+          });
+          const restoredDbPath = path.join(restore.targetPath, archivedDbEntry);
+          expect((await fs.readFile(restoredDbPath)).includes(Buffer.from(deletedMarker))).toBe(
+            false,
+          );
+          const restoredDb = new sqlite.DatabaseSync(restoredDbPath, { readOnly: true });
+          try {
+            expect(
+              restoredDb.prepare("SELECT value FROM durable_records ORDER BY value").all(),
+            ).toEqual([{ value: "checkpointed" }, { value: "committed-in-wal" }]);
+          } finally {
+            restoredDb.close();
+          }
+        },
+      );
+    },
+  );
+
+  it("rejects a configured external agent database owned by a different agent", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-external-agent-owner-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = state.path("external-agent");
+        await fs.mkdir(agentDir, { recursive: true });
+        await state.writeConfig({ agents: { entries: { main: { default: true, agentDir } } } });
+        createOwnedSqliteDatabase({
+          sqlitePath: path.join(agentDir, "openclaw-agent.sqlite"),
+          role: "agent",
+          agentId: "other",
+        });
+
+        await expect(
+          createBackupArchive({ output: state.path("rejected.tar.gz"), includeWorkspace: false }),
+        ).rejects.toThrow(/belongs to agent other; requested agent main/iu);
+      },
+    );
+  });
+
+  it("applies activated manifest-owned exclusions before SQLite and symlink handling", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-resource-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = state.path("external-agent");
+        const pluginRoot = state.path("synthetic-backup-plugin");
+        const excludedStateRoot = state.statePath("generated");
+        const excludedAgentRoot = path.join(agentDir, "codex-home", "tmp", "arg0");
+        await fs.mkdir(pluginRoot, { recursive: true });
+        await fs.mkdir(path.join(excludedStateRoot, "protected"), { recursive: true });
+        await fs.mkdir(path.join(excludedAgentRoot, "protected"), { recursive: true });
+        await fs.mkdir(path.join(agentDir, "codex-home", "tmp", "arg0-data"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(agentDir, "codex-home", ".tmp-data"), { recursive: true });
+        await fs.writeFile(
+          path.join(pluginRoot, "index.ts"),
+          'throw new Error("plugin runtime must not activate during backup planning")\n',
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(pluginRoot, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "backup-owner",
+            configSchema: { type: "object", additionalProperties: false },
+            backupResources: [
+              { disposition: "regenerable", scope: "state", relativePath: "generated" },
+              { disposition: "include", scope: "state", relativePath: "generated/protected" },
+              {
+                disposition: "regenerable",
+                scope: "state",
+                relativePath: "state/openclaw.sqlite",
+              },
+              {
+                disposition: "regenerable",
+                scope: "agent",
+                relativePath: "openclaw-agent.sqlite",
+              },
+              {
+                disposition: "regenerable",
+                scope: "agent",
+                relativePath: "codex-home/tmp/arg0",
+              },
+              {
+                disposition: "include",
+                scope: "agent",
+                relativePath: "codex-home/tmp/arg0/protected",
+              },
+            ],
+          }),
+          "utf8",
+        );
+        await fs.writeFile(path.join(excludedStateRoot, "unsafe.sqlite"), "not sqlite\n", "utf8");
+        await fs.writeFile(path.join(excludedStateRoot, "protected", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(path.join(excludedAgentRoot, "unsafe.sqlite"), "not sqlite\n", "utf8");
+        await fs.writeFile(path.join(excludedAgentRoot, "protected", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(
+          path.join(agentDir, "codex-home", "tmp", "arg0-data", "keep.txt"),
+          "keep\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(agentDir, "codex-home", ".tmp-data", "keep.txt"),
+          "keep\n",
+          "utf8",
+        );
+        if (process.platform !== "win32") {
+          await fs.symlink("/outside-backup", path.join(excludedAgentRoot, "unsafe-link"));
+        }
+        await state.writeConfig({
+          agents: { entries: { main: { default: true, agentDir } } },
+          plugins: {
+            load: { paths: [pluginRoot] },
+            entries: { "backup-owner": { enabled: true } },
+          },
+        });
+        const globalDbPath = resolveCanonicalTestSqlitePath(state, "global");
+        const agentDbPath = path.join(agentDir, "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(globalDbPath), { recursive: true });
+        createOwnedSqliteDatabase({ sqlitePath: globalDbPath, role: "global" });
+        createOwnedSqliteDatabase({
+          sqlitePath: agentDbPath,
+          role: "agent",
+          agentId: "main",
+        });
+
+        const result = await createBackupArchive({
+          output: state.path("plugin-owned.tar.gz"),
+          includeWorkspace: false,
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        for (const suffix of [
+          "/state/state/openclaw.sqlite",
+          "/state/generated/protected/keep.txt",
+          "/external-agent/openclaw-agent.sqlite",
+          "/external-agent/codex-home/tmp/arg0/protected/keep.txt",
+          "/external-agent/codex-home/tmp/arg0-data/keep.txt",
+          "/external-agent/codex-home/.tmp-data/keep.txt",
+        ]) {
+          expect(
+            entries.some((entry) => entry.endsWith(suffix)),
+            suffix,
+          ).toBe(true);
+        }
+        expect(entries.some((entry) => entry.endsWith("/unsafe.sqlite"))).toBe(false);
+        expect(entries.some((entry) => entry.endsWith("/unsafe-link"))).toBe(false);
+        expect(result.skipped).toContainEqual(
+          expect.objectContaining({ sourcePath: excludedAgentRoot, reason: "regenerable" }),
+        );
+      },
+    );
+  });
+
   it("falls back when injected nowMs is outside Date range", async () => {
     await withOpenClawTestState(
       {
@@ -693,7 +1255,35 @@ describe("createBackupArchive", () => {
             suffix,
           ).toBe(false);
         }
-        expect(result.skippedVolatileCount).toBe(10);
+        expect(result.skippedVolatileCount).toBe(9);
+      },
+    );
+  });
+
+  it("creates a verifiable archive for highly compressible sparse state", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-sparse-state-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const sparsePath = state.statePath("sparse-state.bin");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(sparsePath, "");
+        await fs.truncate(sparsePath, 256 * 1024 * 1024);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 10, 0),
+        });
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -920,7 +1510,6 @@ describe("createBackupArchive", () => {
             maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
             env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
           }).entries();
-          expect(restoredEntries).toHaveLength(2);
           expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
           expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
         } finally {
@@ -946,8 +1535,13 @@ describe("createBackupArchive", () => {
         db.prepare(
           `
             INSERT INTO delivery_queue_entries (
-              queue_name, id, status, retry_count, entry_json, enqueued_at, updated_at
-            ) VALUES ('outbound', 'queued-1', 'pending', 0, '{"id":"queued-1"}', 10, 10)
+              queue_name, id, status, session_key, channel, target, retry_count, last_error,
+              entry_json, enqueued_at, updated_at, failed_at
+            ) VALUES (
+              'outbound', 'failed-1', 'failed', 'agent:main:private', 'telegram', 'secret-target',
+              2, 'raw provider error',
+              '{"id":"failed-1","message":"sensitive failed delivery"}', 10, 20, 20
+            )
           `,
         ).run();
         const transientBlobMarker = `transient-diffs-blob-${"sensitive".repeat(32)}`;
@@ -982,7 +1576,7 @@ describe("createBackupArchive", () => {
             INSERT INTO state_leases (
               scope, lease_key, owner, expires_at, heartbeat_at,
               payload_json, created_at, updated_at
-            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+            ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 10, NULL, 10, 10)
           `,
         ).run();
 
@@ -1160,16 +1754,6 @@ describe("createBackupArchive", () => {
             .run(`keeper-${"y".repeat(16_384)}`);
           liveDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           liveDb.prepare("DELETE FROM deleted_secrets WHERE value = ?").run(deletedSecret);
-          liveDb
-            .prepare(
-              `
-                INSERT INTO state_leases (
-                  scope, lease_key, owner, expires_at, heartbeat_at,
-                  payload_json, created_at, updated_at
-                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
-              `,
-            )
-            .run();
         } finally {
           liveDb.close();
         }
@@ -1211,19 +1795,8 @@ describe("createBackupArchive", () => {
             provider: "openai",
             key: "sk-backup",
           });
-          expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-            count: 0,
-          });
         } finally {
           archivedDb.close();
-        }
-        const sourceDb = new sqlite.DatabaseSync(liveDbPath, { readOnly: true });
-        try {
-          expect(sourceDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-            count: 1,
-          });
-        } finally {
-          sourceDb.close();
         }
       },
     );
@@ -1659,7 +2232,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("snapshots nested live SQLite databases with transaction continuity", async () => {
+  it("snapshots lock-named plugin SQLite databases with transaction continuity", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -1669,7 +2242,7 @@ describe("createBackupArchive", () => {
       async (state) => {
         const outputDir = state.path("backups");
         const extractDir = state.path("extract");
-        const dbPath = state.statePath("plugins", "dedicated", "live.sqlite");
+        const dbPath = state.statePath("plugins", "dedicated", "cache.lock.sqlite");
         await fs.mkdir(path.dirname(dbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
         await fs.mkdir(extractDir, { recursive: true });
@@ -1714,13 +2287,13 @@ describe("createBackupArchive", () => {
           });
           const entries = await listArchiveEntries(result.archivePath);
           const archivedDbEntries = entries.filter((entry) =>
-            entry.endsWith("/state/plugins/dedicated/live.sqlite"),
+            entry.endsWith("/state/plugins/dedicated/cache.lock.sqlite"),
           );
           expect(archivedDbEntries).toHaveLength(1);
           for (const suffix of ["-wal", "-shm", "-journal"]) {
             expect(
               entries.some((entry) =>
-                entry.endsWith(`/state/plugins/dedicated/live.sqlite${suffix}`),
+                entry.endsWith(`/state/plugins/dedicated/cache.lock.sqlite${suffix}`),
               ),
               suffix,
             ).toBe(false);
@@ -1987,6 +2560,8 @@ describe("createBackupArchive", () => {
         const outputDir = state.path("backups");
         const transientPaths = [
           state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
+          state.statePath("memory", "main.sqlite.generation-writer.sqlite"),
+          state.statePath("memory", "main.sqlite.generation-lock.sqlite"),
           state.statePath("memory", "main.sqlite.tmp-11111111-2222-3333-4444-555555555555"),
           state.statePath("memory", "main.sqlite.backup-66666666-7777-8888-9999-aaaaaaaaaaaa"),
           state.statePath(
@@ -2025,6 +2600,240 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("excludes the state-local gateway lock tree while backing up durable SQLite", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-gateway-lock-sqlite-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const lockDir = resolveGatewayLockDir(state.stateDir);
+        const pluginDbPath = state.statePath("plugins", "dedicated", "durable.sqlite");
+        const producerShapedDbPath = state.statePath(
+          "plugins",
+          "dedicated",
+          "gateway.12345678.lock.sqlite",
+        );
+        const colocatedDbPath = path.join(lockDir, "retained.sqlite");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        await fs.mkdir(path.dirname(pluginDbPath), { recursive: true });
+        await fs.mkdir(lockDir, { recursive: true });
+
+        const sqlite = requireNodeSqlite();
+        for (const [databasePath, value] of [
+          [pluginDbPath, "plugin-state"],
+          [producerShapedDbPath, "producer-shaped-state"],
+          [colocatedDbPath, "colocated-state"],
+        ] as const) {
+          const database = new sqlite.DatabaseSync(databasePath);
+          try {
+            database.exec("CREATE TABLE durable_state (value TEXT NOT NULL)");
+            database.prepare("INSERT INTO durable_state (value) VALUES (?)").run(value);
+          } finally {
+            database.close();
+          }
+        }
+
+        const gatewayLock = await acquireGatewayLock({
+          allowInTests: true,
+          env: state.env,
+          lockDir,
+          timeoutMs: 100,
+        });
+        if (!gatewayLock) {
+          throw new Error("expected test gateway lock");
+        }
+        const gatewayCoordinatorPaths = [
+          `${gatewayLock.lockPath}.sqlite`,
+          `${gatewayLock.stateLockPath}.sqlite`,
+        ];
+        const extraTransientPaths = [
+          path.join(lockDir, "device-identity.12345678.lock.sqlite"),
+          state.statePath("memory", "main.sqlite.reindex-lock.sqlite"),
+        ];
+
+        try {
+          for (const transientPath of [...gatewayCoordinatorPaths, ...extraTransientPaths]) {
+            await fs.mkdir(path.dirname(transientPath), { recursive: true });
+            if (!gatewayCoordinatorPaths.includes(transientPath)) {
+              await fs.writeFile(transientPath, "transient coordinator database");
+            }
+            for (const suffix of ["-wal", "-shm", "-journal"]) {
+              await fs.writeFile(`${transientPath}${suffix}`, "transient coordinator sidecar");
+            }
+          }
+
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 7, 5, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          for (const transientPath of [...gatewayCoordinatorPaths, ...extraTransientPaths]) {
+            const relativeTransientPath = path
+              .relative(state.stateDir, transientPath)
+              .split(path.sep)
+              .join("/");
+            for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+              expect(
+                entries.some((entry) => entry.endsWith(`/state/${relativeTransientPath}${suffix}`)),
+                `${relativeTransientPath}${suffix}`,
+              ).toBe(false);
+            }
+          }
+          expect(
+            entries.some((entry) => entry.endsWith("/state/plugins/dedicated/durable.sqlite")),
+          ).toBe(true);
+          expect(
+            entries.some((entry) =>
+              entry.endsWith("/state/plugins/dedicated/gateway.12345678.lock.sqlite"),
+            ),
+          ).toBe(true);
+          expect(entries.some((entry) => entry.includes(`/${path.basename(lockDir)}/`))).toBe(
+            false,
+          );
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          for (const [entrySuffix, value] of [
+            ["/state/plugins/dedicated/durable.sqlite", "plugin-state"],
+            ["/state/plugins/dedicated/gateway.12345678.lock.sqlite", "producer-shaped-state"],
+          ] as const) {
+            const archivedEntry = expectDefined(
+              entries.find((entry) => entry.endsWith(entrySuffix)),
+              `archive entry ending with ${entrySuffix}`,
+            );
+            const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedEntry), {
+              readOnly: true,
+            });
+            try {
+              expect(archivedDb.prepare("SELECT value FROM durable_state").get()).toEqual({
+                value,
+              });
+            } finally {
+              archivedDb.close();
+            }
+          }
+        } finally {
+          await gatewayLock.release();
+        }
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "absolute",
+      relative: false,
+      error: /Archive symbolic link target must be relative/iu,
+    },
+    {
+      label: "declared-asset-escaping relative",
+      relative: true,
+      error: /Archive symbolic link is outside the declared backup assets/iu,
+    },
+  ])(
+    "rejects $label symlink targets before publishing the archive",
+    async ({ relative, error }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-absolute-symlink-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const outputPath = state.path("absolute-symlink.tar.gz");
+          const outsideTarget = state.path("outside-target.txt");
+          await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          await fs.symlink(
+            relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
+            state.statePath("ordinary-link"),
+          );
+
+          await expect(
+            createBackupArchive({
+              output: outputPath,
+              includeWorkspace: false,
+              nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+            }),
+          ).rejects.toThrow(error);
+          await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
+  it("skips managed absolute runtime symlinks while preserving adjacent state", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-managed-runtime-links-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const browserRoot = state.statePath("browser", "openclaw", "user-data");
+        const skillsRoot = state.statePath(
+          "sandbox",
+          "skills-workspaces",
+          "workspace-main",
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+        );
+        const generatedDbPath = path.join(skillsRoot, "generated.sqlite");
+        const durableDbPath = state.statePath("plugins", "dedicated", "durable.sqlite");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(browserRoot, { recursive: true });
+        await fs.mkdir(skillsRoot, { recursive: true });
+        await fs.mkdir(path.dirname(durableDbPath), { recursive: true });
+        await fs.writeFile(path.join(browserRoot, "Preferences"), "browser state\n", "utf8");
+        await state.writeJson("sandbox/registry.json", { active: true });
+        createEmptySqliteDatabase(generatedDbPath);
+        createEmptySqliteDatabase(durableDbPath);
+        await fs.symlink(state.path("chromium-socket"), path.join(browserRoot, "SingletonSocket"));
+        await fs.symlink(state.path("project-skill"), path.join(skillsRoot, "project-skill"));
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 7, 17, 12, 0, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+
+        expect(
+          entries.some((entry) => entry.endsWith("/state/browser/openclaw/user-data/Preferences")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/sandbox/registry.json"))).toBe(true);
+        expect(
+          entries.some((entry) => entry.endsWith("/state/plugins/dedicated/durable.sqlite")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.includes("/SingletonSocket"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/sandbox/skills-workspaces/"))).toBe(false);
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    );
+  });
+
   it("preserves noncanonical symlinked SQLite paths without dereferencing them", async () => {
     if (process.platform === "win32") {
       return;
@@ -2038,12 +2847,13 @@ describe("createBackupArchive", () => {
       },
       async (state) => {
         const outputDir = state.path("backups");
-        const externalDbPath = state.path("external-malformed.sqlite");
+        const backingPath = state.statePath("plugins", "backing", "malformed.bin");
         const linkedDbPath = state.statePath("plugins", "dedicated", "linked.sqlite");
+        await fs.mkdir(path.dirname(backingPath), { recursive: true });
         await fs.mkdir(path.dirname(linkedDbPath), { recursive: true });
         await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(externalDbPath, "not a sqlite database", "utf8");
-        await fs.symlink(externalDbPath, linkedDbPath);
+        await fs.writeFile(backingPath, "not a sqlite database", "utf8");
+        await fs.symlink(path.relative(path.dirname(linkedDbPath), backingPath), linkedDbPath);
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -2057,7 +2867,7 @@ describe("createBackupArchive", () => {
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(
           backupVerifyCommand(runtime, { archive: result.archivePath }),
-        ).resolves.toMatchObject({ ok: true });
+        ).resolves.toEqual(expect.objectContaining({ ok: true, symlinkCount: 1 }));
       },
     );
   });
@@ -2245,7 +3055,7 @@ describe("createBackupArchive", () => {
           PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
-          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');
         `);
         await fs.symlink(backingDbPath, linkedDbPath);
         await fs.link(backingDbPath, hardlinkedDbPath);
@@ -2338,6 +3148,17 @@ describe("createBackupArchive", () => {
       async (state) => {
         const stateDir = state.stateDir;
         const outputDir = state.path("backups");
+        const durablePaths = [
+          "developer",
+          "dev-backup",
+          "temporary",
+          "tmp-data",
+          "agents/main/agent/runtime-home/sessions",
+          "agents/main/agent/runtime-home/tmp-data",
+          "agents/main/agent/runtime-home/.tmp-data",
+          "agents/main/agent/runtime-home/temporary",
+          "agents/main/not-agent/tmp",
+        ];
         await fs.mkdir(path.join(stateDir, "extensions", "demo", "node_modules", "dep"), {
           recursive: true,
         });
@@ -2346,7 +3167,19 @@ describe("createBackupArchive", () => {
         await fs.mkdir(path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep"), {
           recursive: true,
         });
-        for (const managedRoot of ["dev", "git", "npm-runtime", "tools"]) {
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "node_modules", "dep"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "dist"), { recursive: true });
+        for (const durablePath of durablePaths) {
+          const durableDir = path.join(stateDir, ...durablePath.split("/"));
+          await fs.mkdir(durableDir, { recursive: true });
+          await fs.writeFile(path.join(durableDir, "keep.txt"), "keep\n", "utf8");
+        }
+        for (const managedRoot of ["dev", "git", "npm-runtime", "tmp", "tools"]) {
           await fs.mkdir(path.join(stateDir, managedRoot, "runtime"), { recursive: true });
           await fs.writeFile(
             path.join(stateDir, managedRoot, "runtime", "fixture.sqlite"),
@@ -2389,6 +3222,26 @@ describe("createBackupArchive", () => {
           "managed-package sqlite-named asset\n",
           "utf8",
         );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack", "pack-fixture.pack"),
+          "reinstallable git pack\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "node_modules", "dep", "index.js"),
+          "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "dist", "entry.js"),
+          "export {};\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "invalid.sqlite"),
+          "reinstallable sqlite-named artifact\n",
+          "utf8",
+        );
         await fs.mkdir(outputDir, { recursive: true });
 
         const result = await createBackupArchive({
@@ -2403,7 +3256,7 @@ describe("createBackupArchive", () => {
         expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
-        for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tools"]) {
+        for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]) {
           expect(
             entrySuffixes.some(
               (entry) =>
@@ -2411,6 +3264,9 @@ describe("createBackupArchive", () => {
             ),
             managedRoot,
           ).toBe(false);
+        }
+        for (const durablePath of durablePaths) {
+          expect(entrySuffixes).toContain(`/state/${durablePath}/keep.txt`);
         }
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
@@ -2435,6 +3291,17 @@ describe("createBackupArchive", () => {
       async (state) => {
         const stateDir = state.stateDir;
         const workspaceDir = path.join(stateDir, "dev", "workspace");
+        const tmpWorkspaceDir = path.join(stateDir, "tmp", "workspace");
+        const agentTempRoot = path.join(
+          stateDir,
+          "agents",
+          "main",
+          "agent",
+          "runtime-home",
+          ".tmp",
+        );
+        const agentTmpWorkspaceDir = path.join(agentTempRoot, "workspace");
+        const externalTmpWorkspaceDir = state.path("tmp");
         const runtimeDir = path.join(stateDir, "dev", "openclaw");
         const configPath = path.join(stateDir, "git", "config", "openclaw.json");
         const oauthDir = path.join(stateDir, "tools", "oauth");
@@ -2445,6 +3312,11 @@ describe("createBackupArchive", () => {
         state.envVars.OPENCLAW_OAUTH_DIR = oauthDir;
         state.applyEnv();
         await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(tmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(agentTmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(path.join(agentTempRoot, "scratch"), { recursive: true });
+        await fs.mkdir(externalTmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(path.join(stateDir, "tmp", "tsx-501"), { recursive: true });
         await fs.mkdir(runtimeDir, { recursive: true });
         await fs.mkdir(path.dirname(configPath), { recursive: true });
         await fs.mkdir(oauthDir, { recursive: true });
@@ -2453,13 +3325,45 @@ describe("createBackupArchive", () => {
           configPath,
           `${JSON.stringify({
             agents: {
-              entries: { main: { default: true, workspace: workspaceDir } },
+              entries: {
+                main: { default: true, workspace: workspaceDir },
+                external: { workspace: externalTmpWorkspaceDir },
+                worker: { workspace: tmpWorkspaceDir },
+                nested: { workspace: agentTmpWorkspaceDir },
+              },
             },
           })}\n`,
           "utf8",
         );
         await fs.writeFile(path.join(oauthDir, "credentials.json"), "{}\n", "utf8");
         await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "durable workspace\n", "utf8");
+        await fs.writeFile(
+          path.join(tmpWorkspaceDir, "AGENTS.md"),
+          "durable tmp workspace\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(agentTmpWorkspaceDir, "AGENTS.md"),
+          "durable agent tmp workspace\n",
+          "utf8",
+        );
+        await fs.writeFile(path.join(agentTempRoot, "scratch", "cache-entry"), "scratch\n", "utf8");
+        await fs.writeFile(
+          path.join(externalTmpWorkspaceDir, "AGENTS.md"),
+          "durable external tmp workspace\n",
+          "utf8",
+        );
+        if (process.platform !== "win32") {
+          await fs.symlink(
+            path.relative(stateDir, path.join(externalTmpWorkspaceDir, "AGENTS.md")),
+            path.join(stateDir, "external-workspace-link"),
+          );
+        }
+        await fs.writeFile(
+          path.join(stateDir, "tmp", "tsx-501", "cache-entry"),
+          "rebuildable compiler cache\n",
+          "utf8",
+        );
         await fs.writeFile(path.join(runtimeDir, "package.json"), "{}\n", "utf8");
         await fs.writeFile(path.join(toolRuntimeDir, "tool.bin"), "runtime\n", "utf8");
         const sqlite = requireNodeSqlite();
@@ -2486,6 +3390,20 @@ describe("createBackupArchive", () => {
         expect(
           entries.some((entry) => entry.endsWith("/state/dev/workspace/workspace.sqlite")),
         ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/tmp/workspace/AGENTS.md"))).toBe(
+          true,
+        );
+        expect(
+          entries.some((entry) =>
+            entry.endsWith("/state/agents/main/agent/runtime-home/.tmp/workspace/AGENTS.md"),
+          ),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/tmp/AGENTS.md"))).toBe(true);
+        if (process.platform !== "win32") {
+          expect(entries.some((entry) => entry.endsWith("/state/external-workspace-link"))).toBe(
+            true,
+          );
+        }
         expect(entries.some((entry) => entry.endsWith("/state/git/config/openclaw.json"))).toBe(
           true,
         );
@@ -2493,7 +3411,16 @@ describe("createBackupArchive", () => {
           true,
         );
         expect(entries.some((entry) => entry.includes("/state/dev/openclaw/"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/state/tmp/tsx-501/"))).toBe(false);
         expect(entries.some((entry) => entry.includes("/state/tools/runtime/"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/runtime-home/.tmp/scratch/"))).toBe(false);
+        expect(result.skipped).toContainEqual(
+          expect.objectContaining({
+            kind: "agent temporary files",
+            sourcePath: agentTempRoot,
+            reason: "regenerable",
+          }),
+        );
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

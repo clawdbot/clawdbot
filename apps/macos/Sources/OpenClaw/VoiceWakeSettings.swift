@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -181,6 +182,21 @@ struct VoiceWakeSettings: View {
                             title: "Hold Right Option to talk",
                             subtitle: "Start listening while you hold the key and show the preview overlay.",
                             binding: self.$state.voicePushToTalkEnabled)
+
+                        self.realtimeRelayToggle
+
+                        SettingsCardRow(
+                            title: "Talk configuration",
+                            subtitle: "Choose the realtime provider, model, voice, and transport in the Control UI.")
+                        {
+                            Button("Open in Dashboard") {
+                                Task {
+                                    await DashboardManager.shared.show(
+                                        atPath: DashboardRouteMap.talkSettingsPath)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
 
                         if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
                             SettingsCardRow(
@@ -930,43 +946,23 @@ private struct TriggerPhraseHelpRow: View {
     }
 }
 
+extension VoiceWakeSettings {
+    private var realtimeRelayToggle: some View {
+        SettingsCardToggleRow(
+            title: "Use realtime Gateway relay",
+            subtitle: """
+            Use the Gateway's configured realtime voice session on this Mac. \
+            Requires realtime, gateway-relay, and agent-consult in Talk settings.
+            """,
+            binding: self.$state.talkRealtimeRelayEnabled)
+    }
+}
+
 #if DEBUG
 struct VoiceWakeSettings_Previews: PreviewProvider {
     static var previews: some View {
         VoiceWakeSettings(state: .preview, isActive: true)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension VoiceWakeSettings {
-    static func exerciseForTesting() {
-        let state = AppState(preview: true)
-        state.swabbleEnabled = true
-        state.voicePushToTalkEnabled = true
-        state.swabbleTriggerWords = ["Claude", "Hey"]
-
-        let view = VoiceWakeSettings(state: state, isActive: true)
-        view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
-        view.availableLocales = [Locale(identifier: "en_US")]
-        view.meterLevel = 0.42
-        view.meterError = "No input"
-        view.testState = .detected("ok")
-        view.isTesting = true
-        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude")]
-
-        _ = view.body
-        _ = view.localePicker
-        _ = view.micPicker
-        _ = view.levelMeter
-        _ = view.triggerTable
-        _ = view.chimeSection
-        _ = view.unsupportedVoiceWakePanel
-
-        view.addWord()
-        if let entryId = view.triggerEntries.first?.id {
-            view.removeWord(id: entryId)
-        }
     }
 }
 #endif

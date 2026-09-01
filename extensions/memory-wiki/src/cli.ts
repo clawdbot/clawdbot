@@ -994,7 +994,11 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       undefined;
     const currentAppConfig = registration.getAppConfig?.();
     let agentId = requestedAgentId;
-    if (needsAgent && registration.config.vault.scope === "agent" && !agentId) {
+    if (
+      needsAgent &&
+      !agentId &&
+      (registration.config.vault.scope === "agent" || currentAppConfig)
+    ) {
       try {
         agentId = resolveDefaultAgentId(currentAppConfig ?? {});
       } catch {

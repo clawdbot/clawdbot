@@ -9,6 +9,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -18,230 +19,41 @@ import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
-import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
+import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
 import {
-  getSessionEntry as getSdkSessionEntry,
-  listSessionEntries as listSdkSessionEntries,
-  loadTranscriptEventsSync as loadSdkTranscriptEventsSync,
-} from "../../src/plugin-sdk/session-store-runtime.js";
-import {
-  appendSessionTranscriptMessageByIdentity,
-  readLatestAssistantTextByIdentity,
-  readSessionTranscriptEvents,
-  resolveSessionTranscriptIdentity,
-} from "../../src/plugin-sdk/session-transcript-runtime.js";
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
 import { sleep } from "../../src/utils.js";
-import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
-type DoctorMode = "import" | "inspect" | "validate" | "restore";
+type DoctorMode = "fix" | "import" | "inspect" | "validate" | "restore";
 type ProofChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 const SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS = 60_000;
 
-type DoctorMigrationRunEvidence = {
-  failureReportJsonPath?: string;
-  failureReportMarkdownPath?: string;
-  manifestPath: string;
-  runId: string;
-};
+type DoctorCommandEvidence = Awaited<ReturnType<typeof runDoctor>>;
 
-type DoctorRestoreEvidence = {
-  conflicts: number;
-  manifestPaths: string[];
-  restoredFiles: string[];
-  skippedFiles: string[];
-};
+type FileInventoryEntry = Awaited<ReturnType<typeof inventoryFile>>;
 
-type DoctorCommandEvidence = {
-  code: number | null;
-  mode: DoctorMode;
-  migrationRun?: DoctorMigrationRunEvidence;
-  restore?: DoctorRestoreEvidence;
-  stderrTail: string;
-  stdoutTail: string;
-  totals?: Record<string, unknown>;
-};
+type ProofCheckpoint = Awaited<ReturnType<typeof captureCheckpoint>>;
+type ScaleMigrationEvidence = ReturnType<typeof requireScaleMigrationProof>;
+type DowngradeReupgradeEvidence = Awaited<ReturnType<typeof runDowngradeReupgradeProof>>;
+type BusyContentionEvidence = Awaited<ReturnType<typeof runSqliteBusyContentionProof>>;
+type SecondStartupAfterResetEvidence = Awaited<ReturnType<typeof runSecondStartupAfterResetProof>>;
+type RollbackRestoreEvidence = Awaited<ReturnType<typeof runRollbackRestoreProof>>;
+type StartupRefusalEvidence = Awaited<ReturnType<typeof requireLegacyStartupRefusal>>;
 
-type FileInventoryEntry = {
-  archiveReason?: "bak" | "deleted" | "reset";
-  archiveSessionId?: string;
-  path: string;
-  bytes: number;
-  jsonlTypes?: string[];
-  lines?: number;
-  messageRoles?: string[];
-  messageTexts?: string[];
-  textTail?: string;
-};
-
-type SqliteSessionEntryEvidence = {
-  entry?: Record<string, unknown>;
-  sessionId: string;
-  sessionKey: string;
-  trajectoryEvents: number;
-  transcriptEvents: number;
-};
-
-type SqliteEvidence = {
-  exists: boolean;
-  path: string;
-  sessionEntries: number;
-  sessions: number;
-  trajectoryRuntimeEvents: number;
-  transcriptEvents: number;
-  trackedEntries: SqliteSessionEntryEvidence[];
-};
-
-type ProofCheckpoint = {
-  activeJsonl: FileInventoryEntry[];
-  archiveArtifacts: FileInventoryEntry[];
-  doctor?: DoctorCommandEvidence;
-  gatewayLogTail?: string;
-  label: string;
-  legacyStateJsonl: FileInventoryEntry[];
-  sqlite: SqliteEvidence;
-};
-
-type PluginSdkConsumerEvidence = {
-  activeJsonlForSessionExists: boolean;
-  activeTrajectoryPointerForSessionExists: boolean;
-  activeTrajectoryRuntimeSidecarForSessionExists: boolean;
-  activeTrajectorySessionSidecarForSessionExists: boolean;
-  appendedMessageId: string;
-  identityMemoryKey: string;
-  latestAssistantTextBeforeAppend: string;
-  latestAssistantTextAfterAppend: string;
-  listedSessionKeys: string[];
-  sessionIdentity: string;
-  sessionId: string;
-  sessionKey: string;
-  storeTranscriptEvents: number;
-  transcriptEventsAfterAppend: number;
-  transcriptEventsBeforeAppend: number;
-};
-
-type ManualCompactionEvidence = {
-  checkpointCount: number;
-  compacted: boolean;
-  rowCountAfter: number;
-  rowCountBefore: number;
-  transcriptIdentity: string;
-  sessionId: string;
-  sessionKey: string;
-};
-
-type ScaleMigrationEvidence = {
-  importedSessionKeys: string[];
-  minTranscriptEventsPerSession: number;
-  seededEvents: number;
-  seededSessions: number;
-  startupImportElapsedMs: number;
-};
-
-type DowngradeReupgradeEvidence = {
-  activeJsonlArchived: boolean;
-  doctorImportedEntries: number;
-  doctorImportedTranscriptEvents: number;
-  trajectoryPointerArchived: boolean;
-  trajectoryPointerSourceRemoved: boolean;
-  trajectorySidecarArchived: boolean;
-  trajectorySidecarSourceRemoved: boolean;
-  sessionId: string;
-  sessionKey: string;
-  transcriptEvents: number;
-};
-
-type BusyContentionEvidence = {
-  childExitCode: number | null;
-  childSignal: NodeJS.Signals | null;
-  elapsedMs: number;
-  holdMs: number;
-  sessionId: string;
-  sessionKey: string;
-  transcriptEvents: number;
-};
-
-type SecondStartupAfterResetEvidence = {
-  activeJsonlForSessionExists: boolean;
-  historyContainsPostResetAppend: boolean;
-  sessionId: string;
-  sessionKey: string;
-  transcriptEvents: number;
-};
-
-type RollbackRestoreEvidence = {
-  archivePath: string;
-  archivedBeforeRestore: boolean;
-  failedManifestIssueCode: string;
-  idempotentRestoreSkippedFiles: string[];
-  manifestPath: string;
-  restoredFiles: string[];
-  sourcePath: string;
-  sourceRestored: boolean;
-  sqliteStillExists: boolean;
-};
-
-type SqliteSessionsTranscriptsFlipProofReport = {
-  ok: boolean;
-  agentId: string;
-  checkpoints: ProofCheckpoint[];
-  cleanupPruneSessionKey: string;
-  concurrentDeleteSessionKey: string;
-  concurrentResetSessionKey: string;
-  concurrentSendSessionKey: string;
-  deleteSessionKey: string;
-  failures: string[];
-  fullTurnAssistantText: string;
-  fullTurnSessionKey: string;
-  gatewayEntrypoint: string[];
-  legacySessionId: string;
-  manualCompaction?: ManualCompactionEvidence;
-  manualCompactionSessionKey: string;
-  mockOpenAiRequestLog: string;
-  oldStateSessionKeys: string[];
-  pluginSdkConsumer?: PluginSdkConsumerEvidence;
-  pluginSdkSessionKey: string;
-  resetSessionKey: string;
-  rollbackRestore?: RollbackRestoreEvidence;
-  busyContention?: BusyContentionEvidence;
-  downgradeReupgrade?: DowngradeReupgradeEvidence;
-  scaleMigration?: ScaleMigrationEvidence;
-  secondStartupAfterReset?: SecondStartupAfterResetEvidence;
-  sharedSessionKeys: string[];
-  stateDir: string;
-};
-
-type ProofContext = {
-  activeSessionsDir: string;
-  agentDbPath: string;
-  agentId: string;
-  archiveRoots: string[];
-  cleanupPruneSessionKey: string;
-  concurrentDeleteSessionKey: string;
-  concurrentResetSessionKey: string;
-  concurrentSendSessionKey: string;
-  deleteSessionKey: string;
-  fullTurnAssistantText: string;
-  fullTurnSessionKey: string;
-  legacySessionsDir: string;
-  legacySessionId: string;
-  manualCompactionSessionKey: string;
-  mockOpenAiRequestLog: string;
-  oldStateSessionKeys: string[];
-  pluginSdkAppendText: string;
-  pluginSdkSessionKey: string;
-  resetSessionKey: string;
-  sharedSessionKeys: string[];
-  stateDir: string;
-  storePath: string;
-  trackedSessionKeys: string[];
-};
+type ProofContext = ReturnType<typeof buildProofContext>;
+type GatewayClient = Awaited<ReturnType<typeof connectGatewayClient>>;
+type OpenClawTestInstance = Awaited<ReturnType<typeof createOpenClawTestInstance>>;
 
 type RunOptions = {
   print?: boolean;
@@ -256,14 +68,8 @@ const CONCURRENT_RESET_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-res
 const CONCURRENT_DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-delete";
 const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
 const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
-const CLEANUP_PRUNE_SESSION_ID = "sqlite-cleanup-prune";
-const CLEANUP_PRUNE_SESSION_KEY = "agent:main:dashboard:sqlite-cleanup-prune";
-const CLEANUP_PRUNE_TEXT = "sqlite cleanup prune me";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
 const FULL_TURN_SESSION_KEY = "agent:main:sqlite-full-turn";
-const MANUAL_COMPACTION_SESSION_KEY = "agent:main:dashboard:sqlite-manual-compact";
-const PLUGIN_SDK_APPEND_TEXT = "sqlite sdk consumer appended by identity";
-const PLUGIN_SDK_SESSION_KEY = "agent:main:dashboard:sqlite-sdk-consumer";
 const DOWNGRADE_REUPGRADE_SESSION_ID = "sqlite-downgrade-reupgrade";
 const DOWNGRADE_REUPGRADE_SESSION_KEY = "agent:main:dashboard:sqlite-downgrade-reupgrade";
 const DOWNGRADE_REUPGRADE_TEXT = "sqlite downgrade wrote file-backed state";
@@ -288,37 +94,45 @@ const OLD_STATE_SESSION_KEYS = [
 ] as const;
 
 /** Runs the isolated live gateway SQLite flip proof and returns structured evidence. */
-export async function runSqliteSessionsTranscriptsFlipProof(
-  options: RunOptions = {},
-): Promise<SqliteSessionsTranscriptsFlipProofReport> {
+export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions = {}) {
   const print = options.print ?? false;
   const mockOpenAiPort = await getFreeTcpPort();
   const inst = await createOpenClawTestInstance({
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
+      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+      ALL_PROXY: undefined,
+      HTTP_PROXY: undefined,
+      HTTPS_PROXY: undefined,
+      NO_PROXY: "127.0.0.1,localhost",
+      ...(options.requireBuiltCli !== true
+        ? {
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          }
+        : {}),
       OPENAI_API_KEY: "sk-openclaw-e2e-mock",
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_SKIP_PROVIDERS: undefined,
+      no_proxy: "127.0.0.1,localhost",
     },
     startTimeoutMs: 90_000,
     stopTimeoutMs: 3_000,
   });
-  // The proof mixes child-process CLI calls with in-process SDK accessors.
-  // Apply the fixture environment so both paths resolve the same isolated DB.
+  // Doctor commands and the gateway must resolve the same isolated database.
   inst.state.applyEnv();
   const context = buildProofContext(inst.stateDir);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
+  let bundledPlugins: Array<{ id: string; source: string }> = [];
   let gatewayEntrypoint: string[] = [];
   let busyContention: BusyContentionEvidence | undefined;
   let downgradeReupgrade: DowngradeReupgradeEvidence | undefined;
-  let manualCompaction: ManualCompactionEvidence | undefined;
   let mockOpenAi: ProofChildProcess | undefined;
-  let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
   let rollbackRestore: RollbackRestoreEvidence | undefined;
   let scaleMigration: ScaleMigrationEvidence | undefined;
   let secondStartupAfterReset: SecondStartupAfterResetEvidence | undefined;
+  let startupRefusal: StartupRefusalEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -338,6 +152,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
       throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
     }
+    if (options.requireBuiltCli === true) {
+      const inventory = await inst.cli(["plugins", "list", "--json"]);
+      const plugins = parseJsonObject(inventory.stdout)?.plugins;
+      if (inventory.code !== 0 || !Array.isArray(plugins)) {
+        throw new Error("built CLI could not list bundled plugin artifacts");
+      }
+      bundledPlugins = plugins.flatMap((value) => {
+        const plugin = asRecord(value);
+        if (plugin?.origin !== "bundled") {
+          return [];
+        }
+        if (typeof plugin.id !== "string" || typeof plugin.source !== "string") {
+          throw new Error("bundled plugin inventory omitted its identity or source artifact");
+        }
+        return [{ id: plugin.id, source: plugin.source }];
+      });
+    }
 
     mockOpenAi = await startMockOpenAiServer({
       port: mockOpenAiPort,
@@ -348,10 +179,16 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
-    const startupImportStartedAt = Date.now();
+    startupRefusal = await requireLegacyStartupRefusal(inst, context);
+    await record("after-startup-refusal");
+
+    const doctorImportStartedAt = Date.now();
+    const fixDoctor = await runDoctor(inst, "fix", context.storePath);
+    await record("after-doctor-fix", fixDoctor);
+    scaleMigration = requireScaleMigrationProof(context, Date.now() - doctorImportStartedAt);
+
     await inst.startGateway();
-    await record("after-startup-import");
-    scaleMigration = requireScaleMigrationProof(context, Date.now() - startupImportStartedAt);
+    await record("after-gateway-start");
 
     const inspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-doctor-inspect", inspectDoctor);
@@ -359,16 +196,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     const validateDoctor = await runDoctor(inst, "validate", context.storePath);
     await record("after-doctor-validate", validateDoctor);
 
-    rollbackRestore = await runRollbackRestoreProof(inst, context);
-    await record("after-rollback-restore");
-
-    const client = await connectGatewayClient({
-      url: inst.url,
-      token: inst.gatewayToken,
-      clientDisplayName: "sqlite-sessions-transcripts-flip-proof",
-      requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-      timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-    });
+    const client = await connectProofClient(inst, "sqlite-sessions-transcripts-flip-proof");
     try {
       await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
     } finally {
@@ -376,16 +204,16 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     }
 
     await inst.stopGateway();
+    // Destructive Doctor maintenance owns the stopped Gateway epoch; inspect/validate stay live.
+    rollbackRestore = await runRollbackRestoreProof(inst, context);
+    await record("after-rollback-restore");
     await inst.startGateway();
     await record("after-gateway-restart");
 
-    const restartedClient = await connectGatewayClient({
-      url: inst.url,
-      token: inst.gatewayToken,
-      clientDisplayName: "sqlite-sessions-transcripts-flip-proof-restart",
-      requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-      timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-    });
+    let restartedClient = await connectProofClient(
+      inst,
+      "sqlite-sessions-transcripts-flip-proof-restart",
+    );
     let restartedClientConnected = true;
     try {
       await waitForHistoryContains(restartedClient, context.resetSessionKey, "legacy hello");
@@ -434,37 +262,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
       await record("after-full-agent-turn");
 
-      manualCompaction = await runManualCompactionProof(restartedClient, context);
-      await record("after-manual-compaction");
-
-      const pluginSdkRunId = await sendGatewayUserMessage(
-        restartedClient,
-        context.pluginSdkSessionKey,
-        `Reply with exactly ${context.fullTurnAssistantText}. SDK consumer proof.`,
-      );
-      await waitForAgentRunOk(restartedClient, pluginSdkRunId);
-      const pluginSdkSessionId = await waitForSqliteSessionId(
-        context.agentDbPath,
-        context.pluginSdkSessionKey,
-      );
-      await waitForSqliteMessageContains(
-        context.agentDbPath,
-        pluginSdkSessionId,
-        "assistant",
-        context.fullTurnAssistantText,
-      );
-      pluginSdkConsumer = await runPluginSdkConsumerProbe(context, pluginSdkSessionId);
-      await waitForSqliteMessageContains(
-        context.agentDbPath,
-        pluginSdkSessionId,
-        "assistant",
-        context.pluginSdkAppendText,
-      );
-      await record("after-plugin-sdk-consumer");
-
-      await runGatewayCleanupPruningProof(restartedClient, context);
-      await record("after-cleanup-pruning");
-
+      await disconnectGatewayClient(restartedClient);
+      restartedClientConnected = false;
+      await inst.stopGateway();
       const idempotentImportDoctor = await runDoctorIdempotenceProof(inst, context);
       await record("after-doctor-import-idempotence", idempotentImportDoctor);
 
@@ -474,6 +274,12 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       busyContention = await runSqliteBusyContentionProof(context);
       await record("after-sqlite-busy-contention");
 
+      await inst.startGateway();
+      restartedClient = await connectProofClient(
+        inst,
+        "sqlite-sessions-transcripts-flip-proof-maintained",
+      );
+      restartedClientConnected = true;
       await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
       await record("after-concurrent-multi-client");
 
@@ -486,13 +292,10 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       await inst.startGateway();
       await record("after-second-startup-after-reset");
 
-      const postResetClient = await connectGatewayClient({
-        url: inst.url,
-        token: inst.gatewayToken,
-        clientDisplayName: "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
-        requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-        timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-      });
+      const postResetClient = await connectProofClient(
+        inst,
+        "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
+      );
       try {
         secondStartupAfterReset = await runSecondStartupAfterResetProof(
           postResetClient,
@@ -535,14 +338,17 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);
+    await inst.stopGateway();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     await inst.cleanup();
   }
 
-  const report: SqliteSessionsTranscriptsFlipProofReport = {
+  const report = {
     ok: failures.length === 0,
     agentId: context.agentId,
+    bundledPlugins,
     checkpoints,
-    cleanupPruneSessionKey: context.cleanupPruneSessionKey,
     concurrentDeleteSessionKey: context.concurrentDeleteSessionKey,
     concurrentResetSessionKey: context.concurrentResetSessionKey,
     concurrentSendSessionKey: context.concurrentSendSessionKey,
@@ -552,18 +358,15 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     fullTurnSessionKey: context.fullTurnSessionKey,
     gatewayEntrypoint,
     legacySessionId: context.legacySessionId,
-    ...(manualCompaction ? { manualCompaction } : {}),
-    manualCompactionSessionKey: context.manualCompactionSessionKey,
     mockOpenAiRequestLog: context.mockOpenAiRequestLog,
     oldStateSessionKeys: [...context.oldStateSessionKeys],
-    ...(pluginSdkConsumer ? { pluginSdkConsumer } : {}),
-    pluginSdkSessionKey: context.pluginSdkSessionKey,
     resetSessionKey: context.resetSessionKey,
     ...(rollbackRestore ? { rollbackRestore } : {}),
     ...(busyContention ? { busyContention } : {}),
     ...(downgradeReupgrade ? { downgradeReupgrade } : {}),
     ...(scaleMigration ? { scaleMigration } : {}),
     ...(secondStartupAfterReset ? { secondStartupAfterReset } : {}),
+    ...(startupRefusal ? { startupRefusal } : {}),
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
   };
@@ -578,7 +381,7 @@ function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
   return rest.length === 0 && (first === "dist/index.js" || first === "dist/index.mjs");
 }
 
-function buildProofContext(stateDir: string): ProofContext {
+function buildProofContext(stateDir: string) {
   const agentDir = path.join(stateDir, "agents", AGENT_ID);
   const activeSessionsDir = path.join(agentDir, "sessions");
   const legacySessionsDir = path.join(stateDir, "sessions");
@@ -587,7 +390,6 @@ function buildProofContext(stateDir: string): ProofContext {
     agentDbPath: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
-    cleanupPruneSessionKey: CLEANUP_PRUNE_SESSION_KEY,
     concurrentDeleteSessionKey: CONCURRENT_DELETE_SESSION_KEY,
     concurrentResetSessionKey: CONCURRENT_RESET_SESSION_KEY,
     concurrentSendSessionKey: CONCURRENT_SEND_SESSION_KEY,
@@ -596,11 +398,8 @@ function buildProofContext(stateDir: string): ProofContext {
     fullTurnSessionKey: FULL_TURN_SESSION_KEY,
     legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
-    manualCompactionSessionKey: MANUAL_COMPACTION_SESSION_KEY,
     mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
-    pluginSdkAppendText: PLUGIN_SDK_APPEND_TEXT,
-    pluginSdkSessionKey: PLUGIN_SDK_SESSION_KEY,
     resetSessionKey: RESET_SESSION_KEY,
     sharedSessionKeys: [...SHARED_SESSION_KEYS],
     stateDir,
@@ -608,13 +407,10 @@ function buildProofContext(stateDir: string): ProofContext {
     trackedSessionKeys: [
       RESET_SESSION_KEY,
       DELETE_SESSION_KEY,
-      CLEANUP_PRUNE_SESSION_KEY,
       CONCURRENT_SEND_SESSION_KEY,
       CONCURRENT_RESET_SESSION_KEY,
       CONCURRENT_DELETE_SESSION_KEY,
       FULL_TURN_SESSION_KEY,
-      MANUAL_COMPACTION_SESSION_KEY,
-      PLUGIN_SDK_SESSION_KEY,
       DOWNGRADE_REUPGRADE_SESSION_KEY,
       SQLITE_BUSY_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
@@ -632,6 +428,7 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
     agents: {
       defaults: {
         model: { primary: modelRef },
+        modelPolicy: { allow: [modelRef] },
         models: {
           [modelRef]: {
             agentRuntime: { id: "openclaw" },
@@ -639,8 +436,9 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
           },
         },
       },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
+    gateway: { mode: "local" },
     models: {
       mode: "merge",
       providers: {
@@ -688,6 +486,19 @@ async function getFreeTcpPort(): Promise<number> {
   return addr.port;
 }
 
+async function connectProofClient(
+  inst: OpenClawTestInstance,
+  clientDisplayName: string,
+): Promise<GatewayClient> {
+  return await connectGatewayClient({
+    url: inst.url,
+    token: inst.gatewayToken,
+    clientDisplayName,
+    requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+    timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+  });
+}
+
 async function startMockOpenAiServer(params: {
   port: number;
   requestLogPath: string;
@@ -703,31 +514,34 @@ async function startMockOpenAiServer(params: {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  let output = "";
-  child.stdout.on("data", (chunk) => {
-    output += String(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    output += String(chunk);
-  });
+  const childOutput = captureChildOutput(child);
   const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `mock OpenAI exited before listening (code=${String(child.exitCode)} signal=${String(
           child.signalCode,
-        )})\n${tail(output)}`,
+        )})\n${tail(childOutput())}`,
       );
     }
-    if (output.includes("mock-openai listening")) {
+    if (childOutput().includes("mock-openai listening")) {
       return child;
     }
     await sleep(25);
   }
   await stopChildProcess(child);
-  throw new Error(`timeout waiting for mock OpenAI server\n${tail(output)}`);
+  throw new Error(`timeout waiting for mock OpenAI server\n${tail(childOutput())}`);
+}
+
+function captureChildOutput(child: ProofChildProcess): () => string {
+  let output = "";
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      output += String(chunk);
+    });
+  }
+  return () => output;
 }
 
 async function stopChildProcess(child: ProofChildProcess | undefined): Promise<void> {
@@ -781,91 +595,75 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
     entries[sessionKey] = legacyEntry(scaleSessionId(index), now - 20_000 - index);
   }
-  await fs.writeFile(context.storePath, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
-  await fs.writeFile(
-    path.join(context.legacySessionsDir, "sessions.json"),
-    `${JSON.stringify(oldStateEntries, null, 2)}\n`,
-    { mode: 0o600 },
+  await writeJsonFile(context.storePath, entries, 2);
+  await writeJsonFile(path.join(context.legacySessionsDir, "sessions.json"), oldStateEntries, 2);
+  await writeJsonFile(path.join(context.stateDir, "agent", "old-settings.json"), {
+    source: "old-agent-layout",
+  });
+  const legacyDir = context.legacySessionsDir;
+  const activeDir = context.activeSessionsDir;
+  await writeMessageTranscript(legacyDir, context.legacySessionId, "sqlite-user-1", "legacy hello");
+  await writeMessageTranscript(legacyDir, "sqlite-old-direct", "sqlite-old-direct-1", "old dm");
+  await writeMessageTranscript(legacyDir, "sqlite-old-group", "sqlite-old-group-1", "old group");
+  await writeMessageTranscript(activeDir, "sqlite-delete-session", "sqlite-delete-1", "delete me");
+  await writeMessageTranscript(
+    activeDir,
+    "sqlite-concurrent-reset",
+    "sqlite-concurrent-reset-1",
+    "concurrent reset seed",
   );
-  await fs.writeFile(
-    path.join(context.stateDir, "agent", "old-settings.json"),
-    `${JSON.stringify({ source: "old-agent-layout" })}\n`,
-    { mode: 0o600 },
+  await writeMessageTranscript(
+    activeDir,
+    "sqlite-concurrent-delete",
+    "sqlite-concurrent-delete-1",
+    "concurrent delete seed",
   );
-  await writeTranscript(context.legacySessionsDir, context.legacySessionId, [
-    legacySessionEvent(context.legacySessionId),
-    { type: "message", id: "sqlite-user-1", message: { role: "user", content: "legacy hello" } },
-  ]);
-  await writeTranscript(context.legacySessionsDir, "sqlite-old-direct", [
-    legacySessionEvent("sqlite-old-direct"),
-    { type: "message", id: "sqlite-old-direct-1", message: { role: "user", content: "old dm" } },
-  ]);
-  await writeTranscript(context.legacySessionsDir, "sqlite-old-group", [
-    legacySessionEvent("sqlite-old-group"),
-    { type: "message", id: "sqlite-old-group-1", message: { role: "user", content: "old group" } },
-  ]);
-  await writeTranscript(context.activeSessionsDir, "sqlite-delete-session", [
-    legacySessionEvent("sqlite-delete-session"),
-    { type: "message", id: "sqlite-delete-1", message: { role: "user", content: "delete me" } },
-  ]);
-  await writeTranscript(context.activeSessionsDir, "sqlite-concurrent-reset", [
-    legacySessionEvent("sqlite-concurrent-reset"),
-    {
-      type: "message",
-      id: "sqlite-concurrent-reset-1",
-      message: { role: "user", content: "concurrent reset seed" },
-    },
-  ]);
-  await writeTranscript(context.activeSessionsDir, "sqlite-concurrent-delete", [
-    legacySessionEvent("sqlite-concurrent-delete"),
-    {
-      type: "message",
-      id: "sqlite-concurrent-delete-1",
-      message: { role: "user", content: "concurrent delete seed" },
-    },
-  ]);
-  await writeTranscript(context.activeSessionsDir, "sqlite-shared-a", [
-    legacySessionEvent("sqlite-shared-session"),
-    { type: "message", id: "sqlite-shared-1", message: { role: "user", content: "shared" } },
-  ]);
-  await writeTranscript(context.activeSessionsDir, "sqlite-shared-b", [
-    legacySessionEvent("sqlite-shared-session"),
-    { type: "message", id: "sqlite-shared-2", message: { role: "user", content: "shared b" } },
-  ]);
+  await writeMessageTranscript(
+    activeDir,
+    "sqlite-shared-a",
+    "sqlite-shared-1",
+    "shared",
+    "sqlite-shared-session",
+  );
+  await writeMessageTranscript(
+    activeDir,
+    "sqlite-shared-b",
+    "sqlite-shared-2",
+    "shared b",
+    "sqlite-shared-session",
+  );
   for (const [index] of SCALE_SESSION_KEYS.entries()) {
     const sessionId = scaleSessionId(index);
     await writeTranscript(context.activeSessionsDir, sessionId, [
       legacySessionEvent(sessionId),
-      ...Array.from({ length: SCALE_EVENTS_PER_SESSION - 1 }, (_, eventIndex) => ({
-        type: "message",
-        id: `${sessionId}-${eventIndex + 1}`,
-        message: {
-          role: eventIndex % 2 === 0 ? "user" : "assistant",
-          content: `sqlite scale ${index + 1} event ${eventIndex + 1}`,
-        },
-      })),
+      ...Array.from({ length: SCALE_EVENTS_PER_SESSION - 1 }, (_, eventIndex) =>
+        messageEvent(
+          `${sessionId}-${eventIndex + 1}`,
+          eventIndex % 2 === 0 ? "user" : "assistant",
+          `sqlite scale ${index + 1} event ${eventIndex + 1}`,
+        ),
+      ),
     ]);
   }
-  await fs.writeFile(
+  await writeJsonFile(
     path.join(context.legacySessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
-    `${JSON.stringify({ type: "trajectory", sessionId: context.legacySessionId })}\n`,
-    { mode: 0o600 },
+    { type: "trajectory", sessionId: context.legacySessionId },
   );
-  await fs.writeFile(
-    path.join(context.legacySessionsDir, "old-orphan.deleted.jsonl"),
-    `${JSON.stringify({ type: "event", id: "old-orphan" })}\n`,
-    { mode: 0o600 },
-  );
+  await writeJsonFile(path.join(context.legacySessionsDir, "old-orphan.deleted.jsonl"), {
+    type: "event",
+    id: "old-orphan",
+  });
   const archiveDir = path.join(context.activeSessionsDir, "archive-fixture");
   await fs.mkdir(archiveDir, { recursive: true });
-  await fs.writeFile(
-    path.join(archiveDir, "cold-archive.jsonl"),
-    `${JSON.stringify({ type: "event", id: "cold-archive" })}\n`,
-    { mode: 0o600 },
-  );
-  await importSqliteSessionRows({
-    agentId: context.agentId,
-    entry: {
+  await writeJsonFile(path.join(archiveDir, "cold-archive.jsonl"), {
+    type: "event",
+    id: "cold-archive",
+  });
+  await importProofSession(
+    context,
+    "agent:main:partial-direct",
+    "sqlite-partial-import",
+    {
       ...legacyEntry("sqlite-partial-import", now - 7_000),
       sessionFile: formatSqliteSessionFileMarker({
         agentId: context.agentId,
@@ -873,17 +671,8 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
         storePath: context.storePath,
       }),
     },
-    readTranscriptEvents(append) {
-      append(legacySessionEvent("sqlite-partial-import"));
-      append({
-        type: "message",
-        id: "sqlite-partial-import-1",
-        message: { role: "user", content: "already imported" },
-      });
-    },
-    sessionKey: "agent:main:partial-direct",
-    storePath: context.storePath,
-  });
+    [messageEvent("sqlite-partial-import-1", "user", "already imported")],
+  );
 }
 
 function scaleSessionId(index: number): string {
@@ -910,6 +699,27 @@ function legacySessionEvent(sessionId: string): TranscriptEvent {
   return { type: "session", sessionId };
 }
 
+function messageEvent(id: string, role: "assistant" | "user", content: string): TranscriptEvent {
+  return { type: "message", id, message: { role, content } };
+}
+
+async function writeJsonFile(filePath: string, value: unknown, indent?: number): Promise<void> {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, indent)}\n`, { mode: 0o600 });
+}
+
+async function writeMessageTranscript(
+  sessionsDir: string,
+  fileId: string,
+  messageId: string,
+  content: string,
+  sessionId = fileId,
+): Promise<void> {
+  await writeTranscript(sessionsDir, fileId, [
+    legacySessionEvent(sessionId),
+    messageEvent(messageId, "user", content),
+  ]);
+}
+
 async function writeTranscript(
   sessionsDir: string,
   sessionId: string,
@@ -919,16 +729,77 @@ async function writeTranscript(
   await fs.writeFile(path.join(sessionsDir, `${sessionId}.jsonl`), `${body}\n`, { mode: 0o600 });
 }
 
-async function runDoctor(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-  mode: DoctorMode,
-  storePath: string,
-): Promise<DoctorCommandEvidence> {
+async function importProofSession(
+  context: ProofContext,
+  sessionKey: string,
+  sessionId: string,
+  entry: SessionEntry,
+  events: TranscriptEvent[],
+) {
+  try {
+    return await importSqliteSessionRows({
+      agentId: context.agentId,
+      entry,
+      readTranscriptEvents(append) {
+        append(legacySessionEvent(sessionId));
+        events.forEach(append);
+      },
+      sessionKey,
+      storePath: context.storePath,
+    });
+  } finally {
+    // The fixture's writer lease must not outlive its import into child maintenance.
+    closeOpenClawAgentDatabaseByPath(context.agentDbPath);
+  }
+}
+
+async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: ProofContext) {
+  const sources = new Map<string, Buffer>();
+  for (const directory of [context.activeSessionsDir, context.legacySessionsDir]) {
+    await walkFiles(directory, async (filePath) => {
+      sources.set(filePath, await fs.readFile(filePath));
+    });
+    if (!sources.has(path.join(directory, "sessions.json"))) {
+      throw new Error(`missing seeded legacy session store in ${directory}`);
+    }
+  }
+  let message = "";
+  try {
+    await inst.startGateway();
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (
+    !message.startsWith("gateway exited before readiness (code=1 signal=null)") ||
+    !message.includes("Gateway failed to start: Legacy session store requires migration:") ||
+    !message.includes(path.join(context.legacySessionsDir, "sessions.json")) ||
+    !message.includes('Run "openclaw doctor --fix"')
+  ) {
+    throw new Error(
+      `expected legacy session migration refusal, got: ${message || "ready Gateway"}`,
+    );
+  }
+  for (const [filePath, bytes] of sources) {
+    if (!(await fs.readFile(filePath)).equals(bytes)) {
+      throw new Error(`Gateway changed legacy source bytes before Doctor migration: ${filePath}`);
+    }
+  }
+  return {
+    message,
+    preservedSourceFiles: [...sources.keys()]
+      .map((filePath) => path.relative(context.stateDir, filePath))
+      .toSorted(),
+  };
+}
+
+async function runDoctor(inst: OpenClawTestInstance, mode: DoctorMode, storePath: string) {
   const result = await inst.cli(
-    ["doctor", "--session-sqlite", mode, "--session-sqlite-store", storePath, "--json"],
+    mode === "fix"
+      ? ["doctor", "--fix", "--non-interactive"]
+      : ["doctor", "--session-sqlite", mode, "--session-sqlite-store", storePath, "--json"],
     { timeoutMs: 60_000 },
   );
-  const parsed = parseJsonObject(result.stdout);
+  const parsed = mode === "fix" ? undefined : parseJsonObject(result.stdout);
   return {
     code: result.code,
     mode,
@@ -942,9 +813,7 @@ async function runDoctor(
   };
 }
 
-function parseDoctorMigrationRun(parsed: Record<string, unknown>): {
-  migrationRun?: DoctorMigrationRunEvidence;
-} {
+function parseDoctorMigrationRun(parsed: Record<string, unknown>) {
   const migrationRun = asRecord(parsed.migrationRun);
   if (
     !migrationRun ||
@@ -967,7 +836,7 @@ function parseDoctorMigrationRun(parsed: Record<string, unknown>): {
   };
 }
 
-function parseDoctorRestore(parsed: Record<string, unknown>): { restore?: DoctorRestoreEvidence } {
+function parseDoctorRestore(parsed: Record<string, unknown>) {
   const targets = Array.isArray(parsed.targets) ? parsed.targets : [];
   const restore = asRecord(asRecord(targets[0])?.restore);
   if (!restore) {
@@ -983,10 +852,7 @@ function parseDoctorRestore(parsed: Record<string, unknown>): { restore?: Doctor
   };
 }
 
-async function runRollbackRestoreProof(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-  context: ProofContext,
-): Promise<RollbackRestoreEvidence> {
+async function runRollbackRestoreProof(inst: OpenClawTestInstance, context: ProofContext) {
   const drillDir = path.join(context.stateDir, "rollback-drill");
   const storePath = path.join(drillDir, "sessions.json");
   const sessionId = "sqlite-rollback-restore";
@@ -994,19 +860,13 @@ async function runRollbackRestoreProof(
   const sourcePath = path.join(drillDir, `${sessionId}.jsonl`);
   const sqlitePath = path.join(drillDir, "openclaw-agent.sqlite");
   await fs.mkdir(drillDir, { recursive: true });
-  await fs.writeFile(
-    storePath,
-    `${JSON.stringify({ [sessionKey]: legacyEntry(sessionId, Date.now()) }, null, 2)}\n`,
-    { mode: 0o600 },
+  await writeJsonFile(storePath, { [sessionKey]: legacyEntry(sessionId, Date.now()) }, 2);
+  await writeMessageTranscript(
+    drillDir,
+    sessionId,
+    "sqlite-rollback-restore-1",
+    "rollback restore me",
   );
-  await writeTranscript(drillDir, sessionId, [
-    legacySessionEvent(sessionId),
-    {
-      type: "message",
-      id: "sqlite-rollback-restore-1",
-      message: { role: "user", content: "rollback restore me" },
-    },
-  ]);
 
   const importDoctor = await runDoctor(inst, "import", storePath);
   if (importDoctor.code !== 0) {
@@ -1131,7 +991,7 @@ async function markMigrationManifestFailed(manifestPath: string, issueCode: stri
       },
     ];
   }
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  await writeJsonFile(manifestPath, manifest, 2);
 }
 
 async function appendProofMessage(
@@ -1140,286 +1000,41 @@ async function appendProofMessage(
   sessionKey: string,
   message: string,
 ): Promise<void> {
-  const result = await appendTranscriptMessage(
-    {
-      agentId: context.agentId,
-      sessionId,
-      sessionKey,
-      storePath: context.storePath,
-    },
-    {
-      message: {
-        role: "assistant",
-        content: message,
-        timestamp: Date.now(),
-      },
-    },
-  );
-  if (!result?.appended || !result.messageId) {
-    throw new Error(`appendTranscriptMessage failed for ${sessionKey}`);
-  }
-}
-
-async function runManualCompactionProof(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  context: ProofContext,
-): Promise<ManualCompactionEvidence> {
-  const runId = await sendGatewayUserMessage(
-    client,
-    context.manualCompactionSessionKey,
-    `Reply with exactly ${context.fullTurnAssistantText}. Manual compaction proof.`,
-  );
-  await waitForAgentRunOk(client, runId);
-  const sessionId = await waitForSqliteSessionId(
-    context.agentDbPath,
-    context.manualCompactionSessionKey,
-  );
-  await waitForSqliteMessageContains(
-    context.agentDbPath,
-    sessionId,
-    "assistant",
-    context.fullTurnAssistantText,
-  );
-  const rowCountBefore = countSqliteTranscriptEvents(context.agentDbPath, sessionId);
-  if (rowCountBefore < 2) {
-    throw new Error(
-      `manual compaction source transcript had too few rows: ${rowCountBefore} for ${sessionId}`,
-    );
-  }
-  const listed: { sessions?: Array<{ key?: string; sessionId?: string }> } = await client.request(
-    "sessions.list",
-    {},
-  );
-  const listedSession = (listed.sessions ?? []).find(
-    (session) =>
-      session.sessionId === sessionId || session.key === context.manualCompactionSessionKey,
-  );
-  if (!listedSession?.key) {
-    throw new Error(
-      `manual compaction session was not listed before compact: ${JSON.stringify(listed)}`,
-    );
-  }
-
-  const compacted: {
-    compacted?: boolean;
-    key?: string;
-    ok?: boolean;
-  } = await client.request("sessions.compact", {
-    key: listedSession.key,
-  });
-  if (compacted.ok !== true || compacted.compacted !== true) {
-    throw new Error(
-      `manual compaction did not compact using ${listedSession.key}: ${JSON.stringify(
-        compacted,
-      )}; listed=${JSON.stringify(listed)}`,
-    );
-  }
-
-  const evidence = readSqliteEvidence(context.agentDbPath, [context.manualCompactionSessionKey]);
-  const row = evidence.trackedEntries.find(
-    (entry) => entry.sessionKey === context.manualCompactionSessionKey,
-  );
-  if (!row?.entry) {
-    throw new Error(`manual compaction entry missing for ${context.manualCompactionSessionKey}`);
-  }
-  const checkpointCount = Array.isArray(row.entry.compactionCheckpoints)
-    ? row.entry.compactionCheckpoints.length
-    : 0;
-  if (checkpointCount < 1) {
-    throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
-  }
-  if (Object.hasOwn(row.entry, "sessionFile")) {
-    throw new Error(`manual compaction entry retained file-era identity: ${JSON.stringify(row)}`);
-  }
-
-  return {
-    checkpointCount,
-    compacted: compacted.compacted,
-    rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
-    rowCountBefore,
-    transcriptIdentity: context.manualCompactionSessionKey,
-    sessionId: row.sessionId,
-    sessionKey: context.manualCompactionSessionKey,
-  };
-}
-
-async function runPluginSdkConsumerProbe(
-  context: ProofContext,
-  sessionId: string,
-): Promise<PluginSdkConsumerEvidence> {
-  const scope = {
-    agentId: context.agentId,
-    sessionId,
-    sessionKey: context.pluginSdkSessionKey,
-    storePath: context.storePath,
-  };
-  const sessionEntry = getSdkSessionEntry({
-    agentId: context.agentId,
-    readConsistency: "latest",
-    sessionKey: context.pluginSdkSessionKey,
-    storePath: context.storePath,
-  });
-  if (sessionEntry?.sessionId !== sessionId) {
-    throw new Error(
-      `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
-    );
-  }
-  if (Object.hasOwn(sessionEntry, "sessionFile")) {
-    throw new Error(`SDK session store exposed retired transcript locator`);
-  }
-
-  const listedSessionKeys = listSdkSessionEntries({
-    agentId: context.agentId,
-    storePath: context.storePath,
-  }).map((entry) => entry.sessionKey);
-  if (!listedSessionKeys.includes(context.pluginSdkSessionKey)) {
-    throw new Error(`SDK session list omitted ${context.pluginSdkSessionKey}`);
-  }
-
-  const identity = await resolveSessionTranscriptIdentity(scope);
-  const latestBefore = await readLatestAssistantTextByIdentity(scope);
-  if (latestBefore?.text !== context.fullTurnAssistantText) {
-    throw new Error(
-      `SDK latest assistant read returned ${JSON.stringify(latestBefore)} for ${context.pluginSdkSessionKey}`,
-    );
-  }
-  const transcriptEventsBeforeAppend = (await readSessionTranscriptEvents(scope)).length;
-  const storeTranscriptEvents = loadSdkTranscriptEventsSync(scope).length;
-  const activeJsonlPath = path.join(context.activeSessionsDir, `${sessionId}.jsonl`);
-  const activeTrajectorySessionSidecarPath = path.join(
-    context.activeSessionsDir,
-    `${sessionId}.trajectory.jsonl`,
-  );
-  const activeTrajectoryPointerPath = path.join(
-    context.activeSessionsDir,
-    `${sessionId}.trajectory-path.json`,
-  );
-  const activeTrajectoryRuntimeSidecarPath = path.join(
-    context.activeSessionsDir,
-    "trajectory",
-    `${sessionId}.jsonl`,
-  );
-  const activeJsonlForSessionExists = fsSync.existsSync(activeJsonlPath);
-  if (activeJsonlForSessionExists) {
-    throw new Error(`SDK probe found active JSONL for SQLite session at ${activeJsonlPath}`);
-  }
-  const activeTrajectorySessionSidecarForSessionExists = fsSync.existsSync(
-    activeTrajectorySessionSidecarPath,
-  );
-  const activeTrajectoryPointerForSessionExists = fsSync.existsSync(activeTrajectoryPointerPath);
-  const activeTrajectoryRuntimeSidecarForSessionExists = fsSync.existsSync(
-    activeTrajectoryRuntimeSidecarPath,
-  );
-  if (
-    activeTrajectorySessionSidecarForSessionExists ||
-    activeTrajectoryPointerForSessionExists ||
-    activeTrajectoryRuntimeSidecarForSessionExists
-  ) {
-    throw new Error(
-      `SDK trajectory probe found active sidecar paths: ${JSON.stringify({
-        pointer: activeTrajectoryPointerPath,
-        runtime: activeTrajectoryRuntimeSidecarPath,
-        session: activeTrajectorySessionSidecarPath,
-      })}`,
-    );
-  }
-
-  const appended = await appendSessionTranscriptMessageByIdentity({
-    ...scope,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: context.pluginSdkAppendText }],
-      timestamp: Date.now(),
-    },
-  });
-  if (!appended?.appended || !appended.messageId) {
-    throw new Error(`SDK transcript append failed for ${context.pluginSdkSessionKey}`);
-  }
-
-  const latestAfter = await readLatestAssistantTextByIdentity(scope);
-  if (latestAfter?.text !== context.pluginSdkAppendText) {
-    throw new Error(
-      `SDK latest assistant after append returned ${JSON.stringify(latestAfter)} for ${
-        context.pluginSdkSessionKey
-      }`,
-    );
-  }
-  const transcriptEventsAfterAppend = (await readSessionTranscriptEvents(scope)).length;
-  if (transcriptEventsAfterAppend <= transcriptEventsBeforeAppend) {
-    throw new Error(
-      `SDK transcript append did not increase event count for ${context.pluginSdkSessionKey}`,
-    );
-  }
-  return {
-    activeJsonlForSessionExists,
-    activeTrajectoryPointerForSessionExists,
-    activeTrajectoryRuntimeSidecarForSessionExists,
-    activeTrajectorySessionSidecarForSessionExists,
-    appendedMessageId: appended.messageId,
-    identityMemoryKey: identity.memoryKey,
-    latestAssistantTextBeforeAppend: latestBefore.text,
-    latestAssistantTextAfterAppend: latestAfter.text,
-    listedSessionKeys,
-    sessionIdentity: context.pluginSdkSessionKey,
-    sessionId,
-    sessionKey: context.pluginSdkSessionKey,
-    storeTranscriptEvents,
-    transcriptEventsAfterAppend,
-    transcriptEventsBeforeAppend,
-  };
-}
-
-async function runGatewayCleanupPruningProof(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  context: ProofContext,
-): Promise<void> {
-  const updatedAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
-  await importSqliteSessionRows({
-    agentId: context.agentId,
-    entry: {
-      delivery: normalizeSessionDeliveryState({ context: { channel: "cli" } }),
-      chatType: "direct",
-      sessionFile: formatSqliteSessionFileMarker({
+  try {
+    const result = await appendTranscriptMessage(
+      {
         agentId: context.agentId,
-        sessionId: CLEANUP_PRUNE_SESSION_ID,
+        sessionId,
+        sessionKey,
         storePath: context.storePath,
-      }),
-      sessionId: CLEANUP_PRUNE_SESSION_ID,
-      sessionStartedAt: updatedAt - 500,
-      updatedAt,
-    },
-    readTranscriptEvents(append) {
-      append(legacySessionEvent(CLEANUP_PRUNE_SESSION_ID));
-      append({
-        type: "message",
-        id: "sqlite-cleanup-prune-1",
-        message: { role: "user", content: CLEANUP_PRUNE_TEXT },
-      });
-    },
-    sessionKey: context.cleanupPruneSessionKey,
-    storePath: context.storePath,
-  });
-  await waitForSqliteMessageContains(
-    context.agentDbPath,
-    CLEANUP_PRUNE_SESSION_ID,
-    "user",
-    CLEANUP_PRUNE_TEXT,
-  );
-
-  const result: { afterCount?: number; applied?: boolean; pruned?: number } = await client.request(
-    "sessions.cleanup",
-    { enforce: true },
-    { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
-  );
-  if (result?.applied !== true || (result.pruned ?? 0) < 1) {
-    throw new Error(`sessions.cleanup did not prune stale SQLite rows: ${JSON.stringify(result)}`);
+      },
+      {
+        message: {
+          role: "assistant",
+          content: message,
+          timestamp: Date.now(),
+        },
+      },
+    );
+    if (!result?.appended || !result.messageId) {
+      throw new Error(`appendTranscriptMessage failed for ${sessionKey}`);
+    }
+  } finally {
+    closeOpenClawAgentDatabaseByPath(context.agentDbPath);
   }
-  await waitForSessionEntryAbsent(context.agentDbPath, context.cleanupPruneSessionKey);
-  await waitForSqliteEventsAbsent(context.agentDbPath, CLEANUP_PRUNE_SESSION_ID);
+}
+
+function sessionArtifactPaths(sessionsDir: string, sessionId: string) {
+  return {
+    jsonl: path.join(sessionsDir, `${sessionId}.jsonl`),
+    pointer: path.join(sessionsDir, `${sessionId}.trajectory-path.json`),
+    runtime: path.join(sessionsDir, "trajectory", `${sessionId}.jsonl`),
+    trajectory: path.join(sessionsDir, `${sessionId}.trajectory.jsonl`),
+  };
 }
 
 async function runDoctorIdempotenceProof(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  inst: OpenClawTestInstance,
   context: ProofContext,
 ): Promise<DoctorCommandEvidence> {
   const before = readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys);
@@ -1446,10 +1061,7 @@ async function runDoctorIdempotenceProof(
   return doctor;
 }
 
-function requireScaleMigrationProof(
-  context: ProofContext,
-  startupImportElapsedMs: number,
-): ScaleMigrationEvidence {
+function requireScaleMigrationProof(context: ProofContext, doctorImportElapsedMs: number) {
   const sqlite = readSqliteEvidence(context.agentDbPath, SCALE_SESSION_KEYS);
   const importedSessionKeys: string[] = [];
   for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
@@ -1470,61 +1082,40 @@ function requireScaleMigrationProof(
     minTranscriptEventsPerSession: SCALE_EVENTS_PER_SESSION,
     seededEvents: SCALE_SESSION_COUNT * SCALE_EVENTS_PER_SESSION,
     seededSessions: SCALE_SESSION_COUNT,
-    startupImportElapsedMs,
+    doctorImportElapsedMs,
   };
 }
 
-async function runDowngradeReupgradeProof(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-  context: ProofContext,
-): Promise<DowngradeReupgradeEvidence> {
+async function runDowngradeReupgradeProof(inst: OpenClawTestInstance, context: ProofContext) {
   await fs.mkdir(context.activeSessionsDir, { recursive: true });
-  await fs.writeFile(
+  await writeJsonFile(
     context.storePath,
-    `${JSON.stringify(
-      {
-        [DOWNGRADE_REUPGRADE_SESSION_KEY]: legacyEntry(DOWNGRADE_REUPGRADE_SESSION_ID, Date.now()),
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
-  const transcriptPath = path.join(
-    context.activeSessionsDir,
-    `${DOWNGRADE_REUPGRADE_SESSION_ID}.jsonl`,
-  );
-  const trajectoryPath = path.join(
-    context.activeSessionsDir,
-    `${DOWNGRADE_REUPGRADE_SESSION_ID}.trajectory.jsonl`,
-  );
-  const trajectoryPointerPath = path.join(
-    context.activeSessionsDir,
-    `${DOWNGRADE_REUPGRADE_SESSION_ID}.trajectory-path.json`,
-  );
-  await writeTranscript(context.activeSessionsDir, DOWNGRADE_REUPGRADE_SESSION_ID, [
-    legacySessionEvent(DOWNGRADE_REUPGRADE_SESSION_ID),
     {
-      type: "message",
-      id: "sqlite-downgrade-reupgrade-1",
-      message: { role: "user", content: DOWNGRADE_REUPGRADE_TEXT },
+      [DOWNGRADE_REUPGRADE_SESSION_KEY]: legacyEntry(DOWNGRADE_REUPGRADE_SESSION_ID, Date.now()),
     },
-  ]);
-  await fs.writeFile(
-    trajectoryPath,
-    `${JSON.stringify({ type: "trajectory", sessionId: DOWNGRADE_REUPGRADE_SESSION_ID })}\n`,
-    { mode: 0o600 },
+    2,
   );
-  await fs.writeFile(
-    trajectoryPointerPath,
-    `${JSON.stringify({
-      traceSchema: "openclaw-trajectory-pointer",
-      schemaVersion: 1,
-      sessionId: DOWNGRADE_REUPGRADE_SESSION_ID,
-      runtimeFile: trajectoryPath,
-    })}\n`,
-    { mode: 0o600 },
+  const {
+    jsonl: transcriptPath,
+    pointer: trajectoryPointerPath,
+    trajectory: trajectoryPath,
+  } = sessionArtifactPaths(context.activeSessionsDir, DOWNGRADE_REUPGRADE_SESSION_ID);
+  await writeMessageTranscript(
+    context.activeSessionsDir,
+    DOWNGRADE_REUPGRADE_SESSION_ID,
+    "sqlite-downgrade-reupgrade-1",
+    DOWNGRADE_REUPGRADE_TEXT,
   );
+  await writeJsonFile(trajectoryPath, {
+    type: "trajectory",
+    sessionId: DOWNGRADE_REUPGRADE_SESSION_ID,
+  });
+  await writeJsonFile(trajectoryPointerPath, {
+    traceSchema: "openclaw-trajectory-pointer",
+    schemaVersion: 1,
+    sessionId: DOWNGRADE_REUPGRADE_SESSION_ID,
+    runtimeFile: trajectoryPath,
+  });
 
   const doctor = await runDoctor(inst, "import", context.storePath);
   if (doctor.code !== 0) {
@@ -1582,9 +1173,7 @@ async function runDowngradeReupgradeProof(
   };
 }
 
-async function runSqliteBusyContentionProof(
-  context: ProofContext,
-): Promise<BusyContentionEvidence> {
+async function runSqliteBusyContentionProof(context: ProofContext) {
   const holdMs = 500;
   const readyPath = path.join(context.stateDir, `sqlite-busy-${randomUUID()}.ready`);
   const child = spawn(
@@ -1615,48 +1204,33 @@ async function runSqliteBusyContentionProof(
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  let childOutput = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    childOutput += String(chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    childOutput += String(chunk);
-  });
+  const childOutput = captureChildOutput(child);
 
   await waitForFile(readyPath, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS, () => {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `SQLite busy child exited before acquiring lock code=${String(
           child.exitCode,
-        )} signal=${String(child.signalCode)} ${tail(childOutput)}`,
+        )} signal=${String(child.signalCode)} ${tail(childOutput())}`,
       );
     }
   });
 
   const startedAt = Date.now();
-  const result = await importSqliteSessionRows({
-    agentId: context.agentId,
-    entry: legacyEntry(SQLITE_BUSY_SESSION_ID, Date.now()),
-    readTranscriptEvents(append) {
-      append(legacySessionEvent(SQLITE_BUSY_SESSION_ID));
-      append({
-        type: "message",
-        id: "sqlite-busy-contention-1",
-        message: { role: "user", content: SQLITE_BUSY_TEXT },
-      });
-    },
-    sessionKey: SQLITE_BUSY_SESSION_KEY,
-    storePath: context.storePath,
-  });
+  const result = await importProofSession(
+    context,
+    SQLITE_BUSY_SESSION_KEY,
+    SQLITE_BUSY_SESSION_ID,
+    legacyEntry(SQLITE_BUSY_SESSION_ID, Date.now()),
+    [messageEvent("sqlite-busy-contention-1", "user", SQLITE_BUSY_TEXT)],
+  );
   const elapsedMs = Date.now() - startedAt;
   const exit = await waitForChildExit(child, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS);
   if (exit.code !== 0) {
     throw new Error(
       `SQLite busy child exited non-zero code=${String(exit.code)} signal=${String(
         exit.signal,
-      )} ${tail(childOutput)}`,
+      )} ${tail(childOutput())}`,
     );
   }
   if (elapsedMs < Math.floor(holdMs / 2)) {
@@ -1680,10 +1254,10 @@ async function runSqliteBusyContentionProof(
 }
 
 async function runSecondStartupAfterResetProof(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   context: ProofContext,
   resetSessionId: string,
-): Promise<SecondStartupAfterResetEvidence> {
+) {
   await appendProofMessage(
     context,
     resetSessionId,
@@ -1704,24 +1278,18 @@ async function runSecondStartupAfterResetProof(
 }
 
 async function runConcurrentMultiClientLifecycle(
-  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  inst: OpenClawTestInstance,
   context: ProofContext,
-  primaryClient: Awaited<ReturnType<typeof connectGatewayClient>>,
+  primaryClient: GatewayClient,
 ): Promise<void> {
-  const historyClient = await connectGatewayClient({
-    url: inst.url,
-    token: inst.gatewayToken,
-    clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-history",
-    requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-    timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-  });
-  const lifecycleClient = await connectGatewayClient({
-    url: inst.url,
-    token: inst.gatewayToken,
-    clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-lifecycle",
-    requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-    timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
-  });
+  const historyClient = await connectProofClient(
+    inst,
+    "sqlite-sessions-transcripts-flip-proof-concurrent-history",
+  );
+  const lifecycleClient = await connectProofClient(
+    inst,
+    "sqlite-sessions-transcripts-flip-proof-concurrent-lifecycle",
+  );
   try {
     await requireHistoryContains(
       historyClient,
@@ -1792,10 +1360,7 @@ async function runConcurrentMultiClientLifecycle(
   }
 }
 
-async function resetSession(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  key: string,
-): Promise<string> {
+async function resetSession(client: GatewayClient, key: string): Promise<string> {
   const result: { ok?: boolean; entry?: { sessionId?: string } } = await client.request(
     "sessions.reset",
     { key, reason: "reset" },
@@ -1807,7 +1372,7 @@ async function resetSession(
 }
 
 async function sendGatewayUserMessage(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   sessionKey: string,
   message: string,
 ): Promise<string> {
@@ -1826,10 +1391,7 @@ async function sendGatewayUserMessage(
   return result.runId;
 }
 
-async function waitForAgentRunOk(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  runId: string,
-): Promise<void> {
+async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
   const result: { error?: unknown; status?: string } = await client.request(
     "agent.wait",
     { runId, timeoutMs: 60_000 },
@@ -1840,10 +1402,7 @@ async function waitForAgentRunOk(
   }
 }
 
-async function waitForAgentRunSettled(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  runId: string,
-): Promise<void> {
+async function waitForAgentRunSettled(client: GatewayClient, runId: string): Promise<void> {
   const result: { endedAt?: number; status?: string; stopReason?: string } = await client.request(
     "agent.wait",
     { runId, timeoutMs: 60_000 },
@@ -1866,10 +1425,7 @@ async function waitForAgentRunSettled(
   throw new Error(`agent.wait did not settle acceptably for ${runId}: ${JSON.stringify(result)}`);
 }
 
-async function deleteSession(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  key: string,
-): Promise<void> {
+async function deleteSession(client: GatewayClient, key: string): Promise<void> {
   const result: { ok?: boolean; deleted?: boolean } = await client.request("sessions.delete", {
     key,
     deleteTranscript: true,
@@ -1879,10 +1435,7 @@ async function deleteSession(
   }
 }
 
-async function requireTrackedSession(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  key: string,
-): Promise<void> {
+async function requireTrackedSession(client: GatewayClient, key: string): Promise<void> {
   const result: { sessions?: Array<{ key?: string }> } = await client.request("sessions.list", {});
   if (!result.sessions?.some((session) => session.key === key)) {
     throw new Error(`expected session ${key} to remain listed`);
@@ -1890,7 +1443,7 @@ async function requireTrackedSession(
 }
 
 async function requireHistoryContains(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   sessionKey: string,
   expected: string,
 ): Promise<void> {
@@ -1910,7 +1463,7 @@ async function requireHistoryContains(
 }
 
 async function requireHistoryRoleContains(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   sessionKey: string,
   role: string,
   expected: string,
@@ -1938,38 +1491,55 @@ async function requireHistoryRoleContains(
 }
 
 async function waitForHistoryContains(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   sessionKey: string,
   expected: string,
 ): Promise<void> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      await requireHistoryContains(client, sessionKey, expected);
-      return;
-    } catch {
-      await sleep(50);
-    }
-  }
-  await requireHistoryContains(client, sessionKey, expected);
+  await waitForAssertion(() => requireHistoryContains(client, sessionKey, expected));
 }
 
 async function waitForHistoryRoleContains(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: GatewayClient,
   sessionKey: string,
   role: string,
   expected: string,
 ): Promise<void> {
+  await waitForAssertion(() => requireHistoryRoleContains(client, sessionKey, role, expected));
+}
+
+async function waitForAssertion(assertion: () => Promise<void>): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await requireHistoryRoleContains(client, sessionKey, role, expected);
-      return;
+      return await assertion();
     } catch {
       await sleep(50);
     }
   }
-  await requireHistoryRoleContains(client, sessionKey, role, expected);
+  await assertion();
+}
+
+async function pollUntil<T>(
+  read: () => T | Promise<T>,
+  ready: (value: T) => boolean,
+  timeoutError: () => Error,
+  options: { intervalMs?: number; stableMs?: number; timeoutMs?: number } = {},
+): Promise<T> {
+  const deadline = Date.now() + (options.timeoutMs ?? SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS);
+  let readySince: number | undefined;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (ready(value)) {
+      readySince ??= Date.now();
+      if (Date.now() - readySince >= (options.stableMs ?? 0)) {
+        return value;
+      }
+    } else {
+      readySince = undefined;
+    }
+    await sleep(options.intervalMs ?? 50);
+  }
+  throw timeoutError();
 }
 
 async function waitForSqliteEvents(
@@ -1977,30 +1547,24 @@ async function waitForSqliteEvents(
   sessionId: string,
   minEvents: number,
 ): Promise<void> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const sqlite = readSqliteEvidence(dbPath, []);
-    const row = sqlite.trackedEntries.find((entry) => entry.sessionId === sessionId);
-    if ((row?.transcriptEvents ?? 0) >= minEvents) {
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for ${minEvents} SQLite events for ${sessionId}`);
+  await pollUntil(
+    () =>
+      readSqliteEvidence(dbPath, []).trackedEntries.find((entry) => entry.sessionId === sessionId)
+        ?.transcriptEvents ?? 0,
+    (eventCount) => eventCount >= minEvents,
+    () => new Error(`timed out waiting for ${minEvents} SQLite events for ${sessionId}`),
+  );
 }
 
 async function waitForSqliteSessionId(dbPath: string, sessionKey: string): Promise<string> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
-      (entry) => entry.sessionKey === sessionKey && entry.sessionId,
-    );
-    if (row?.sessionId) {
-      return row.sessionId;
-    }
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for SQLite session entry for ${sessionKey}`);
+  return await pollUntil(
+    () =>
+      readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
+        (entry) => entry.sessionKey === sessionKey,
+      )?.sessionId ?? "",
+    Boolean,
+    () => new Error(`timed out waiting for SQLite session entry for ${sessionKey}`),
+  );
 }
 
 async function waitForTrackedSessionId(
@@ -2008,59 +1572,29 @@ async function waitForTrackedSessionId(
   sessionKey: string,
   expectedSessionId: string,
 ): Promise<void> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
-      (entry) => entry.sessionKey === sessionKey,
-    );
-    if (row?.sessionId === expectedSessionId) {
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error(
-    `timed out waiting for SQLite session entry ${sessionKey} to point at ${expectedSessionId}`,
+  await pollUntil(
+    () =>
+      readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
+        (entry) => entry.sessionKey === sessionKey,
+      )?.sessionId,
+    (sessionId) => sessionId === expectedSessionId,
+    () =>
+      new Error(
+        `timed out waiting for SQLite session entry ${sessionKey} to point at ${expectedSessionId}`,
+      ),
   );
 }
 
 async function waitForSessionEntryAbsent(dbPath: string, sessionKey: string): Promise<void> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  let absentSince: number | undefined;
-  while (Date.now() < deadline) {
-    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
-      (entry) => entry.sessionKey === sessionKey,
-    );
-    if (!row) {
-      absentSince ??= Date.now();
-      if (Date.now() - absentSince >= 1_500) {
-        return;
-      }
-      await sleep(50);
-      continue;
-    }
-    absentSince = undefined;
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for SQLite session entry deletion for ${sessionKey}`);
-}
-
-async function waitForSqliteEventsAbsent(dbPath: string, sessionId: string): Promise<void> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  let absentSince: number | undefined;
-  while (Date.now() < deadline) {
-    const count = countSqliteTranscriptEvents(dbPath, sessionId);
-    if (count === 0) {
-      absentSince ??= Date.now();
-      if (Date.now() - absentSince >= 1_500) {
-        return;
-      }
-      await sleep(50);
-      continue;
-    }
-    absentSince = undefined;
-    await sleep(50);
-  }
-  throw new Error(`timed out waiting for SQLite transcript row deletion for ${sessionId}`);
+  await pollUntil(
+    () =>
+      readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.some(
+        (entry) => entry.sessionKey === sessionKey,
+      ),
+    (exists) => !exists,
+    () => new Error(`timed out waiting for SQLite session entry deletion for ${sessionKey}`),
+    { stableMs: 1_500 },
+  );
 }
 
 async function waitForSqliteMessageContains(
@@ -2069,35 +1603,31 @@ async function waitForSqliteMessageContains(
   role: "assistant" | "user",
   expected: string,
 ): Promise<void> {
-  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const messages = readSqliteTranscriptMessages(dbPath, sessionId);
-    if (
+  await pollUntil(
+    () => readSqliteTranscriptMessages(dbPath, sessionId),
+    (messages) =>
       messages.some(
         (message) => message.role === role && JSON.stringify(message.content).includes(expected),
-      )
-    ) {
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error(
-    `timed out waiting for SQLite ${role} transcript message containing ${JSON.stringify(
-      expected,
-    )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
+      ),
+    () =>
+      new Error(
+        `timed out waiting for SQLite ${role} transcript message containing ${JSON.stringify(
+          expected,
+        )} for ${sessionId}: ${JSON.stringify(readSqliteTranscriptMessages(dbPath, sessionId))}`,
+      ),
   );
 }
 
 async function waitForFile(filePath: string, timeoutMs: number, poll: () => void): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    poll();
-    if (fsSync.existsSync(filePath)) {
-      return;
-    }
-    await sleep(25);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
+  await pollUntil(
+    () => {
+      poll();
+      return fsSync.existsSync(filePath);
+    },
+    Boolean,
+    () => new Error(`timed out waiting for ${filePath}`),
+    { intervalMs: 25, timeoutMs },
+  );
 }
 
 async function waitForChildExit(
@@ -2139,11 +1669,7 @@ function readSqliteTranscriptMessages(
   dbPath: string,
   sessionId: string,
 ): Array<{ content?: unknown; role?: string }> {
-  if (!fsSync.existsSync(dbPath)) {
-    return [];
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
+  return withReadOnlyDatabase(dbPath, [], (db) => {
     const rows = db
       .prepare(
         `SELECT event_json AS eventJson
@@ -2165,32 +1691,22 @@ function readSqliteTranscriptMessages(
         ? [{ role: message.role, content: message.content }]
         : [];
     });
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function countSqliteTranscriptEvents(dbPath: string, sessionId: string): number {
-  if (!fsSync.existsSync(dbPath)) {
-    return 0;
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return scalarNumber(
-      db,
-      "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
-      [sessionId],
-    );
-  } finally {
-    db.close();
-  }
+  return withReadOnlyDatabase(dbPath, 0, (db) =>
+    scalarNumber(db, "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?", [
+      sessionId,
+    ]),
+  );
 }
 
 async function captureCheckpoint(
   context: ProofContext,
   label: string,
   options: { doctor?: DoctorCommandEvidence; gatewayLogTail?: string },
-): Promise<ProofCheckpoint> {
+) {
   return {
     activeJsonl: await inventoryActiveJsonl(context.activeSessionsDir),
     archiveArtifacts: await inventoryArchiveArtifacts(context),
@@ -2259,7 +1775,7 @@ async function walkFiles(root: string, visit: (filePath: string) => Promise<void
   }
 }
 
-async function inventoryFile(filePath: string, relativeRoot: string): Promise<FileInventoryEntry> {
+async function inventoryFile(filePath: string, relativeRoot: string) {
   const stat = await fs.stat(filePath);
   const text = await Promise.resolve()
     .then(() => readSessionArchiveContentSync(filePath))
@@ -2281,7 +1797,7 @@ async function inventoryFile(filePath: string, relativeRoot: string): Promise<Fi
 
 function parseArchiveArtifactName(
   fileName: string,
-): Pick<FileInventoryEntry, "archiveReason" | "archiveSessionId"> | undefined {
+): { archiveReason: "bak" | "deleted" | "reset"; archiveSessionId: string } | undefined {
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   for (const archiveReason of ["deleted", "reset", "bak"] as const) {
     const marker = `.jsonl.${archiveReason}.`;
@@ -2332,9 +1848,10 @@ function summarizeJsonl(text: string): {
   };
 }
 
-function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[]): SqliteEvidence {
-  if (!fsSync.existsSync(dbPath)) {
-    return {
+function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[]) {
+  return withReadOnlyDatabase(
+    dbPath,
+    {
       exists: false,
       path: dbPath,
       sessionEntries: 0,
@@ -2342,12 +1859,8 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
       trackedEntries: [],
       trajectoryRuntimeEvents: 0,
       transcriptEvents: 0,
-    };
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const trackedEntries = readTrackedEntries(db, trackedSessionKeys);
-    return {
+    },
+    (db) => ({
       exists: true,
       path: dbPath,
       sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_nodes"),
@@ -2356,18 +1869,25 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
         db,
         "SELECT COUNT(*) AS count FROM trajectory_runtime_events",
       ),
-      trackedEntries,
+      trackedEntries: readTrackedEntries(db, trackedSessionKeys),
       transcriptEvents: scalarNumber(db, "SELECT COUNT(*) AS count FROM transcript_events"),
-    };
+    }),
+  );
+}
+
+function withReadOnlyDatabase<T>(dbPath: string, fallback: T, read: (db: DatabaseSync) => T): T {
+  if (!fsSync.existsSync(dbPath)) {
+    return fallback;
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return read(db);
   } finally {
     db.close();
   }
 }
 
-function readTrackedEntries(
-  db: DatabaseSync,
-  trackedSessionKeys: readonly string[],
-): SqliteSessionEntryEvidence[] {
+function readTrackedEntries(db: DatabaseSync, trackedSessionKeys: readonly string[]) {
   const rows = db
     .prepare(
       `SELECT session_key AS sessionKey, current_session_id AS sessionId, entry_json AS entryJson
@@ -2383,7 +1903,14 @@ function readTrackedEntries(
     )
     .map((row) => {
       const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
-      const result: SqliteSessionEntryEvidence = {
+      const entry = typeof row.entryJson === "string" ? parseEntryJson(row.entryJson) : undefined;
+      const trackedEntry: {
+        entry?: Record<string, unknown>;
+        sessionId: string;
+        sessionKey: string;
+        trajectoryEvents: number;
+        transcriptEvents: number;
+      } = {
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
         trajectoryEvents: scalarNumber(
@@ -2397,10 +1924,10 @@ function readTrackedEntries(
           [sessionId],
         ),
       };
-      if (typeof row.entryJson === "string") {
-        result.entry = parseEntryJson(row.entryJson);
+      if (entry) {
+        trackedEntry.entry = entry;
       }
-      return result;
+      return trackedEntry;
     });
 }
 
@@ -2428,29 +1955,29 @@ function validateCheckpointInvariants(
   checkpoint: ProofCheckpoint,
   failures: string[],
 ): void {
-  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.activeJsonl.length > 0) {
-    failures.push(
-      `${checkpoint.label}: active sessions directory still has JSONL files: ${checkpoint.activeJsonl
-        .map((entry) => entry.path)
-        .join(", ")}`,
-    );
-  }
-  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.legacyStateJsonl.length > 0) {
-    failures.push(
-      `${checkpoint.label}: old sessions directory still has JSONL files: ${checkpoint.legacyStateJsonl
-        .map((entry) => entry.path)
-        .join(", ")}`,
-    );
+  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.label !== "after-startup-refusal") {
+    for (const [description, inventory] of [
+      ["active sessions directory", checkpoint.activeJsonl],
+      ["old sessions directory", checkpoint.legacyStateJsonl],
+    ] as const) {
+      if (inventory.length > 0) {
+        failures.push(
+          `${checkpoint.label}: ${description} still has JSONL files: ${inventory
+            .map((entry) => entry.path)
+            .join(", ")}`,
+        );
+      }
+    }
   }
   const doctor = checkpoint.doctor;
   if (checkpoint.label.startsWith("after-doctor") && doctor?.code !== 0) {
     failures.push(`${checkpoint.label}: doctor ${doctor?.mode ?? "unknown"} exited non-zero`);
   }
   if (
-    checkpoint.label === "after-startup-import" &&
+    checkpoint.label === "after-doctor-fix" &&
     (checkpoint.sqlite.sessionEntries === 0 || checkpoint.sqlite.transcriptEvents === 0)
   ) {
-    failures.push(`${checkpoint.label}: startup did not import sessions into SQLite`);
+    failures.push(`${checkpoint.label}: Doctor did not import sessions into SQLite`);
   }
   if (
     checkpoint.label.startsWith("after-doctor") &&
@@ -2468,7 +1995,7 @@ function validateCheckpointInvariants(
   ) {
     failures.push(`${checkpoint.label}: shared sibling entry was deleted too early`);
   }
-  if (checkpoint.label === "after-startup-import") {
+  if (checkpoint.label === "after-doctor-fix") {
     requireArchiveText(checkpoint, failures, {
       description: "legacy trajectory sidecar",
       includes: ["trajectory", context.legacySessionId],
@@ -2497,21 +2024,6 @@ function validateCheckpointInvariants(
       reason: "deleted",
       sessionId: "sqlite-delete-session",
     });
-  }
-  if (checkpoint.label === "after-cleanup-pruning") {
-    requireArchiveText(checkpoint, failures, {
-      description: "cleanup-pruned transcript archive",
-      includes: [CLEANUP_PRUNE_TEXT],
-      reason: "deleted",
-      sessionId: CLEANUP_PRUNE_SESSION_ID,
-    });
-    if (
-      checkpoint.sqlite.trackedEntries.some(
-        (entry) => entry.sessionKey === context.cleanupPruneSessionKey,
-      )
-    ) {
-      failures.push(`${checkpoint.label}: cleanup-pruned entry still exists in SQLite`);
-    }
   }
   if (checkpoint.label === "after-doctor-import-idempotence") {
     const totals = checkpoint.doctor?.totals ?? {};
@@ -2591,18 +2103,12 @@ function findArchiveArtifact(
     sessionId?: string;
   },
 ): FileInventoryEntry | undefined {
-  return checkpoint.archiveArtifacts.find((artifact) => {
-    if (params.pathIncludes && !artifact.path.includes(params.pathIncludes)) {
-      return false;
-    }
-    if (params.reason && artifact.archiveReason !== params.reason) {
-      return false;
-    }
-    if (params.sessionId && artifact.archiveSessionId !== params.sessionId) {
-      return false;
-    }
-    return true;
-  });
+  return checkpoint.archiveArtifacts.find(
+    (artifact) =>
+      (!params.pathIncludes || artifact.path.includes(params.pathIncludes)) &&
+      (!params.reason || artifact.archiveReason === params.reason) &&
+      (!params.sessionId || artifact.archiveSessionId === params.sessionId),
+  );
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
@@ -2619,12 +2125,6 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function stringArray(value: unknown): string[] {

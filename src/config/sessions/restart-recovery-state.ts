@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalString as normalizeRunId } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -16,10 +17,6 @@ type RestartRecoveryChannelAuthority = {
   deliveryContext: DeliveryContext & { channel: string; to: string };
   sourceTurnId: string;
 };
-
-function normalizeRunId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 /** Resolves only a complete durable channel claim; session-route fallbacks carry no authority. */
 export function resolveRestartRecoveryChannelAuthority(

@@ -1,5 +1,7 @@
 // Mattermost plugin module implements client behavior.
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -91,6 +93,20 @@ type MattermostFileInfo = {
   mime_type?: string | null;
   size?: number | null;
 };
+
+export function parseMattermostApiStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
+  const match = /Mattermost API (\d{3})\b/.exec(message);
+  if (!match) {
+    return undefined;
+  }
+  const status = Number(match[1]);
+  return Number.isFinite(status) ? status : undefined;
+}
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
@@ -378,35 +394,6 @@ export type CreateDmChannelRetryOptions = {
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
-const DM_REPLY_DELIVERY_BARRIER_SLACK_MS = 60_000;
-
-/** Covers DM creation retries without extending channel-delivery stalls. */
-export function resolveMattermostReplyDeliveryBarrierTimeoutMs(params: {
-  isDirect: boolean;
-  dmRetryOptions?: CreateDmChannelRetryOptions;
-  queuedCounts: Readonly<Record<"tool" | "block" | "final", number>>;
-  humanDelayBudgetMs?: number;
-}): number | undefined {
-  if (!params.isDirect) {
-    return undefined;
-  }
-  const deliveryCount = Object.values(params.queuedCounts).reduce((sum, count) => sum + count, 0);
-  if (deliveryCount === 0) {
-    return undefined;
-  }
-  const maxRetries = params.dmRetryOptions?.maxRetries ?? 3;
-  const maxDelayMs = params.dmRetryOptions?.maxDelayMs ?? 10_000;
-  const timeoutMs = params.dmRetryOptions?.timeoutMs ?? 30_000;
-  const perDeliveryTimeoutMs =
-    (maxRetries + 1) * timeoutMs + maxRetries * maxDelayMs + DM_REPLY_DELIVERY_BARRIER_SLACK_MS;
-  const totalTimeoutMs =
-    perDeliveryTimeoutMs * deliveryCount + Math.max(0, params.humanDelayBudgetMs ?? 0);
-  return resolveTimerTimeoutMs(
-    Number.isFinite(totalTimeoutMs) ? totalTimeoutMs : Number.MAX_SAFE_INTEGER,
-    perDeliveryTimeoutMs,
-  );
-}
-
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -485,8 +472,8 @@ export async function createMattermostDirectChannelWithRetry(
       attempts: maxRetries + 1,
       // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
       // allows initialDelayMs above the (defaulted) maxDelayMs cap. The cap is
-      // the documented contract here and the reply-delivery barrier budgets
-      // with it, so clamp the base instead of letting the floor win.
+      // the documented contract here, so clamp the base instead of letting
+      // the floor win.
       minDelayMs: Math.min(initialDelayMs, maxDelayMs),
       maxDelayMs,
       // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
@@ -499,7 +486,11 @@ export async function createMattermostDirectChannelWithRetry(
 }
 
 function isRetryableError(error: Error): boolean {
-  const candidates = collectErrorCandidates(error);
+  const candidates = collectErrorGraphCandidates(error, (current) => [
+    current.cause,
+    current.reason,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ]);
   const messages = candidates
     .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
     .filter((message): message is string => Boolean(message));
@@ -576,39 +567,6 @@ function isRetryableError(error: Error): boolean {
   return messages.some((message) =>
     RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern)),
   );
-}
-
-function collectErrorCandidates(error: unknown): unknown[] {
-  const queue: unknown[] = [error];
-  let queueIndex = 0;
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const nested = current as {
-      cause?: unknown;
-      reason?: unknown;
-      errors?: unknown;
-    };
-    queue.push(nested.cause, nested.reason);
-    if (Array.isArray(nested.errors)) {
-      queue.push(...nested.errors);
-    }
-  }
-
-  return candidates;
 }
 
 function readErrorMessage(error: unknown): string | undefined {
@@ -737,10 +695,7 @@ export async function uploadMattermostFile(
 ): Promise<MattermostFileInfo> {
   const form = new FormData();
   const fileName = normalizeOptionalString(params.fileName) ?? "upload";
-  const bytes = Uint8Array.from(params.buffer);
-  const blob = params.contentType
-    ? new Blob([bytes], { type: params.contentType })
-    : new Blob([bytes]);
+  const blob = new Blob([bufferToBlobPart(params.buffer)], { type: params.contentType });
   form.append("files", blob, fileName);
   form.append("channel_id", params.channelId);
 

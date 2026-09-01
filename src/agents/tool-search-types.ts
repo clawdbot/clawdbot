@@ -1,7 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -12,6 +12,13 @@ export const TOOL_SEARCH_CODE_MODE_TOOL_NAME = "tool_search_code";
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
 export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
+// One model-visible search response, including a batch, may expose at most this many candidates.
+export const MAX_TOOL_SEARCH_RESULTS = 50;
+export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
+export const MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES = 512;
+// Includes JSON escaping and multibyte text echoed to identify batch result groups.
+export const MAX_TOOL_SEARCH_BATCH_QUERY_BYTES = 512;
+export const MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS = 4_000;
 
 export const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -27,12 +34,16 @@ export const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
 ]);
 
 export type ToolSearchMode = "code" | "tools" | "directory";
+export type ToolSearchRequest =
+  | { kind: "single"; search: { query: string; limit: number } }
+  | { kind: "batch"; searches: Array<{ query: string; limit: number }> };
 export type CatalogSource = "openclaw" | "mcp" | "client";
 export type CatalogTool = AnyAgentTool | ToolDefinition;
 export type CatalogVisibilityOptions = {
   includeMcp?: boolean;
+  allowedIds?: { has(id: string): boolean };
 };
-export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
+export type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "catalog";
 export type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
@@ -51,6 +62,8 @@ export type ToolSearchCatalogToolExecutor = (params: {
   sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
+  /** Exact registered-instance classification resolved by the catalog owner. */
+  replaySafe?: boolean;
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -58,17 +71,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
     result: AgentToolResult<unknown>,
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
-
-/** Transcript projection for target tool calls made through Tool Search. */
-export type ToolSearchTargetTranscriptProjection = {
-  parentToolCallId?: string;
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  result?: unknown;
-  isError?: boolean;
-  timestamp?: number;
-};
 
 /** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
@@ -91,6 +93,8 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
+  toolExecutionAllow?: readonly string[];
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -116,8 +120,17 @@ export type ToolSearchCatalogSession = {
   callCount: number;
 };
 
+export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries"> & {
+  catalogSize: number;
+  sources: Record<CatalogSource, number>;
+};
+
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  closedTelemetry?: ToolSearchCatalogTelemetry;
+  onChange?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

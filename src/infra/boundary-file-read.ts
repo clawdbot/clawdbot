@@ -1,10 +1,15 @@
 // Exposes root-scoped file open helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
+import path from "node:path";
 import {
+  canonicalPathFromExistingAncestor,
   matchRootFileOpenFailure as matchRootFileOpenFailureFsSafe,
+  openRootFile,
+  type OpenRootFileParams,
   readFileDescriptorBounded as readFileDescriptorBoundedFsSafe,
   readFileDescriptorBoundedSync as readFileDescriptorBoundedSyncFsSafe,
   type RootFileOpenFailure,
+  type RootFileOpenResult,
 } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 
@@ -19,6 +24,25 @@ export {
   type RootFileOpenResult,
 } from "@openclaw/fs-safe/advanced";
 
+/**
+ * Opens a root-scoped file after canonicalizing symlink parents. fs-safe
+ * rejects every symlink path component by default; the workspace contract
+ * follows contained parent symlinks (directory aliases) while final-symlink
+ * targets and out-of-root escapes stay rejected by openRootFile itself.
+ */
+export async function openRootFileFollowingParents(
+  params: OpenRootFileParams,
+): Promise<RootFileOpenResult> {
+  let absolutePath = path.resolve(params.absolutePath);
+  try {
+    const canonicalParent = await canonicalPathFromExistingAncestor(path.dirname(absolutePath));
+    absolutePath = path.join(canonicalParent, path.basename(absolutePath));
+  } catch {
+    // Keep the lexical path; openRootFile reports the boundary or IO failure.
+  }
+  return await openRootFile({ ...params, absolutePath });
+}
+
 // fs-safe folds ENOENT, ENOTDIR, and ELOOP into its `path` reason. Only the
 // first two mean the artifact is absent; a symlink loop is an unreadable path.
 const MISSING_PATH_ERROR_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDIR"]);
@@ -26,6 +50,13 @@ const MISSING_PATH_ERROR_CODES: ReadonlySet<string> = new Set(["ENOENT", "ENOTDI
 function readFailureErrorCode(error: unknown): string | undefined {
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   return typeof code === "string" && code ? code : undefined;
+}
+
+export function isRootFileMissingFailure(failure: RootFileOpenFailure): boolean {
+  return (
+    failure.reason === "path" &&
+    MISSING_PATH_ERROR_CODES.has(readFailureErrorCode(failure.error) ?? "")
+  );
 }
 
 /**
@@ -46,9 +77,9 @@ export function describeRootFileOpenFailure(params: {
   return matchRootFileOpenFailureFsSafe(params.failure, {
     path: (failure) => {
       const code = readFailureErrorCode(failure.error);
-      return code && !MISSING_PATH_ERROR_CODES.has(code)
-        ? unreadable(code)
-        : `${params.subject} not found: ${params.filePath}`;
+      return isRootFileMissingFailure(failure)
+        ? `${params.subject} not found: ${params.filePath}`
+        : unreadable(code);
     },
     validation: () =>
       `${params.subject} escapes ${params.boundaryLabel} or fails alias checks: ${params.filePath}`,

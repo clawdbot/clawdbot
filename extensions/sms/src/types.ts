@@ -2,6 +2,8 @@
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 type SmsChannelConfigFields = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   enabled?: boolean;
   accountSid?: string;
   authToken?: SecretInput;
@@ -37,15 +39,24 @@ export interface ResolvedSmsAccount {
   dmPolicy: "pairing" | "open" | "allowlist" | "disabled";
   allowFrom: string[];
   textChunkLimit: number;
+  mediaMaxBytes?: number;
 }
 
 export interface SmsInboundMessage {
   messageSid: string;
   accountSid: string;
+  messagingServiceSid?: string;
   from: string;
   to: string;
   body: string;
+  media: SmsInboundMedia[];
+  unavailableMediaCount?: number;
 }
+
+type SmsInboundMedia = {
+  url: string;
+  contentType?: string;
+};
 
 export type SmsSendResult = {
   sid: string;

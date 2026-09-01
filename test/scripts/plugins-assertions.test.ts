@@ -222,15 +222,6 @@ describe("plugins Docker assertions", () => {
     );
   });
 
-  it("passes ClawHub preflight body timeouts into the bounded reader", () => {
-    const script = readFileSync(ASSERTIONS_SCRIPT, "utf8");
-
-    expect(script).toContain("run(controller.signal, timeoutPromise)");
-    expect(
-      script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
-    ).toHaveLength(2);
-  });
-
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
     const scripts = [
       "scripts/e2e/lib/plugins/sweep.sh",
@@ -773,6 +764,10 @@ ${command}
       ],
       {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -785,6 +780,10 @@ ${command}
       const metadata = JSON.parse(response.body);
 
       expect(response.statusCode).toBe(200);
+      expect(metadata["dist-tags"]).toEqual({
+        latest: "0.0.0",
+        beta: "2026.7.1-beta.3",
+      });
       expect(metadata.versions["2026.7.1-beta.3"].dependencies).toEqual({
         "@openclaw/ai": "2026.7.1-beta.3",
         zod: "4.3.6",
@@ -1632,6 +1631,9 @@ ${command}
       const result = await runAssertionAsync(["clawhub-preflight"], {
         CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
         CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(
+          "const response = await fetch(process.env.OPENCLAW_CLAWHUB_URL); globalThis.fetch = async () => response;",
+        )}`,
         OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
         OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "75",
       });

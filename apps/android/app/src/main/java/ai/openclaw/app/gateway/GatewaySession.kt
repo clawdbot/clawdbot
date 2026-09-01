@@ -15,7 +15,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -30,6 +32,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -181,9 +184,7 @@ data class GatewayErrorDetails(
   val clientMaxProtocol: Int? = null,
   val expectedProtocol: Int? = null,
   val minimumProbeProtocol: Int? = null,
-  val clawhubTrustCode: String? = null,
   val clawhubWarning: String? = null,
-  val clawhubVersion: String? = null,
   val missingScope: String? = null,
   val requiredScopes: List<String> = emptyList(),
 )
@@ -214,7 +215,8 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
-  val methods: Set<String> = emptySet(),
+  val methods: Set<String>? = null,
+  val capabilities: Set<String>? = null,
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -229,6 +231,7 @@ private data class SelectedConnectAuth(
   val authDeviceToken: String?,
   val authPassword: String?,
   val signatureToken: String?,
+  val storedToken: String?,
   val storedScopes: List<String>,
   val authSource: GatewayConnectAuthSource,
   val attemptedDeviceTokenRetry: Boolean,
@@ -350,7 +353,7 @@ class GatewaySession(
     val endpointStableId: String,
     private val isCurrentImpl: () -> Boolean = { true },
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
-    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
+    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
 
@@ -361,11 +364,13 @@ class GatewaySession(
       return true
     }
 
+    /** After transport waiting, [withEnqueue] must enqueue synchronously or throw to reject the request. */
     suspend fun request(
       method: String,
       paramsJson: String?,
       timeoutMs: Long = 15_000,
-    ): String = requestImpl(method, paramsJson, timeoutMs)
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String = requestImpl(method, paramsJson, timeoutMs, withEnqueue)
   }
 
   private val json =
@@ -806,8 +811,8 @@ class GatewaySession(
             }
           }
         },
-      ) { method, paramsJson, timeoutMs ->
-        val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+      ) { method, paramsJson, timeoutMs, withEnqueue ->
+        val res = requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue)
         if (!res.ok) {
           throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
         }
@@ -843,6 +848,7 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long,
+    withEnqueue: (() -> Unit) -> Unit = { it() },
   ): RpcResult {
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -850,12 +856,17 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    // Readiness and identity are checked after parsing, immediately before enqueue.
-    // A later reconnect can only close this exact socket, never retarget the lease.
-    if (currentConnection !== conn || !conn.isReady()) {
-      throw GatewayRequestNotEnqueued("gateway request lease changed")
-    }
-    val res = conn.request(method, params, timeoutMs)
+    val res =
+      conn.request(method, params, timeoutMs) { enqueue ->
+        // Check after the transport mutex wait, in the same physical -> caller-owner
+        // lock order as hello publication. Only OkHttp's synchronous enqueue is guarded.
+        synchronized(lifecycleLock) {
+          if (currentConnection !== conn || !conn.isReady()) {
+            throw GatewayRequestNotEnqueued("gateway request lease changed")
+          }
+          withEnqueue(enqueue)
+        }
+      }
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
@@ -949,6 +960,7 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private var lastEventSequence: Long? = null
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
@@ -987,12 +999,13 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
       timeoutMs: Long,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
       val deferred = registerPending(id)
       try {
-        sendJson(buildRequestFrame(id = id, method = method, params = params))
+        sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
         return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
         throw GatewayRequestOutcomeUnknown("request timeout")
@@ -1094,7 +1107,7 @@ class GatewaySession(
         } else {
           ticketedPath
         }
-      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$playbackPath"
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}${endpoint.contextPath}$playbackPath"
       val headers = mediaTransportHeaders()
       return TicketedMediaRequest(url = url, headers = headers)
     }
@@ -1161,12 +1174,18 @@ class GatewaySession(
       return deferred
     }
 
-    suspend fun sendJson(obj: JsonObject) {
+    suspend fun sendJson(
+      obj: JsonObject,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ) {
       val jsonString = obj.toString()
       writeLock.withLock {
-        if (socket?.send(jsonString) != true) {
-          // OkHttp returning false means this frame never entered its outgoing queue.
-          throw GatewayRequestNotEnqueued("gateway send failed")
+        currentCoroutineContext().ensureActive()
+        withEnqueue {
+          if (socket?.send(jsonString) != true) {
+            // OkHttp returning false means this frame never entered its outgoing queue.
+            throw GatewayRequestNotEnqueued("gateway send failed")
+          }
         }
       }
     }
@@ -1362,7 +1381,7 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth)
       connectDeferred.complete(connected)
     }
 
@@ -1423,7 +1442,7 @@ class GatewaySession(
     private fun parseConnectSuccess(
       res: RpcResponse,
       deviceId: String,
-      authSource: GatewayConnectAuthSource,
+      selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
@@ -1440,7 +1459,13 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
-          .orEmpty()
+      val capabilities =
+        obj["features"]
+          .asObjectOrNull()
+          ?.get("capabilities")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { capability -> capability.isNotEmpty() } }
+          ?.toSet()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -1451,9 +1476,15 @@ class GatewaySession(
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+        // Hello scopes describe this socket. Reissuing the same stored token must not narrow its
+        // reusable grant metadata, while a rotated token starts with the live approved scopes.
+        val sameStoredTokenRecord =
+          deviceToken.trim() == selectedAuth.storedToken &&
+            authRole.trim().equals(options.role.trim(), ignoreCase = true)
+        val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
+        persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
       }
-      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+      if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
@@ -1499,6 +1530,7 @@ class GatewaySession(
             authRole = authRole,
             authScopes = authScopes,
             methods = methods,
+            capabilities = capabilities,
           ),
       )
     }
@@ -1662,9 +1694,7 @@ class GatewaySession(
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
                 minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
-                clawhubTrustCode = it["clawhubTrustCode"].asStringOrNull(),
                 clawhubWarning = it["warning"].asStringOrNull(),
-                clawhubVersion = it["version"].asStringOrNull(),
                 missingScope = it["missingScope"].asStringOrNull(),
                 requiredScopes =
                   it["requiredScopes"]
@@ -1701,6 +1731,15 @@ class GatewaySession(
       }
       // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
       if (currentConnection !== this) return
+      gatewayEvent.seq?.let { sequence ->
+        val previous = lastEventSequence
+        if (previous != null && sequence > previous + 1) {
+          onEvent("seqGap", null)
+          // Recovery can retire this socket before its triggering event is delivered.
+          if (currentConnection !== this || !isReady()) return
+        }
+        lastEventSequence = sequence
+      }
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return
@@ -1942,42 +1981,42 @@ class GatewaySession(
     val trimmed = raw?.trim().orEmpty()
     val parsed = trimmed.takeIf { it.isNotBlank() }?.let { runCatching { java.net.URI(it) }.getOrNull() }
     val host = parsed?.host?.trim().orEmpty()
-    val port = parsed?.port ?: -1
-    val scheme =
-      parsed
-        ?.scheme
-        ?.trim()
-        .orEmpty()
-        .ifBlank { "http" }
-    val suffix = buildUrlSuffix(parsed)
-
-    // If raw URL is a non-loopback address and this connection uses TLS,
-    // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackGatewayHost(host)) {
-      val needsTlsRewrite =
-        isTlsConnection &&
-          (
-            !scheme.equals("https", ignoreCase = true) ||
-              (port > 0 && port != endpoint.port) ||
-              (port <= 0 && endpoint.port != 443)
-          )
-      if (needsTlsRewrite) {
-        return buildCanvasUrl(host = host, scheme = "https", port = endpoint.port, suffix = suffix)
+    val scheme = parsed?.scheme ?: "http"
+    val port = parsed?.port?.takeIf { it > 0 } ?: if (scheme.equals("https", ignoreCase = true)) 443 else 80
+    val usesFallbackHost = host.isBlank() || isLoopbackGatewayHost(host)
+    val isGatewayAuthority = usesFallbackHost || endpoint.matchesGatewayAuthority(host, port)
+    val path = parsed?.rawPath.orEmpty()
+    val capability = path.removePrefix("/__openclaw__/cap/")
+    val isRootCapability = path != capability && capability.isNotEmpty() && !capability.contains('/')
+    val hasUriExtras = parsed?.rawUserInfo != null || parsed?.rawQuery != null || parsed?.rawFragment != null
+    val isHttpSurface = scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
+    // Only gateway-hosted root capabilities inherit its proxy prefix. Judge the original
+    // authority before TLS rewriting, and leave explicit surface paths and token bytes intact.
+    val contextPath =
+      if (isGatewayAuthority && isRootCapability && !hasUriExtras && isHttpSurface) {
+        endpoint.contextPath
+      } else {
+        ""
       }
-      return trimmed
-    }
+    val suffix = contextPath + buildUrlSuffix(parsed)
 
-    val fallbackHost =
-      endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
-        ?: endpoint.host.trim()
-    if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
-
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
-    val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    val needsTlsRewrite = isTlsConnection && (!scheme.equals("https", ignoreCase = true) || port != endpoint.port)
+    if (!usesFallbackHost && !needsTlsRewrite && contextPath.isEmpty()) return trimmed
+    val resolvedHost =
+      if (usesFallbackHost) {
+        endpoint.tailnetDns?.trim().takeIf { !it.isNullOrEmpty() }
+          ?: endpoint.lanHost?.trim().takeIf { !it.isNullOrEmpty() }
+          ?: endpoint.host.trim()
+      } else {
+        host
+      }
+    if (resolvedHost.isEmpty()) return trimmed.ifBlank { null }
+    return buildCanvasUrl(
+      host = resolvedHost,
+      scheme = if (isTlsConnection) "https" else scheme,
+      port = if (usesFallbackHost || isTlsConnection) endpoint.port else port,
+      suffix = suffix,
+    )
   }
 
   private fun buildCanvasUrl(
@@ -2042,6 +2081,7 @@ class GatewaySession(
       authDeviceToken = authDeviceToken,
       authPassword = explicitPassword,
       signatureToken = authToken ?: authBootstrapToken,
+      storedToken = storedToken,
       storedScopes = storedScopes,
       authSource = authSource,
       attemptedDeviceTokenRetry = shouldUseDeviceRetryToken,
@@ -2145,7 +2185,15 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   }
 }
 
-/** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
+private fun GatewayEndpoint.matchesGatewayAuthority(
+  surfaceHost: String,
+  surfacePort: Int,
+): Boolean =
+  "http://${formatGatewayAuthority(host.trim().trimEnd('.'), port)}".toHttpUrlOrNull()?.let {
+    it == "http://${formatGatewayAuthority(surfaceHost.trim().trimEnd('.'), surfacePort)}".toHttpUrlOrNull()
+  } == true
+
+/** Retains pins for the same TLS authority, canonicalizing numeric hosts without adding DNS aliases. */
 internal fun gatewayTlsFingerprintForCanvasSurface(
   fingerprint: String?,
   surfaceUrl: String,
@@ -2156,20 +2204,19 @@ internal fun gatewayTlsFingerprintForCanvasSurface(
   val surface = runCatching { java.net.URI(surfaceUrl) }.getOrNull() ?: return null
   if (!surface.scheme.equals("https", ignoreCase = true)) return null
   val surfaceHost = surface.host?.trim()?.trimEnd('.') ?: return null
-  val gatewayHost = endpoint.host.trim().trimEnd('.')
-  val surfacePort = surface.port.takeIf { it > 0 } ?: 443
-  return fingerprint.takeIf {
-    surfaceHost.equals(gatewayHost, ignoreCase = true) && surfacePort == endpoint.port
-  }
+  if (!surfaceHost.equals(endpoint.host.trim().trimEnd('.'), ignoreCase = true) && ':' !in surfaceHost && ':' !in endpoint.host) return null
+  return fingerprint.takeIf { endpoint.matchesGatewayAuthority(surfaceHost, surface.port.takeIf { it > 0 } ?: 443) }
 }
 
 internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
   useTls: Boolean,
+  contextPath: String = "",
 ): String {
   val scheme = if (useTls) "wss" else "ws"
-  return "$scheme://${formatGatewayAuthority(host, port)}"
+  val path = normalizeGatewayContextPath(contextPath)
+  return "$scheme://${formatGatewayAuthority(host, port)}$path"
 }
 
 /** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
@@ -2178,7 +2225,15 @@ internal fun buildGatewayWebSocketUpgradeRequest(
   tls: GatewayTlsParams?,
   customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
 ): Request {
-  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  val request =
+    Request.Builder().url(
+      buildGatewayWebSocketUrl(
+        endpoint.host,
+        endpoint.port,
+        tls != null,
+        endpoint.contextPath,
+      ),
+    )
   if (tls == null) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens

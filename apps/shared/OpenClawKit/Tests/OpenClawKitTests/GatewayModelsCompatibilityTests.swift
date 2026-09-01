@@ -67,6 +67,75 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `session sharing decodes present unknown and absent actor evidence`() throws {
+        let presentList = try JSONDecoder().decode(
+            SessionMembersListResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"present","addedBy":"profile-ada","addedAt":1}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+        let principalLessList = try JSONDecoder().decode(
+            SessionMembersListEvidenceResult.self,
+            from: Data(
+                #"{"sessionKey":"main","members":[{"identityId":"unknown","addedByState":"unknown","addedAt":2},{"identityId":"absent","addedAt":3}],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                    .utf8))
+
+        #expect(presentList.members[0].addedby == "profile-ada")
+        #expect(principalLessList.members[0].addedby == nil)
+        #expect(principalLessList.members[0].addedbystate == "unknown")
+        #expect(principalLessList.members[1].addedby == nil)
+        #expect(principalLessList.members[1].addedbystate == nil)
+        for member in [
+            #"{"identityId":"unknown","addedByState":"unknown","addedAt":2}"#,
+            #"{"identityId":"absent","addedAt":3}"#,
+        ] {
+            #expect(throws: DecodingError.self) {
+                try JSONDecoder().decode(
+                    SessionMembersListResult.self,
+                    from: Data(
+                        #"{"sessionKey":"main","members":[\#(member)],"identities":[],"role":"owner","allowedVisibilities":["shared"]}"#
+                            .utf8))
+            }
+        }
+
+        let present = try JSONDecoder().decode(
+            SessionSharingEvent.self,
+            from: Data(
+                #"{"action":"visibility","sessionKey":"main","agentId":"main","actor":{"type":"human","id":"profile-ada"},"ts":1}"#
+                    .utf8))
+
+        #expect(present.actor.id == "profile-ada")
+
+        let principalLess = try JSONDecoder().decode(
+            [SessionSharingEvidenceEvent].self,
+            from: Data(
+                #"[{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2},{"action":"member-removed","sessionKey":"main","agentId":"main","identityId":"member","ts":3}]"#
+                    .utf8))
+
+        #expect(principalLess[0].actorstate == "unknown")
+        #expect(principalLess[1].actorstate == nil)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                SessionSharingEvent.self,
+                from: Data(
+                    #"{"action":"member-added","sessionKey":"main","agentId":"main","actorState":"unknown","identityId":"member","ts":2}"#
+                        .utf8))
+        }
+    }
+
+    @Test
+    func `device pair setup results decode older gateway payloads`() throws {
+        let result = try JSONDecoder().decode(
+            DevicePairSetupCodeResult.self,
+            from: Data(
+                #"{"setupCode":"opaque-code","gatewayUrl":"wss://gateway.example","auth":"token","urlSource":"gateway.remote.url"}"#
+                    .utf8))
+
+        #expect(result.setupid == nil)
+        #expect(result.expiresatms == nil)
+        #expect(result.setupcode == "opaque-code")
+    }
+
+    @Test
     func `generated models ignore additive gateway fields`() throws {
         let result = try JSONDecoder().decode(
             SessionsGroupsListResult.self,
@@ -74,6 +143,34 @@ struct GatewayModelsCompatibilityTests {
 
         #expect(result.groups.isEmpty)
         #expect(result.sectionorder == nil)
+    }
+
+    @Test
+    func `session compaction checkpoint preserves canonical token version casing`() throws {
+        let checkpoint = SessionCompactionCheckpoint(
+            checkpointid: "checkpoint-1",
+            sessionkey: "main",
+            sessionid: "session-1",
+            createdat: 1,
+            reason: AnyCodable("manual"),
+            tokensVersion: 1,
+            precompaction: [:],
+            postcompaction: [:])
+
+        #expect(checkpoint.tokensVersion == 1)
+
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(checkpoint))
+        let encodedJSON = try #require(encoded as? [String: Any])
+        #expect(encodedJSON.keys.contains("tokensVersion"))
+        #expect(!encodedJSON.keys.contains("tokensversion"))
+
+        let decoded = try JSONDecoder().decode(
+            SessionCompactionCheckpoint.self,
+            from: Data(
+                #"{"checkpointId":"checkpoint-2","sessionKey":"main","sessionId":"session-2","createdAt":2,"reason":"manual","tokensVersion":1,"preCompaction":{},"postCompaction":{}}"#
+                    .utf8))
+
+        #expect(decoded.tokensVersion == 1)
     }
 
     @Test

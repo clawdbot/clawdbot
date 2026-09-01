@@ -2,11 +2,18 @@
  * Process-local registry that lets Talk protocol methods resolve opaque
  * `sessionId` values to the concrete relay or managed-room backend.
  */
-export type UnifiedTalkSessionRecord =
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { formatError } from "./server-utils.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
+
+type TalkConnectionCleanupKind = "browser-control" | "realtime-relay" | "transcription-relay";
+
+type UnifiedTalkSessionRecord =
   | {
       kind: "realtime-relay";
       connId: string;
       relaySessionId: string;
+      sessionTarget: PreparedTalkSessionTarget;
     }
   | {
       kind: "transcription-relay";
@@ -20,7 +27,51 @@ export type UnifiedTalkSessionRecord =
       roomId: string;
     };
 
-const unifiedTalkSessions = new Map<string, UnifiedTalkSessionRecord>();
+const unifiedTalkSessions = resolveGlobalMap<string, UnifiedTalkSessionRecord>(
+  Symbol.for("openclaw.unifiedTalkSessions"),
+  "close-and-restart",
+);
+const talkConnectionCleanups = resolveGlobalMap<string, Map<TalkConnectionCleanupKind, () => void>>(
+  Symbol.for("openclaw.talkConnectionCleanups"),
+  "close-and-restart",
+);
+
+/**
+ * Keeps one owner cleanup per relay kind until the connection closes.
+ * Replacing by kind stays bounded while the owner cleanup scans all live sessions.
+ */
+export function registerTalkConnectionCleanup(
+  connId: string,
+  kind: TalkConnectionCleanupKind,
+  cleanup: () => void,
+): void {
+  const cleanups =
+    talkConnectionCleanups.get(connId) ?? new Map<TalkConnectionCleanupKind, () => void>();
+  cleanups.set(kind, cleanup);
+  talkConnectionCleanups.set(connId, cleanups);
+}
+
+/** Runs and forgets every Talk cleanup owned by a disconnected gateway connection. */
+export function cleanupTalkConnection(
+  connId: string,
+  log: { warn: (message: string) => void },
+): void {
+  const cleanups = talkConnectionCleanups.get(connId);
+  if (!cleanups) {
+    return;
+  }
+  // Delete first so cleanup failures or re-entrancy cannot retain stale connection owners.
+  talkConnectionCleanups.delete(connId);
+  for (const [kind, cleanup] of cleanups) {
+    try {
+      cleanup();
+    } catch (error) {
+      log.warn(
+        `failed to run ${kind} Talk cleanup after connection disconnect: ${formatError(error)}`,
+      );
+    }
+  }
+}
 
 /** Associates a public Talk session id with its concrete gateway backend. */
 export function rememberUnifiedTalkSession(
@@ -37,6 +88,23 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
     throw new Error("Unknown Talk session");
   }
   return session;
+}
+
+/** Retains the realtime relay's admitted target without reinterpreting current defaults. */
+export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
+  const session = unifiedTalkSessions.get(sessionId);
+  if (session?.kind !== "realtime-relay") {
+    return undefined;
+  }
+  requireUnifiedTalkSessionConn(session, connId);
+  const target = session.sessionTarget;
+  return {
+    target,
+    isCurrent: () =>
+      unifiedTalkSessions.get(sessionId) === session &&
+      session.connId === connId &&
+      session.sessionTarget === target,
+  };
 }
 
 /** Removes a Talk session id after the concrete backend closes. */

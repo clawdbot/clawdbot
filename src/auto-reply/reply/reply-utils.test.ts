@@ -1,12 +1,15 @@
 // Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
+import { normalizeReplyPayload, normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import { parseReplyDirectives } from "./reply-directives.js";
+import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
@@ -183,6 +186,83 @@ describe("normalizeReplyPayload", () => {
       expect(normalized, testCase.name).toBeNull();
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
+  });
+
+  it("returns a typed channel-transform suppression outcome", () => {
+    const outcome = normalizeReplyPayloadOutcome(
+      { text: "private reply" },
+      { transformReplyPayload: () => null },
+    );
+
+    expect(outcome).toEqual({ kind: "suppress", reason: "channel_transform" });
+  });
+
+  it("scopes transform ownership to the exact channel adapter and account", () => {
+    const firstMessaging = {
+      transformReplyPayload: vi.fn(({ payload }) => ({ ...payload, text: `${payload.text}!` })),
+    } satisfies ChannelMessagingAdapter;
+    const secondMessaging = {
+      transformReplyPayload: vi.fn(() => null),
+    } satisfies ChannelMessagingAdapter;
+    const firstTransform = createChannelReplyTransform({
+      messaging: firstMessaging,
+      cfg: {},
+      accountId: "primary",
+    });
+    const first = normalizeReplyPayloadOutcome(
+      { text: "reply" },
+      { transformReplyPayload: firstTransform },
+    );
+    if (first.kind !== "deliver") {
+      throw new Error("expected first channel transform to accept the payload");
+    }
+
+    const sameOwner = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+    const differentAccount = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "secondary",
+      }),
+    });
+    const differentChannel = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: secondMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+    if (differentAccount.kind !== "deliver") {
+      throw new Error("expected the second account transform to accept the payload");
+    }
+    const sameSecondOwner = normalizeReplyPayloadOutcome(differentAccount.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "secondary",
+      }),
+    });
+    const originalOwnerAgain = normalizeReplyPayloadOutcome(differentAccount.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+
+    expect(sameOwner).toEqual({ kind: "deliver", payload: { text: "reply!" } });
+    expect(differentAccount).toEqual({ kind: "deliver", payload: { text: "reply!!" } });
+    expect(differentChannel).toEqual({ kind: "suppress", reason: "channel_transform" });
+    expect(sameSecondOwner).toEqual({ kind: "deliver", payload: { text: "reply!!" } });
+    expect(originalOwnerAgain).toEqual({ kind: "deliver", payload: { text: "reply!!!" } });
+    expect(firstMessaging.transformReplyPayload).toHaveBeenCalledTimes(3);
+    expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
   });
 
   it("strips NO_REPLY from mixed emoji message (#30916)", () => {
@@ -470,6 +550,41 @@ describe("typing controller", () => {
     await typing.startTypingOnText("late tool result");
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps execution typing alive past its base TTL until the dispatcher settles", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn(async () => undefined);
+    const onCleanup = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      onCleanup,
+      typingIntervalSeconds: 121,
+    });
+    const lifecycle = createReplyDispatcherWithTyping({
+      deliver: async () => undefined,
+    });
+    lifecycle.replyOptions.onTypingController?.(typing);
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalExecutionActivity?.();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(243_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
+    expect(onCleanup).not.toHaveBeenCalled();
+
+    lifecycle.markRunComplete();
+    lifecycle.dispatcher.markComplete();
+    await lifecycle.dispatcher.waitForIdle();
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(243_000);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
   });
 
   it("can send the first typing signal without periodic keepalive refreshes", async () => {
@@ -1329,6 +1444,18 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("strips a malformed leading reply prefix split across chunks", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    expect(accumulator.consume("[[reply_to_")).toBeNull();
+    expect(accumulator.consume("current] Visible reply")).toBeNull();
+
+    expect(accumulator.consume("", { final: true })).toMatchObject({
+      text: "Visible reply",
+      replyToCurrent: false,
+      replyToTag: false,
+    });
+  });
+
   it("preserves padding when a buffered trailing reply tag stays incomplete", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1352,16 +1479,32 @@ describe("createStreamingDirectiveAccumulator", () => {
     },
   );
 
-  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
-    "releases malformed directive-looking final text verbatim: %s",
-    (text) => {
-      const accumulator = createStreamingDirectiveAccumulator();
-      const first = accumulator.consume(text);
-      const final = accumulator.consume("", { final: true });
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Explain [[reply_to_current] literally.",
+    "answer ending [",
+  ])("releases malformed directive-looking final text verbatim: %s", (text) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const first = accumulator.consume(text);
+    const final = accumulator.consume("", { final: true });
 
-      expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
-    },
-  );
+    expect(`${first?.text ?? ""}${final?.text ?? ""}`).toBe(text);
+  });
+
+  it.each<[string, string[]]>([
+    ["inline prose", ["Explain [[reply_to_", "current] literally."]],
+    ["later line", ["Visible reply\n", "[[reply_to_", "current] literally"]],
+    ["inline code", ["Use `[[reply_to_", "current]` literally."]],
+    ["fenced code", ["```text\n[[reply_to_", "current]\n```"]],
+    ["indented code", ["    [[reply_to_", "current]"]],
+    ["ambiguous explicit prefix", ["[[reply_to:message-7", " Visible reply"]],
+  ])("preserves split malformed %s", (_name, chunks) => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+    const final = accumulator.consume("", { final: true });
+
+    expect(`${streamed}${final?.text ?? ""}`).toBe(chunks.join(""));
+  });
 
   it.each([
     ["answer [[", "bogus]] tail", "answer [[bogus]] tail"],
@@ -1517,6 +1660,38 @@ describe("createStreamingDirectiveAccumulator", () => {
       text: "Here.",
       mediaUrls: ["/tmp/final.png"],
     });
+  });
+});
+
+describe("parseReplyDirectives malformed reply prefixes", () => {
+  it.each([
+    ["[[reply_to_current] Visible reply", "Visible reply"],
+    ["[[reply_to_current", ""],
+    ["[[reply_to:message-7] Visible reply", "Visible reply"],
+    ["[[reply_to:", ""],
+  ])("strips %s without treating it as reply intent", (input, text) => {
+    expect(parseReplyDirectives(input)).toMatchObject({
+      text,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+    });
+  });
+
+  it.each([
+    "Use `[[reply_to_current]` literally.",
+    ["```text", "[[reply_to_current]", "```"].join("\n"),
+    "    [[reply_to_current]",
+  ])("preserves malformed reply examples in code: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
+  });
+
+  it.each([
+    "answer part A msg [[E1008]timeout] answer part B",
+    "Visible reply\n[[reply_to_current] literally",
+    "answer ending [",
+  ])("preserves unrelated malformed bracket text: %s", (text) => {
+    expect(parseReplyDirectives(text).text).toBe(text);
   });
 });
 

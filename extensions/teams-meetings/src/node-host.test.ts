@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -7,8 +7,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
-import { teamsMeetingsConfig } from "./config.js";
-import { handleTeamsMeetingsNodeHostCommand } from "./node-host.js";
+let teamsMeetingsConfig: (typeof import("./config.js"))["teamsMeetingsConfig"];
+let handleTeamsMeetingsNodeHostCommand: (typeof import("./node-host.js"))["handleTeamsMeetingsNodeHostCommand"];
 
 const successfulProbe = {
   pid: 123,
@@ -29,10 +29,25 @@ function setupParams() {
 }
 
 describe("Teams meeting node-host prerequisite deadline", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      ({ teamsMeetingsConfig } = await import("./config.js"));
+      ({ handleTeamsMeetingsNodeHostCommand } = await import("./node-host.js"));
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue(successfulProbe);
+    spawnSyncMock.mockReset().mockReturnValue(successfulProbe);
+  });
+
+  afterAll(() => {
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
   });
 
   afterEach(() => {
@@ -41,12 +56,16 @@ describe("Teams meeting node-host prerequisite deadline", () => {
 
   it("shares one timeout budget across every prerequisite probe", async () => {
     const now = vi.spyOn(Date, "now");
-    for (const value of [1_000, 1_000, 4_000, 4_000, 8_000, 8_000]) {
+    for (const value of [1_000, 1_000, 4_000, 8_000]) {
       now.mockReturnValueOnce(value);
     }
 
     await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).resolves.toBe(
-      JSON.stringify({ ok: true }),
+      JSON.stringify({
+        ok: true,
+        audioBackend: "blackhole-2ch",
+        audioDeviceLabel: "BlackHole 2ch",
+      }),
     );
 
     expect(
@@ -63,7 +82,13 @@ describe("Teams meeting node-host prerequisite deadline", () => {
           audioOutputCommand: teamsMeetingsConfig.defaultAudioOutputCommand,
         }),
       ),
-    ).resolves.toBe(JSON.stringify({ ok: true }));
+    ).resolves.toBe(
+      JSON.stringify({
+        ok: true,
+        audioBackend: "blackhole-2ch",
+        audioDeviceLabel: "BlackHole 2ch",
+      }),
+    );
 
     expect(spawnSyncMock).toHaveBeenCalledTimes(2);
     expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual([

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -48,6 +49,10 @@ function createStateStore() {
       return value;
     },
     delete: (key) => values.delete(key),
+    deleteIf: (key, predicate) => {
+      const value = values.get(key);
+      return value !== undefined && predicate(value) && values.delete(key);
+    },
     entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
     clear: () => values.clear(),
   };
@@ -60,6 +65,176 @@ afterEach(() => {
 });
 
 describe("Codex app-server binding store", () => {
+  it("rechecks resume authority after the lazy store resolves and before writing", async () => {
+    const { state } = createStateStore();
+    const store = createLazyCodexAppServerBindingStore(state);
+    const identity = { kind: "conversation" as const, bindingId: "pending-resume" };
+    const binding = {
+      threadId: "thread-pending",
+      cwd: "/repo",
+      pendingResumeConfiguration: true as const,
+    };
+    await store.mutate(identity, { kind: "set", binding });
+    let current = true;
+    const writing = store.mutate(
+      identity,
+      {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { pendingResumeConfiguration: undefined },
+      },
+      () => {
+        if (!current) {
+          throw new Error("resume authority changed");
+        }
+      },
+    );
+    current = false;
+    await expect(writing).rejects.toThrow("resume authority changed");
+    expect(await store.read(identity)).toEqual(binding);
+  });
+
+  it("deletes only the requested stable owner and restores it on transaction rollback", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
+    try {
+      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        namespace: "deletion-test",
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      });
+      const store = createCodexAppServerBindingStore(state);
+      const base = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "shared-id",
+        sessionKey: "agent:main:cron:job",
+      };
+      const run = { ...base, sessionKey: `${base.sessionKey}:run:one` };
+      for (const identity of [base, run]) {
+        await store.mutate(identity, {
+          kind: "set",
+          binding: {
+            threadId: identity.sessionKey,
+            cwd: "/repo",
+          },
+        });
+      }
+      const original = state.lookup(bindingStoreKey(run));
+      await store.withSessionDeletion(
+        run,
+        () => {},
+        async (_binding, mutation) => {
+          mutation.commit();
+          expect(state.lookup(bindingStoreKey(run))).toBeUndefined();
+          expect(state.lookup(bindingStoreKey(base))).toMatchObject({ state: "active" });
+          mutation.rollback();
+        },
+      );
+      expect(state.lookup(bindingStoreKey(run))).toEqual(original);
+      let retainedCommit: (() => void) | undefined;
+      await store.withSessionDeletion(
+        run,
+        () => {},
+        async (_binding, mutation) => {
+          retainedCommit = mutation.commit;
+          mutation.commit();
+        },
+      );
+      expect(state.entries().map(({ key }) => key)).toEqual([bindingStoreKey(base)]);
+      expect(retainedCommit).toThrow("lease");
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes retired fences without creating rows for absent bindings", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "old",
+      sessionKey: "agent:main:cron:expired",
+    };
+    await store.mutate(identity, { kind: "set", binding: { threadId: "old", cwd: "/repo" } });
+    await store.retireSessionGeneration(identity);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await store.withSessionDeletion(
+        identity,
+        () => {},
+        async (binding, mutation) => {
+          expect(binding).toBeUndefined();
+          mutation.commit();
+        },
+      );
+      expect(values.size).toBe(0);
+    }
+  });
+
+  it("rejects revoked deletion authority and never restores over a successor", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "old",
+      sessionKey: "agent:main:cron:expired",
+    };
+    await store.mutate(identity, { kind: "set", binding: { threadId: "old", cwd: "/repo" } });
+    let active = true;
+    await expect(
+      store.withSessionDeletion(
+        identity,
+        () => {
+          if (!active) {
+            throw new Error("owner revoked");
+          }
+        },
+        async (_binding, mutation) => {
+          active = false;
+          expect(mutation.commit).toThrow("owner revoked");
+        },
+      ),
+    ).rejects.toThrow("owner revoked");
+    expect(values.get(bindingStoreKey(identity))).toMatchObject({
+      state: "active",
+      sessionId: "old",
+    });
+    // Revocation intentionally leaves the lease for expiry. The next owner is
+    // independent persisted state, not a continuation of that closed callback.
+    const successor = {
+      version: 1 as const,
+      state: "active" as const,
+      sessionId: "new",
+      binding: { threadId: "new", cwd: "/repo" },
+    };
+    state.register(bindingStoreKey(identity), successor);
+    await expect(
+      store.withSessionDeletion(
+        identity,
+        () => {},
+        async (_binding, mutation) => {
+          mutation.commit();
+        },
+      ),
+    ).rejects.toThrow("generation changed");
+    expect(values.get(bindingStoreKey(identity))).toEqual(successor);
+
+    const current = { ...identity, sessionId: "new" };
+    await store.withSessionDeletion(
+      current,
+      () => {},
+      async (_binding, mutation) => {
+        mutation.commit();
+        state.register(bindingStoreKey(identity), successor);
+        expect(mutation.rollback).toThrow("changed before session deletion rollback");
+      },
+    );
+    expect(values.get(bindingStoreKey(identity))).toEqual(successor);
+  });
+
   it("normalizes the retired approval policy in persisted bindings", () => {
     expect(
       readCodexAppServerThreadBinding({
@@ -72,6 +247,22 @@ describe("Codex app-server binding store", () => {
       threadId: "thread-legacy-policy",
       cwd: "/repo",
       approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+  });
+
+  it("preserves the effective managed approval policy in persisted thread bindings", () => {
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-untrusted-policy",
+        cwd: "/repo",
+        approvalPolicy: "untrusted",
+        sandbox: "workspace-write",
+      }),
+    ).toEqual({
+      threadId: "thread-untrusted-policy",
+      cwd: "/repo",
+      approvalPolicy: "untrusted",
       sandbox: "workspace-write",
     });
   });
@@ -95,6 +286,70 @@ describe("Codex app-server binding store", () => {
       state: "active",
       binding: { threadId: "thread-1" },
     });
+  });
+
+  it("replaces only the exact ordinary thread owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-cas" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-stale",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("rejects same-thread and supervision ownership through replacement CAS", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-cas-boundary",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-old", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: {
+          threadId: "thread-private",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-private",
+          preserveNativeModel: true,
+        },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
   });
 
   it("does not report the exact session or conversation binding owner as another owner", async () => {
@@ -361,6 +616,7 @@ describe("Codex app-server binding store", () => {
           source: "account" as const,
           appName: "ChatGPT Meetings",
           allowDestructiveActions: true,
+          allowOpenWorld: false,
           destructiveApprovalMode: "auto" as const,
           mcpServerNames: [],
         },
@@ -382,6 +638,67 @@ describe("Codex app-server binding store", () => {
       pluginAppPolicyContext,
     });
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("round-trips repository marketplace app ownership through stored and imported bindings", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-security-review",
+    };
+    const pluginAppPolicyContext = {
+      fingerprint: "repository-plugin-policy",
+      apps: {
+        github: {
+          configKey: "security-review@company-tools",
+          marketplaceName: "company-tools",
+          pluginName: "security-review",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask" as const,
+          mcpServerNames: ["github"],
+        },
+      },
+      pluginAppIds: { "security-review@company-tools": ["github"] },
+    };
+
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-security-review", cwd: "/repo/company", pluginAppPolicyContext },
+    });
+    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-security-review",
+      cwd: "/repo/company",
+      pluginAppPolicyContext,
+    });
+    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("rejects unsafe marketplace names in imported plugin app ownership", () => {
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-unsafe-plugin",
+      cwd: "/repo/company",
+      pluginAppPolicyContext: {
+        fingerprint: "unsafe-plugin-policy",
+        apps: {
+          github: {
+            configKey: "security-review",
+            marketplaceName: "../unsafe-marketplace",
+            pluginName: "security-review",
+            allowDestructiveActions: true,
+            mcpServerNames: ["github"],
+          },
+        },
+        pluginAppIds: { "security-review": ["github"] },
+      },
+    });
+
+    expect(imported?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
   it("normalizes legacy fingerprints without rehashing canonical values", () => {

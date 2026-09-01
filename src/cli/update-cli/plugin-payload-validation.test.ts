@@ -10,7 +10,7 @@ import {
   runPluginPayloadSmokeCheckForManifestRecords,
 } from "./plugin-payload-validation.js";
 
-type BundleFormat = "codex" | "claude" | "cursor";
+type BundleFormat = "agent" | "codex" | "claude" | "cursor";
 type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
   format: "bundle";
   bundleFormat?: BundleFormat;
@@ -52,16 +52,28 @@ describe("runPluginPayloadSmokeCheck", () => {
       await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
       return;
     }
-    const manifestDir =
-      params.format === "codex"
-        ? ".codex-plugin"
-        : params.format === "cursor"
-          ? ".cursor-plugin"
-          : ".claude-plugin";
-    await fs.mkdir(path.join(params.dir, manifestDir), { recursive: true });
+    const manifestRelativePath =
+      params.format === "agent"
+        ? "plugin.json"
+        : path.join(
+            params.format === "codex"
+              ? ".codex-plugin"
+              : params.format === "cursor"
+                ? ".cursor-plugin"
+                : ".claude-plugin",
+            "plugin.json",
+          );
+    await fs.mkdir(path.dirname(path.join(params.dir, manifestRelativePath)), { recursive: true });
     await fs.writeFile(
-      path.join(params.dir, manifestDir, "plugin.json"),
-      JSON.stringify(params.manifest ?? { name: `${params.format}-bundle` }),
+      path.join(params.dir, manifestRelativePath),
+      JSON.stringify(
+        params.manifest ?? {
+          ...(params.format === "agent"
+            ? { $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json" }
+            : {}),
+          name: `${params.format}-bundle`,
+        },
+      ),
       "utf8",
     );
     await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
@@ -129,6 +141,44 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result).toEqual({ checked: ["codex"], failures: [] });
   });
 
+  it.each([
+    { dependencyField: "dependencies", expectedFailures: 0 },
+    { dependencyField: "peerDependencies", expectedFailures: 1 },
+  ] as const)(
+    "keeps $dependencyField host checks aligned with selected-manifest ownership provenance",
+    async ({ dependencyField, expectedFailures }) => {
+      const dir = path.join(tmpRoot, `manifest-${dependencyField}`);
+      await writePackage(
+        dir,
+        {
+          name: "@clawemail/email",
+          [dependencyField]: { openclaw: "2026.7.1" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        "export default {};",
+      );
+      const staleHostDir = path.join(dir, "node_modules", "openclaw");
+      await fs.mkdir(staleHostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      );
+
+      const manifestResult = await runPluginPayloadSmokeCheckForManifestRecords({
+        plugins: [{ id: "email", rootDir: dir }],
+        env: {},
+      });
+      const authoritativeResult = await runPluginPayloadSmokeCheck({
+        records: { email: { source: "npm", installPath: dir } },
+        env: {},
+      });
+
+      expect(manifestResult.failures).toHaveLength(expectedFailures);
+      expect(authoritativeResult.failures).toHaveLength(1);
+      expect(authoritativeResult.failures[0]?.reason).toBe("missing-openclaw-peer-link");
+    },
+  );
+
   it("reports a failure when the package directory is missing", async () => {
     const dir = path.join(tmpRoot, "brave");
     const result = await runPluginPayloadSmokeCheck({
@@ -163,6 +213,7 @@ describe("runPluginPayloadSmokeCheck", () => {
   });
 
   it.each([
+    ["agent", "format"],
     ["codex", "clawhubFamily"],
     ["claude", "format"],
     ["cursor", "format"],
@@ -509,6 +560,69 @@ describe("runPluginPayloadSmokeCheck", () => {
       `instead of ${await resolveRealPath(resolveTestHostRoot())}`,
     );
   });
+
+  it("reports a failure when a direct openclaw dependency resolves to a stale copied host", async () => {
+    const dir = path.join(tmpRoot, "email");
+    await writePackage(
+      dir,
+      {
+        name: "@clawemail/email",
+        main: "dist/index.js",
+        dependencies: { openclaw: "2026.7.1" },
+      },
+      "export default {};\n",
+    );
+    const staleHostDir = path.join(dir, "node_modules", "openclaw");
+    await fs.mkdir(staleHostDir, { recursive: true });
+    await fs.writeFile(
+      path.join(staleHostDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      "utf8",
+    );
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { email: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "email",
+      installPath: dir,
+      reason: "missing-openclaw-peer-link",
+    });
+    expect(result.failures[0]?.detail).toContain(`${staleHostDir} points to`);
+  });
+
+  it.each(["git", "clawhub", "marketplace"] as const)(
+    "does not quarantine a shipped %s plugin for an unmanaged direct host dependency",
+    async (source) => {
+      const dir = path.join(tmpRoot, `${source}-email`);
+      await writePackage(
+        dir,
+        {
+          name: "@clawemail/email",
+          main: "dist/index.js",
+          dependencies: { openclaw: "2026.7.1" },
+        },
+        "export default {};\n",
+      );
+      const staleHostDir = path.join(dir, "node_modules", "openclaw");
+      await fs.mkdir(staleHostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+        "utf8",
+      );
+
+      const result = await runPluginPayloadSmokeCheck({
+        records: { email: { source, installPath: dir } },
+        env: {},
+      });
+
+      expect(result.failures).toEqual([]);
+    },
+  );
 
   it("reports a failure when an openclaw peer link points at the wrong package root", async () => {
     const dir = path.join(tmpRoot, "codex");

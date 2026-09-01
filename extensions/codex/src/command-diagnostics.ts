@@ -1,6 +1,7 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { isJsonObject } from "./app-server/protocol.js";
@@ -15,10 +16,8 @@ import {
   codexDiagnosticsTargetsMatch,
   createCodexDiagnosticsConfirmation,
   deletePendingCodexDiagnosticsConfirmation,
-  escapeCodexChatText,
   formatCodexDiagnosticsTargetLines,
   formatCodexDiagnosticsUploadResult,
-  formatCodexTextForDisplay,
   formatDiagnosticsUsage,
   normalizeDiagnosticsReason,
   parseDiagnosticsArgs,
@@ -29,7 +28,7 @@ import {
   readPendingCodexDiagnosticsConfirmation,
   recordCodexDiagnosticsUpload,
 } from "./command-diagnostics-support.js";
-import { readString } from "./command-formatters.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import { CODEX_CONTROL_METHODS, type CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveControlTarget } from "./command-handler-scope.js";
 
@@ -120,7 +119,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
   });
   const confirmCommand = `${commandPrefix} confirm ${token}`;
   const cancelCommand = `${commandPrefix} cancel ${token}`;
-  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
+  const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   const lines = [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
     `Codex diagnostics can send ${targets.length === 1 ? "this thread's feedback bundle" : "these threads' feedback bundles"} to OpenAI servers.`,
@@ -180,7 +179,7 @@ async function previewCodexDiagnosticsFeedbackApproval(
     return cooldownMessage;
   }
   const reason = normalizeDiagnosticsReason(note);
-  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
+  const displayReason = reason ? formatCodexDisplayText(reason) : undefined;
   return [
     targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
     `Approving diagnostics will also send ${targets.length === 1 ? "this thread's feedback bundle" : "these threads' feedback bundles"} to OpenAI servers.`,
@@ -345,7 +344,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       continue;
     }
     const responseThreadId = isJsonObject(response.value)
-      ? readString(response.value, "threadId")
+      ? normalizeOptionalString(response.value.threadId)
       : undefined;
     sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
     recordCodexDiagnosticsUpload(target.threadId, ctx, now, options.cooldownScope);

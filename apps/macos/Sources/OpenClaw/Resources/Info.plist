@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.7.2</string>
+    <string>2026.8.1</string>
     <key>CFBundleVersion</key>
-    <string>2026070200</string>
+    <string>2026080100</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
     <key>CFBundleURLTypes</key>
@@ -39,6 +39,8 @@
     <key>OpenClawBuildTimestamp</key>
     <string></string>
     <key>OpenClawGitCommit</key>
+    <string></string>
+    <key>PeekabooSourceCommit</key>
     <string></string>
     <key>OpenClawPortGuardianStorageVersion</key>
     <integer>2</integer>

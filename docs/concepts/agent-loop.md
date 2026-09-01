@@ -2,7 +2,7 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-  - You are changing session queueing, transcript writes, or session write lock behavior
+  - You are changing session queueing, writer claims, or transcript write fencing
 title: "Agent loop"
 ---
 
@@ -27,14 +27,14 @@ execution, streaming, persistence.
 
 Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
 
-Transcript writes are serialized by the per-session lane and the SQLite writer queue. Each append or rewrite validates the current session identity inside its synchronous commit transaction, so a stale run cannot overwrite a newer session generation.
+Before streaming, an admitted run records its durable `activeWriterRunId` claim. Every transcript append or rewrite supplies `expectedWriterRunId`, and the synchronous commit transaction verifies that it still matches the active claim. A superseded run therefore cannot commit stale transcript data. The SQLite writer queue orders per-agent mutations, while the Gateway state-directory lock prevents another Gateway or `openclaw agent --local` process from owning the same state directory concurrently.
 
 ## Session and workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt.
-- A session write lock is acquired and the session transcript target is prepared before streaming starts. Any later transcript rewrite, compaction, or truncation path must take the same lock before mutating the SQLite transcript rows.
+- The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 
 ## Prompt assembly
 
@@ -42,15 +42,17 @@ System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap con
 
 ## Hooks
 
-OpenClaw has two hook systems:
+OpenClaw has two in-process hook systems:
 
-- **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
-- **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
+- **Internal hooks**: `HOOK.md` scripts for command and lifecycle events such as `command:new`.
+- **Plugin hooks**: typed `api.on(...)` handlers inside the agent/tool lifecycle and Gateway pipeline, such as `before_tool_call`.
+
+[HTTP webhooks](/automation/cron-jobs#webhooks) are separate: they accept external requests that trigger work, rather than subscribing to agent-loop events.
 
 ### Internal hooks (Gateway hooks)
 
 - **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized. Use it to add or remove bootstrap context files.
-- **Command hooks**: `/new`, `/reset`, `/stop`, and other command events (see the Hooks doc).
+- **Command hooks**: core emits `command:new`, `command:reset`, and `command:stop`. Other command names do not automatically become hook events.
 
 See [Hooks](/automation/hooks) for setup and examples.
 
@@ -64,7 +66,7 @@ These run inside the agent loop or gateway pipeline:
 | `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
 | `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
 | `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
-| `before_compaction` / `after_compaction`                | Observe or annotate compaction cycles.                                                                                                                                                                                                                                                                                                                                                                              |
+| `before_compaction` / `after_compaction`                | Observe compaction cycles; these hooks do not rewrite or veto compaction.                                                                                                                                                                                                                                                                                                                                           |
 | `before_tool_call` / `after_tool_call`                  | Intercept tool params/results.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `before_install`                                        | After operator install policy runs, on staged skill/plugin install material, when plugin hooks are loaded in the current process.                                                                                                                                                                                                                                                                                   |
 | `tool_result_persist`                                   | Synchronously transforms tool results before they are written to an OpenClaw-owned session transcript.                                                                                                                                                                                                                                                                                                              |
@@ -75,7 +77,7 @@ These run inside the agent loop or gateway pipeline:
 Hook decision rules for outbound/tool guards:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers. `{ block: false }` is a no-op and does not clear a prior block.
-- `before_install`: same terminal/no-op semantics as above. Use `security.installPolicy`, not `before_install`, for operator-owned install allow/block decisions that must cover CLI install and update paths.
+- `before_install`: same terminal/no-op semantics as above. Use `security.installPolicy`, not `before_install`, for operator-owned install allow/warn/block decisions that must cover CLI install and update paths.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers. `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
 See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
@@ -103,6 +105,8 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
 
+Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
+
 ## Compaction and retries
 
 Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
@@ -121,6 +125,8 @@ or raw errors out of the transcript/runtime path.
 ## Chat channel handling
 
 Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
+
+Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
 

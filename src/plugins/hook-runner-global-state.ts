@@ -9,6 +9,7 @@ import type {
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
@@ -22,10 +23,17 @@ type HookRunnerGlobalState = {
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 
 export function getHookRunnerGlobalState(): HookRunnerGlobalState {
-  return resolveGlobalSingleton<HookRunnerGlobalState>(hookRunnerGlobalStateKey, () => ({
-    hookRunner: null,
-    registry: null,
-  }));
+  return resolveGlobalSingleton<HookRunnerGlobalState>(
+    hookRunnerGlobalStateKey,
+    () => ({
+      hookRunner: null,
+      registry: null,
+    }),
+    (state) => {
+      state.registry = null;
+    },
+    "plugin-registry",
+  );
 }
 
 function resolveRootHookRegistry(
@@ -114,6 +122,10 @@ function overlayHookRegistries(
 }
 
 function resolveHookRegistry(state: HookRunnerGlobalState): TrustedPolicyHookRunnerRegistry | null {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (generationRegistry) {
+    return generationRegistry;
+  }
   return overlayHookRegistries(
     resolveRootHookRegistry(state),
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? null,

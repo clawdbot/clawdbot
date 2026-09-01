@@ -14,23 +14,24 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsEmpty,
   renderSettingsNavRow,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
+import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import {
   agentBadgeText,
   buildAgentContext,
   normalizeAgentLabel,
 } from "../../lib/agents/display.ts";
-import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import type { AgentsPanel } from "../../lib/agents/index.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
@@ -94,6 +95,14 @@ type ToolsEffectiveState = {
 };
 
 type AgentsProps = {
+  access: {
+    canCreateAgent: boolean;
+    canPatchConfig: boolean;
+    canUpdateConfig: boolean;
+    canUpdateIdentity: boolean;
+    canWriteFiles: boolean;
+    canRunCron: boolean;
+  };
   basePath: string;
   authToken: string | null;
   loading: boolean;
@@ -114,6 +123,8 @@ type AgentsProps = {
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
+  githubIdentity: GitHubIdentityController;
+  onOpenGitHubConnections: () => void;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
@@ -154,6 +165,45 @@ type AgentsProps = {
   onSetDefault: (agentId: string) => void;
 };
 
+type AgentRosterRow = AgentsListResult["agents"][number];
+
+function buildAgentRosterTree(agents: AgentRosterRow[]) {
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+  const childrenById = new Map<string, AgentRosterRow[]>();
+  const roots: AgentRosterRow[] = [];
+
+  for (const agent of agents) {
+    const creatorAgentId = agent.creatorAgentId;
+    if (creatorAgentId && creatorAgentId !== agent.id && agentById.has(creatorAgentId)) {
+      const children = childrenById.get(creatorAgentId) ?? [];
+      children.push(agent);
+      childrenById.set(creatorAgentId, children);
+    } else {
+      roots.push(agent);
+    }
+  }
+
+  const entries: Array<{ agent: AgentRosterRow; creatorAgentId?: string }> = [];
+  const visited = new Set<string>();
+  const append = (agent: AgentRosterRow, depth: number): void => {
+    if (visited.has(agent.id)) {
+      return;
+    }
+    visited.add(agent.id);
+    entries.push({
+      agent,
+      ...(depth > 0 && agent.creatorAgentId ? { creatorAgentId: agent.creatorAgentId } : {}),
+    });
+    for (const child of childrenById.get(agent.id) ?? []) {
+      append(child, depth + 1);
+    }
+  };
+  roots.forEach((agent) => append(agent, 0));
+  // Match the CLI tree: malformed cycles cannot make configured agents disappear.
+  agents.forEach((agent) => append(agent, 0));
+  return entries;
+}
+
 export function renderAgents(props: AgentsProps) {
   const agents = props.agentsList?.agents ?? [];
   const defaultId = props.agentsList?.defaultId ?? null;
@@ -161,10 +211,11 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
-  const agentOptions = agents.map((agent) => ({
+  const agentOptions = buildAgentRosterTree(agents).map(({ agent, creatorAgentId }) => ({
     value: agent.id,
     label: normalizeAgentLabel(agent),
     agent,
+    description: creatorAgentId ? t("agents.createdBy", { id: creatorAgentId }) : undefined,
     badge: agentBadgeText(agent.id, defaultId) ?? undefined,
   }));
   const selectedSkillCount =
@@ -187,32 +238,54 @@ export function renderAgents(props: AgentsProps) {
     <div class="agents-layout">
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
-          <div class="agents-control-select">
-            <openclaw-agent-select
-              .options=${agentOptions}
-              .value=${selectedId ?? ""}
-              .accessibleLabel=${t("usage.filters.agent")}
-              .identityById=${props.agentIdentityById}
-              .authToken=${props.authToken}
-              .disabled=${props.loading}
-              .onSelect=${props.onSelectAgent}
-              .onCreateAgent=${props.onCreateAgent}
-            ></openclaw-agent-select>
-          </div>
+          ${agentOptions.length > 1
+            ? html`
+                <div class="agents-control-select">
+                  <openclaw-agent-select
+                    .options=${agentOptions}
+                    .value=${selectedId ?? ""}
+                    .accessibleLabel=${t("usage.filters.agent")}
+                    .identityById=${props.agentIdentityById}
+                    .authToken=${props.authToken}
+                    .disabled=${props.loading}
+                    .onSelect=${props.onSelectAgent}
+                    .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}
+                  ></openclaw-agent-select>
+                </div>
+              `
+            : nothing}
           <div class="agents-toolbar-actions">
-            ${selectedAgent
+            ${agentOptions.length <= 1 && props.access.canCreateAgent
               ? html`
                   <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    @click=${() => void copyToClipboard(selectedAgent.id)}
+                    class="btn btn--sm btn--ghost agents-create-btn"
+                    ?disabled=${props.loading}
+                    @click=${props.onCreateAgent}
                   >
-                    ${t("agents.copyId")}
+                    ${t("custodian.newAgent")}
                   </button>
+                `
+              : nothing}
+            ${selectedAgent
+              ? html`
+                  ${keyed(
+                    selectedAgent.id,
+                    html`
+                      <button
+                        type="button"
+                        class="btn btn--sm btn--ghost"
+                        @click=${(event: Event) =>
+                          void handleCopyButton(event, selectedAgent.id, t("agents.copyId"))}
+                      >
+                        <span data-copy-label>${t("agents.copyId")}</span>
+                      </button>
+                    `,
+                  )}
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
+                    ?disabled=${!props.access.canUpdateConfig ||
+                    Boolean(defaultId && selectedAgent.id === defaultId)}
                     @click=${() => props.onSetDefault(selectedAgent.id)}
                   >
                     ${defaultId && selectedAgent.id === defaultId
@@ -264,6 +337,7 @@ export function renderAgents(props: AgentsProps) {
               )}
               <div
                 id="agent-panel"
+                class="settings-stack"
                 role="tabpanel"
                 aria-labelledby=${`agents-tab-${props.activePanel}`}
               >
@@ -285,6 +359,8 @@ export function renderAgents(props: AgentsProps) {
                         identityDraft: props.identityDraft,
                         identitySaving: props.identitySaving,
                         identityError: props.identityError,
+                        canUpdateConfig: props.access.canUpdateConfig,
+                        canUpdateIdentity: props.access.canUpdateIdentity,
                         configLoading: props.config.loading,
                         configSaving: props.config.saving,
                         configDirty: props.config.dirty,
@@ -312,6 +388,7 @@ export function renderAgents(props: AgentsProps) {
                       agentFileContents: props.agentFiles.contents,
                       agentFileDrafts: props.agentFiles.drafts,
                       agentFileSaving: props.agentFiles.saving,
+                      canWrite: props.access.canWriteFiles,
                       onLoadFiles: props.onLoadFiles,
                       onSelectFile: props.onSelectFile,
                       onFileDraftChange: props.onFileDraftChange,
@@ -334,6 +411,9 @@ export function renderAgents(props: AgentsProps) {
                       toolsEffectiveResult: props.toolsEffective.result,
                       runtimeSessionKey: props.runtimeSessionKey,
                       runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
+                      canUpdateConfig: props.access.canUpdateConfig,
+                      githubIdentity: props.githubIdentity,
+                      onOpenGitHubConnections: props.onOpenGitHubConnections,
                       onProfileChange: props.onToolsProfileChange,
                       onOverridesChange: props.onToolsOverridesChange,
                       onConfigReload: props.onConfigReload,
@@ -352,6 +432,8 @@ export function renderAgents(props: AgentsProps) {
                       configSaving: props.config.saving,
                       configDirty: props.config.dirty,
                       filter: props.agentSkills.filter,
+                      canPatchConfig: props.access.canPatchConfig,
+                      canUpdateConfig: props.access.canUpdateConfig,
                       onFilterChange: props.onSkillsFilterChange,
                       onRefresh: props.onSkillsRefresh,
                       onToggle: props.onAgentSkillToggle,
@@ -398,6 +480,7 @@ export function renderAgents(props: AgentsProps) {
                       scopedNextWakeAtMs: props.cron.scopedNextWakeAtMs,
                       loading: props.cron.loading,
                       error: props.cron.error,
+                      canRunNow: props.access.canRunCron,
                       onRefresh: props.onCronRefresh,
                       onLoadMore: props.onCronLoadMore,
                       onRunNow: props.onCronRunNow,

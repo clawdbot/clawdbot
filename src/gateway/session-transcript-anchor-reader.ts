@@ -1,10 +1,8 @@
-import {
-  readSessionTranscriptMessageAnchorPage,
-  type SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
+import { readSessionTranscriptHistoryAnchorPage } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
 import {
   resolveTranscriptReadTarget,
-  sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
@@ -28,7 +26,7 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
     scope.sessionEntry.sessionId !== scope.sessionId
       ? undefined
       : target.sessionFile;
-  const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
+  const page = readSessionTranscriptHistoryAnchorPage(toTranscriptReadScope(target), opts);
   if (!page.found) {
     if (opts.allowResetArchiveFallback === true) {
       return await new ArchivedTranscriptReader({
@@ -49,9 +47,10 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
   }
   return {
     found: true,
+    displaySource: page.displaySource,
     hasOverreadContext: page.hasOverreadContext,
     messages: page.events.flatMap((entry) => {
-      const message = sqliteMessageEventWithSeq(entry);
+      const message = projectTranscriptEntryMessage(entry.event, entry.seq, entry.displayPosition);
       return message === undefined ? [] : [message];
     }),
     offset: page.offset,

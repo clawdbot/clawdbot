@@ -1,7 +1,9 @@
+import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
@@ -20,16 +22,18 @@ export type PluginConfigUiHint = {
 export type PluginFormat = "openclaw" | "bundle";
 
 /** Supported external bundle manifest formats. */
-export type PluginBundleFormat = "codex" | "claude" | "cursor";
+export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 
 /**
  * Closed classification codes for plugin diagnostics. Health surfaces branch
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "backup-resource-declaration-invalid"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
-  | "plugin-verification";
+  | "plugin-verification"
+  | "workspace-scope-omitted";
 
 /** Diagnostic emitted while discovering or validating plugins. */
 export type PluginDiagnostic = {
@@ -70,22 +74,8 @@ export type PluginManifestModelSupport = {
 
 export type PluginManifestModelCatalog = ModelCatalog;
 
-export type PluginManifestModelPricingModelIdTransform = "version-dots";
-
-export type PluginManifestModelPricingSource = {
-  provider?: string;
-  passthroughProviderModel?: boolean;
-  modelIdTransforms?: PluginManifestModelPricingModelIdTransform[];
-};
-
-export type PluginManifestModelPricingProvider = {
-  external?: boolean;
-  openRouter?: PluginManifestModelPricingSource | false;
-  liteLLM?: PluginManifestModelPricingSource | false;
-};
-
 export type PluginManifestModelPricing = {
-  providers?: Record<string, PluginManifestModelPricingProvider>;
+  providers?: Record<string, ModelPricingProvider>;
 };
 
 export type PluginManifestModelIdPrefixRule = {
@@ -147,7 +137,6 @@ export type PluginManifestSecretProviderIntegration = {
   jsonOnly?: boolean;
   env?: Record<string, string>;
   passEnv?: string[];
-  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -176,6 +165,13 @@ export type PluginManifestActivation = {
   onConfigPaths?: string[];
   /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
+};
+
+/** Root CLI command metadata available before plugin code is imported. */
+export type PluginManifestCliCommand = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
 };
 
 export type PluginManifestDefaultPlatform = NodeJS.Platform;
@@ -221,9 +217,20 @@ export type PluginManifestSetup = {
   configMigrations?: string[];
   /**
    * Whether setup still needs plugin runtime execution after descriptor lookup.
-   * Defaults to false when omitted.
+   * Explicit false disables setup runtime; omission preserves the legacy fallback.
    */
   requiresRuntime?: boolean;
+};
+
+export type PluginManifestDoctorContract = {
+  configRepair?: boolean;
+  resolveSessionStoreAgentIds?: boolean;
+  /**
+   * @deprecated Declare static ownership in top-level sessionRouteStateOwners instead.
+   * Removal plan: remove the module fallback in OpenClaw 2027.1 after external plugins migrate.
+   */
+  sessionRouteStateOwners?: boolean;
+  stateMigrations?: boolean;
 };
 
 export type PluginManifestQaRunner = {
@@ -279,7 +286,7 @@ export type PluginManifestSecretInputPath = {
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
   /** Runtime owner kind used to isolate this surface when resolution fails. */
-  ownerKind?: "route";
+  ownerKind?: "capability" | "route";
 };
 
 export type PluginManifestSecretInputContracts = {
@@ -316,9 +323,18 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
+/** Declarative backup ownership rooted at host-managed state or each configured agent. */
+export type PluginManifestBackupResource = {
+  disposition: "include" | "regenerable";
+  scope: "state" | "agent";
+  relativePath: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Static backup inclusion/exclusion declarations; resolved without loading plugin runtime. */
+  backupResources?: PluginManifestBackupResource[];
   /** Plugin ids that must also be installed for this plugin to have effect. */
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
@@ -372,6 +388,8 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
+  /** Root commands advertised by help and activation planning before runtime loads. */
+  cliCommands?: PluginManifestCliCommand[];
   /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
   providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
@@ -385,6 +403,12 @@ export type PluginManifest = {
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
+  /** Doctor contract surfaces available without loading the plugin artifact. */
+  doctorContract?: PluginManifestDoctorContract;
+  /** Whether the plugin public API registers structured health checks. */
+  doctorHealthChecks?: boolean;
+  /** Static ownership metadata for doctor session-route state repairs. */
+  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
@@ -434,7 +458,6 @@ export type PluginManifestContracts = {
    */
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
-  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
@@ -510,9 +533,15 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Built-in tool profiles that expose this plugin tool by default. */
+  profiles?: PluginManifestToolProfile[];
   /** Tool execution is safe to repeat after an incomplete model turn. */
   replaySafe?: boolean;
+  /** Tool execution can change durable state and failed attempts must remain visible. */
+  sideEffecting?: boolean;
 };
+
+export type PluginManifestToolProfile = "minimal" | "coding" | "messaging" | "full";
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */

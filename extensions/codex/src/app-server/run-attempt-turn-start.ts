@@ -242,7 +242,7 @@ export async function startCodexAttemptTurn(
             threadId: resourceState.thread.threadId,
           })
         : true;
-      if (!state.timedOut && bindingReleased) {
+      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
         const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -313,6 +313,16 @@ export async function startCodexAttemptTurn(
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
+  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
+  if (resourceState.thread.pluginAppPolicyContext) {
+    authoritySourceRef.current = {
+      client: resourceState.client,
+      threadId: resourceState.thread.threadId,
+      policyContext: resourceState.thread.pluginAppPolicyContext,
+      configCwd: connection.effectiveCwd,
+    };
+  }
   turnIdRef.current = turn.turn.id;
+  resourceState.nativeSubagentMonitor?.bindTurn(turn.turn.id);
   return { turn };
 }

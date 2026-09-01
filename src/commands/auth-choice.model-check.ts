@@ -16,11 +16,20 @@ import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 type ModelRouteObservation = {
   api?: ModelApi | null;
   baseUrl?: unknown;
+};
+
+type DefaultModelAuthOptions = {
+  agentId?: string;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+  observedRoutes?: readonly ModelRouteObservation[];
+  pendingAuthProfiles?: ProviderAuthResult["profiles"];
 };
 
 type DefaultModelAuthStatus = {
@@ -45,12 +54,7 @@ type DefaultModelAuthStatus = {
  */
 export function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
-  options?: {
-    agentId?: string;
-    agentDir?: string;
-    env?: NodeJS.ProcessEnv;
-    observedRoutes?: readonly ModelRouteObservation[];
-  },
+  options?: DefaultModelAuthOptions,
 ): DefaultModelAuthStatus {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
@@ -62,9 +66,18 @@ export function resolveDefaultModelAuthStatus(
     ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
     readOnly: true,
   });
+  // Pending wizard credentials are transaction-local; include them without
+  // publishing or persisting them before setup commits.
+  const pendingAuthProfiles = options?.pendingAuthProfiles ?? [];
+  const authStore = pendingAuthProfiles.length
+    ? { ...store, profiles: { ...store.profiles } }
+    : store;
+  for (const { profileId, credential } of pendingAuthProfiles) {
+    authStore.profiles[profileId] = credential;
+  }
   const evaluation = createModelAuthAvailabilityResolver({
     cfg: config,
-    authStore: store,
+    authStore,
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
   }).evaluateModelAuth(ref.provider, {
@@ -151,13 +164,7 @@ export function resolveDefaultModelCatalogFacts(
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: {
-    agentId?: string;
-    agentDir?: string;
-    validateCatalog?: boolean;
-    env?: NodeJS.ProcessEnv;
-    observedRoutes?: readonly ModelRouteObservation[];
-  },
+  options?: DefaultModelAuthOptions & { validateCatalog?: boolean },
 ) {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
@@ -178,7 +185,6 @@ export async function warnIfModelConfigLooksOff(
                 (options?.agentId
                   ? resolveAgentDir(config, options.agentId)
                   : resolveDefaultAgentDir(config)),
-              inheritedAuthDir: resolveDefaultAgentDir(config),
               workspaceDir: resolveAgentWorkspaceDir(config, validationAgentId),
             },
             { force: true, provenance: "explicit" },
@@ -205,6 +211,7 @@ export async function warnIfModelConfigLooksOff(
     ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(observedRoutes ? { observedRoutes } : {}),
+    ...(options?.pendingAuthProfiles ? { pendingAuthProfiles: options.pendingAuthProfiles } : {}),
   });
   if (authStatus.status === "missing") {
     warnings.push(

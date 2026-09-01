@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
@@ -7,16 +8,20 @@ import {
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDurationCompact } from "../../lib/format.ts";
 import "../../components/tooltip.ts";
-import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import {
+  formatDurationCompact,
+  formatDateTimeMs,
+  formatMs,
+  formatTimeMs,
+} from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatCost, formatTokens } from "./metrics.ts";
+import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
+  UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
 import { renderInsightList, renderUsageToggle, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
@@ -75,7 +80,7 @@ function renderUsageRefreshStatus(
   status: PanelRefreshStatus,
   onRetry: () => void,
   detailKey: string,
-  kind: "timeline" | "conversation",
+  kind: "timeline" | "conversation" | "context",
 ) {
   return renderPanelRefreshStatus({
     status,
@@ -134,8 +139,8 @@ function renderSessionSummary(
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
-      value: formatCost(entry.totals.totalCost),
-      sub: formatTokens(entry.totals.totalTokens),
+      value: formatUsageCost(entry.totals.totalCost),
+      sub: formatUsageTokens(entry.totals.totalTokens),
     })) ?? [];
   const cards = [
     {
@@ -158,8 +163,7 @@ function renderSessionSummary(
     },
     {
       labelKey: "usage.details.duration",
-      value:
-        formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue"),
+      value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
       meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
     },
   ];
@@ -273,6 +277,8 @@ function renderSessionDetailPanel(
   onLogFilterHasToolsChange: (next: boolean) => void,
   onLogFilterQueryChange: (next: string) => void,
   onLogFilterClear: () => void,
+  context: UsageContextDetail,
+  onRetryContextWeight: () => void,
   contextExpanded: boolean,
   onToggleContextExpanded: () => void,
   onClose: () => void,
@@ -306,12 +312,15 @@ function renderSessionDetailPanel(
           ${usage
             ? html`
                 <span
-                  ><strong>${formatTokens(headerStats.totalTokens)}</strong>
+                  ><strong>${formatUsageTokens(headerStats.totalTokens)}</strong>
                   ${normalizeLowercaseStringOrEmpty(
                     t("usage.metrics.tokens"),
                   )}${cursorIndicator}</span
                 >
-                <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
+                <span
+                  ><strong>${formatUsageCost(headerStats.totalCost)}</strong
+                  >${cursorIndicator}</span
+                >
               `
             : nothing}
         </div>
@@ -379,7 +388,8 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorEnd : null,
           )}
           ${renderContextPanel(
-            session.contextWeight,
+            context,
+            onRetryContextWeight,
             usage,
             contextExpanded,
             onToggleContextExpanded,
@@ -572,7 +582,7 @@ function renderTimeSeriesCompact(
               svg`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--border)" />`,
           )}
           ${[
-            { y: padding.top + 5, text: formatTokens(maxValue) },
+            { y: padding.top + 5, text: formatUsageTokens(maxValue) },
             { y: padding.top + chartHeight, text: "0" },
           ].map(
             ({ y, text }) =>
@@ -603,12 +613,12 @@ function renderTimeSeriesCompact(
                 },
                 "",
               ),
-              `${formatTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+              `${formatUsageTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
               tooltipLines.push(
                 ...USAGE_TOKEN_CATEGORIES.map(
-                  ({ key, short }) => `${short} ${formatTokens(p[key])}`,
+                  ({ key, short }) => `${short} ${formatUsageTokens(p[key])}`,
                 ),
               );
             }
@@ -616,7 +626,7 @@ function renderTimeSeriesCompact(
             const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
 
             if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1"><title>${tooltip}</title></rect>`;
+              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
             }
             let yC = padding.top + chartHeight;
             const dim = isOutside ? " dimmed" : "";
@@ -628,7 +638,7 @@ function renderTimeSeriesCompact(
                 }
                 const sh = bh * (value / val);
                 yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1"><title>${tooltip}</title></rect>`;
+                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
               })}
             `;
           })}
@@ -750,11 +760,11 @@ function renderTimeSeriesCompact(
                 { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
                 "",
               )}
-              · ${formatTokens(totalTypeTokens)} ·
-              ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+              · ${formatUsageTokens(totalTypeTokens)} ·
+              ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
             `
-          : html`${points.length} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(cumTokens)}
-            · ${formatCost(cumCost)}`}
+          : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
+            ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`}
       </div>
       ${breakdownByType
         ? html`
@@ -775,13 +785,13 @@ function renderTimeSeriesCompact(
                   ({ key, className, labelKey, hintKey }) => html`
                     <div class="legend-item" title=${t(hintKey)}>
                       <span class="legend-dot ${className}"></span>${t(labelKey)}
-                      ${formatTokens(filteredTokens[key])}
+                      ${formatUsageTokens(filteredTokens[key])}
                     </div>
                   `,
                 )}
               </div>
               <div class="cost-breakdown-total">
-                ${t("usage.breakdown.total")}: ${formatTokens(totalTypeTokens)}
+                ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
               </div>
             </div>
           `
@@ -791,15 +801,27 @@ function renderTimeSeriesCompact(
 }
 
 function renderContextPanel(
-  contextWeight: UsageSessionEntry["contextWeight"],
+  { weight: contextWeight, loading, status }: UsageContextDetail,
+  onRetry: () => void,
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
 ) {
+  const refreshStatus = renderUsageRefreshStatus(
+    status,
+    onRetry,
+    "usage.details.systemPromptBreakdown",
+    "context",
+  );
   if (!contextWeight) {
     return html`
       <div class="context-details-panel">
-        <div class="usage-empty-block">${t("usage.details.noContextData")}</div>
+        ${refreshStatus}
+        ${status.error
+          ? nothing
+          : html`<div class="usage-empty-block">
+              ${t(loading ? "usage.loading.badge" : "usage.details.noContextData")}
+            </div>`}
       </div>
     `;
   }
@@ -826,7 +848,11 @@ function renderContextPanel(
       className: "files",
       labelKey: "usage.details.files",
       tokens: charsToTokens(
-        contextWeight.injectedWorkspaceFiles.reduce((sum, file) => sum + file.injectedChars, 0),
+        contextWeight.injectedWorkspaceFiles.reduce(
+          (sum, file) =>
+            file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
+          0,
+        ),
       ),
       entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
         name,
@@ -837,7 +863,12 @@ function renderContextPanel(
     className,
     labelKey,
     tokens,
-    entries: entries.toSorted((left, right) => right.chars - left.chars),
+    entries: entries.toSorted((left, right) => {
+      if (left.chars === null) {
+        return right.chars === null ? 0 : 1;
+      }
+      return right.chars === null ? -1 : right.chars - left.chars;
+    }),
   }));
   const categories = [
     {
@@ -858,6 +889,7 @@ function renderContextPanel(
 
   return html`
     <div class="context-details-panel">
+      ${refreshStatus}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">
           ${t("usage.details.systemPromptBreakdown")}
@@ -875,7 +907,7 @@ function renderContextPanel(
             <div
               class="context-segment ${className}"
               style="width: ${pct(tokens, totalContextTokens).toFixed(1)}%"
-              title="${t(labelKey)}: ~${formatTokens(tokens)}"
+              title="${t(labelKey)}: ~${formatUsageTokens(tokens)}"
             ></div>
           `,
         )}
@@ -887,13 +919,13 @@ function renderContextPanel(
               ><span class="legend-dot ${className}"></span>${t(
                 className === "system" ? "usage.details.systemShort" : labelKey,
               )}
-              ~${formatTokens(tokens)}</span
+              ~${formatUsageTokens(tokens)}</span
             >
           `,
         )}
       </div>
       <div class="context-total">
-        ${t("usage.breakdown.total")}: ~${formatTokens(totalContextTokens)}
+        ${t("usage.breakdown.total")}: ~${formatUsageTokens(totalContextTokens)}
       </div>
       <div class="context-breakdown-grid">
         ${groups
@@ -909,7 +941,11 @@ function renderContextPanel(
                     ({ name, chars }) => html`
                       <div class="context-breakdown-item">
                         <span class="mono" title=${name}>${name}</span>
-                        <span class="muted">~${formatTokens(charsToTokens(chars))}</span>
+                        <span class="muted"
+                          >${chars === null
+                            ? t("usage.common.unknown")
+                            : `~${formatUsageTokens(charsToTokens(chars))}`}</span
+                        >
                       </div>
                     `,
                   )}
@@ -1110,7 +1146,7 @@ function renderSessionLogsCompact(
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
                 <span>${formatMs(log.timestamp)}</span>
-                ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
+                ${log.tokens ? html`<span>${formatUsageTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>
               ${toolInfo.tools.length > 0

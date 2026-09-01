@@ -1,257 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentEntry } from "../agents/agent-scope-config.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  baseParams,
+  type CommitTransform,
+  codexPluginMetadataSnapshot,
+  getSetupApplyMocks,
+  mainAgentModelConfig,
+  materializePluginDefaults,
+  runtime,
+  setSetupCommitState,
+  snapshot,
+} from "./setup-apply.test-harness.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { projectDefaultInferenceRoute } from "./inference-route.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
 
-type ConfigSnapshot = {
-  exists: boolean;
-  valid: boolean;
-  path: string;
-  hash: string | null;
-  parsed: unknown;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
-  config: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
-  issues: Array<{ path?: string; message: string }>;
-};
-
-type CommitTransform = (
-  currentConfig: OpenClawConfig,
-  context: {
-    previousHash: string | null;
-    snapshot: ConfigSnapshot;
-    attempt: number;
-  },
-) =>
-  | { nextConfig: OpenClawConfig; result?: unknown }
-  | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>;
-
-const mocks = vi.hoisted(() => ({
-  state: {
-    initialSnapshot: {} as ConfigSnapshot,
-    commitConfig: {} as OpenClawConfig,
-    commitSnapshot: {} as ConfigSnapshot,
-    commitPreviousHash: "probe" as string | null,
-    persistedConfig: undefined as OpenClawConfig | undefined,
-  },
-  events: [] as string[],
-  readSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
-  readVerifiedSnapshot: vi.fn<() => Promise<ConfigSnapshot>>(),
-  readVerifiedSnapshotWithPluginMetadata: vi.fn(),
-  commit: vi.fn(),
-  configureGateway: vi.fn(),
-  ensureWorkspace: vi.fn(),
-  ensureGatewayService: vi.fn(),
-  refreshPluginRegistry: vi.fn(),
-  updateExecApprovals: vi.fn(),
-  ensureOnboardingAgent: vi.fn(),
-  verifySetupInferenceConfig: vi.fn(),
-}));
-
-vi.mock("../commands/onboard-agent.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/onboard-agent.js")>()),
-  ensureOnboardingAgent: mocks.ensureOnboardingAgent,
-}));
-
-vi.mock("./setup-inference.js", () => ({
-  verifySetupInferenceConfig: mocks.verifySetupInferenceConfig,
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: mocks.readVerifiedSnapshot,
-  readConfigFileSnapshotWithPluginMetadata: mocks.readVerifiedSnapshotWithPluginMetadata,
-}));
-
-vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../wizard/setup.shared.js")>()),
-  readSetupConfigFileSnapshot: mocks.readSnapshot,
-}));
-
-vi.mock("../commands/onboard-helpers.js", () => ({
-  applyWizardMetadata: (config: OpenClawConfig) => ({
-    ...config,
-    wizard: {
-      ...config.wizard,
-      lastRunAt: "2026-07-10T00:00:00.000Z",
-      lastRunVersion: "test",
-      lastRunCommand: "onboard",
-      lastRunMode: "local",
-    },
-  }),
-  ensureWorkspaceAndSessions: mocks.ensureWorkspace,
-  resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
-    wsUrl: `ws://127.0.0.1:${port}`,
-  }),
-  waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
-}));
-
-vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
-  transformConfigWithPendingPluginInstalls: mocks.commit,
-}));
-
-vi.mock("../wizard/setup.gateway-config.js", () => ({
-  configureGatewayForSetup: mocks.configureGateway,
-}));
-
-vi.mock("../wizard/setup.finalize.js", () => ({
-  ensureGatewayServiceForOnboarding: mocks.ensureGatewayService,
-}));
-
-vi.mock("../plugins/registry-refresh.js", () => ({
-  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistry,
-}));
-
-vi.mock("../infra/exec-approvals.js", () => ({
-  updateExecApprovals: mocks.updateExecApprovals,
-}));
-
-vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
-  resolveAgentDir: (config: OpenClawConfig, agentId: string) =>
-    resolveAgentEntry(config, agentId)?.agentDir ?? `/agents/${agentId}`,
-}));
-
-import { applySystemAgentModelSelection, applySystemAgentSetup } from "./setup-apply.js";
-
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-
-function snapshot(
-  hash: string | null,
-  sourceConfig: OpenClawConfig,
-  runtimeConfig: OpenClawConfig = sourceConfig,
-): ConfigSnapshot {
-  return {
-    exists: hash !== null,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash,
-    parsed: structuredClone(sourceConfig),
-    sourceConfigBeforeMigrations: structuredClone(sourceConfig),
-    config: runtimeConfig,
-    sourceConfig: runtimeConfig,
-    runtimeConfig,
-    issues: [],
-  };
-}
-
-function codexPluginMetadataSnapshot(homeScope: "agent" | "user") {
-  return {
-    manifestRegistry: {
-      diagnostics: [],
-      plugins: [
-        {
-          id: "codex",
-          origin: "global",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          settingsFiles: [],
-          hooks: [],
-          rootDir: "/tmp/codex",
-          source: "/tmp/codex/index.js",
-          manifestPath: "/tmp/codex/openclaw.plugin.json",
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              codexDynamicToolsLoading: { type: "string", default: "searchable" },
-              appServer: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  transport: { type: "string", default: "stdio" },
-                  homeScope: { type: "string", default: homeScope },
-                  requestTimeoutMs: { type: "number", default: 60_000 },
-                },
-              },
-            },
-          },
-        },
-      ],
-    },
-  } as never;
-}
-
-function materializePluginDefaults(
-  config: OpenClawConfig,
-  pluginMetadataSnapshot: ReturnType<typeof codexPluginMetadataSnapshot>,
-): OpenClawConfig {
-  const result = configModule.validateConfigObjectWithPlugins(config, { pluginMetadataSnapshot });
-  if (!result.ok) {
-    throw new Error(result.issues[0]?.message ?? "test config failed validation");
-  }
-  return result.config;
-}
-
-function baseParams(overrides: Partial<Parameters<typeof applySystemAgentSetup>[0]> = {}) {
-  return {
-    workspace: "/tmp/openclaw-workspace",
-    surface: "gateway" as const,
-    runtime,
-    ...overrides,
-  };
-}
-
-describe("applySystemAgentModelSelection", () => {
-  it("clears stale harness pins in both model scopes for a native route", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-        entries: {
-          work: {
-            default: true,
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                alias: "primary",
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({
-      config,
-      model: "openai/gpt-5.5",
-    });
-
-    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
-    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
-    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
-  });
-
-  it("pins the verified credential without creating a global visibility map", async () => {
-    const result = await applySystemAgentModelSelection({
-      config: {
-        agents: {
-          defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
-        },
-      },
-      model: "openai/gpt-5.5",
-      authProfileId: "openai:verified",
-    });
-
-    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
-    expect(result.agents?.defaults?.models).toBeUndefined();
-  });
-});
+const mocks = getSetupApplyMocks();
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("applySystemAgentSetup transaction boundaries", () => {
   beforeEach(() => {
@@ -263,23 +35,36 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         entries: { main: { default: true } },
       },
     };
-    mocks.state.initialSnapshot = snapshot("probe", config);
-    mocks.state.commitConfig = structuredClone(config);
-    mocks.state.commitSnapshot = snapshot("probe", config);
+    setSetupCommitState(structuredClone(config), snapshot("probe", config));
     mocks.state.commitPreviousHash = "probe";
     mocks.state.persistedConfig = undefined;
-    mocks.ensureOnboardingAgent.mockImplementation(async ({ config: current, name, workspace }) => {
-      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
-      const next = {
-        ...current,
-        agents: {
-          ...current.agents,
-          entries: { [id]: { default: true, workspace, agentDir: `/agents/${id}` } },
-        },
-      };
-      mocks.state.persistedConfig = next;
-      return { config: next, agentId: id, bootstrapPending: true };
-    });
+    mocks.ensureOnboardingAgent.mockImplementation(
+      async ({ config: current, firstAgent, workspace }) => {
+        const name = firstAgent?.name ?? "main";
+        const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+        const next = {
+          ...current,
+          agents: {
+            ...current.agents,
+            entries: { [id]: { default: true, workspace, agentDir: `/agents/${id}` } },
+          },
+        };
+        mocks.state.persistedConfig = next;
+        const createdSnapshot = snapshot("agent-create", next);
+        mocks.state.initialSnapshot = createdSnapshot;
+        mocks.state.commitConfig = next;
+        mocks.state.commitSnapshot = createdSnapshot;
+        mocks.state.commitPreviousHash = "agent-create";
+        mocks.events.push("agent-create");
+        return {
+          config: next,
+          agentId: id,
+          bootstrapPending: true,
+          createdAgent: true,
+          configHash: "agent-create",
+        };
+      },
+    );
     mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
@@ -294,6 +79,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       });
       mocks.events.push("commit");
       mocks.state.persistedConfig = result.nextConfig;
+      mocks.state.initialSnapshot = snapshot("persisted", result.nextConfig);
       return {
         nextConfig: result.nextConfig,
         path: "/tmp/openclaw.json",
@@ -330,7 +116,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       mocks.events.push("workspace");
       return { bootstrapPending: true };
     });
-    mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
+    mocks.ensureGatewayService.mockResolvedValue({
+      gateway: { status: "skipped", reason: "explicit" },
+      containerWithoutUserSystemd: false,
+    });
+    mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
     mocks.updateExecApprovals.mockResolvedValue(undefined);
     mocks.verifySetupInferenceConfig.mockResolvedValue({
@@ -364,9 +154,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
   it("commits a fresh injected roster before provisioning its workspace", async () => {
     const absent = snapshot(null, {}, { agents: { entries: { main: { default: true } } } });
-    mocks.state.initialSnapshot = absent;
-    mocks.state.commitConfig = { agents: { entries: { main: { default: true } } } };
-    mocks.state.commitSnapshot = absent;
+    setSetupCommitState({ agents: { entries: { main: { default: true } } } }, absent);
     mocks.state.commitPreviousHash = null;
 
     const result = await applySystemAgentSetup(baseParams({ expectedConfigHash: null }));
@@ -379,14 +167,42 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         entries: { main: { default: true } },
       },
     });
-    expect(mocks.events).toEqual(["commit", "workspace"]);
+    expect(mocks.events).toEqual(["agent-create", "commit", "workspace"]);
+  });
+
+  it("creates a named first agent while preserving the pre-roster verified route", async () => {
+    const source = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        entries: { main: { default: true, agentDir: "/agents/main" } },
+      },
+    } satisfies OpenClawConfig;
+    const absentRoster = snapshot("probe", source, runtimeConfig);
+    setSetupCommitState(runtimeConfig, absentRoster);
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(runtimeConfig);
+    mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+
+    await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: "probe",
+        expectedAgentId: "main",
+        expectedAgentDir: "/agents/main",
+        expectedInferenceRoute,
+        firstAgent: { name: "Research Buddy" },
+      }),
+    );
+
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "Research Buddy" } }),
+    );
+    expect(mocks.state.persistedConfig?.agents?.entries).toHaveProperty("research-buddy");
+    expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
   });
 
   it("does not mistake a proposal-created roster for an existing fleet", async () => {
     const absent = snapshot(null, {}, { agents: { entries: { main: { default: true } } } });
-    mocks.state.initialSnapshot = absent;
-    mocks.state.commitConfig = { agents: { entries: { main: { default: true } } } };
-    mocks.state.commitSnapshot = absent;
+    setSetupCommitState({ agents: { entries: { main: { default: true } } } }, absent);
     mocks.state.commitPreviousHash = null;
 
     await applySystemAgentSetup(
@@ -403,36 +219,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     });
   });
 
-  it("configures the requested workspace for a persisted pre-roster config", async () => {
-    const authoredConfig: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-    };
-    const preRosterRuntime: OpenClawConfig = {
-      agents: {
-        ...authoredConfig.agents,
-        entries: { main: { default: true, agentDir: "/agents/main" } },
-      },
-    };
-    const preRosterSnapshot = snapshot("probe", authoredConfig, preRosterRuntime);
-    mocks.state.initialSnapshot = preRosterSnapshot;
-    mocks.state.commitConfig = structuredClone(preRosterRuntime);
-    mocks.state.commitSnapshot = preRosterSnapshot;
-
-    await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
-
-    expect(mocks.state.persistedConfig?.agents).toMatchObject({
-      defaults: {
-        model: { primary: "openai/gpt-5.5" },
-        workspace: "/tmp/requested-workspace",
-      },
-      entries: { main: { default: true } },
-    });
-  });
-
   it.each([
+    { label: "missing", agents: {} },
     { label: "entries", agents: { entries: {} } },
     { label: "list", agents: { list: [] } },
-  ])("treats an authored empty $label roster as bootstrap", async ({ agents }) => {
+  ])("treats an authored $label roster as bootstrap", async ({ agents }) => {
     const authoredConfig: OpenClawConfig = {
       agents: {
         ...agents,
@@ -447,9 +238,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       },
     };
     const emptyRosterSnapshot = snapshot("probe", authoredConfig, emptyRosterRuntime);
-    mocks.state.initialSnapshot = emptyRosterSnapshot;
-    mocks.state.commitConfig = structuredClone(emptyRosterRuntime);
-    mocks.state.commitSnapshot = emptyRosterSnapshot;
+    setSetupCommitState(structuredClone(emptyRosterRuntime), emptyRosterSnapshot);
 
     await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
 
@@ -459,6 +248,126 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         workspace: "/tmp/requested-workspace",
       },
       entries: { main: { default: true } },
+    });
+  });
+
+  it.each([
+    { label: "missing", agents: {} },
+    { label: "entries", agents: { entries: {} } },
+    { label: "list", agents: { list: [] } },
+  ])(
+    "preserves a configured workspace with existing state and an authored $label roster",
+    async ({ agents }) => {
+      const stateDir = testTempDirs.make("openclaw-setup-state-");
+      await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sourceConfig: OpenClawConfig = {
+          agents: {
+            ...agents,
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              workspace: "/tmp/current-workspace",
+            },
+          },
+        };
+        const runtimeConfig: OpenClawConfig = {
+          agents: {
+            ...sourceConfig.agents,
+            list: undefined,
+            entries: { main: { default: true, agentDir: "/agents/main" } },
+          },
+        };
+        const initial = snapshot("probe", sourceConfig, runtimeConfig);
+        setSetupCommitState(structuredClone(runtimeConfig), initial);
+        const assertCommitPreconditions = vi.fn();
+
+        await applySystemAgentSetup(
+          baseParams({
+            workspace: "/tmp/requested-workspace",
+            assertCommitPreconditions,
+          }),
+        );
+
+        expect(assertCommitPreconditions).toHaveBeenCalledOnce();
+        expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ workspace: "/tmp/current-workspace" }),
+        );
+        expect(mocks.state.persistedConfig?.agents).toMatchObject({
+          defaults: { workspace: "/tmp/current-workspace" },
+          entries: { main: { default: true, workspace: "/tmp/current-workspace" } },
+        });
+        expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+          "/tmp/current-workspace",
+          runtime,
+          expect.objectContaining({ agentId: "main" }),
+        );
+      });
+    },
+  );
+
+  it("moves a configured workspace with existing state after explicit approval", async () => {
+    const stateDir = testTempDirs.make("openclaw-setup-state-");
+    await fs.mkdir(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const sourceConfig: OpenClawConfig = {
+        agents: { defaults: { workspace: "/tmp/current-workspace" }, entries: {} },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        agents: {
+          ...sourceConfig.agents,
+          entries: { main: { default: true, agentDir: "/agents/main" } },
+        },
+      };
+      const initial = snapshot("probe", sourceConfig, runtimeConfig);
+      setSetupCommitState(structuredClone(runtimeConfig), initial);
+
+      await applySystemAgentSetup(
+        baseParams({
+          workspace: "/tmp/requested-workspace",
+          allowWorkspaceChange: true,
+        }),
+      );
+
+      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ workspace: "/tmp/requested-workspace" }),
+      );
+      expect(mocks.state.persistedConfig?.agents).toMatchObject({
+        defaults: { workspace: "/tmp/requested-workspace" },
+        entries: { main: { default: true, workspace: "/tmp/requested-workspace" } },
+      });
+      expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+        "/tmp/requested-workspace",
+        runtime,
+        expect.objectContaining({ agentId: "main" }),
+      );
+    });
+  });
+
+  it("uses the requested workspace when configured state is fresh", async () => {
+    const stateDir = testTempDirs.make("openclaw-setup-state-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const sourceConfig: OpenClawConfig = {
+        agents: { defaults: { workspace: "/tmp/current-workspace" }, entries: {} },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        agents: {
+          ...sourceConfig.agents,
+          entries: { main: { default: true, agentDir: "/agents/main" } },
+        },
+      };
+      const initial = snapshot("probe", sourceConfig, runtimeConfig);
+      setSetupCommitState(structuredClone(runtimeConfig), initial);
+
+      await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
+
+      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ workspace: "/tmp/requested-workspace" }),
+      );
+      expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+        "/tmp/requested-workspace",
+        runtime,
+        expect.objectContaining({ agentId: "main" }),
+      );
     });
   });
 
@@ -474,9 +383,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       parsed: { agents: { $include: "./agents.json5" } },
       sourceConfigBeforeMigrations: config,
     };
-    mocks.state.initialSnapshot = includedRosterSnapshot;
-    mocks.state.commitConfig = structuredClone(config);
-    mocks.state.commitSnapshot = includedRosterSnapshot;
+    setSetupCommitState(structuredClone(config), includedRosterSnapshot);
 
     await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
 
@@ -497,9 +404,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         },
       },
     } satisfies OpenClawConfig;
-    mocks.state.initialSnapshot = snapshot("probe", config);
-    mocks.state.commitConfig = structuredClone(config);
-    mocks.state.commitSnapshot = snapshot("probe", config);
+    setSetupCommitState(structuredClone(config), snapshot("probe", config));
 
     await applySystemAgentSetup(
       baseParams({
@@ -532,33 +437,20 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });
 
-  it("rejects a configured user agent that collides with the privileged id", async () => {
+  it.each([
+    { id: "OpenClaw", reserved: "openclaw" },
+    { id: "crestodian", reserved: "crestodian" },
+  ])("rejects the reserved user agent id $id", async ({ id, reserved }) => {
     const config = {
       agents: {
         defaults: { model: "openai/gpt-5.5" },
-        entries: { OpenClaw: {} },
+        entries: { [id]: {} },
       },
     } satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("reserved", config);
 
     await expect(applySystemAgentSetup(baseParams())).rejects.toThrow(
-      'Agent id "openclaw" is reserved',
-    );
-
-    expect(mocks.commit).not.toHaveBeenCalled();
-  });
-
-  it("rejects a configured user agent with the retired id", async () => {
-    const config = {
-      agents: {
-        defaults: { model: "openai/gpt-5.5" },
-        entries: { crestodian: {} }, // reserved retired id
-      },
-    } satisfies OpenClawConfig;
-    mocks.state.initialSnapshot = snapshot("reserved-retired", config);
-
-    await expect(applySystemAgentSetup(baseParams())).rejects.toThrow(
-      'Agent id "crestodian" is reserved', // reserved retired id
+      `Agent id "${reserved}" is reserved`,
     );
     expect(mocks.commit).not.toHaveBeenCalled();
   });
@@ -670,15 +562,8 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it("rejects route drift before opening the config transaction", async () => {
-    const current = {
-      agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: { default: true } } },
-    } satisfies OpenClawConfig;
-    const verified = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-8" },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const current = mainAgentModelConfig();
+    const verified = mainAgentModelConfig("anthropic/claude-opus-4-8");
     mocks.state.initialSnapshot = snapshot("probe", current);
     mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("probe", current));
 
@@ -713,13 +598,9 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it("rejects a setup candidate that changes the exact verified route identity", async () => {
-    const initial = {
-      agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: { default: true } } },
-    } satisfies OpenClawConfig;
+    const initial = mainAgentModelConfig();
     const initialSnapshot = snapshot("probe", initial);
-    mocks.state.initialSnapshot = initialSnapshot;
-    mocks.state.commitConfig = initial;
-    mocks.state.commitSnapshot = initialSnapshot;
+    setSetupCommitState(initial, initialSnapshot);
     mocks.readVerifiedSnapshot.mockResolvedValue(initialSnapshot);
 
     await expect(
@@ -755,9 +636,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     } satisfies OpenClawConfig;
     const initialSnapshot = snapshot("hash-1", initial);
     const concurrentSnapshot = snapshot("hash-2", concurrent);
-    mocks.state.initialSnapshot = initialSnapshot;
-    mocks.state.commitConfig = initial;
-    mocks.state.commitSnapshot = initialSnapshot;
+    setSetupCommitState(initial, initialSnapshot);
     let setupReads = 0;
     mocks.readSnapshot.mockImplementation(async () => {
       if (setupReads++ === 0) {
@@ -821,20 +700,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it("revalidates the verified route after the config write", async () => {
-    const initial = {
-      agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: { default: true } } },
-    } satisfies OpenClawConfig;
-    const drifted = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-8" },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const initial = mainAgentModelConfig();
+    const drifted = mainAgentModelConfig("anthropic/claude-opus-4-8");
     const initialSnapshot = snapshot("probe", initial);
     const driftedSnapshot = snapshot("persisted", drifted);
-    mocks.state.initialSnapshot = initialSnapshot;
-    mocks.state.commitConfig = initial;
-    mocks.state.commitSnapshot = initialSnapshot;
+    setSetupCommitState(initial, initialSnapshot);
     mocks.readSnapshot
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(driftedSnapshot);
@@ -892,9 +762,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         runtimeConfig: materializePluginDefaults(persisted, pluginMetadataSnapshot),
       };
     };
-    mocks.state.initialSnapshot = initialSnapshot;
-    mocks.state.commitConfig = sourceConfig;
-    mocks.state.commitSnapshot = initialSnapshot;
+    setSetupCommitState(sourceConfig, initialSnapshot);
     mocks.readVerifiedSnapshot
       .mockResolvedValueOnce(initialSnapshot)
       .mockResolvedValueOnce(initialSnapshot)
@@ -913,15 +781,8 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   });
 
   it("rejects a materialized route that differs from the inference proof", async () => {
-    const sourceConfig = {
-      agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: { default: true } } },
-    } satisfies OpenClawConfig;
-    const materializedConfig = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-8" },
-        entries: { main: { default: true } },
-      },
-    } satisfies OpenClawConfig;
+    const sourceConfig = mainAgentModelConfig();
+    const materializedConfig = mainAgentModelConfig("anthropic/claude-opus-4-8");
     const verifiedSnapshot = snapshot("probe", sourceConfig);
     const persistedSnapshot = () => {
       const persisted = mocks.state.persistedConfig ?? sourceConfig;
@@ -930,9 +791,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         runtimeConfig: materializedConfig,
       };
     };
-    mocks.state.initialSnapshot = verifiedSnapshot;
-    mocks.state.commitConfig = sourceConfig;
-    mocks.state.commitSnapshot = verifiedSnapshot;
+    setSetupCommitState(sourceConfig, verifiedSnapshot);
     mocks.readVerifiedSnapshot
       .mockResolvedValueOnce(verifiedSnapshot)
       .mockResolvedValueOnce(verifiedSnapshot)
@@ -968,9 +827,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
     let currentConfig: OpenClawConfig = initial;
     let currentHash = "probe";
-    mocks.state.initialSnapshot = initialSnapshot;
-    mocks.state.commitConfig = initial;
-    mocks.state.commitSnapshot = initialSnapshot;
+    setSetupCommitState(initial, initialSnapshot);
     let setupReads = 0;
     mocks.readSnapshot.mockImplementation(async () =>
       setupReads++ === 0 ? initialSnapshot : snapshot(currentHash, currentConfig),
@@ -1039,10 +896,19 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         plugins: source.plugins,
       };
     });
-
-    await applySystemAgentSetup(baseParams({ expectedConfigHash: "probe", finalizeConfig }));
+    const assertCommitPreconditions = vi.fn();
+    await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: "probe",
+        workspace: "/tmp/finalized-ops",
+        allowWorkspaceChange: true,
+        finalizeConfig,
+        assertCommitPreconditions,
+      }),
+    );
 
     expect(finalizeConfig).toHaveBeenCalledWith(expect.any(Object), sourceConfig);
+    expect(assertCommitPreconditions).toHaveBeenCalledWith(sourceConfig);
     expect(mocks.state.persistedConfig?.plugins).toEqual(sourceConfig.plugins);
     expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
       "/tmp/finalized-ops",
@@ -1075,5 +941,140 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         "Gateway service: service exploded",
       ]),
     );
+    expect(result.workspaceReady).toBe(false);
+    expect(result.gateway).toEqual({ status: "failed", error: "service exploded" });
+  });
+
+  it.each([
+    { status: "failed", error: "gateway install blocked" } as const,
+    { status: "skipped", reason: "external" } as const,
+  ])("preserves the service owner's $status outcome after config commits", async (gateway) => {
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
+    const marker = gateway.status === "failed" ? gateway.error : "SUPERVISOR_MODE=external";
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines.join("\n")).toContain(marker);
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "explicit", installDaemon: false, line: "Gateway: will run in the foreground." },
+    {
+      reason: "systemd-unavailable",
+      installDaemon: false,
+      line: "Gateway: will run in the foreground.",
+    },
+    {
+      reason: "explicit",
+      installDaemon: undefined,
+      line: "Gateway: service install skipped — say `start gateway` when you want it running.",
+    },
+  ])("reports $reason service setup with installDaemon=$installDaemon", async (scenario) => {
+    const gateway = { status: "skipped", reason: scenario.reason };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await applySystemAgentSetup(
+      baseParams({ surface: "cli", installDaemon: scenario.installDaemon }),
+    );
+
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: { installDaemon: scenario.installDaemon } }),
+    );
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines).toContain(scenario.line);
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (["linux", "win32"] as const).flatMap((platform) =>
+      (["installed", "started", "restarted", "restart-scheduled", "reused"] as const).map(
+        (action) => ({ platform, action }),
+      ),
+    ),
+  )("uses the $platform readiness budget after service $action", async ({ platform, action }) => {
+    await withMockedPlatform(platform, async () => {
+      const gateway = { status: "ready", action } as const;
+      mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+
+      const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
+
+      expect(result.gateway).toEqual(gateway);
+      expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
+      expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+        expect.objectContaining(
+          action === "reused"
+            ? { deadlineMs: 15_000 }
+            : {
+                deadlineMs: platform === "win32" ? 90_000 : 45_000,
+                probeTimeoutMs: platform === "win32" ? 15_000 : 10_000,
+              },
+        ),
+      );
+    });
+  });
+
+  it("keeps setup incomplete when the installed gateway never becomes reachable", async () => {
+    mocks.ensureGatewayService.mockResolvedValueOnce({
+      gateway: { status: "ready", action: "installed" },
+      containerWithoutUserSystemd: false,
+    });
+    mocks.waitForGatewayReachable.mockResolvedValueOnce({
+      ok: false,
+      detail: "connection refused",
+    });
+
+    const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
+
+    expect(result.gateway).toEqual({
+      status: "failed",
+      error: "Gateway is not reachable yet (connection refused).",
+    });
+    expect(result.lines).toContain(
+      "Gateway: not reachable yet (connection refused) — say `gateway status` to check",
+    );
+  });
+
+  it.each([
+    {
+      label: "plaintext password",
+      auth: { mode: "password" as const, password: "plaintext-password" },
+      expectedCredential: "plaintext-password",
+    },
+    {
+      label: "environment-backed password SecretRef",
+      auth: {
+        mode: "password" as const,
+        password: { source: "env" as const, provider: "default", id: "SETUP_TEST_PASSWORD" },
+      },
+      expectedCredential: "resolved-password",
+    },
+    {
+      label: "token",
+      auth: { mode: "token" as const, token: "gateway-token" },
+      expectedCredential: "gateway-token",
+    },
+  ])("authenticates non-restarting Gateway recovery with its $label only", async (scenario) => {
+    const config: OpenClawConfig = { ...mainAgentModelConfig(), gateway: { auth: scenario.auth } };
+    setSetupCommitState(config, snapshot("probe", config));
+    mocks.ensureGatewayService.mockResolvedValueOnce({
+      gateway: { status: "ready", action: "reused" },
+      containerWithoutUserSystemd: false,
+    });
+
+    await withEnvAsync({ SETUP_TEST_PASSWORD: "resolved-password" }, async () => {
+      const result = await applySystemAgentSetup(baseParams({ surface: "cli", resume: true }));
+
+      expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+        expect.objectContaining({ loadedAction: "resume" }),
+      );
+      expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith({
+        url: "ws://127.0.0.1:18789",
+        token: scenario.auth.mode === "token" ? scenario.expectedCredential : undefined,
+        password: scenario.auth.mode === "password" ? scenario.expectedCredential : undefined,
+        deadlineMs: 15_000,
+      });
+      expect(mocks.state.persistedConfig?.gateway?.auth).toEqual(scenario.auth);
+      expect(result.gateway).toEqual({ status: "ready", action: "reused" });
+      expect(result.workspaceReady).toBe(true);
+    });
   });
 });

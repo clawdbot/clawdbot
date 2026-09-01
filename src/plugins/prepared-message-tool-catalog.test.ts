@@ -103,8 +103,12 @@ describe("prepared message-tool catalog", () => {
     expect(listMessageActionDiscoveryChannels(runtimeCatalog).map((entry) => entry.id)).toEqual([
       "beta",
     ]);
-    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha")?.pluginId).toBe("alpha");
-    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta")).toBeNull();
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha")).toBeNull();
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta")?.pluginId).toBe("beta");
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("alpha", firstCatalog)?.pluginId).toBe(
+      "alpha",
+    );
+    expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta", firstCatalog)).toBeNull();
     expect(resolveCurrentChannelMessageToolDiscoveryAdapter("beta", runtimeCatalog)?.pluginId).toBe(
       "beta",
     );

@@ -6,10 +6,14 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeNullableString as normalizeRawString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  isRecord,
+  normalizeNullableString as normalizeRawString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
+import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -27,7 +31,13 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
+  numberAliasEventId?: string;
 };
+
+type SignalPreparedIngressEvent = [
+  event: SignalSseEvent,
+  parsedPayload: SignalReceivePayload | null | undefined,
+];
 
 type SignalIngressPayload = {
   version: 1;
@@ -44,6 +54,7 @@ type SignalIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 type SignalIngressDispatch = (
   event: SignalSseEvent,
   lifecycle: SignalIngressLifecycle,
+  parsedPayload: SignalReceivePayload,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
 const SignalIngressPermanentError = createChannelIngressError<
@@ -51,10 +62,10 @@ const SignalIngressPermanentError = createChannelIngressError<
 >("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+  return asPositiveSafeInteger(value) ?? null;
 }
 
-function parseReceiveEnvelope(event: SignalSseEvent): SignalIngressEnvelope | null {
+function parseReceivePayload(event: SignalSseEvent): SignalReceivePayload | null {
   if (event.event !== "receive" || !event.data) {
     return null;
   }
@@ -76,7 +87,8 @@ function parseReceiveEnvelope(event: SignalSseEvent): SignalIngressEnvelope | nu
       "Signal receive event must contain a JSON object",
     );
   }
-  return isRecord(parsed.envelope) ? (parsed.envelope as SignalIngressEnvelope) : null;
+  // SAFETY: SignalReceivePayload has only optional fields; downstream code validates each field.
+  return parsed as SignalReceivePayload;
 }
 
 function resolveDataMessage(envelope: SignalIngressEnvelope): Record<string, unknown> | null {
@@ -86,8 +98,11 @@ function resolveDataMessage(envelope: SignalIngressEnvelope): Record<string, unk
   return isRecord(envelope.editMessage?.dataMessage) ? envelope.editMessage.dataMessage : null;
 }
 
-function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFacts | null {
-  const envelope = parseReceiveEnvelope(event);
+function inspectSignalIngressEvent(
+  prepared: SignalPreparedIngressEvent,
+): SignalIngressEventFacts | null {
+  const payload = (prepared[1] ??= parseReceivePayload(prepared[0]));
+  const envelope = isRecord(payload?.envelope) ? (payload.envelope as SignalIngressEnvelope) : null;
   if (!envelope || "syncMessage" in envelope) {
     return null;
   }
@@ -125,6 +140,9 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
     laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
+    ...(senderUuid && senderNumber
+      ? { numberAliasEventId: JSON.stringify([`number:${senderNumber}`, timestamp]) }
+      : {}),
   };
 }
 
@@ -157,17 +175,19 @@ export async function startSignalIngressMonitor(params: {
       accountId: params.accountId,
     });
   }
+  const ingressQueue = queue;
   const monitor = createChannelIngressMonitor<
-    SignalSseEvent,
+    SignalPreparedIngressEvent,
     SignalIngressBody,
     SignalIngressPayload
   >({
-    queue,
-    inspect: (event) => inspectSignalIngressEvent(event),
+    queue: ingressQueue,
+    inspect: (prepared) => inspectSignalIngressEvent(prepared),
     payload: {
       version: 1,
-      serialize: (event, { receivedAt }) => ({ receivedAt, event }),
-      deserialize: (body) => body.event,
+      // Parsed JSON remains transient; durable rows retain the exact raw event shape.
+      serialize: ([event], { receivedAt }) => ({ receivedAt, event }),
+      deserialize: (body) => [body.event, undefined],
       encode: ({ body }) => ({ version: 1, ...body }),
       decode: (payload) => ({ version: payload.version, body: payload }),
       createClaimError: (_kind, claim) =>
@@ -176,12 +196,25 @@ export async function startSignalIngressMonitor(params: {
           `Signal ingress row ${claim.id} has an invalid payload`,
         ),
     },
-    deliver: (event, lifecycle) => params.dispatch(event, lifecycle),
+    deliver: ([event, parsedPayload], lifecycle) =>
+      parsedPayload ? params.dispatch(event, lifecycle, parsedPayload) : undefined,
+    onDurableAdmission: async (_event, { facts, isNew }) => {
+      const { numberAliasEventId } = facts as SignalIngressEventFacts;
+      if (!numberAliasEventId) {
+        return;
+      }
+      // signal-cli can learn or forget a UUID between redeliveries; bridge both
+      // shipped sender IDs before the monitor releases its admission/claim lock.
+      if (!(await ingressQueue.complete(numberAliasEventId)) && isNew) {
+        await ingressQueue.complete(facts.eventId);
+      }
+    },
     pollIntervalMs: SIGNAL_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       // Signal previously pruned before every enqueue rather than on a timed cadence.
       pruneIntervalMs: 0,
-      completedMaxEntries: 1_000,
+      // At most two tombstones per message preserve the prior 1,000-message window.
+      completedMaxEntries: 2_000,
       failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
@@ -195,7 +228,7 @@ export async function startSignalIngressMonitor(params: {
 
   return {
     receive: async (event) => {
-      await monitor.admit(event);
+      await monitor.admit([event, undefined]);
       await monitor.waitForPumpIdle();
     },
     stop: monitor.stop,

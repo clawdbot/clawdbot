@@ -2,14 +2,10 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayStartupPluginPlan } from "./gateway-startup-plugin-contracts.js";
-import {
-  createGatewayStartupMetadataPluginIdScope,
-  isMetadataSnapshotScopedForGatewayStartup,
-} from "./gateway-startup-plugin-metadata.js";
+import { createGatewayStartupMetadataPluginIdScope } from "./gateway-startup-plugin-metadata.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-plan.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
-  isPluginMetadataSnapshotCompatible,
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
@@ -35,7 +31,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
 }
 
-export function loadGatewayStartupPluginPlan(params: {
+type GatewayStartupPluginPlanParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
@@ -45,44 +41,36 @@ export function loadGatewayStartupPluginPlan(params: {
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): GatewayStartupPluginPlan {
+};
+
+export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupPluginPlanParams): {
+  plan: GatewayStartupPluginPlan;
+  metadataSnapshot: PluginMetadataSnapshot;
+} {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
-  const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
-    config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    env: params.env,
-    workerProviderIds: params.workerProviderIds ?? [],
-    ...(params.platform !== undefined ? { platform: params.platform } : {}),
-    ...(params.ambientEnvTriggers !== undefined
-      ? { ambientEnvTriggers: params.ambientEnvTriggers }
-      : {}),
-  });
+  // Activation may change, but a supplied inventory still belongs to its boot.
   const metadataSnapshot =
-    params.metadataSnapshot &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: params.metadataSnapshot,
+    params.metadataSnapshot ??
+    resolvePluginMetadataSnapshot({
       config: snapshotConfig,
-      env: params.env,
-      allowScopedSnapshot: true,
       workspaceDir: params.workspaceDir,
-      index: params.index,
-    }) &&
-    isMetadataSnapshotScopedForGatewayStartup({
-      metadataSnapshot: params.metadataSnapshot,
-      pluginIdScope,
-    })
-      ? params.metadataSnapshot
-      : resolvePluginMetadataSnapshot({
-          config: snapshotConfig,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
-          ...(params.index ? { index: params.index } : {}),
-          pluginIdScope,
-        });
-  return resolveGatewayStartupPluginPlanFromRegistry({
+      env: params.env,
+      allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
+      ...(params.index ? { index: params.index } : {}),
+      pluginIdScope: createGatewayStartupMetadataPluginIdScope({
+        config: params.config,
+        ...(params.activationSourceConfig !== undefined
+          ? { activationSourceConfig: params.activationSourceConfig }
+          : {}),
+        env: params.env,
+        workerProviderIds: params.workerProviderIds ?? [],
+        ...(params.platform !== undefined ? { platform: params.platform } : {}),
+        ...(params.ambientEnvTriggers !== undefined
+          ? { ambientEnvTriggers: params.ambientEnvTriggers }
+          : {}),
+      }),
+    });
+  const plan = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
       ? { activationSourceConfig: params.activationSourceConfig }
@@ -90,20 +78,17 @@ export function loadGatewayStartupPluginPlan(params: {
     env: params.env,
     index: metadataSnapshot.index,
     manifestRegistry: metadataSnapshot.manifestRegistry,
+    discovery: metadataSnapshot.discovery,
+    normalizePluginId: metadataSnapshot.normalizePluginId,
     workerProviderIds: params.workerProviderIds ?? [],
     platform: params.platform,
     ambientEnvTriggers: params.ambientEnvTriggers,
   });
+  return { plan, metadataSnapshot };
 }
 
-export function resolveGatewayStartupPluginIds(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  workerProviderIds?: readonly string[];
-  platform?: NodeJS.Platform;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): string[] {
-  return [...loadGatewayStartupPluginPlan(params).pluginIds];
+export function loadGatewayStartupPluginPlan(
+  params: GatewayStartupPluginPlanParams,
+): GatewayStartupPluginPlan {
+  return loadGatewayStartupPluginPlanWithMetadata(params).plan;
 }

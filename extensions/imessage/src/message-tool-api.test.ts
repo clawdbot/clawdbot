@@ -1,10 +1,14 @@
 // Imessage tests cover message tool api plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { describeMessageTool } from "../message-tool-api.js";
 import {
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 
 function expireCachedPrivateApiStatus(): void {
   setCachedIMessagePrivateApiStatus(
@@ -16,8 +20,16 @@ function expireCachedPrivateApiStatus(): void {
 }
 
 describe("iMessage message-tool artifact", () => {
+  const tempDirs: string[] = [];
+
   beforeEach(() => {
     expireCachedPrivateApiStatus();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
+    );
   });
 
   it("keeps poll actions discoverable until the first lazy bridge probe", () => {
@@ -32,6 +44,44 @@ describe("iMessage message-tool artifact", () => {
       actions: ["poll-vote"],
       visibility: "all-configured",
       properties: { pollOptionText: { type: "string" } },
+    });
+  });
+
+  it("guides Remote Mac accounts to stable poll option ids", () => {
+    const discovery = describeMessageTool({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/gateway/imsg-ssh",
+            remoteHost: "bot@messages-mac",
+          },
+        },
+      } as never,
+      currentChannelId: "chat_id:1",
+    });
+
+    expect(discovery?.schema?.properties).toMatchObject({
+      pollOptionId: { description: expect.stringContaining("Required for Remote Mac") },
+      pollOptionIndex: { description: expect.stringContaining("Local iMessage accounts only") },
+      pollOptionText: { description: expect.stringContaining("Local iMessage accounts only") },
+    });
+  });
+
+  it("uses an already-cached legacy wrapper host for synchronous poll guidance", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-tool-host-"));
+    tempDirs.push(dir);
+    const cliPath = path.join(dir, "imsg-ssh");
+    await fs.writeFile(cliPath, '#!/bin/sh\nexec ssh bot@messages-mac imsg "$@"\n');
+    await resolveIMessageRemoteHost({ cliPath });
+
+    const discovery = describeMessageTool({
+      cfg: { channels: { imessage: { cliPath } } } as never,
+      currentChannelId: "chat_id:1",
+    });
+
+    expect(discovery?.schema?.properties).toMatchObject({
+      pollOptionId: { description: expect.stringContaining("Required for Remote Mac") },
+      pollOptionIndex: { description: expect.stringContaining("Local iMessage accounts only") },
     });
   });
 
@@ -57,6 +107,7 @@ describe("iMessage message-tool artifact", () => {
           },
         },
       } as never,
+      chatType: "group",
       currentChannelId: "chat_id:1",
     });
 
@@ -72,6 +123,31 @@ describe("iMessage message-tool artifact", () => {
       "leaveGroup",
       "upload-file",
     ]);
+  });
+
+  it("keeps group-only actions hidden for a direct numeric current chat", () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: [],
+    });
+
+    const discovery = describeMessageTool({
+      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
+      chatType: "direct",
+      currentChannelId: "chat_id:1",
+    });
+
+    expect(discovery?.actions).not.toEqual(
+      expect.arrayContaining([
+        "renameGroup",
+        "setGroupIcon",
+        "addParticipant",
+        "removeParticipant",
+        "leaveGroup",
+      ]),
+    );
   });
 
   it("offers poll but hides poll-vote on imsg builds without the poll.vote rpc", () => {

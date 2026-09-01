@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -12,8 +13,10 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
@@ -31,6 +34,7 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 // OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
 // The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
@@ -87,7 +91,7 @@ export const OpenClawSchemaShape = {
           tracesEndpoint: z.string().optional(),
           metricsEndpoint: z.string().optional(),
           logsEndpoint: z.string().optional(),
-          protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
+          protocol: z.literal("http/protobuf").optional(),
           headers: z.record(z.string(), z.string()).optional(),
           serviceName: z.string().optional(),
           metricNamePrefix: MetricNamePrefixSchema.optional(),
@@ -116,6 +120,7 @@ export const OpenClawSchemaShape = {
       audit: z
         .strictObject({
           enabled: z.boolean().optional(),
+          executionIdentity: z.boolean().optional(),
           messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
         })
         .optional(),
@@ -139,6 +144,7 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
+  telemetry: TelemetryConfigSchema,
   browser: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -151,12 +157,7 @@ export const OpenClawSchemaShape = {
       attachOnly: z.boolean().optional(),
       defaultProfile: z.string().optional(),
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
-      ssrfPolicy: z
-        .strictObject({
-          dangerouslyAllowPrivateNetwork: z.boolean().optional(),
-          allowedHostnames: z.array(z.string()).optional(),
-        })
-        .optional(),
+      ssrfPolicy: SsrFPolicyConfigSchema.optional(),
       profiles: z
         .record(
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
@@ -204,28 +205,41 @@ export const OpenClawSchemaShape = {
           enabled: z.boolean().optional(),
         })
         .optional(),
+      extensionRelay: z
+        .strictObject({
+          allowLegacyAuth: z.boolean().optional(),
+        })
+        .optional(),
     })
     .optional(),
   ui: z
     .strictObject({
       seamColor: HexColorSchema.optional(),
-      assistant: z
-        .strictObject({
-          name: z.string().max(50).optional(),
-          avatar: z.string().max(2_000_000).optional(),
-        })
-        .optional(),
       // Operator display prefs. Canonical here (agent-writable via approval,
       // synced across devices); the Control UI mirrors them into local
       // storage for instant boot and offline fallback.
       prefs: z
         .strictObject({
           theme: z
-            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
+            .union([
+              z.literal("claw"),
+              z.literal("knot"),
+              z.literal("dash"),
+              z.literal("absolutely"),
+              z.literal("tide"),
+              z.literal("beacon"),
+              z.literal("phosphor"),
+              z.literal("crt"),
+              z.literal("manuscript"),
+              z.literal("rose"),
+              z.literal("miami"),
+              z.literal("custom"),
+            ])
             .optional(),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
+          accent: HexColorSchema.startsWith("#").optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),
@@ -289,6 +303,19 @@ export const OpenClawSchemaShape = {
   models: ModelsConfigSchema,
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
+  worktreeRoot: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (value) =>
+        path.isAbsolute(value) ||
+        value === "~" ||
+        value.startsWith("~/") ||
+        value.startsWith(`~${path.sep}`),
+      "worktreeRoot must be an absolute path or a path starting with ~",
+    )
+    .optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -317,6 +344,7 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       webhookToken: SecretInputSchema.optional().register(sensitive),
+      webhookSsrfPolicy: SsrFPolicyConfigSchema.optional(),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
         .strictObject({
@@ -421,6 +449,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,
   skills: z

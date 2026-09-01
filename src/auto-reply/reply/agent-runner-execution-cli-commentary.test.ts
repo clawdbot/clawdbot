@@ -5,8 +5,10 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockTypingSignaler,
   getExecuteAgentTurnForTest,
+  loadActualRunCliAgentForTest,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
@@ -53,7 +55,11 @@ process.stdin.on("end", () => {
 function useClaudeCliFallback() {
   state.isCliProviderMock.mockReturnValue(true);
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run("claude-cli", "claude-opus-4-6"),
+    result: await params.run(
+      "claude-cli",
+      "claude-opus-4-6",
+      initialFallbackAttemptOptions(params),
+    ),
     provider: "claude-cli",
     model: "claude-opus-4-6",
     attempts: [],
@@ -66,6 +72,7 @@ function useScriptedClaudeCliBackend() {
     modelProvider: "anthropic",
     pluginId: "anthropic",
     bundleMcp: false,
+    contextEngineHostCapabilities: ["thread-bootstrap-projection"] as const,
     config: {
       command: process.execPath,
       args: ["-e", scriptedCliProgram],
@@ -82,15 +89,15 @@ function useScriptedClaudeCliBackend() {
     resolveRuntimeCliBackends: () => [backend],
   });
   state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-    if (!state.runCliAgentActual) {
-      throw new Error("real CLI runner was not initialized");
-    }
-    return await state.runCliAgentActual(params);
+    return await (
+      await loadActualRunCliAgentForTest()
+    )(params);
   });
 }
 
 function createClaudeCliFollowupRun() {
   const followupRun = createFollowupRun();
+  followupRun.run.agentId = "agent";
   followupRun.run.provider = "claude-cli";
   followupRun.run.model = "claude-opus-4-6";
   followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };
@@ -133,6 +140,22 @@ describe("executeAgentTurn: CLI durable commentary", () => {
     const result = await executeAgentTurn(createTurnParams({ onBlockReply }, true));
 
     expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({ emitCommentaryText: true });
+    const resolveContextEngineHost = state.runEmbeddedAgentEntryMock.mock.calls[0]?.[0]?.harness
+      ?.resolveContextEngineHost as
+      | ((
+          provider: string,
+          model: string,
+        ) => {
+          id: string;
+          label: string;
+          capabilities: readonly string[];
+        })
+      | undefined;
+    expect(resolveContextEngineHost?.("claude-cli", "claude-opus-4-6")).toEqual({
+      id: "cli:claude-cli",
+      label: 'CLI backend "claude-cli"',
+      capabilities: ["thread-bootstrap-projection"],
+    });
     expect(result.kind).toBe("success");
     if (result.kind === "success") {
       expect(result.runResult.payloads).toEqual([{ text: "Subprocess final answer." }]);

@@ -11,6 +11,7 @@ import {
   parseStrictInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 
@@ -35,6 +36,11 @@ const ACT_DEFAULT_WAIT_TIMEOUT_MS = 20_000;
 export const BROWSER_ACTION_TRANSPORT_SLACK_MS = 5_000;
 /** Post-action window that keeps navigation policy interception active. */
 export const BROWSER_ACTION_NAVIGATION_GRACE_MS = 250;
+
+/** Keep navigation timeouts consistent across transports and browser backends. */
+export function resolveBrowserNavigationTimeoutMs(timeoutMs?: number): number {
+  return Math.min(120_000, resolveTimerTimeoutMs(timeoutMs, 20_000, 1_000));
+}
 
 export function normalizeActBoundedNonNegativeMs(
   value: number | undefined,
@@ -105,7 +111,7 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
 }
 
 function isActionObject(value: unknown): value is BrowserActRequest {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function resolveLeafExecutionBudgetMs(
@@ -200,7 +206,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
  * Resolve the runtime budget before an outer transport watchdog is armed.
  * Wait phases and batch children execute serially, so maxima would abort valid work midway.
  */
-export function resolveBrowserActExecutionBudgetMs(request: BrowserActRequest): number {
+function resolveBrowserActExecutionBudgetMs(request: BrowserActRequest): number {
   const executionBudgetMs = resolveExecutionBudgetMs(request);
   if (request.kind === "wait") {
     return executionBudgetMs;

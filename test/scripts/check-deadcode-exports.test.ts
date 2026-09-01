@@ -7,10 +7,11 @@ import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
+  checkExportScan,
   checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
-} from "../../scripts/check-deadcode-exports.mjs";
+} from "../../scripts/check-deadcode-exports.mts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -45,7 +46,7 @@ function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
 describe("check-deadcode-exports", () => {
   it("requests every unused-export issue class from Knip", () => {
     const script = fs.readFileSync(
-      new URL("../../scripts/check-deadcode-exports.mjs", import.meta.url),
+      new URL("../../scripts/check-deadcode-exports.mts", import.meta.url),
       "utf8",
     );
     expect(script).toContain('"exports,nsExports,types,nsTypes,enumMembers,namespaceMembers"');
@@ -120,17 +121,20 @@ describe("check-deadcode-exports", () => {
       expect.arrayContaining([
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        ".github/actions/register-bind-mount-cleanup/main.cjs!",
         "apps/android/scripts/build-release-artifacts.ts!",
         "security/opengrep/check-rule-metadata.mjs!",
         "skills/meme-maker/scripts/meme.mjs!",
         "scripts/check-live-cache.ts!",
+        "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "src/plugin-sdk/api-baseline.ts!",
       ]),
     );
     expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
+    expect(
+      scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
+    ).toEqual(["exports"]);
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty("src/**");
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
@@ -168,6 +172,12 @@ describe("check-deadcode-exports", () => {
 
   it("tracks production script consumers of plugin exports", () => {
     expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
+  });
+
+  it("tracks the workflow-invoked producer verifier as an executable root", () => {
+    expect(knipConfig.workspaces["."].entry).toContain(
+      "scripts/verify-full-release-producer-job.mjs!",
+    );
   });
 
   it("runs exhaustive dead-code hygiene against production and full-tree configs", () => {
@@ -220,7 +230,7 @@ describe("check-deadcode-exports", () => {
   it("models non-imported runtime and build entrypoints explicitly", () => {
     expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
-        "src/agents/subagent-registry.runtime.ts!",
+        "src/agents/subagents/registry/subagent-registry.runtime.ts!",
         "src/mcp/plugin-tools-serve.ts!",
         "src/plugins/build-smoke-entry.ts!",
         "src/config/doc-baseline.ts!",
@@ -241,9 +251,6 @@ describe("check-deadcode-exports", () => {
       ]),
     );
     expect(knipConfig.workspaces["extensions/diffs"].entry).toContain("src/viewer-client.ts!");
-    expect(knipConfig.workspaces["extensions/matrix"].entry).toContain(
-      "src/plugin-entry.runtime.js!",
-    );
     expect(knipConfig.workspaces["extensions/mxc"].entry).toContain("src/mxc-spawn-launcher.mjs!");
     expect(knipConfig.workspaces["extensions/qa-lab"].entry).toContain("src/ci-smoke-plan.ts!");
   });
@@ -255,7 +262,6 @@ describe("check-deadcode-exports", () => {
         "browser-control-auth.ts!",
         "browser-config.ts!",
         "browser-doctor.ts!",
-        "browser-host-inspection.ts!",
         "browser-maintenance.ts!",
         "browser-profiles.ts!",
       ]),
@@ -345,11 +351,11 @@ src/noise.ts: src/noise.ts
   it("keeps findings from dot-directories and root entry files", () => {
     expect(
       parseKnipCompactUnusedExports(`Unused exports (2)
-.agents/skills/example/scripts/check.mjs: checkExample
+.agents/skills/example/scripts/check.mts: checkExample
 tsdown.ai.config.ts: default
 `),
     ).toEqual([
-      ".agents/skills/example/scripts/check.mjs: checkExample",
+      ".agents/skills/example/scripts/check.mts: checkExample",
       "tsdown.ai.config.ts: default",
     ]);
   });
@@ -386,6 +392,43 @@ src/a.ts: alpha
   src/a.ts: alpha
   src/z.ts: zebra
 Delete the exports or model their real production consumers in Knip.`,
+    });
+  });
+
+  it("discards export findings after workspace module resolution failures", () => {
+    const output = `ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')
+ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')
+Unused exports (1)
+src/config/types.ts: TelegramConfig
+`;
+
+    const result = checkExportScan("production unused-export scan", output);
+    expect(result.ok).toBe(false);
+    expect(result.entries).toEqual([]);
+    expect(result.message).toContain(
+      "deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.",
+    );
+    expect(result.message).toContain("ERROR: Error loading vitest.config.ts");
+    expect(result.message).toContain("ERROR: Error loading ui/vite.config.ts");
+    expect(result.message).toContain("Install workspace dependencies in-tree (pnpm install)");
+    expect(result.message).not.toContain("Unused exports are not allowed");
+    expect(result.message).not.toContain("src/config/types.ts: TelegramConfig");
+  });
+
+  it("accepts clean export scan output unchanged", () => {
+    expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
+  });
+
+  it("reports genuine export findings unchanged", () => {
+    expect(
+      checkExportScan("finding scan", "Unused exports (1)\nsrc/config/types.ts: TelegramConfig\n"),
+    ).toEqual({
+      entries: ["src/config/types.ts: TelegramConfig"],
+      message: `finding scan:
+Unused exports are not allowed:
+  src/config/types.ts: TelegramConfig
+Delete the exports or model their real production consumers in Knip.`,
+      ok: false,
     });
   });
 });

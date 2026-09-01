@@ -1,14 +1,9 @@
 // Recent-queue message-id dedupe shared by enqueue admission and abandonment release.
-import { pruneMapToMaxSize } from "../../../infra/map-size.js";
+import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 
 const RECENT_QUEUE_MESSAGE_ID_TTL_MS = 5 * 60 * 1000;
 const RECENT_QUEUE_MESSAGE_ID_MAX_SIZE = 10_000;
-
-type RecentQueueMessageIdRecord = {
-  ownerToken: object;
-  recordedAt: number;
-};
 
 type RecentQueueMessageIdOwnership = {
   key: string;
@@ -19,9 +14,12 @@ type RecentQueueMessageIdOwnership = {
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
  * are rejected no matter which chunk receives the enqueue call.
  */
-const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalSingleton(
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(
   Symbol.for("openclaw.recentQueueMessageIdOwners"),
-  () => new Map<string, RecentQueueMessageIdRecord>(),
+  {
+    ttlMs: RECENT_QUEUE_MESSAGE_ID_TTL_MS,
+    maxSize: RECENT_QUEUE_MESSAGE_ID_MAX_SIZE,
+  },
 );
 
 /** Chunk-shared identity→key association so abandonment can free the entry. */
@@ -43,26 +41,8 @@ function resolveDedupeIdentity(run: DedupeOwnedRun): object {
   return run.turnAdoptionLifecycle ?? run;
 }
 
-function pruneRecentQueueMessageIds(now: number): void {
-  const cutoff = now - RECENT_QUEUE_MESSAGE_ID_TTL_MS;
-  for (const [key, record] of RECENT_QUEUE_MESSAGE_IDS) {
-    if (record.recordedAt <= cutoff) {
-      RECENT_QUEUE_MESSAGE_IDS.delete(key);
-    }
-  }
-  pruneMapToMaxSize(RECENT_QUEUE_MESSAGE_IDS, RECENT_QUEUE_MESSAGE_ID_MAX_SIZE);
-}
-
 export function peekRecentQueueMessageId(key: string, now = Date.now()): boolean {
-  const record = RECENT_QUEUE_MESSAGE_IDS.get(key);
-  if (!record) {
-    return false;
-  }
-  if (now - record.recordedAt >= RECENT_QUEUE_MESSAGE_ID_TTL_MS) {
-    RECENT_QUEUE_MESSAGE_IDS.delete(key);
-    return false;
-  }
-  return true;
+  return RECENT_QUEUE_MESSAGE_IDS.peek(key, now);
 }
 
 export function recordRecentQueueMessageId(
@@ -73,8 +53,7 @@ export function recordRecentQueueMessageId(
   const ownerToken = {};
   DEDUPE_IDENTITY_OWNERSHIPS.set(resolveDedupeIdentity(run), { key, ownerToken });
   RECENT_QUEUE_MESSAGE_IDS.delete(key);
-  RECENT_QUEUE_MESSAGE_IDS.set(key, { ownerToken, recordedAt: now });
-  pruneRecentQueueMessageIds(now);
+  RECENT_QUEUE_MESSAGE_IDS.check(key, now, ownerToken);
 }
 
 /**
@@ -91,9 +70,7 @@ export function releaseRecentQueueMessageId(run: DedupeOwnedRun): void {
   DEDUPE_IDENTITY_OWNERSHIPS.delete(identity);
   // The key may have expired and been re-recorded by a newer same-ID run.
   // Only the lifecycle that installed the current owner may release it.
-  if (RECENT_QUEUE_MESSAGE_IDS.get(ownership.key)?.ownerToken === ownership.ownerToken) {
-    RECENT_QUEUE_MESSAGE_IDS.delete(ownership.key);
-  }
+  RECENT_QUEUE_MESSAGE_IDS.delete(ownership.key, ownership.ownerToken);
 }
 
 export function resetRecentQueuedMessageIdDedupe(): void {

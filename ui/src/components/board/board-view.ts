@@ -17,13 +17,10 @@ import {
   type BoardGridDirection,
   type BoardGridItem,
 } from "../../lib/board/grid.ts";
-import type { BoardOp, BoardTab } from "../../lib/board/types.ts";
+import type { BoardOp, BoardSnapshot, BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
-  BoardObserverContext,
   BoardViewCallbacks,
-  BoardViewSnapshot,
-  BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -45,13 +42,13 @@ type BoardPointerGesture = {
   items: BoardGridItem[];
 };
 
-function orderedTabs(snapshot: BoardViewSnapshot): BoardTab[] {
+function orderedTabs(snapshot: BoardSnapshot): BoardTab[] {
   return snapshot.tabs.toSorted(
     (left, right) => left.position - right.position || left.tabId.localeCompare(right.tabId),
   );
 }
 
-function orderedWidgets(snapshot: BoardViewSnapshot, tabId: string): BoardViewWidget[] {
+function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
   return snapshot.widgets
     .filter((widget) => widget.tabId === tabId)
     .toSorted(
@@ -60,7 +57,7 @@ function orderedWidgets(snapshot: BoardViewSnapshot, tabId: string): BoardViewWi
 }
 
 function itemsForWidgets(
-  widgets: readonly BoardViewWidget[],
+  widgets: readonly BoardWidget[],
   contentHeights: ReadonlyMap<string, number>,
 ): BoardGridItem[] {
   const chromeRowPx = boardChromeRowPx();
@@ -73,14 +70,13 @@ function itemsForWidgets(
 }
 
 class OpenClawBoardView extends OpenClawLightDomElement {
-  @property({ attribute: false }) snapshot?: BoardViewSnapshot;
+  @property({ attribute: false }) snapshot?: BoardSnapshot;
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
-  @property({ attribute: false }) observer?: BoardObserverContext;
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
-  @property({ type: Boolean }) ticketRefreshEnabled = true;
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -138,7 +134,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (changed.has("activeTabId")) {
       this.focusName = "";
     }
-    if (this.gesture && (changed.has("snapshot") || changed.has("activeTabId"))) {
+    if (
+      this.gesture &&
+      (changed.has("snapshot") ||
+        changed.has("activeTabId") ||
+        (changed.has("active") && !this.active))
+    ) {
       this.cancelGesture();
     }
   }
@@ -196,6 +197,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   private readonly cellCallbacks: BoardWidgetCellCallbacks = {
+    appViewGeneration: () => this.callbacks?.appViewGeneration ?? 0,
     grant: async (name: string, decision: BoardGrantDecision) => {
       if (!this.callbacks) {
         return;
@@ -295,10 +297,16 @@ class OpenClawBoardView extends OpenClawLightDomElement {
 
   private beginGesture(
     mode: BoardPointerGesture["mode"],
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     event: PointerEvent,
   ): void {
-    if (!this.canMutate || event.button !== 0 || this.gesture || this.mutationPending) {
+    if (
+      !this.active ||
+      !this.canMutate ||
+      event.button !== 0 ||
+      this.gesture ||
+      this.mutationPending
+    ) {
       return;
     }
     const snapshot = this.snapshot;
@@ -376,11 +384,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         1,
         (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
       );
-      const targetCell = {
+      // Resolve both the visible target and reorder against the current preview;
+      // a card moving under the pointer must not undo the drop on pointerup.
+      const items = this.previewItems ?? gesture.items;
+      const targetName = pointerElement?.closest<
+        HTMLElementTagNameMap["openclaw-board-widget-cell"]
+      >("openclaw-board-widget-cell")?.widget?.name;
+      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
       };
-      this.previewItems = previewDrag(gesture.items, gesture.name, targetCell).items;
+      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
       return;
     }
 
@@ -472,7 +486,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     this.hoverTabId = "";
   }
 
-  private async nudgeWidget(widget: BoardViewWidget, direction: BoardGridDirection): Promise<void> {
+  private async nudgeWidget(widget: BoardWidget, direction: BoardGridDirection): Promise<void> {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
@@ -488,7 +502,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     );
   }
 
-  private focusWidget(widget: BoardViewWidget, direction: BoardGridDirection): void {
+  private focusWidget(widget: BoardWidget, direction: BoardGridDirection): void {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
@@ -606,7 +620,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   }
 
   private renderGrid(
-    widgets: readonly BoardViewWidget[],
+    widgets: readonly BoardWidget[],
     tabs: readonly BoardTab[],
     sessionKey: string,
   ): TemplateResult {
@@ -656,7 +670,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
-                .observer=${this.observer}
+                .active=${this.active}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}
@@ -664,7 +678,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .busy=${this.mutationPending}
                 .canMutate=${this.canMutate}
                 .canGrant=${this.canGrant}
-                .ticketRefreshEnabled=${this.ticketRefreshEnabled}
               ></openclaw-board-widget-cell>
             `;
           },

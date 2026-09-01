@@ -141,7 +141,7 @@ const baseAccount: ResolvedFeishuAccount = {
   config: FeishuConfigSchema.parse({}),
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
@@ -158,7 +158,7 @@ type HttpInstanceLike = {
 
 function requireHttpInstance(value: unknown): HttpInstanceLike {
   if (
-    isRecord(value) &&
+    isObjectRecord(value) &&
     typeof value.request === "function" &&
     typeof value.get === "function" &&
     typeof value.post === "function"
@@ -173,7 +173,7 @@ function readCallOptions(
   index = -1,
 ): Record<string, unknown> {
   const call = index < 0 ? mock.mock.calls.at(index)?.[0] : mock.mock.calls[index]?.[0];
-  return isRecord(call) ? call : {};
+  return isObjectRecord(call) ? call : {};
 }
 
 function firstWsClientOptions(): {

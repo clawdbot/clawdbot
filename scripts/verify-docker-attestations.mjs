@@ -3,6 +3,8 @@
 // Verifies Docker image attestations cover required platforms and predicates.
 import { execFileSync } from "node:child_process";
 import process from "node:process";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
 const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
@@ -173,21 +175,13 @@ export function inspectRaw(imageRef, params = {}) {
   });
 }
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const imageRefs = [];
   const requiredPlatforms = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--platform") {
-      requiredPlatforms.push(parsePlatform(readOptionValue(argv, i, arg)));
+      requiredPlatforms.push(parsePlatform(requireOptionArgument(argv, i, arg)));
       i += 1;
       continue;
     }
@@ -227,7 +221,7 @@ async function main() {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

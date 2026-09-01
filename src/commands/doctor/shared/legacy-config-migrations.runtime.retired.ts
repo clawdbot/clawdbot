@@ -21,8 +21,9 @@ import {
   moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitChannelEntries } from "./legacy-config-record-shared.js";
+import { visitAgentConfigScopes, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -100,28 +101,22 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
+  visitAgentConfigScopes(raw, (scope, path) => {
     moveKey(
-      getRecord(getRecord(scope?.tools)?.exec),
+      getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
     moveKey(
-      getRecord(getRecord(getRecord(scope?.sandbox)?.browser)),
+      getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
       `${path}.sandbox.browser`,
       changes,
     );
-  };
-  migrateAgentScope(defaults, "agents.defaults");
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((entry, index) =>
-      migrateAgentScope(getRecord(entry), `agents.list[${index}]`),
-    );
-  }
+  });
   moveKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",
@@ -222,8 +217,29 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
 
 function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  if (defaults && Object.hasOwn(defaults, "promptOverlays")) {
+    const personality = getRecord(getRecord(defaults.promptOverlays)?.gpt5)?.personality;
+    if (personality !== undefined) {
+      const openaiConfig = ensureRecord(
+        ensureRecord(ensureRecord(ensureRecord(raw, "plugins"), "entries"), "openai"),
+        "config",
+      );
+      if (openaiConfig.personality === undefined) {
+        openaiConfig.personality = personality;
+        changes.push(
+          "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+        );
+      } else {
+        changes.push(
+          "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+        );
+      }
+    } else {
+      changes.push("Removed agents.defaults.promptOverlays; built-in behavior now applies.");
+    }
+    delete defaults.promptOverlays;
+  }
   for (const key of [
-    "promptOverlays",
     "envelopeTimestamp",
     "envelopeElapsed",
     "envelopeTimezone",
@@ -300,13 +316,9 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
         delete entry.ui;
       }
     }
-    if (Object.hasOwn(entry, "subagentProgress")) {
-      delete entry.subagentProgress;
-      changes.push(`Removed ${path}.subagentProgress.`);
-    }
   });
 
-  let messages = getRecord(raw.messages);
+  const messages = getRecord(raw.messages);
   const statusReactions = getRecord(messages?.statusReactions);
   if (statusReactions && Object.hasOwn(statusReactions, "emojis")) {
     delete statusReactions.emojis;
@@ -319,49 +331,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 
   visitChannelEntries(raw, "whatsapp", (entry, path) => {
     moveKey(entry, "messagePrefix", "responsePrefix", path, changes);
-    const ack = getRecord(entry.ackReaction);
-    if (!ack) {
-      return;
-    }
-    messages ??= ensureRecord(raw, "messages");
-    if (messages.ackReaction === undefined) {
-      const legacyAgents = getRecord(raw.agents)?.list;
-      const agentEntries = Array.isArray(legacyAgents)
-        ? legacyAgents.filter((value): value is Record<string, unknown> =>
-            Boolean(getRecord(value)),
-          )
-        : [];
-      const defaultAgent =
-        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
-      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
-      messages.ackReaction =
-        typeof ack.emoji === "string"
-          ? ack.emoji
-          : typeof identityEmoji === "string"
-            ? identityEmoji
-            : "👀";
-    }
-    if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
-      if (scope) {
-        messages.ackReactionScope = scope;
-      }
-    }
-    delete entry.ackReaction;
-    changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
@@ -418,7 +387,58 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
   }
 }
 
+function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string[]): void {
+  const ui = getRecord(raw.ui);
+  if (!ui || !Object.hasOwn(ui, "assistant")) {
+    return;
+  }
+
+  // The retired override was presentation-only. Translating it into agent identity
+  // would unexpectedly change outbound channel identity.
+  delete ui.assistant;
+  if (Object.keys(ui).length === 0) {
+    delete raw.ui;
+  }
+  changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  defineLegacyConfigMigration({
+    id: "runtime.retired-internal-hook-handlers",
+    describe: "Remove retired internal hook handler registrations",
+    legacyRules: [
+      {
+        path: ["hooks", "internal", "handlers"],
+        message:
+          'hooks.internal.handlers is retired. Move each module to a managed/workspace hook directory with HOOK.md + handler file before running "openclaw doctor --fix"; the fix removes retired registrations and does not materialize executable files.',
+      },
+    ],
+    apply: (raw, changes) => {
+      const internal = getRecord(getRecord(raw.hooks)?.internal);
+      if (!internal || !Object.hasOwn(internal, "handlers")) {
+        return;
+      }
+
+      delete internal.handlers;
+      changes.push(
+        "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      );
+
+      const entries = getRecord(internal.entries);
+      const extraDirs = getRecord(internal.load)?.extraDirs;
+      const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
+      const hasExtraDirs =
+        Array.isArray(extraDirs) &&
+        extraDirs.some((dir) => typeof dir === "string" && dir.trim().length > 0);
+      if (internal.enabled === true && !hasNamedEntries && !hasExtraDirs) {
+        delete internal.enabled;
+        changes.push(
+          "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+        );
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.doctor-tier-eval-tranche",
     describe: "Consolidate approved tier-eval configuration surfaces",
@@ -497,6 +517,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.ui-assistant-identity",
+    describe: "Remove the retired UI assistant identity override",
+    legacyRules: [
+      rule(["ui", "assistant"], "ui.assistant was retired; use agents.list[].identity instead."),
+    ],
+    apply: removeUiAssistantIdentity,
   }),
   defineLegacyConfigMigration({
     id: "runtime.retired-config-keys",

@@ -98,6 +98,9 @@ final class ExecApprovalsMigrationRequiredCache: @unchecked Sendable {
 }
 
 enum ExecApprovalsStore {
+    // Test stores are task-scoped so parallel suites cannot redirect unrelated
+    // shared-state consumers through the process environment.
+    @TaskLocal private static var scopedStateDirectoryURL: URL?
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private static let migrationRequiredCache = ExecApprovalsMigrationRequiredCache { event in
         switch event {
@@ -115,12 +118,63 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+    private static let cwdBoundArgPatternPrefix = "sha256:cwd-argv:v1:"
+
+    #if compiler(>=6.4)
+    nonisolated(nonsending) static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(url) {
+            try await operation()
+        }
+    }
+    #else
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(
+            url,
+            operation: operation,
+            isolation: isolation)
+    }
+    #endif
+
     static func databaseURL() -> URL {
         ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: self.stateDirURL())
     }
 
     static func socketPath() -> String {
-        self.stateDirURL().appendingPathComponent("exec-approvals.sock").path
+        self.socketPath(
+            stateDirectoryURL: self.stateDirURL(),
+            profileActive: AppProfile.current.isActive)
+    }
+
+    static func socketPath(stateDirectoryURL: URL, profileActive: Bool) -> String {
+        let canonical = stateDirectoryURL.appendingPathComponent("exec-approvals.sock").path
+        let maximumLength = MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+        guard canonical.utf8.count >= maximumLength, profileActive else {
+            return canonical
+        }
+        let digest = SHA256.hash(data: Data(canonical.utf8))
+            .prefix(8)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "/tmp/openclaw-\(geteuid())/exec-approvals-\(digest).sock"
+    }
+
+    static func resolvedPersistedSocketPath(
+        existing: String?,
+        stateDirectoryURL: URL,
+        computed: String) -> String
+    {
+        let existing = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let oldCanonical = stateDirectoryURL.appendingPathComponent("exec-approvals.sock").path
+        return existing.isEmpty || (existing == oldCanonical && computed != oldCanonical)
+            ? computed
+            : existing
     }
 
     private static func homeURL() -> URL {
@@ -133,8 +187,11 @@ enum ExecApprovalsStore {
     }
 
     private static func stateDirURL() -> URL {
+        if let scopedStateDirectoryURL {
+            return scopedStateDirectoryURL
+        }
         guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
-            return self.homeURL().appendingPathComponent(".openclaw", isDirectory: true)
+            return AppProfile.current.stateDirectoryURL(homeDirectory: self.homeURL())
         }
         let home = self.homeURL().path
         let expanded: String = if configured == "~" {
@@ -264,10 +321,12 @@ enum ExecApprovalsStore {
         if file.socket == nil {
             file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
         }
-        let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if path.isEmpty {
-            file.socket?.path = self.socketPath()
-        }
+        let existingSocketPath = file.socket?.path
+        let resolvedSocketPath = self.resolvedPersistedSocketPath(
+            existing: existingSocketPath,
+            stateDirectoryURL: self.stateDirURL(),
+            computed: self.socketPath())
+        file.socket?.path = resolvedSocketPath
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if token.isEmpty {
             file.socket?.token = self.generateToken()
@@ -387,8 +446,13 @@ enum ExecApprovalsStore {
     static func resolveAsyncResult(
         agentId: String?) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     {
-        await Task.detached(priority: .userInitiated) {
-            self.resolveResult(agentId: agentId)
+        let stateDirectoryURL = self.stateDirURL()
+        // Detached work does not inherit task-local values; bind the prepared
+        // root again so one read cannot mix database and socket directories.
+        return await Task.detached(priority: .userInitiated) {
+            self.$scopedStateDirectoryURL.withValue(stateDirectoryURL) {
+                self.resolveResult(agentId: agentId)
+            }
         }.value
     }
 
@@ -724,6 +788,15 @@ extension ExecApprovalsStore {
         let now = Date().timeIntervalSince1970 * 1000
         for grant in grants {
             let incoming = grant.match
+            if incoming.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) == true {
+                // Renewing trust for one executable also clears its inactive
+                // pre-cwd grants, which can never authorize after this upgrade.
+                allowlist.removeAll { item in
+                    item.pattern == incoming.pattern &&
+                        item.source == "allow-always" &&
+                        item.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) != true
+                }
+            }
             if let index = allowlist.firstIndex(where: {
                 self.allowlistEntryMatchKey($0) == self.allowlistEntryMatchKey(incoming)
             }) {
@@ -783,7 +856,35 @@ extension ExecApprovalsStore {
     }
 
     private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
-        !(entry.argPattern?.hasPrefix("sha256:argv:") ?? false)
+        !(entry.argPattern?.hasPrefix("sha256:") ?? false)
+    }
+
+    @discardableResult
+    static func removeObsoleteGeneratedAllowAlwaysEntries() -> Result<Int, ExecApprovalsMutationError> {
+        var removed = 0
+        let result = self.updateFile { file in
+            var agents = file.agents ?? [:]
+            for (key, var agent) in agents {
+                let current = agent.allowlist ?? []
+                let retained = current.filter { item in
+                    let pattern = item.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let keep = item.source != "allow-always" ||
+                        pattern.hasPrefix("=command:") ||
+                        pattern.hasPrefix("=node-command:") ||
+                        item.argPattern?.hasPrefix(self.cwdBoundArgPatternPrefix) == true
+                    if !keep { removed += 1 }
+                    return keep
+                }
+                if retained.count != current.count {
+                    agent.allowlist = retained
+                    agents[key] = agent
+                }
+            }
+            if removed > 0 {
+                file.agents = agents
+            }
+        }
+        return result.map { removed }
     }
 
     @discardableResult

@@ -1,21 +1,11 @@
 // Normalizes payloads and applies post-send presentation/media effects.
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
+import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
-import {
-  hasReplyPayloadContent,
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
-  type ReplyPayloadDeliveryPin,
-} from "../../interactive/payload.js";
+import { hasReplyPayloadContent, type ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
-import {
-  emitInternalDiagnosticEvent as emitDiagnosticEvent,
-  type DiagnosticMessageDeliveryKind,
-} from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import type {
   ChannelHandler,
@@ -24,24 +14,14 @@ import type {
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
-import type { DeliveryMirror } from "./mirror.js";
 import {
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
 } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
-import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 const log = createSubsystemLogger("outbound/deliver");
-
-export function sessionKeyForDeliveryDiagnostics(params: {
-  mirror?: DeliveryMirror;
-  session?: OutboundSessionContext;
-}): string | undefined {
-  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
-}
 
 export function deliveryKindForPayload(
   payload: ReplyPayload,
@@ -54,53 +34,6 @@ export function deliveryKindForPayload(
     return "other";
   }
   return "text";
-}
-
-export function emitMessageDeliveryStarted(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.started",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-export function emitMessageDeliveryCompleted(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  durationMs: number;
-  resultCount: number;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.completed",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    durationMs: params.durationMs,
-    resultCount: params.resultCount,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-export function emitMessageDeliveryError(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  durationMs: number;
-  error: unknown;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.error",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    durationMs: params.durationMs,
-    errorCategory: diagnosticErrorCategory(params.error),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
 }
 
 export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
@@ -236,15 +169,7 @@ export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPa
 }
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return Boolean(
-    result.messageId ||
-    result.chatId ||
-    result.channelId ||
-    result.roomId ||
-    result.conversationId ||
-    result.toJid ||
-    result.pollId,
-  );
+  return resolveReceiptSourceId(result) !== undefined;
 }
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
@@ -341,50 +266,4 @@ export async function maybeNotifyAfterDeliveredPayload(params: {
       error: formatErrorMessage(err),
     });
   }
-}
-
-export async function renderPresentationForDelivery(
-  handler: ChannelHandler,
-  payload: ReplyPayload,
-): Promise<ReplyPayload> {
-  const presentation = normalizeMessagePresentation(payload.presentation);
-  if (!presentation) {
-    return payload;
-  }
-  const adaptedPresentation = adaptMessagePresentationForChannel({
-    presentation,
-    capabilities: handler.presentationCapabilities,
-  });
-  const textIsFallback = payload.presentationTextMode === "fallback";
-  const adaptedPayload = {
-    ...payload,
-    ...(textIsFallback ? { text: undefined } : {}),
-    presentation: adaptedPresentation,
-  };
-  const rendered = handler.renderPresentation
-    ? await handler.renderPresentation(adaptedPayload)
-    : null;
-  if (rendered) {
-    const {
-      presentation: _presentation,
-      presentationTextMode: _presentationTextMode,
-      ...withoutPresentation
-    } = rendered;
-    return withoutPresentation;
-  }
-  const {
-    presentation: _presentation,
-    presentationTextMode: _presentationTextMode,
-    ...withoutPresentation
-  } = payload;
-  // Native controls may be clipped or split; plain fallback must retain authored labels.
-  return {
-    ...withoutPresentation,
-    text: textIsFallback
-      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
-      : renderMessagePresentationFallbackText({
-          text: payload.text,
-          presentation,
-        }),
-  };
 }

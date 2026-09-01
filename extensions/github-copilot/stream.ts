@@ -4,7 +4,7 @@ import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
-  streamWithPayloadPatch,
+  createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
@@ -46,17 +46,6 @@ function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   });
 }
 
-function buildCopilotDynamicHeaders(params: {
-  messages: Context["messages"];
-  hasImages: boolean;
-}): Record<string, string> {
-  return {
-    ...buildCopilotRuntimeHeaders(),
-    "x-initiator": inferCopilotInitiator(params.messages),
-    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
-  };
-}
-
 function patchOnPayloadResult(
   result: unknown,
   patchPayload: (payload: unknown) => unknown = sanitizeCopilotReplayResponsePayload,
@@ -70,19 +59,6 @@ function patchOnPayloadResult(
   }
   patchPayload(result === undefined ? fallbackPayload : result);
   return result;
-}
-
-function buildCopilotRequestHeaders(
-  context: Parameters<StreamFn>[1],
-  headers: Record<string, string> | undefined,
-): Record<string, string> {
-  return {
-    ...buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages: hasCopilotVisionInput(context.messages),
-    }),
-    ...headers,
-  };
 }
 
 type CopilotAnthropicToolBlock = {
@@ -185,39 +161,33 @@ function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
   applyAnthropicEphemeralCacheControlMarkers(payload);
 }
 
-export function wrapCopilotAnthropicStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
+function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): StreamFn | undefined {
   if (!baseStreamFn) {
     return undefined;
   }
   const underlying = baseStreamFn;
+  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) =>
+    patchCopilotAnthropicPayload(payload),
+  );
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "anthropic-messages") {
       return underlying(model, context, options);
     }
 
     const originalOnPayload = options?.onPayload;
-    return streamWithPayloadPatch(
-      underlying,
-      model,
-      context,
-      {
-        ...options,
-        headers: buildCopilotRequestHeaders(context, options?.headers),
-        onPayload: (payload, payloadModel) =>
-          patchOnPayloadResult(
-            originalOnPayload?.(payload, payloadModel),
-            (replacement) => {
-              if (replacement && typeof replacement === "object") {
-                patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
-              }
-            },
-            payload,
-          ),
-      },
-      patchCopilotAnthropicPayload,
-    );
+    return payloadWrapper(model, context, {
+      ...options,
+      onPayload: (payload, payloadModel) =>
+        patchOnPayloadResult(
+          originalOnPayload?.(payload, payloadModel),
+          (replacement) => {
+            if (replacement && typeof replacement === "object") {
+              patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
+            }
+          },
+          payload,
+        ),
+    });
   };
 }
 
@@ -236,37 +206,38 @@ function wrapCopilotOpenAIResponsesStream(
     const originalOnPayload = options?.onPayload;
     const wrappedOptions: StreamOptions = {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         sanitizeCopilotReplayResponsePayload(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), undefined, payload);
       },
     };
     return underlying(model, context, wrappedOptions);
   };
 }
 
-function wrapCopilotOpenAICompletionsStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
-  if (!baseStreamFn) {
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const stream = wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  if (!stream) {
     return undefined;
   }
-  const underlying = baseStreamFn;
   return (model, context, options) => {
-    if (model.provider !== "github-copilot" || model.api !== "openai-completions") {
-      return underlying(model, context, options);
+    if (
+      model.provider !== "github-copilot" ||
+      !["anthropic-messages", "openai-responses", "openai-completions"].includes(model.api)
+    ) {
+      return stream(model, context, options);
     }
-
-    return underlying(model, context, {
+    return stream(model, context, {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: {
+          ...model.headers,
+          "x-initiator": inferCopilotInitiator(context.messages),
+          ...(hasCopilotVisionInput(context.messages) ? { "Copilot-Vision-Request": "true" } : {}),
+          ...options?.headers,
+        },
+      }),
     });
   };
-}
-
-export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  return wrapCopilotOpenAICompletionsStream(
-    wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
-  );
 }

@@ -2,11 +2,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  commandsLightSourceFiles,
-  commandsLightTestFiles,
-} from "./vitest.commands-light-paths.mjs";
-import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
+import { commandsLightTestFiles } from "./vitest.commands-light-paths.mjs";
+import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
+import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -65,7 +64,6 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
-  "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.failover.test.ts",
@@ -86,7 +84,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/translator.session-snapshot.test.ts",
   "src/acp/translator.tool-streaming.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
-  "extensions/canvas/src/host/server.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
@@ -96,7 +93,6 @@ export const forcedUnitFastTestFiles = [
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
-  "extensions/canvas/src/host/server.state-dir.test.ts",
   "src/entry.compile-cache.test.ts",
   "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
@@ -104,11 +100,11 @@ export const forcedUnitFastTestFiles = [
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/flows/search-setup.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
-  "src/image-generation/provider-registry.test.ts",
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
   "src/mcp/openclaw-tools-serve.test.ts",
+  "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -152,23 +148,39 @@ export const forcedUnitFastTestFiles = [
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
-  "src/video-generation/provider-registry.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
 const unitFastCandidateExactFileSet = new Set(unitFastCandidateExactFiles);
-const unitFastSourceExactFileSet = new Set([
-  ...pluginSdkLightSourceFiles,
-  ...commandsLightSourceFiles,
-]);
 const broadUnitFastCandidateGlobs = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
 const ownerRoutedUnitTestPatterns = [
+  ...cliProcessTestFiles,
+  // Real Git process-tree fixtures stay in serial tooling even when their
+  // subprocess harness moves into shared test support.
+  "test/scripts/ci-git-owner.test.ts",
+  "test/scripts/openclaw-performance-git-lifecycle.test.ts",
+  "test/scripts/plugin-release-git-lifecycle.test.ts",
+  "test/scripts/release-workflow-git-lifecycle.test.ts",
+  "test/scripts/ci-linux-git.test.ts",
+  "test/scripts/ci-platform-checkout.test.ts",
+  // Command compaction tests need the scoped runtime registry even when their
+  // mocks live in a shared helper.
+  "src/agents/agent-command.compaction-rotation.test.ts",
+  "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+  "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
+  "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",
@@ -251,7 +263,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -334,17 +346,29 @@ function walkFiles(directory, files = []) {
 const walkedTestFilesByCwd = new Map();
 
 function collectRepoTestFilesFromGit(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", "src", "packages", "test"], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  // Planning, fast-lane includes, and scoped exclusions share this inventory.
+  // New working-tree tests must be present so explicit targets cannot become empty lanes.
+  const result = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      "src",
+      "packages",
+      "test",
+    ],
+    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  );
   if (result.status !== 0) {
     return null;
   }
   return result.stdout
-    .split("\n")
-    .map((file) => normalizeRepoPath(file.trim()))
+    .split("\0")
+    .map(normalizeRepoPath)
     .filter((file) => file.endsWith(".test.ts"));
 }
 
@@ -481,27 +505,37 @@ function analyzeUnitFastTestFile(cwd, file) {
   }
 
   let analysis;
-  try {
-    const source = fs.readFileSync(path.join(cwd, file), "utf8");
-    const reasons = classifyUnitFastTestFileContent(source);
-    if (importsStatefulTestHelper(cwd, file, source)) {
-      // The helper executes in the importing file's module scope, so its mocks and
-      // singleton mutations need the same isolation as stateful code in the test itself.
-      reasons.push("stateful-test-helper");
-    }
-    const forced = forcedUnitFastTestFileSet.has(file);
-    analysis = {
-      file,
-      unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
-      forced,
-      reasons,
-    };
-  } catch {
+  if (isToolingIsolatedTestFile(file)) {
+    // Explicit project ownership wins over inferred eligibility so full-suite
+    // configs cannot run the same stateful tooling test in two worker pools.
     analysis = {
       file,
       unitFast: false,
-      reasons: ["missing-file"],
+      reasons: ["tooling-isolated-owner"],
     };
+  } else {
+    try {
+      const source = fs.readFileSync(path.join(cwd, file), "utf8");
+      const reasons = classifyUnitFastTestFileContent(source);
+      if (importsStatefulTestHelper(cwd, file, source)) {
+        // The helper executes in the importing file's module scope, so its mocks and
+        // singleton mutations need the same isolation as stateful code in the test itself.
+        reasons.push("stateful-test-helper");
+      }
+      const forced = forcedUnitFastTestFileSet.has(file);
+      analysis = {
+        file,
+        unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
+        forced,
+        reasons,
+      };
+    } catch {
+      analysis = {
+        file,
+        unitFast: false,
+        reasons: ["missing-file"],
+      };
+    }
   }
 
   // Discovery is a process-start snapshot; default and broad audits overlap heavily.
@@ -574,7 +608,10 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
   return files;
 }
 
-export function getUnitFastTestFiles() {
+export function getUnitFastTestFiles(includePatterns) {
+  if (includePatterns) {
+    return getUnitFastTestFilesForIncludePatterns(includePatterns);
+  }
   if (cachedUnitFastTestFiles !== null) {
     return cachedUnitFastTestFiles;
   }
@@ -584,30 +621,38 @@ export function getUnitFastTestFiles() {
   return cachedUnitFastTestFiles;
 }
 
-export function getUnitFastTimerTestFiles() {
-  if (cachedUnitFastTimerTestFiles !== null) {
-    return cachedUnitFastTimerTestFiles;
-  }
-  cachedUnitFastTimerTestFiles = collectUnitFastTestFileAnalysis()
-    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
-    .map((entry) => entry.file);
-  return cachedUnitFastTimerTestFiles;
+function selectedUnitFastAnalysis(includePatterns) {
+  // Partial selections reuse scoped analysis without populating whole-lane membership caches.
+  return includePatterns
+    ? getUnitFastTestFilesForIncludePatterns(includePatterns).map((file) =>
+        analyzeUnitFastTestFile(process.cwd(), file),
+      )
+    : collectUnitFastTestFileAnalysis();
 }
 
-export function getUnitFastIsolatedTestFiles() {
-  if (cachedUnitFastIsolatedTestFiles !== null) {
+export function getUnitFastTimerTestFiles(includePatterns) {
+  if (!includePatterns && cachedUnitFastTimerTestFiles !== null) {
+    return cachedUnitFastTimerTestFiles;
+  }
+  const files = selectedUnitFastAnalysis(includePatterns)
+    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
+    .map((entry) => entry.file);
+  return includePatterns ? files : (cachedUnitFastTimerTestFiles = files);
+}
+
+export function getUnitFastIsolatedTestFiles(includePatterns) {
+  if (!includePatterns && cachedUnitFastIsolatedTestFiles !== null) {
     return cachedUnitFastIsolatedTestFiles;
   }
-  const timerTestFiles = new Set(getUnitFastTimerTestFiles());
-  cachedUnitFastIsolatedTestFiles = collectUnitFastTestFileAnalysis()
+  const files = selectedUnitFastAnalysis(includePatterns)
     .filter(
       (entry) =>
         entry.unitFast &&
-        !timerTestFiles.has(entry.file) &&
+        !entry.reasons.includes("fake-timers") &&
         (entry.forced || entry.reasons.includes("stateful-test-helper")),
     )
     .map((entry) => entry.file);
-  return cachedUnitFastIsolatedTestFiles;
+  return includePatterns ? files : (cachedUnitFastIsolatedTestFiles = files);
 }
 
 function getUnitFastTestFileSet() {
@@ -634,14 +679,6 @@ function getUnitFastIsolatedTestFileSet() {
   return cachedUnitFastIsolatedTestFileSet;
 }
 
-function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
-  const normalized = normalizeRepoPath(file);
-  if (!isUnitFastCandidateFile(normalized)) {
-    return false;
-  }
-  return analyzeUnitFastTestFile(cwd, normalized).unitFast;
-}
-
 export function isUnitFastTestFile(file) {
   return getUnitFastTestFileSet().has(normalizeRepoPath(file));
 }
@@ -662,7 +699,7 @@ export function resolveUnitFastTestIncludePattern(file) {
   if (isUnitFastIsolatedTestFile(normalized)) {
     return null;
   }
-  if (isUnitFastTestFileOnDemand(normalized)) {
+  if (isUnitFastTestFile(normalized)) {
     return normalized;
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
@@ -672,14 +709,7 @@ export function resolveUnitFastTestIncludePattern(file) {
   if (isUnitFastIsolatedTestFile(siblingTestFile)) {
     return null;
   }
-  if (isUnitFastTestFileOnDemand(siblingTestFile)) {
-    return siblingTestFile;
-  }
-  if (unitFastSourceExactFileSet.has(normalized)) {
-    const exactTestFile = normalized.replace(/\.ts$/u, ".test.ts");
-    return isUnitFastTestFileOnDemand(exactTestFile) ? exactTestFile : null;
-  }
-  return null;
+  return isUnitFastTestFile(siblingTestFile) ? siblingTestFile : null;
 }
 
 export function resolveUnitFastTimerTestIncludePattern(file) {

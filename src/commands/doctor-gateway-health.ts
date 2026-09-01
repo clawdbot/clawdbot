@@ -3,6 +3,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { compareCliGatewayStateDirs, type GatewayHello } from "../cli/state-dir-gateway-check.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -18,15 +20,20 @@ import type {
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
 import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
+import { projectDoctorSecretRuntimeDegradations } from "./doctor-secret-runtime-degradation.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+  gatewayConnectErrorWasRateLimited,
   gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
 
 type GatewayMemoryProbe = {
   checked: boolean;
@@ -86,17 +93,30 @@ export async function checkGatewayHealth(params: {
       params: { includeChannelSummary: false },
       timeoutMs,
       config: params.cfg,
+      onHelloOk: ({ snapshot }: GatewayHello) => {
+        if (!snapshot.stateDir) {
+          return;
+        }
+        const comparison = compareCliGatewayStateDirs({
+          cliStateDir: resolveStateDir(process.env),
+          cliConfigPath: resolveConfigPath(process.env),
+          gatewayStateDir: snapshot.stateDir,
+          gatewayConfigPath: snapshot.configPath,
+          source: "live Gateway",
+          mode: "warn",
+        });
+        if (comparison.kind === "warn") {
+          note(comparison.message, "Gateway state directory mismatch");
+        }
+      },
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
-    if (status.degradedSecretOwners && status.degradedSecretOwners.length > 0) {
+    const secretDegradations = projectDoctorSecretRuntimeDegradations(status);
+    if (secretDegradations.length > 0) {
       note(
-        status.degradedSecretOwners
-          .map(
-            (owner) =>
-              `- ${owner.degradationState ?? "cold"} ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
-              "\n  Retry: openclaw secrets reload",
-          )
+        secretDegradations
+          .map((owner) => `- ${owner.message}\n  Retry: ${owner.retryHint}`)
           .join("\n"),
         "Secret runtime degradation",
       );
@@ -112,14 +132,22 @@ export async function checkGatewayHealth(params: {
         "Plugins configured unavailable",
       );
     }
-    try {
-      const statusLocal = await callGateway({
+    const [channelsResult, exporterResult] = await Promise.allSettled([
+      callGateway({
         method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
         config: params.cfg,
-      });
-      const issues = collectChannelStatusIssues(statusLocal);
+      }),
+      callGateway({
+        method: "diagnostics.stability",
+        params: { type: "telemetry.exporter", limit: 1000 },
+        timeoutMs: Math.min(timeoutMs, 6000),
+        config: params.cfg,
+      }),
+    ]);
+    if (channelsResult.status === "fulfilled") {
+      const issues = collectChannelStatusIssues(channelsResult.value);
       if (issues.length > 0) {
         note(
           issues
@@ -133,17 +161,35 @@ export async function checkGatewayHealth(params: {
           "Channel warnings",
         );
       }
-    } catch (error) {
+    } else {
       note(
         [
-          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
           `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
         ].join("\n"),
         "Channel warnings",
       );
     }
+    if (exporterResult.status === "fulfilled") {
+      const exporterSummary = formatTelemetryExporterSummary(exporterResult.value);
+      if (exporterSummary) {
+        note(exporterSummary.lines.join("\n"), exporterSummary.title);
+      }
+    } else {
+      note(
+        [
+          `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
+          `Retry: ${formatCliCommand("openclaw gateway stability --type telemetry.exporter")}`,
+        ].join("\n"),
+        "Telemetry exporters",
+      );
+    }
     return { healthOk, authenticated: true, status };
   } catch (err) {
+    if (gatewayConnectErrorWasRateLimited(err)) {
+      note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+      return { healthOk: true, authenticated: false };
+    }
     if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
       const probe = await probeGatewayStatus({
@@ -155,23 +201,22 @@ export async function checkGatewayHealth(params: {
         json: true,
       });
       if (gatewayProbeResultSawGateway(probe)) {
-        note(
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
-        );
+        if (gatewayProbeResultWasRateLimited(probe)) {
+          note(GATEWAY_HEALTH_RATE_LIMITED_MESSAGE, GATEWAY_HEALTH_RATE_LIMITED_TITLE);
+        } else {
+          note(
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+          );
+        }
         healthOk = true;
         return { healthOk, authenticated: false };
       }
     }
-    const message = String(err);
-    if (message.includes("gateway closed")) {
+    const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+    if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-      const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-      if (closedDiagnostic) {
-        note(closedDiagnostic, "Gateway");
-      } else {
-        note("Gateway not running.", "Gateway");
-      }
+      note(closedDiagnostic, "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));

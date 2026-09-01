@@ -169,6 +169,12 @@ The push wake and node status demo completed.
 
 ## Device Permissions
 
+OpenClaw does not present an aggregate permissions page during onboarding.
+Optional access is requested when the reviewer invokes the related feature or
+taps `Continue` for a permission in Settings. `Continue` immediately presents
+the native iOS authorization prompt, with no additional OpenClaw dialog or
+deferral action.
+
 1. Tap `Settings`.
 2. Tap `Permissions`.
 3. Confirm these current app controls are available:
@@ -177,11 +183,19 @@ The push wake and node status demo completed.
    - `Keep Awake`
 4. Confirm the always-visible `Apple Health` section identifies the integration
    as `Apple Health Summaries`.
-5. Expand `Privacy & Access` and confirm these request controls are available:
-   - `Contacts` / `Request Access`
-   - `Calendar (Add Events)` / `Request Access`
-   - `Calendar (View Events)` / `Request Full Access`
-   - `Reminders` / `Request Access`
+5. Expand `Privacy & Access` and confirm these controls show `Continue` when
+   access has not previously been requested:
+   - `Contacts`
+   - `Photos`
+   - `Calendar (Add Events)`
+   - `Calendar (View Events)`
+   - `Reminders`
+6. Tap `Continue` for any permission that has not been requested. Confirm the
+   corresponding native iOS authorization prompt appears immediately, then
+   make the permission choice in that system prompt.
+
+If the review device already has a decision for a permission, the row shows
+its current status or a management action instead of `Continue`.
 
 ### Optional Apple Health summary
 

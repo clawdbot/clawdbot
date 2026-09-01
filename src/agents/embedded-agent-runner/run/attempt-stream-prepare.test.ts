@@ -1,8 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ToolSearchTargetTranscriptProjection } from "../../tool-search.js";
+import {
+  createReplyOperation,
+  expireStaleReplyOperation,
+  type ReplyOperation,
+} from "../../../auto-reply/reply/reply-run-registry.js";
+import {
+  projectNestedToolActivityForHooks,
+  type NestedToolActivity,
+} from "../../../sessions/nested-tool-activity.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import {
+  isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
+} from "../../run-termination.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { isToolResultError } from "../../tool-result-error.js";
+import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
 
 const mocks = vi.hoisted(() => ({
-  buildSubscriptionParams: vi.fn(),
   clearActiveRun: vi.fn(),
   notifyToolActivity: vi.fn(),
   runBeforeFinalizeHook: vi.fn(),
@@ -17,9 +32,6 @@ vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
-vi.mock("./attempt.subscription-cleanup.js", () => ({
-  buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
-}));
 vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: mocks.notifyToolActivity,
 }));
@@ -27,11 +39,15 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
   runAgentHarnessBeforeAgentFinalizeHook: mocks.runBeforeFinalizeHook,
 }));
 
+import {
+  createEmbeddedAttemptExternalAbortController,
+  createEmbeddedAttemptRunAbort,
+} from "./attempt-finalize.js";
+import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
-import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
 function prepareCatalogExecutor(
-  projections: ToolSearchTargetTranscriptProjection[],
+  projections: NestedToolActivity[],
   options?: {
     getRunState?: () => {
       aborted: boolean;
@@ -42,6 +58,12 @@ function prepareCatalogExecutor(
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
+    replyOperation?: ReplyOperation;
+    onAttemptAbort?: () => void;
+    abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
+    markExternalAbort?: () => void;
+    toolProgressDetail?: "explain" | "raw";
+    onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -50,17 +72,27 @@ function prepareCatalogExecutor(
       runId: "run-output-schema",
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
+      replyOperation: options?.replyOperation,
+      onAttemptAbort: options?.onAttemptAbort,
+      toolProgressDetail: options?.toolProgressDetail,
+      onAgentEvent: options?.onAgentEvent,
     } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
+    activeSession: {
+      agent: {},
+      isStreaming: false,
+      sessionManager: SessionManager.inMemory(),
+      subscribe: () => () => {},
+    } as never,
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
+    diagnosticOwner: {} as never,
     clientToolCallSlots: [],
-    toolSearchTargetTranscriptProjections: projections,
+    nestedToolActivities: projections,
     isReplaySafeTool: () => false,
     runAbortController,
-    abortRun: vi.fn(),
-    markExternalAbort: vi.fn(),
+    abortRun: options?.abortRun ?? vi.fn(),
+    markExternalAbort: options?.markExternalAbort ?? vi.fn(),
     getRunState:
       options?.getRunState ??
       (() => ({
@@ -82,13 +114,99 @@ function prepareCatalogExecutor(
 describe("prepareEmbeddedAttemptStream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.buildSubscriptionParams.mockImplementation((params) => params);
+    ACTIVE_EMBEDDED_RUNS.clear();
+    mocks.setActiveRun.mockImplementation((sessionId, handle) =>
+      ACTIVE_EMBEDDED_RUNS.set(sessionId, handle),
+    );
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
+        try {
+          const result = await execute(() => undefined);
+          await onTerminal?.({
+            result,
+            isError: isToolResultError(result),
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          return result;
+        } catch (error) {
+          await onTerminal?.({
+            result: buildToolLifecycleErrorResult(error),
+            isError: true,
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          throw error;
+        }
+      }),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it.each([
+    [undefined, "check git status"],
+    ["explain", "check git status"],
+    ["raw", "check git status, `git status`"],
+  ] as const)(
+    "renders %s progress detail through the real subscription",
+    async (toolProgressDetail, meta) => {
+      const { subscribeEmbeddedAgentSession } = await vi.importActual<
+        typeof import("../../embedded-agent-subscribe.js")
+      >("../../embedded-agent-subscribe.js");
+      mocks.subscribe.mockImplementation(subscribeEmbeddedAgentSession);
+      const onAgentEvent = vi.fn();
+      const prepared = prepareCatalogExecutor([], { toolProgressDetail, onAgentEvent });
+      try {
+        await prepared.toolSearchCatalogExecutor({
+          tool: {
+            name: "exec",
+            execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
+          } as never,
+          toolName: "exec",
+          source: "openclaw",
+          toolCallId: "progress-detail-exec",
+          input: { command: "git status" },
+          acceptResultBeforeProjection: async (result) => result,
+        });
+        expect(onAgentEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            stream: "item",
+            data: expect.objectContaining({ phase: "start", kind: "tool", name: "exec", meta }),
+          }),
+        );
+      } finally {
+        prepared.subscription.unsubscribe();
+      }
+    },
+  );
+
+  it("retains exact heartbeat preemption on the embedded queue handle", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    try {
+      const prepared = prepareCatalogExecutor([], { replyOperation: operation });
+
+      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
+      expect(mocks.setActiveRun).toHaveBeenCalledWith(
+        "session-output-schema",
+        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
+        "agent:main:main",
+        undefined,
+        "main",
+      );
+    } finally {
+      operation.complete();
+    }
   });
 
   it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {
@@ -116,8 +234,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       isReplaySafeTool: () => false,
       runAbortController: new AbortController(),
       abortRun: vi.fn(),
@@ -136,7 +255,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
     });
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
     const decision = subscriptionInput.onBeforeTerminalDelivery?.({
@@ -194,8 +313,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
-      toolSearchTargetTranscriptProjections: [],
+      nestedToolActivities: [],
       isReplaySafeTool: () => false,
       runAbortController: new AbortController(),
       abortRun: vi.fn(),
@@ -215,7 +335,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       replaySafeToolNames: new Set(),
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
-    const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
+    const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
     };
 
@@ -249,93 +369,108 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
     });
 
-    expect(mocks.buildSubscriptionParams).toHaveBeenCalledWith(
+    expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),
     );
   });
 
-  it("validates hidden tool results before queuing transcript projections", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const rawResult = {
-      content: [{ type: "text" as const, text: "rejected raw result" }],
-      details: { id: 42, unexpected: "must-not-enter-transcript" },
-    };
-    const prepared = prepareCatalogExecutor(projections);
-
-    await expect(
-      prepared.toolSearchCatalogExecutor({
+  it.each(["rejected", "accepted", "canonical failure", "thrown"] as const)(
+    "records one accepted terminal fact for %s output",
+    async (kind) => {
+      const activities: NestedToolActivity[] = [];
+      const prepared = prepareCatalogExecutor(activities);
+      const rawResult = {
+        content: [{ type: "text" as const, text: "tool output" }],
+        details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },
+      };
+      const failure = kind === "thrown" ? "transport disconnected" : "declared output mismatch";
+      const toolName = "lookup";
+      const input = { path: "original.txt" };
+      const execution = prepared.toolSearchCatalogExecutor({
         tool: {
-          name: "orchard_bad_output",
-          description: "Return a rejected orchard result",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-          execute: vi.fn(async () => rawResult),
+          name: toolName,
+          description: "Look up a record",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+            additionalProperties: false,
+          },
+          execute: async () => {
+            if (kind === "thrown") {
+              throw new Error(failure);
+            }
+            return rawResult;
+          },
         } as never,
-        toolName: "orchard_bad_output",
-        source: "openclaw",
-        sourceName: "fixture-plugin",
-        toolCallId: "call-output-schema",
-        parentToolCallId: "call-code-mode",
-        input: {},
+        toolName,
+        source: kind === "canonical failure" || kind === "thrown" ? "mcp" : "openclaw",
+        toolCallId: "nested-lookup",
+        parentToolCallId: "outer-exec",
+        input,
         acceptResultBeforeProjection: async (candidate) => {
           expect(candidate).toBe(rawResult);
-          expect(projections).toHaveLength(0);
-          throw new Error("declared output mismatch");
-        },
-      }),
-    ).rejects.toThrow("declared output mismatch");
-
-    expect(projections).toEqual([
-      expect.objectContaining({
-        toolCallId: "call-output-schema",
-        toolName: "orchard_bad_output",
-        isError: true,
-      }),
-    ]);
-    expect(JSON.stringify(projections)).not.toContain("must-not-enter-transcript");
-    expect(mocks.notifyToolActivity).toHaveBeenCalledWith("run-output-schema");
-  });
-
-  it("snapshots accepted results before delayed transcript settlement", async () => {
-    const projections: ToolSearchTargetTranscriptProjection[] = [];
-    const rawResult = {
-      content: [{ type: "text" as const, text: "accepted result" }],
-      details: { id: 42 },
-    };
-    const prepared = prepareCatalogExecutor(projections);
-
-    const returned = await prepared.toolSearchCatalogExecutor({
-      tool: {
-        name: "orchard_output",
-        description: "Return an orchard result",
-        parameters: { type: "object", properties: {}, additionalProperties: false },
-        execute: vi.fn(async () => rawResult),
-      } as never,
-      toolName: "orchard_output",
-      source: "openclaw",
-      sourceName: "fixture-plugin",
-      toolCallId: "call-output-schema",
-      parentToolCallId: "call-code-mode",
-      input: {},
-      acceptResultBeforeProjection: async (candidate) => {
-        expect(candidate).toBe(rawResult);
-        expect(projections).toHaveLength(0);
-        const snapshot = structuredClone(candidate);
-        if (snapshot.details && typeof snapshot.details === "object") {
+          expect(activities).toHaveLength(0);
+          if (kind === "rejected") {
+            throw new Error(failure);
+          }
+          const snapshot = structuredClone(candidate);
           Object.freeze(snapshot.details);
-        }
-        return Object.freeze(snapshot);
-      },
-    });
-
-    rawResult.details.id = 99;
-    expect(returned).not.toBe(rawResult);
-    expect(projections[0]?.result).toBe(returned);
-    expect(returned).toMatchObject({ details: { id: 42 } });
-    expect(Object.isFrozen(returned)).toBe(true);
-    expect(Object.isFrozen(returned.details)).toBe(true);
-  });
+          return Object.freeze(snapshot);
+        },
+      });
+      if (kind === "rejected" || kind === "thrown") {
+        await expect(execution).rejects.toThrow(failure);
+        expect(activities[0]?.details.result).toEqual({
+          content: [{ type: "text", text: failure }],
+          details: { status: "error", error: failure },
+        });
+        expect(JSON.stringify(activities)).not.toContain("tool output");
+      } else {
+        const returned = await execution;
+        rawResult.details.id = 99;
+        expect(returned).not.toBe(rawResult);
+        expect(returned.details).toMatchObject({ id: 42 });
+        expect(Object.isFrozen(returned)).toBe(true);
+        expect(Object.isFrozen(returned.details)).toBe(true);
+        expect(activities[0]?.details.result).toEqual(returned);
+      }
+      input.path = "changed-after-completion.txt";
+      expect(activities).toHaveLength(1);
+      expect(activities[0]?.details.input).toEqual({ path: "original.txt" });
+      expect(activities[0]?.details).toMatchObject({
+        parentToolCallId: "outer-exec",
+        toolCallId: "nested-lookup",
+        toolName,
+        isError: kind !== "accepted",
+      });
+      const ordinaryMessage = { role: "assistant", content: "Final answer" };
+      const hookMessages = projectNestedToolActivityForHooks([ordinaryMessage], activities);
+      expect(hookMessages).toEqual([
+        ordinaryMessage,
+        expect.objectContaining({
+          role: "custom",
+          display: true,
+          excludeFromContext: true,
+          content: expect.any(String),
+          details: activities[0]?.details,
+        }),
+      ]);
+      expect(hookMessages[0]).toBe(ordinaryMessage);
+      const activity = activities[0]!;
+      const nextInvocation = {
+        ...activity,
+        details: { ...activity.details, scopeId: "next-scope" },
+      };
+      const nextHookMessage = projectNestedToolActivityForHooks([], [nextInvocation])[0];
+      expect((nextHookMessage as { content: string }).content).not.toBe(
+        (hookMessages[1] as { content: string }).content,
+      );
+      expect(mocks.notifyToolActivity).toHaveBeenCalledWith("run-output-schema");
+    },
+  );
 
   it("distinguishes an accepted abort from normal steering closure and sessions_yield", () => {
     const runAbortController = new AbortController();
@@ -360,5 +495,106 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     aborted = true;
     expect(prepared.queueHandle.isAborted?.()).toBe(true);
+  });
+
+  it("processes aliased cancel and abort through one external-abort sequence", () => {
+    const markExternalAbort = vi.fn();
+    const onAttemptAbort = vi.fn();
+    const abortRun = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onAttemptAbort,
+      abortRun,
+    });
+
+    prepared.queueHandle.abort("restart");
+    prepared.queueHandle.cancel("user_abort");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledOnce();
+    expect(abortRun.mock.calls[0]?.[0]).toBe(false);
+    expect(isAgentRunRestartAbortReason(abortRun.mock.calls[0]?.[1])).toBe(true);
+  });
+
+  it("runs attempt cleanup once when reply cancellation re-enters through its abort signal", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      resetTriggered: false,
+    });
+    const attemptAbortController = new AbortController();
+    const runAbortController = new AbortController();
+    const markExternalAbort = vi.fn();
+    const markAborted = vi.fn();
+    const abortActiveSession = vi.fn(async () => {});
+    const abortState = {
+      markAborted,
+      markExternalAbort,
+      markTimedOut: vi.fn(),
+      markTimedOutDuringCompaction: vi.fn(),
+      markTimedOutDuringToolExecution: vi.fn(),
+      readTimedOutDuringCompaction: vi.fn(() => false),
+      setPromptError: vi.fn(),
+    };
+    const externalAbortController = createEmbeddedAttemptExternalAbortController({
+      abortSignal: attemptAbortController.signal,
+      cleanupAfterEarlyAbort: vi.fn(async () => {}),
+      runAbortController,
+      runId: "run-output-schema",
+      state: abortState,
+    });
+    let queueHandle: ReturnType<typeof prepareCatalogExecutor>["queueHandle"] | undefined;
+    const abortRun = createEmbeddedAttemptRunAbort({
+      abortActiveSession,
+      activeSession: { abortCompaction: vi.fn(), isCompacting: false },
+      attempt: {
+        runId: "run-output-schema",
+        sessionFile: "agent:main:main",
+        sessionId: "session-output-schema",
+        sessionKey: "agent:main:main",
+      },
+      getQueueHandle: () => queueHandle,
+      isProbeSession: true,
+      log: { warn: vi.fn() },
+      runAbortController,
+      state: abortState,
+    });
+    externalAbortController.setRunAbort(abortRun);
+    externalAbortController.arm();
+    const relayReplyAbort = () => {
+      attemptAbortController.abort(operation.abortSignal.reason);
+    };
+    operation.abortSignal.addEventListener("abort", relayReplyAbort, { once: true });
+    const onAttemptAbort = vi.fn(() => {
+      if (!operation.abortSignal.aborted) {
+        operation.abortByUser();
+      }
+    });
+
+    try {
+      operation.setPhase("running");
+      const prepared = prepareCatalogExecutor([], {
+        replyOperation: operation,
+        markExternalAbort,
+        onAttemptAbort,
+        abortRun,
+      });
+      queueHandle = prepared.queueHandle;
+
+      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+
+      expect(markExternalAbort).toHaveBeenCalledTimes(2);
+      expect(onAttemptAbort).toHaveBeenCalledOnce();
+      expect(markAborted).toHaveBeenCalledOnce();
+      expect(abortActiveSession).toHaveBeenCalledOnce();
+      expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
+      expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+      expect(operation.abortSignal.aborted).toBe(true);
+    } finally {
+      externalAbortController.dispose();
+      operation.abortSignal.removeEventListener("abort", relayReplyAbort);
+      operation.complete();
+    }
   });
 });

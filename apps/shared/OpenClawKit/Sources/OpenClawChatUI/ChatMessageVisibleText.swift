@@ -5,6 +5,18 @@ import Foundation
 /// transcript exporter and the Listen action so exported and spoken text
 /// always match the visible transcript.
 public enum ChatMessageVisibleText {
+    static func isVisibleContentType(_ type: String?, role: String) -> Bool {
+        let kind = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if kind.isEmpty || kind == "text" {
+            return true
+        }
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if kind == "input_text" {
+            return normalizedRole == "user" || normalizedRole == "assistant"
+        }
+        return normalizedRole == "assistant" && kind == "output_text"
+    }
+
     static func copyText(in message: OpenClawChatMessage) -> String {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return role == "assistant" ? self.visibleText(in: message) : self.primaryText(in: message)
@@ -25,16 +37,33 @@ public enum ChatMessageVisibleText {
             .isEmpty
     }
 
-    private static func primaryText(in message: OpenClawChatMessage) -> String {
+    static func displayText(in message: OpenClawChatMessage, includeThinking: Bool) -> String {
+        let isAssistant = message.role.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "assistant"
         let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
+            let kind = content.type?.lowercased() ?? ""
+            if self.isVisibleContentType(kind, role: message.role) {
+                return content.text
+            }
+            guard
+                includeThinking,
+                isAssistant,
+                kind == "thinking",
+                let thinking = content.thinking,
+                !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return nil
+            }
+            return "<think>\n\(thinking)\n</think>"
         }
         return OpenClawChatMessage.displayText(
             contentText: parts.joined(separator: "\n"),
             role: message.role,
             stopReason: message.stopReason,
             errorMessage: message.errorMessage)
+    }
+
+    private static func primaryText(in message: OpenClawChatMessage) -> String {
+        self.displayText(in: message, includeThinking: false)
     }
 }

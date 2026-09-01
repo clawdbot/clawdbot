@@ -80,7 +80,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (!injectedEnoent && relativePath.includes(`${params.segment}${path.sep}`)) {
+              if (!injectedEnoent && relativePath.includes(`${params.segment}/`)) {
                 injectedEnoent = true;
                 await fs.rm(path.dirname(actualStore.path(relativePath)), {
                   recursive: true,
@@ -126,7 +126,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (relativePath.includes(`failed-buffer${path.sep}`)) {
+              if (relativePath.includes("failed-buffer/")) {
                 attemptedRelPaths.push(relativePath);
                 const err = new Error("no space left on device") as NodeJS.ErrnoException;
                 err.code = "ENOSPC";
@@ -341,10 +341,6 @@ describe("media store", () => {
     });
   }
 
-  async function expectTempStoreCase(run: () => Promise<void>) {
-    await run();
-  }
-
   it.each([
     {
       name: "creates and returns media directory",
@@ -424,22 +420,25 @@ describe("media store", () => {
     {
       name: "saves streams with detected extension without buffering first",
       run: async () => {
-        await withTempStore(async (storeLocal12) => {
-          const saved = await storeLocal12.saveMediaStream(
-            Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
-            undefined,
-            "stream-inbound",
-            1024,
-            "photo.bin",
-          );
+        const chunk = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+        const stream = (async function* () {
+          yield chunk;
+          chunk.fill(0);
+        })();
+        const saved = await store.saveMediaStream(
+          stream,
+          undefined,
+          "stream-inbound",
+          1024,
+          "photo.bin",
+        );
 
-          expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
-          expect(saved.size).toBe(4);
-          expect(saved.contentType).toBe("image/jpeg");
-          await expect(fs.readFile(saved.path)).resolves.toEqual(
-            Buffer.from([0xff, 0xd8, 0xff, 0x00]),
-          );
-        });
+        expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+        expect(saved.size).toBe(4);
+        expect(saved.contentType).toBe("image/jpeg");
+        await expect(fs.readFile(saved.path)).resolves.toEqual(
+          Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+        );
       },
     },
     {
@@ -645,7 +644,7 @@ describe("media store", () => {
       },
     },
   ] as const)("$name", async ({ run }) => {
-    await expectTempStoreCase(run);
+    await run();
   });
 
   it.each([
@@ -827,18 +826,18 @@ describe("media store", () => {
         const nested = await storeResult.saveMediaBuffer(
           Buffer.from("old nested"),
           "text/plain",
-          path.join("remote-cache", "session-prune", "images"),
+          path.join("prune-chain", "session-prune", "images"),
         );
         const mediaDir = await storeResult.ensureMediaDir();
         const sessionDir = path.dirname(path.dirname(nested.path));
-        const remoteCacheDir = path.dirname(sessionDir);
+        const pruneChainDir = path.dirname(sessionDir);
         const past = Date.now() - 10_000;
         await fs.utimes(nested.path, past / 1000, past / 1000);
         return {
           removedFiles: [nested.path],
           preservedFiles: [],
-          removedDirs: [sessionDir],
-          preservedDirs: [remoteCacheDir, mediaDir],
+          removedDirs: [sessionDir, pruneChainDir],
+          preservedDirs: [mediaDir],
         };
       },
       run: async (storeValue: typeof import("./store.js")) =>
@@ -1021,9 +1020,9 @@ describe("media store", () => {
         expectedExtractedFilename: "report.txt",
       },
       {
-        name: "sanitizes unsafe characters in original filename",
-        originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^my_file_test---[a-f0-9-]{36}\.txt$/,
+        name: "strips Windows-invalid and underscores non-portable characters",
+        originalFilename: "my <file>:test!.txt",
+        expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",

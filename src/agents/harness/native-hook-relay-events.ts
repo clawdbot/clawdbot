@@ -41,9 +41,12 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(
-  registration: ActiveNativeHookRelayRegistration,
-): boolean {
+type NativeHookRelayPolicy = Pick<
+  ActiveNativeHookRelayRegistration,
+  "preToolUseLoopDetection" | "sessionKey" | "config" | "agentId"
+>;
+
+function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayPolicy): boolean {
   if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
     return false;
   }
@@ -51,11 +54,11 @@ function nativePreToolUseMayRunLoopDetection(
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled === true;
 }
 
 export function nativeHookRelayEventHasLocalWork(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {
@@ -73,7 +76,7 @@ export function nativeHookRelayEventHasLocalWork(
 }
 
 export function nativeHookRelayEventToolMatcher(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
@@ -124,26 +127,35 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
-  const outcome = await runBeforeToolCallHook({
+  const policyRequest = {
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
     signal: params.registration.signal,
-    ctx: {
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      ...(params.registration.config ? { config: params.registration.config } : {}),
-      runId: params.registration.runId,
-      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
-      ...params.registration.approvalContext,
-      ...(params.invocation.cwd
-        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
-        : {}),
-    },
-  });
+  };
+  const outcome = params.registration.runBeforeToolCall
+    ? await params.registration.runBeforeToolCall({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ...(params.invocation.cwd ? { nativeOperation: { cwd: params.invocation.cwd } } : {}),
+      })
+    : await runBeforeToolCallHook({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ctx: {
+          ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+          sessionId: params.registration.sessionId,
+          ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+          ...(params.registration.config ? { config: params.registration.config } : {}),
+          runId: params.registration.runId,
+          ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+          ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+          ...params.registration.approvalContext,
+          ...(params.invocation.cwd
+            ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+            : {}),
+        },
+      });
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(
       outcome.reason,

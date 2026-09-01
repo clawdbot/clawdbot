@@ -1,4 +1,4 @@
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
+import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
@@ -8,7 +8,13 @@ import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-appro
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
+import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
+
+export type PluginDoctorRepairAuthority = {
+  assertCurrent(): void;
+  assertOwnedInTransaction(database: DatabaseSync): void;
+};
 
 export type LegacyRescuePendingDetection = {
   sourcePaths: string[];
@@ -44,10 +50,6 @@ export type LegacyStateDetection = {
     targetDir: string;
     hasLegacy: boolean;
   };
-  channelPlans: {
-    hasLegacy: boolean;
-    plans: ChannelLegacyStateMigrationPlan[];
-  };
   pluginPlans?: {
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
@@ -69,7 +71,11 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
-  worktrees: { hasLegacy: boolean };
+  sharedAuthStore: SharedAuthStoreMigrationDetection;
+  worktrees: {
+    hasLegacy: boolean;
+    pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
+  };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;
@@ -105,7 +111,7 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
-  commitments: {
+  commitments?: {
     sourcePath: string;
     hasLegacy: boolean;
   };
@@ -160,6 +166,9 @@ export type MigrationLogger = {
 
 export type DetectedPluginDoctorStateMigrationPlan = {
   pluginId: string;
+  /** Only bundled/trusted-official owners may reach durable channel ingress queues. */
+  trustedForDurableStores?: boolean;
+  channelIds: string[];
   migration: PluginDoctorStateMigration;
   preview: string[];
 };

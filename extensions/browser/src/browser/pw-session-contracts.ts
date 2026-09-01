@@ -1,4 +1,12 @@
-import type { Browser, BrowserContext, Dialog, Frame, Page, Request } from "playwright-core";
+import type {
+  Browser,
+  BrowserContext,
+  CDPSession,
+  Dialog,
+  Frame,
+  Page,
+  Request,
+} from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { PlaywrightDownload } from "./pw-download-capture.js";
 
@@ -101,7 +109,8 @@ export type ActionDownloadCapture = {
 export type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
-  requests: BrowserNetworkRequest[];
+  requests: Map<string, BrowserNetworkRequest>;
+  // Strong Request keys would retain disposed Playwright page/context graphs.
   requestIds: WeakMap<Request, string>;
   nextRequestId: number;
   armIdUpload: number;
@@ -113,6 +122,11 @@ export type PageState = {
   recentDialogs: BrowserObservedDialogRecord[];
   armedDialogResponse?: ArmedDialogResponse;
   dialogAbortControllers: Set<AbortController>;
+  /** Persistent session and queue for page-scoped emulation overrides. */
+  emulation?: {
+    session?: Promise<CDPSession>;
+    deviceTransitionTail?: Promise<void>;
+  };
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.

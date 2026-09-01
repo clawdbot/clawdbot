@@ -10,7 +10,10 @@ import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
 } from "./app-inventory-cache.js";
-import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerLocalHomeDir,
+} from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import {
   resolveCodexAppServerUserHomeDir,
@@ -21,6 +24,28 @@ import {
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
+type CodexCatalogConnectionHome = {
+  agentDir: string;
+  fingerprint: string;
+  codexHome: string;
+};
+
+let catalogConnectionHomes = new Map<string, string>();
+
+function catalogConnectionHomeKey(fingerprint: string, agentDir?: string): string {
+  return `${agentDir ?? ""}\0${fingerprint}`;
+}
+
+/** Replaces the lifecycle-owned catalog connection snapshot used by supervised bindings. */
+export function replaceCodexCatalogConnectionHomes(homes: CodexCatalogConnectionHome[]): void {
+  catalogConnectionHomes = new Map(
+    homes.map((home) => [
+      catalogConnectionHomeKey(home.fingerprint, home.agentDir),
+      home.codexHome,
+    ]),
+  );
+}
+
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
@@ -29,6 +54,7 @@ type CodexPluginAppCacheKeyParams = Omit<
   appServer: Pick<CodexAppServerRuntimeOptions, "start">;
   agentDir?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
+  desktopGenerationFingerprint?: string;
 };
 
 /** Builds the full app inventory cache key for Codex plugin/app discovery. */
@@ -43,7 +69,12 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
       accountId: params.accountId,
       envApiKeyFingerprint: params.envApiKeyFingerprint,
       appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
-      runtimeIdentity: params.runtimeIdentity,
+      runtimeIdentity: params.desktopGenerationFingerprint
+        ? {
+            ...params.runtimeIdentity,
+            desktopGeneration: params.desktopGenerationFingerprint,
+          }
+        : params.runtimeIdentity,
     },
     OPENCLAW_VERSION,
     CODEX_PLUGIN_VERSION,
@@ -86,6 +117,14 @@ export function buildCodexAppServerConnectionFingerprint(
   });
 }
 
+/** Looks up a snapshotted catalog store without repeating filesystem discovery on a run. */
+export function resolveCodexCatalogConnectionHome(
+  fingerprint: string,
+  agentDir?: string,
+): string | undefined {
+  return catalogConnectionHomes.get(catalogConnectionHomeKey(fingerprint, agentDir));
+}
+
 function resolveCodexAppServerConnectionHome(
   start: CodexAppServerStartOptions,
   agentDir?: string,
@@ -103,7 +142,7 @@ function resolveCodexAppServerConnectionHome(
   if (start.homeScope === "user") {
     return resolveCodexAppServerUserHomeDir(process.env);
   }
-  return agentDir ? resolveCodexAppServerHomeDir(agentDir) : null;
+  return agentDir ? resolveCodexAppServerLocalHomeDir(start, agentDir) : null;
 }
 
 /** Serializes app-server endpoint identity, including credential fingerprints. */

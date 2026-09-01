@@ -7,14 +7,14 @@ read_when:
 title: "Environment variables"
 ---
 
-OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
+OpenClaw pulls environment variables from multiple sources. The normal rule is **never override existing values**. For an OpenClaw-installed systemd service, the global `.env` may replace only service values that OpenClaw recorded as managed; operator-owned service values still take precedence.
 Workspace `.env` files are a lower-trust source: OpenClaw ignores provider credentials and protected runtime controls from workspace `.env` before applying precedence.
 
 ## Precedence (highest to lowest)
 
 1. **Process environment** (what the Gateway process already has from the parent shell/daemon).
 2. **`.env` in the current working directory** (dotenv default; does not override; provider credentials and protected runtime controls are ignored).
-3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; recommended for provider API keys; does not override).
+3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; recommended for provider API keys; does not override except for recorded OpenClaw-managed systemd service values).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
 
@@ -101,20 +101,20 @@ See [Workspace `.env` files](/gateway/security#workspace-env-files) for the secu
 
 ## Config `env` block
 
-Two equivalent ways to set inline env vars (both are non-overriding):
+Set inline env vars under `env.vars` (values are non-overriding):
 
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
   },
 }
 ```
 
-The config `env` block accepts literal string values only. It does not expand
+The config `env.vars` block accepts literal string values only. It does not expand
 `file:...` values; for example, `XAI_API_KEY: "file:secrets/xai-api-key.txt"`
 is passed to providers as that exact string.
 
@@ -166,6 +166,16 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000` (default `15000`)
 
+For Bash, the import uses an interactive login shell (`bash -lic`) so `PS1` is initialized
+before login startup files run. Bash reads `/etc/profile` and the first available user login
+profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`); many login profiles also source
+`~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
+failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
+This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
+discovery during ordinary Gateway commands remains noninteractive.
+
+Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+
 ## Exec shell snapshots
 
 On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.
@@ -207,7 +217,15 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 }
 ```
 
+A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
+
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
+
+This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. OpenClaw's dotenv loader does not expand environment variable values. For example, `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace` in a runtime `.env` file remains literal when OpenClaw loads it.
+
+Since OpenClaw does not expand these values, give path variables fully-resolved absolute paths. `OPENCLAW_WORKSPACE_DIR` does not expand a leading `~` either, because it goes straight to `path.resolve`. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do expand `~`. A workspace-local `.env` file drops the entire `OPENCLAW_*` namespace, since it is untrusted input, so set these variables in the trusted global `.env` at `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
+
+Docker Compose follows its own [interpolation rules](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/). In the bundled `docker-compose.yml`, `OPENCLAW_WORKSPACE_DIR` from the project `.env` selects the host directory for the workspace bind mount. The container-side `OPENCLAW_WORKSPACE_DIR` stays pinned to `/home/node/.openclaw/workspace`.
 
 ## Secret refs vs `${ENV}` strings
 

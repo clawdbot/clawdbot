@@ -107,7 +107,9 @@ function createMockFetch(entries: Array<{ match: RegExp; response: Response }>):
     if (!entry) {
       return new Response("not found", { status: 404 });
     }
-    return entry.response.clone();
+    // Fetch returns one body. Cloning tees it, so canceling the returned branch
+    // would wait forever for the untouched fixture branch to be canceled too.
+    return entry.response;
   }) as typeof fetch;
 }
 

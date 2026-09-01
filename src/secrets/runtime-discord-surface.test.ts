@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import "./runtime-discord.test-support.ts";
 import {
   asConfig,
@@ -77,7 +77,7 @@ describe("secrets runtime snapshot discord surface", () => {
   it.skipIf(process.platform === "win32")(
     "resolves the implicit default token when named Discord accounts are added",
     async () => {
-      await withTempDir({ prefix: "openclaw-discord-secrets-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-discord-secrets-" }, async (root) => {
         const secretsPath = path.join(root, "secrets.json");
         await fs.writeFile(
           secretsPath,
@@ -309,6 +309,77 @@ describe("secrets runtime snapshot discord surface", () => {
       "channels.discord.pluralkit.token",
     );
   });
+
+  it.each([true, false])(
+    "resolves Discord persona refs with root inheritance=%s",
+    async (inheritsRoot) => {
+      const ref = (id: string) => ({ source: "env", provider: "default", id }) as const;
+      const voice = (id: string, enabled = true) => ({
+        enabled,
+        mode: "stt-tts",
+        tts: {
+          persona: "reader.uk",
+          personas: { "reader.uk": { providers: { mock: { apiKey: ref(id) } } } },
+        },
+        realtime: { providers: { openai: { apiKey: ref(`${id}_REALTIME`) } } },
+      });
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            discord: {
+              voice: voice("TEST_TTS_DISCORD_ROOT"),
+              accounts: {
+                ...(inheritsRoot ? { inherited: {} } : {}),
+                work: { voice: voice("TEST_TTS_DISCORD_WORK") },
+                disabled: { enabled: false, voice: voice("TEST_TTS_DISCORD_DISABLED") },
+                muted: { voice: voice("TEST_TTS_DISCORD_MUTED", false) },
+              },
+            },
+          },
+        }),
+        env: {
+          ...(inheritsRoot ? { TEST_TTS_DISCORD_ROOT: "root-fixture-key" } : {}),
+          TEST_TTS_DISCORD_WORK: "work-fixture-key",
+        },
+        includeAuthStoreRefs: false,
+        agentDirs: ["/tmp/openclaw-agent-main"],
+      });
+      const discord = snapshot.config.channels?.discord;
+      expect(discord?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock?.apiKey).toEqual(
+        inheritsRoot ? "root-fixture-key" : ref("TEST_TTS_DISCORD_ROOT"),
+      );
+      expect(
+        discord?.accounts?.work?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock?.apiKey,
+      ).toBe("work-fixture-key");
+      const inactivePaths = snapshot.warnings
+        .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
+        .map((warning) => warning.path);
+      for (const [accountId, id] of [
+        ["disabled", "TEST_TTS_DISCORD_DISABLED"],
+        ["muted", "TEST_TTS_DISCORD_MUTED"],
+      ] as const) {
+        expect(
+          discord?.accounts?.[accountId]?.voice?.tts?.personas?.["reader.uk"]?.providers?.mock
+            ?.apiKey,
+        ).toEqual(ref(id));
+        expect(inactivePaths).toContain(
+          `channels.discord.accounts.${accountId}.voice.tts.personas["reader.uk"].providers.mock.apiKey`,
+        );
+      }
+      expect(
+        inactivePaths.includes(
+          'channels.discord.voice.tts.personas["reader.uk"].providers.mock.apiKey',
+        ),
+      ).toBe(!inheritsRoot);
+      expect(discord?.accounts?.work?.voice?.realtime?.providers?.openai?.apiKey).toEqual(
+        ref("TEST_TTS_DISCORD_WORK_REALTIME"),
+      );
+      expect(inactivePaths).toContain(
+        "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
+      );
+      expect(snapshot.degradedOwners).toEqual([]);
+    },
+  );
 
   it("treats Discord voice TTS refs as inactive when voice is disabled", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({

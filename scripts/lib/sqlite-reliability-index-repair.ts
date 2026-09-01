@@ -9,6 +9,7 @@ import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../../src/infra/sqlite-integrity.js";
 import {
+  formatReliabilityStderr,
   INDEX_REPAIR_INDEX_NAME,
   INDEX_REPAIR_SCHEMA_SQL,
   type IndexRepairJournalMode,
@@ -27,7 +28,9 @@ type WorkerExit = IndexRepairProof["exit"];
 const INDEX_REPAIR_WORKER_PATH = fileURLToPath(
   new URL("./sqlite-reliability-index-repair-worker.ts", import.meta.url),
 );
-const INDEX_REPAIR_ROWS = 32_768;
+// Keep enough index pages to spill both rollback-journal and WAL transactions
+// before the worker reports its explicit crash point.
+const INDEX_REPAIR_ROWS = 16_384;
 const INDEX_REPAIR_TIMEOUT_MS = 30_000;
 
 function fileSize(filePath: string): number {
@@ -109,11 +112,6 @@ function prepareIndexRepairDatabase(
   }
 }
 
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 async function waitForWorkerMessage(params: {
   action?: () => void;
   child: ChildProcess;
@@ -125,7 +123,7 @@ async function waitForWorkerMessage(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite index repair worker did not report ${params.kind}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite index repair worker did not report ${params.kind}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, INDEX_REPAIR_TIMEOUT_MS);
@@ -148,7 +146,7 @@ async function waitForWorkerMessage(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite index repair worker exited before ${params.kind}: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite index repair worker exited before ${params.kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -181,7 +179,7 @@ async function waitForActiveTransaction(params: {
     }
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
       throw new Error(
-        `SQLite index repair completed before ${params.journalMode} interruption evidence was observed.${formatWorkerStderr(params.readStderr())}`,
+        `SQLite index repair completed before ${params.journalMode} interruption evidence was observed.${formatReliabilityStderr(params.readStderr())}`,
       );
     }
     await delay(2);

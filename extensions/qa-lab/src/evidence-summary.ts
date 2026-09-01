@@ -1,8 +1,10 @@
-// Qa Lab plugin module implements QA evidence summary behavior.
+// QA Lab plugin module implements QA evidence summary behavior.
+import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
+import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import { qaRuntimePairLaneSchema, type QaRuntimePairLane } from "./scenario-catalog.js";
 import {
@@ -164,6 +166,7 @@ const qaEvidenceSummarySchema = z.strictObject({
   evidenceMode: qaScorecardEvidenceModeSchema,
   entries: z.array(qaEvidenceSummaryEntrySchema),
   profile: qaEvidenceProfileIdSchema.optional(),
+  profilePlan: qaProfileEvidencePlan.schema.optional(),
   scorecard: qaEvidenceScorecardSchema.optional(),
 });
 
@@ -251,16 +254,9 @@ function buildQaEvidenceRefs(params: {
   docsRefs?: readonly string[];
   codeRefs?: readonly string[];
 }) {
-  const buildRef = (kind: "docs" | "code", refPath: string) => {
-    const ref = {
-      kind,
-      path: refPath,
-    };
-    return ref;
-  };
   const refs = [
-    ...(params.docsRefs ?? []).map((path) => buildRef("docs", path)),
-    ...(params.codeRefs ?? []).map((path) => buildRef("code", path)),
+    ...(params.docsRefs ?? []).map((path) => ({ kind: "docs" as const, path })),
+    ...(params.codeRefs ?? []).map((path) => ({ kind: "code" as const, path })),
   ];
   return [...new Map(refs.map((ref) => [`${ref.kind}:${ref.path}`, ref])).values()];
 }
@@ -269,17 +265,15 @@ function buildQaEvidenceCoverage(params: {
   primaryCoverageIds?: readonly string[];
   secondaryCoverageIds?: readonly string[];
 }) {
-  const buildCoverage = (id: string, role: "primary" | "secondary") => ({
-    id,
-    role,
-  });
   return [
-    ...uniqueSortedStrings(params.primaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "primary"),
-    ),
-    ...uniqueSortedStrings(params.secondaryCoverageIds ?? []).map((id) =>
-      buildCoverage(id, "secondary"),
-    ),
+    ...normalizeSortedUniqueTrimmedStringList(params.primaryCoverageIds ?? []).map((id) => ({
+      id,
+      role: "primary" as const,
+    })),
+    ...normalizeSortedUniqueTrimmedStringList(params.secondaryCoverageIds ?? []).map((id) => ({
+      id,
+      role: "secondary" as const,
+    })),
   ];
 }
 
@@ -289,12 +283,6 @@ function buildQaEvidenceArtifacts(paths: readonly QaEvidenceArtifactInput[], sou
     path: artifact.path,
     source,
   }));
-}
-
-function uniqueSortedStrings(values: readonly (string | undefined)[]) {
-  return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
 }
 
 export function resolveQaEvidenceProfile(params: {
@@ -324,18 +312,6 @@ export function resolveQaEvidenceProfile(params: {
   return undefined;
 }
 
-function resolveQaEvidenceRunner(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
-  return params.env?.OPENCLAW_QA_RUNNER?.trim() || params.fallback || "host";
-}
-
-function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallback?: string }) {
-  const id =
-    params.fallback?.trim() ||
-    params.env?.OPENCLAW_QA_CHANNEL_DRIVER?.trim() ||
-    params.env?.OPENCLAW_E2E_CHANNEL_DRIVER?.trim();
-  return id ? { id } : undefined;
-}
-
 function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
   const spec = env?.OPENCLAW_QA_PACKAGE_SOURCE?.trim() || undefined;
   const sha = env?.OPENCLAW_QA_PACKAGE_SOURCE_SHA?.trim() || undefined;
@@ -348,10 +324,6 @@ function resolveQaEvidencePackageSource(env: NodeJS.ProcessEnv | undefined) {
     spec,
     sha,
   };
-}
-
-function resolveQaEvidenceBuildPackageSource(params: QaEvidenceBuildBase) {
-  return params.packageSource ?? resolveQaEvidencePackageSource(params.env);
 }
 
 function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primaryModel: string }) {
@@ -382,6 +354,18 @@ function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primary
     id: mockProviderId,
     live: false,
     fixture: params.providerMode,
+  };
+}
+
+function resolveQaEvidenceBuildContext(params: QaEvidenceBuildBase, defaultRunner?: string) {
+  return {
+    profile: resolveQaEvidenceProfile({ env: params.env, explicit: params.profile }),
+    executionBase: {
+      runner: params.env?.OPENCLAW_QA_RUNNER?.trim() || (params.runner ?? defaultRunner) || "host",
+      environment: resolveQaEvidenceEnvironment({ env: params.env, repoRoot: params.repoRoot }),
+      provider: buildQaEvidenceProvider(params),
+    },
+    packageSource: params.packageSource ?? resolveQaEvidencePackageSource(params.env),
   };
 }
 
@@ -441,6 +425,7 @@ function buildQaEvidenceSummary(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
+  profilePlan?: QaProfileEvidencePlan;
   scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   const profileOptions = readQaScorecardProfileOptions(params.profile);
@@ -459,6 +444,7 @@ function buildQaEvidenceSummary(params: {
     evidenceMode,
     entries,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });
 }
@@ -467,10 +453,36 @@ export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSumma
   return qaEvidenceSummarySchema.parse(summary);
 }
 
+export function mergeQaEvidenceSummaries(params: {
+  evidenceSummaries: readonly QaEvidenceSummaryJson[];
+  generatedAt: string;
+}) {
+  const profiles = [
+    ...new Set(
+      params.evidenceSummaries
+        .map((summary) => summary.profile?.trim())
+        .filter((profile): profile is string => Boolean(profile)),
+    ),
+  ];
+  return validateQaEvidenceSummaryJson({
+    kind: QA_EVIDENCE_SUMMARY_KIND,
+    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    generatedAt: params.generatedAt,
+    evidenceMode:
+      params.evidenceSummaries.length > 0 &&
+      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
+        ? "slim"
+        : "full",
+    entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
+    profile: profiles.length === 1 ? profiles[0] : undefined,
+  });
+}
+
 export function attachQaEvidenceScorecard(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   summary: QaEvidenceSummaryJson;
   profile: QaEvidenceProfile;
+  profilePlan: QaProfileEvidencePlan;
   scorecard: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
   return buildQaEvidenceSummary({
@@ -478,6 +490,7 @@ export function attachQaEvidenceScorecard(params: {
     evidenceMode: params.evidenceMode,
     generatedAt: params.summary.generatedAt,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });
 }
@@ -489,25 +502,14 @@ export function buildQaSuiteEvidenceSummary(
     scenarioResults: readonly QaEvidenceScenarioResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
-  const channelDriver = resolveQaEvidenceChannelDriver({
-    env: params.env,
-    fallback: params.channelDriver,
-  });
+  const { executionBase, packageSource, profile } = resolveQaEvidenceBuildContext(params);
+  const channelDriver = params.channelDriver?.trim() || undefined;
   const entries = params.scenarioResults.map((result, index): QaEvidenceSummaryEntry => {
     const scenario = params.scenarioDefinitions[index];
-    const primaryCoverageIds = uniqueSortedStrings(scenario?.coverage?.primary ?? []);
-    const coverageIds = uniqueSortedStrings([
+    const primaryCoverageIds = normalizeSortedUniqueTrimmedStringList(
+      scenario?.coverage?.primary ?? [],
+    );
+    const coverageIds = normalizeSortedUniqueTrimmedStringList([
       ...(scenario?.coverage?.primary ?? []),
       ...(scenario?.coverage?.secondary ?? []),
     ]);
@@ -534,13 +536,11 @@ export function buildQaSuiteEvidenceSummary(
       refs: refs.length > 0 ? refs : undefined,
       runtimePairLane,
       execution: {
-        runner,
-        environment,
-        provider,
+        ...executionBase,
         channel: {
           id: params.channelId,
-          live: channelDriver?.id === "live",
-          driver: channelDriver?.id,
+          live: channelDriver === "live",
+          driver: channelDriver,
         },
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
@@ -558,26 +558,16 @@ export function buildQaSuiteEvidenceSummary(
 
 function buildTestRunnerEvidenceSummary(
   params: QaEvidenceBuildBase & {
-    defaultRunner: string;
-    testKind: string;
     targets: readonly QaEvidenceTestTargetInput[];
     results: readonly QaEvidenceTestResultInput[];
   },
+  defaultRunner: string,
+  testKind: string,
 ): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({
-    env: params.env,
-    fallback: params.runner ?? params.defaultRunner,
-  });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
+  const { executionBase, packageSource, profile } = resolveQaEvidenceBuildContext(
+    params,
+    defaultRunner,
+  );
   const targetById = new Map(params.targets.map((target) => [target.id, target]));
   const targetByPath = new Map(params.targets.map((target) => [target.sourcePath, target]));
   const entries = params.results.map((result, index): QaEvidenceSummaryEntry => {
@@ -595,7 +585,7 @@ function buildTestRunnerEvidenceSummary(
     const timing = timingForTestResult(result);
     return {
       test: {
-        kind: params.testKind,
+        kind: testKind,
         id: target?.id ?? fallbackId,
         title: target?.title ?? result.title ?? fallbackId,
         source: sourcePath ? { path: sourcePath } : undefined,
@@ -606,11 +596,9 @@ function buildTestRunnerEvidenceSummary(
       }),
       refs: refs.length > 0 ? refs : undefined,
       execution: {
-        runner,
-        environment,
-        provider,
+        ...executionBase,
         packageSource,
-        artifacts: buildQaEvidenceArtifacts(params.artifactPaths, runner),
+        artifacts: buildQaEvidenceArtifacts(params.artifactPaths, executionBase.runner),
       },
       result: resultForEvidence(result, timing),
     };
@@ -629,12 +617,7 @@ export function buildVitestEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "vitest",
-    testKind: "vitest-test",
-    runner: params.runner ?? "vitest",
-  });
+  return buildTestRunnerEvidenceSummary(params, "vitest", "vitest-test");
 }
 
 export function buildPlaywrightEvidenceSummary(
@@ -643,12 +626,7 @@ export function buildPlaywrightEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "playwright",
-    testKind: "playwright-test",
-    runner: params.runner ?? "playwright",
-  });
+  return buildTestRunnerEvidenceSummary(params, "playwright", "playwright-test");
 }
 
 export function buildScriptEvidenceSummary(
@@ -657,10 +635,5 @@ export function buildScriptEvidenceSummary(
     results: readonly QaEvidenceTestResultInput[];
   },
 ): QaEvidenceSummaryJson {
-  return buildTestRunnerEvidenceSummary({
-    ...params,
-    defaultRunner: "script",
-    testKind: "script-test",
-    runner: params.runner ?? "script",
-  });
+  return buildTestRunnerEvidenceSummary(params, "script", "script-test");
 }

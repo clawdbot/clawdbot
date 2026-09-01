@@ -12,12 +12,13 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
+import { resolveCurrentAttemptAssistant } from "./attempt-terminal-evidence.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { resolveRunFailoverDecision } from "./failover-policy.js";
 import {
   buildErrorAgentMeta,
-  isAssistantForModelRef,
+  normalizeAssistantUsageForContext,
   resolveActiveErrorContext,
   resolveLatestCallUsage,
 } from "./helpers.js";
@@ -26,7 +27,8 @@ import {
   stepIdleTimeoutBreaker,
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
-import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
+import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
+import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -59,12 +61,14 @@ export async function normalizeEmbeddedRunAttempt(input: {
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   idleTimeoutBreakerState: ReturnType<typeof createIdleTimeoutBreakerState>;
   contextRecoveryState: ReturnType<typeof createEmbeddedRunContextRecoveryState>;
+  recordedCompactionCount?: number;
   replayState: ReplayState;
   lastRetryFailoverReason: Parameters<typeof resolveRunFailoverDecision>[0]["failoverReason"];
 }): Promise<
   | { action: "complete"; result: EmbeddedAgentRunResult }
   | {
       action: "retry";
+      retryKind: RunRetryKind;
       bootstrapPromptWarningSignaturesSeen: string[];
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       replayState: ReplayState;
@@ -102,6 +106,27 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const params = runInput.runParams;
   const runtime = preparedRuntime.snapshot();
   const attempt = normalizeEmbeddedRunAttemptResult(dispatchedAttempt.rawAttempt);
+  // Completed attempt facts must survive cancellation while user persistence settles.
+  const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
+  const recordedCompactionCount = input.recordedCompactionCount ?? 0;
+  input.contextRecoveryState.autoCompactionCount += Math.max(
+    0,
+    attemptCompactionCount - recordedCompactionCount,
+  );
+  if (attemptCompactionCount > recordedCompactionCount) {
+    // Returned counts carry no ordering relative to model observations.
+    input.contextRecoveryState.currentContextSnapshot = { tokens: undefined };
+  }
+  if (
+    (recordedCompactionCount === 0 || attemptCompactionCount > recordedCompactionCount) &&
+    typeof attempt.compactionTokensAfter === "number" &&
+    Number.isFinite(attempt.compactionTokensAfter) &&
+    attempt.compactionTokensAfter >= 0
+  ) {
+    input.contextRecoveryState.lastCompactionTokensAfter = Math.floor(
+      attempt.compactionTokensAfter,
+    );
+  }
   await sessionPromptState.waitForCurrentUserMessagePersistence();
   sessionPromptState.suppressNextUserMessagePersistence = sessionPromptState.activePrompt.persisted;
   if (dispatchedAttempt.cancellationRequested) {
@@ -118,18 +143,10 @@ export async function normalizeEmbeddedRunAttempt(input: {
     currentAttemptCompletedAssistant,
   } = attempt;
   const { idleTimedOut } = projectAgentRunAttemptTerminal(terminal);
-  const sessionAssistantForCandidate =
-    !currentAttemptAssistant &&
-    !isAssistantForModelRef(sessionLastAssistant, {
-      provider: runtime.effectiveModel.provider,
-      model: runtime.effectiveModel.id,
-    })
-      ? undefined
-      : sessionLastAssistant;
-  const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
+  const attemptAssistant = resolveCurrentAttemptAssistant(attempt);
   const terminalState = resolveEmbeddedRunAttemptTerminalState({
     attempt,
-    assistant: currentAttemptAssistant,
+    assistant: attemptAssistant,
     abortSignal: params.abortSignal,
   });
   const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
@@ -156,12 +173,19 @@ export async function normalizeEmbeddedRunAttempt(input: {
           ]),
         )
       : input.bootstrapPromptWarningSignaturesSeen);
-  const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
-  const currentAttemptAssistantUsage = normalizeUsage(currentAttemptAssistant?.usage as UsageLike);
+  const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
+  const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
+  // Current-attempt evidence is newest. The session assistant is only a transcript fallback
+  // and can predate a carried attempt snapshot after transcript rewrites or compaction.
   const callUsage = resolveLatestCallUsage({
-    currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    carriedCandidates: [input.lastRunPromptUsage, lastAssistantUsage],
+    currentAttemptCandidates: [
+      attempt.attemptUsage?.contextUsage ? attempt.attemptUsage : undefined,
+      currentAttemptAssistantUsage,
+      promptCacheLastCallUsage,
+    ],
+    carriedUsage: input.lastRunPromptUsage,
+    transcriptFallback: lastAssistantUsage,
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
@@ -200,6 +224,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
           sessionFile: sessionPromptState.sessionFile,
           provider,
           model: preparedRuntime.model.id,
+          credentialSource: attempt.modelAttempt?.credentialSource,
           ...runtime.outerContextTokenMeta,
           usageAccumulator: input.usageAccumulator,
           lastRunPromptUsage,
@@ -208,17 +233,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
         livenessState: "blocked",
       }),
     };
-  }
-  const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
-  input.contextRecoveryState.autoCompactionCount += attemptCompactionCount;
-  if (
-    typeof attempt.compactionTokensAfter === "number" &&
-    Number.isFinite(attempt.compactionTokensAfter) &&
-    attempt.compactionTokensAfter >= 0
-  ) {
-    input.contextRecoveryState.lastCompactionTokensAfter = Math.floor(
-      attempt.compactionTokensAfter,
-    );
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
@@ -235,11 +249,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
     replayState.replayInvalid = true;
   }
   replayState = observeReplayMetadata(replayState, attempt.replayMetadata);
-  const formattedAssistantErrorText = sessionAssistantForCandidate
-    ? formatAssistantErrorText(sessionAssistantForCandidate, {
+  const formattedAssistantErrorText = attemptAssistant
+    ? formatAssistantErrorText(attemptAssistant, {
         cfg: params.config,
         sessionKey: runInput.resolvedSessionKey ?? params.sessionId,
+        agentId: params.agentId,
         provider: activeErrorContext.provider,
+        providerOwner: runtime.providerRuntimeHandle?.plugin,
         model: activeErrorContext.model,
         authMode: runtime.lastProfileId
           ? preparedRuntime.attemptAuthProfileStore.profiles?.[runtime.lastProfileId]?.type
@@ -247,8 +263,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
       })
     : undefined;
   const assistantErrorText =
-    sessionAssistantForCandidate?.stopReason === "error"
-      ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
+    attemptAssistant?.stopReason === "error"
+      ? attemptAssistant.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
   if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
@@ -257,10 +273,19 @@ export async function normalizeEmbeddedRunAttempt(input: {
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );
     if (retryingFromTranscript) {
+      if ((preflightRecovery.truncatedCount ?? 0) > 0) {
+        sessionPromptState.markOwnedTranscriptRetry();
+      }
       sessionPromptState.continueFromCurrentTranscript();
     }
+    const retryKind = resolveRunRetryKind({
+      preflightRecovery,
+      retryingFromTranscript,
+      toolMetas: attempt.toolMetas,
+    });
     return {
       action: "retry",
+      retryKind,
       bootstrapPromptWarningSignaturesSeen,
       lastRunPromptUsage,
       replayState,

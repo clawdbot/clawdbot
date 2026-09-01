@@ -1,4 +1,9 @@
 // Normalizes installed plugin config and install records.
+import {
+  copyPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -123,21 +128,20 @@ export function recordPluginInstall(
     ...record,
     installedAt: record.installedAt ?? new Date().toISOString(),
   };
+  const installs = copyPluginInstallRecordMap(cfg.plugins?.installs);
+  setPluginInstallRecordMapEntry(installs, pluginId, nextRecord);
 
   const next = {
     ...cfg,
     plugins: {
       // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
-      installs: {
-        ...cfg.plugins?.installs,
-        [pluginId]: nextRecord,
-      },
+      installs,
     },
   };
   return reconcileNpmPluginLoadPath({
     config: next,
-    previousInstall: cfg.plugins?.installs?.[pluginId],
+    previousInstall: getPluginInstallRecordMapEntry(cfg.plugins?.installs, pluginId),
     nextInstall: nextRecord,
   });
 }

@@ -23,15 +23,27 @@ type RuntimeBackendEntry = ReturnType<
 type SetupBackendEntry = NonNullable<
   ReturnType<(typeof import("../plugins/setup-registry.js"))["resolvePluginSetupCliBackend"]>
 >;
+type CliBackendOverrides = Partial<
+  Omit<CliBackendPlugin, "ownsNativeCompaction" | "manualCompaction">
+> &
+  (
+    | {
+        ownsNativeCompaction: true;
+        manualCompaction?: NonNullable<CliBackendPlugin["manualCompaction"]>;
+      }
+    | {
+        ownsNativeCompaction?: false;
+        manualCompaction?: never;
+      }
+  );
 
 const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
   kind: "bundled-package-tree",
   packageName: "@fixture/acme-cli",
   entrypoint: "command",
 };
-
-function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlugin {
-  return {
+function createBackend(overrides: CliBackendOverrides = {}): CliBackendPlugin {
+  const base = {
     id: "acme-cli",
     modelProvider: "acme",
     config: {
@@ -55,20 +67,31 @@ function createBackend(overrides: Partial<CliBackendPlugin> = {}): CliBackendPlu
         binaryName: "acme",
       },
     },
-    ...overrides,
+  } satisfies CliBackendPlugin;
+  return overrides.ownsNativeCompaction === true
+    ? { ...base, ...overrides, ownsNativeCompaction: true }
+    : { ...base, ...overrides, ownsNativeCompaction: false };
+}
+
+function createBooleanOwnershipBackend(ownsNativeCompaction: boolean): CliBackendPlugin {
+  return {
+    id: "boolean-ownership-cli",
+    modelProvider: "acme",
+    config: { command: "acme" },
+    bundleMcp: false,
+    ownsNativeCompaction,
   };
 }
 
 function runtimeEntry(
-  overrides: Partial<CliBackendPlugin> = {},
+  overrides: CliBackendOverrides = {},
   pluginId = "acme-plugin",
-  metadata: { builtWithOpenClawVersion?: string } = {},
 ): RuntimeBackendEntry {
-  return { ...createBackend(overrides), pluginId, ...metadata } as RuntimeBackendEntry;
+  return { ...createBackend(overrides), pluginId } as RuntimeBackendEntry;
 }
 
 function setupEntry(
-  overrides: Partial<CliBackendPlugin> = {},
+  overrides: CliBackendOverrides = {},
   pluginId = "acme-plugin",
 ): SetupBackendEntry {
   return {
@@ -100,6 +123,10 @@ afterEach(() => {
 });
 
 describe("resolveCliBackendConfig", () => {
+  it("accepts boolean native-compaction ownership without a manual contract", () => {
+    expect(createBooleanOwnershipBackend(true).ownsNativeCompaction).toBe(true);
+  });
+
   it("returns the plugin-owned command adapter and registration metadata", () => {
     const resolved = requireBackend();
 
@@ -178,9 +205,14 @@ describe("resolveCliBackendConfig", () => {
 
   it("falls back to setup registration before runtime activation", () => {
     const parseJsonlEvent = vi.fn();
+    const resolveModelId = vi.fn(
+      ({ modelId, contextWindow }: { modelId: string; contextWindow?: string }) =>
+        contextWindow === "1m" ? `${modelId}[1m]` : modelId,
+    );
     const entry = setupEntry({
       config: { command: "setup-acme", args: ["run"] },
       parseJsonlEvent,
+      resolveModelId,
     });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -193,6 +225,9 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
     expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(resolved.resolveModelId?.({ modelId: "acme-large", contextWindow: "1m" })).toBe(
+      "acme-large[1m]",
+    );
   });
 
   it("returns null when no plugin owns the backend", () => {
@@ -206,6 +241,11 @@ describe("resolveCliBackendConfig", () => {
 
   it("preserves backend-owned execution hooks", () => {
     const prepareExecution = vi.fn(async () => ({ env: { ACME_HOME: "/tmp/acme" } }));
+    const manualCompaction = {
+      buildPrompt: vi.fn(() => "/shrink"),
+      input: "arg" as const,
+      validateOutput: vi.fn(() => ({ ok: true as const })),
+    };
     const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => [
       ...baseArgs,
       "--effort",
@@ -217,6 +257,7 @@ describe("resolveCliBackendConfig", () => {
           prepareExecution,
           resolveExecutionArgs: resolveExecutionArgs as never,
           ownsNativeCompaction: true,
+          manualCompaction,
           nativeToolMode: "selectable",
           toolAvailabilityEnforcement: "execution-args",
           sideQuestionToolMode: "disabled",
@@ -230,34 +271,13 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.prepareExecution).toBe(prepareExecution);
     expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
     expect(resolved.ownsNativeCompaction).toBe(true);
+    expect(resolved.manualCompaction).toBe(manualCompaction);
     expect(resolved.nativeToolMode).toBe("selectable");
     expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
     expect(resolved.sideQuestionToolMode).toBe("disabled");
   });
 
-  it("normalizes the shipped beta selectable-hook contract to execution-args enforcement", () => {
-    const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        runtimeEntry(
-          {
-            nativeToolMode: "selectable",
-            resolveExecutionArgs: resolveExecutionArgs as never,
-          },
-          "acme-plugin",
-          { builtWithOpenClawVersion: "2026.7.2-beta.3" },
-        ),
-      ],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-
-    const resolved = requireBackend();
-
-    expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
-    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
-  });
-
-  it("does not infer enforcement for an unversioned selectable hook", () => {
+  it("requires explicit enforcement for a selectable hook", () => {
     const resolveExecutionArgs = vi.fn(({ baseArgs }: { baseArgs: readonly string[] }) => baseArgs);
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [

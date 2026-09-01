@@ -1,5 +1,5 @@
 ---
-summary: "Adds memory embedding provider support."
+summary: "Adds embedding provider support, including memory search."
 read_when:
   - You are installing, configuring, or auditing the voyage plugin
 title: "Voyage plugin"
@@ -7,7 +7,7 @@ title: "Voyage plugin"
 
 # Voyage plugin
 
-Adds memory embedding provider support.
+Adds embedding provider support, including memory search.
 
 ## Distribution
 
@@ -16,4 +16,4 @@ Adds memory embedding provider support.
 
 ## Surface
 
-contracts: `memoryEmbeddingProviders`
+contracts: `embeddingProviders`

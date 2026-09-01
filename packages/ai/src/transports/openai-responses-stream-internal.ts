@@ -1,14 +1,8 @@
-import type {
-  ResponseCreateParamsStreaming,
-  ResponseOutputItem,
-  ResponseOutputMessage,
-  ResponseStreamEvent,
-} from "openai/resources/responses/responses.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
-  type AzureResponsesTextContentPart,
-  type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
@@ -18,110 +12,42 @@ import {
   readResponsesToolCallItemIdentity,
   type ResponsesToolCallState,
 } from "../providers/openai-responses-tool-call-tracker.js";
-import type { Api, AssistantMessage, Model, TextContent, ToolCall, Usage } from "../types.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import type { Api, AssistantMessage, Model, TextContent, ToolCall } from "../types.js";
 import {
-  type FirstStreamEventInternalOptions,
-  withFirstStreamEventTimeout,
-} from "../utils/stream-first-event-timeout.js";
-import {
-  OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
-  type OpenAIResponsesReasoningReplayMetadata,
-} from "./openai-responses-contracts.js";
-import { normalizeResponsesFailedEvent } from "./openai-responses-debug.js";
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
+import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
+import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
+import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
+  createResponsesOutputTracker,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
   type ResponsesStreamOutputSlot,
 } from "./openai-responses-stream-slots-internal.js";
 import {
   createResponsesTerminalController,
-  resolveCompletedToolCallName,
+  resolveCompletedResponsesToolCall,
   resolveResponsesToolCallId,
   type ResponsesEventSink,
   type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
+import type {
+  CompletedResponse,
+  ResponsesStreamOptions,
+  ResponsesStreamOutputMessage,
+} from "./openai-responses-stream-types-internal.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
-type ResponsesConsumedEventType =
-  | "error"
-  | "response.completed"
-  | "response.content_part.added"
-  | "response.created"
-  | "response.failed"
-  | "response.function_call_arguments.delta"
-  | "response.function_call_arguments.done"
-  | "response.incomplete"
-  | "response.output_item.added"
-  | "response.output_item.done"
-  | "response.output_text.delta"
-  | "response.reasoning_summary_part.added"
-  | "response.reasoning_summary_part.done"
-  | "response.reasoning_summary_text.delta"
-  | "response.reasoning_text.delta"
-  | "response.refusal.delta";
-
-type OpenAIResponsesConsumedEvent = Extract<
-  ResponseStreamEvent,
-  { type: ResponsesConsumedEventType }
->;
-type OpenAIResponsesIgnoredSdkEvent = Exclude<ResponseStreamEvent, OpenAIResponsesConsumedEvent>;
-type ResponsesTextContentPart =
-  | ResponseOutputMessage["content"][number]
-  | AzureResponsesTextContentPart;
-type ResponsesStreamOutputMessage = Omit<ResponseOutputMessage, "content"> & {
-  content: ResponsesTextContentPart[] | null;
-};
-type ResponsesContentPartAddedEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.content_part.added" }
->;
-type ResponsesOutputItemDoneEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.output_item.done" }
->;
-
-export type OpenAIResponsesStreamEvent =
-  | OpenAIResponsesConsumedEvent
-  | OpenAIResponsesIgnoredSdkEvent
-  | (Omit<ResponsesContentPartAddedEvent, "part"> & {
-      part: Extract<ResponsesTextContentPart, { type: "text" }>;
-    })
-  | (Omit<ResponsesOutputItemDoneEvent, "item"> & {
-      item: ResponsesStreamOutputMessage;
-    })
-  | AzureResponsesTextDeltaEvent;
-
-type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-  signal?: AbortSignal;
-  reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
-};
-
-export class ResponsesStreamFailure extends Error {
-  readonly responseId?: string;
-  readonly response: unknown;
-  readonly observation: ReturnType<typeof normalizeResponsesFailedEvent>["observation"];
-
-  constructor(failure: ReturnType<typeof normalizeResponsesFailedEvent>, response: unknown) {
-    super(failure.message);
-    this.name = "ResponsesStreamFailure";
-    this.responseId = failure.responseId;
-    this.response = response;
-    this.observation = failure.observation;
-  }
-}
+export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
 export async function processResponsesStream<TApi extends Api>(
   openaiStream: AsyncIterable<unknown>,
@@ -129,11 +55,14 @@ export async function processResponsesStream<TApi extends Api>(
   stream: ResponsesEventSink,
   model: Model<TApi>,
   options?: ResponsesStreamOptions,
-): Promise<void> {
+) {
+  type CompletedToolCall = Extract<ResponseOutputItem, { type: "function_call" }>;
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
     contentIndex: number;
+    // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
+    previewSchedule: ToolArgumentPreviewSchedule;
   };
   type ResponsesOutputSlot = ResponsesStreamOutputSlot<
     ResponsesStreamOutputMessage,
@@ -141,13 +70,11 @@ export async function processResponsesStream<TApi extends Api>(
   >;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
-  const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
-  const completedOutputItemIdentities = new Set<string>();
-  const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
-  let terminalResponseEvent: "finalized" | "failed" | undefined;
+  const outputs = createResponsesOutputTracker();
+  let terminalResponse: CompletedResponse | null | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
-  const blockIndex = () => blocks.length - 1;
+  const compactionTracker = createCompactionTracker(output, model, options);
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
@@ -159,9 +86,10 @@ export async function processResponsesStream<TApi extends Api>(
         item,
         block,
         contentIndex: blocks.length,
+        outputIndex: readResponsesOutputIndex(event),
       } satisfies ResponsesOutputSlot;
       blocks.push(block);
-      reasoningBlocksById.set(item.id, block);
+      outputs.set(item, slot.contentIndex, slot.outputIndex);
       outputSlots.register(event, slot);
       stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
       return slot;
@@ -183,16 +111,13 @@ export async function processResponsesStream<TApi extends Api>(
         item: messageItem,
         block,
         contentIndex: block ? blocks.length : undefined,
+        outputIndex: readResponsesOutputIndex(event),
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
       } satisfies ResponsesOutputSlot;
       if (block) {
         blocks.push(block);
-        startedTextBlocksByItemId.set(messageItem.id, {
-          block,
-          index: slot.contentIndex ?? blocks.length - 1,
-          phase: messageItem.phase ?? undefined,
-        });
+        outputs.set(messageItem, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
       }
       outputSlots.register(event, slot);
       if (slot.contentIndex !== undefined) {
@@ -214,12 +139,6 @@ export async function processResponsesStream<TApi extends Api>(
     }
     return readResponsesOutputIndex(event) === undefined ? undefined : outputSlots.get(event);
   };
-  const getOrCreateOutputSlot = (
-    event: object,
-    item: ResponseOutputItem | ResponsesStreamOutputMessage,
-  ): ResponsesOutputSlot | undefined => {
-    return resolveOutputItemSlot(event, item) ?? createOutputSlot(event, item);
-  };
   const materializeDeferredTextSlot = (
     slot: Extract<ResponsesOutputSlot, { type: "text" }>,
   ): void => {
@@ -235,12 +154,8 @@ export async function processResponsesStream<TApi extends Api>(
         : {}),
     };
     blocks.push(slot.block);
-    slot.contentIndex = blockIndex();
-    startedTextBlocksByItemId.set(slot.item.id, {
-      block: slot.block,
-      index: slot.contentIndex,
-      phase: slot.item.phase ?? undefined,
-    });
+    slot.contentIndex = blocks.length - 1;
+    outputs.set(slot.item, slot.contentIndex, slot.outputIndex);
     stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
     if (text) {
       stream.push({
@@ -262,22 +177,99 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
+  const terminal = createResponsesTerminalController({
     output,
     stream,
     model,
     options,
-    reasoningBlocksById,
-    completedOutputItemIdentities,
-    startedTextBlocksByItemId,
+    outputs,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
     },
-    markFinalized: () => {
-      terminalResponseEvent = "finalized";
-    },
   });
+
+  const finalizeToolCall = (
+    item: CompletedToolCall,
+    outputIndex: number | undefined,
+    streamingToolCall: StreamingToolCallState | undefined,
+    validated: Pick<ToolCall, "name" | "arguments">,
+  ): void => {
+    const identity = {
+      type: item.type,
+      id: item.id || streamingToolCall?.itemId,
+      call_id: item.call_id || streamingToolCall?.callId,
+    };
+    const finalOutputIndex = outputIndex ?? streamingToolCall?.outputIndex;
+    // A wholly anonymous, unindexed done event cannot be deduplicated. Keep
+    // its active owner until the terminal snapshot supplies an output position.
+    if (finalOutputIndex === undefined && !identity.id && !identity.call_id) {
+      if (!streamingToolCall) {
+        throw new Error("Responses stream completed tool call without an output identity");
+      }
+      return;
+    }
+    if (streamingToolCall) {
+      streamingToolCalls.forget(streamingToolCall);
+      for (const slot of outputSlots.values()) {
+        if (slot.type === "toolCall" && slot.toolCall === streamingToolCall) {
+          outputSlots.forget(slot);
+        }
+      }
+    }
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, validated);
+  };
+  const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
+    const prepared = new Map<number, () => void>();
+    const recovered: StreamingToolCallState[] = [];
+    const callIds = new Set<string>();
+    const allowUnmatchedIdentity =
+      items.filter(
+        (item, index) => item.type === "function_call" && !outputs.get(item, index)?.completed,
+      ).length === 1;
+    for (const [outputIndex, item] of items.entries()) {
+      const tracked = outputs.get(item, outputIndex);
+      if (item.type !== "function_call") {
+        continue;
+      }
+      if (item.call_id && callIds.has(item.call_id)) {
+        throw new Error("Responses stream repeated a terminal tool-call identity");
+      }
+      if (item.call_id) {
+        callIds.add(item.call_id);
+      }
+      // Completed positions must be skipped before resolve can adopt an
+      // unindexed active call. The positional tracker still checks identity.
+      if (tracked?.completed) {
+        continue;
+      }
+      const state = streamingToolCalls.resolve(
+        { output_index: outputIndex },
+        readResponsesToolCallItemIdentity(item),
+        allowUnmatchedIdentity,
+      );
+      if (tracked && !state) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
+      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      if (state) {
+        recovered.push(state);
+      }
+      prepared.set(outputIndex, () => finalizeToolCall(item, outputIndex, state, validated));
+    }
+    if (!streamingToolCalls.hasExactlyActive(recovered)) {
+      throw new Error("Responses stream completed with unresolved tool calls");
+    }
+    // All terminal calls and active-call coverage are validated before any
+    // toolcall_end can authorize execution; terminal ordering is checked next.
+    return (outputIndex: number) => {
+      const complete = prepared.get(outputIndex);
+      if (!complete) {
+        throw new Error("Responses stream completed with unresolved tool calls");
+      }
+      complete();
+    };
+  };
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -294,11 +286,16 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
+      // provider progress; keep the idle watchdog alive without exposing them,
+      // matching the completions and anthropic transports.
+      notifyLlmRequestActivity(options?.signal);
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {
         materializeDeferredTextSlots();
         const item = event.item;
+        compactionTracker.added(item, blocks.length);
         if (item.type !== "message") {
           // Snapshot collapse only applies to back-to-back message items; any
           // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
@@ -319,6 +316,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
           streamingToolCalls.register(event, toolCallState);
@@ -326,6 +324,7 @@ export async function processResponsesStream<TApi extends Api>(
             outputSlots.register(event, { type: "toolCall", toolCall: toolCallState });
           }
           output.content.push(toolCallBlock);
+          outputs.set(item, contentIndex, readResponsesOutputIndex(event));
           stream.push({ type: "toolcall_start", contentIndex, partial: output });
         }
       } else if (event.type === "response.reasoning_summary_part.added") {
@@ -467,7 +466,11 @@ export async function processResponsesStream<TApi extends Api>(
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
           toolCall.block.partialJson += event.delta;
-          toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
+          // Preview refresh is geometric; the done event and terminal finalize
+          // re-parse the full buffer authoritatively either way.
+          if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
+            toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
+          }
           stream.push({
             type: "toolcall_delta",
             contentIndex: toolCall.contentIndex,
@@ -514,12 +517,19 @@ export async function processResponsesStream<TApi extends Api>(
 
         const existingOutputSlot = resolveOutputItemSlot(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
-        const outputSlot = existingOutputSlot ?? getOrCreateOutputSlot(event, item);
+        const outputSlot = existingOutputSlot ?? createOutputSlot(event, item);
+        compactionTracker.completed(item, blocks.length);
         if (item.type === "reasoning" && outputSlot?.type === "thinking") {
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
           outputSlot.block.thinkingSignature = JSON.stringify(item);
+          outputs.set(
+            item,
+            outputSlot.contentIndex,
+            readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+            true,
+          );
           if (item.encrypted_content && options?.reasoningReplayMetadata) {
             outputSlot.block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] =
               options.reasoningReplayMetadata;
@@ -574,6 +584,12 @@ export async function processResponsesStream<TApi extends Api>(
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
+            outputs.set(
+              item,
+              outputSlot.collapseCandidate.index,
+              readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+              true,
+            );
           } else {
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
@@ -584,7 +600,7 @@ export async function processResponsesStream<TApi extends Api>(
                 ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
               };
               blocks.push(outputSlot.block);
-              outputSlot.contentIndex = blockIndex();
+              outputSlot.contentIndex = blocks.length - 1;
               stream.push({
                 type: "text_start",
                 contentIndex: outputSlot.contentIndex,
@@ -598,6 +614,12 @@ export async function processResponsesStream<TApi extends Api>(
               throw new Error("Responses stream finalized text without a content index");
             }
             lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+            outputs.set(
+              item,
+              contentIndex,
+              readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
+              true,
+            );
             stream.push({
               type: "text_end",
               contentIndex,
@@ -606,9 +628,10 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
           outputSlots.forget(outputSlot);
-          startedTextBlocksByItemId.delete(item.id);
-          completedOutputItemIdentities.add(`message:${item.id}`);
         } else if (item.type === "function_call") {
+          if (outputs.get(item, readResponsesOutputIndex(event))?.completed) {
+            continue;
+          }
           const streamingToolCall = streamingToolCalls.resolve(
             event,
             readResponsesToolCallItemIdentity(item),
@@ -618,8 +641,6 @@ export async function processResponsesStream<TApi extends Api>(
           if (!streamingToolCall && streamingToolCalls.hasActive()) {
             continue;
           }
-          const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
-          const streamedArguments = streamingToolCall?.block.partialJson ?? "";
           const completedArguments =
             typeof item.arguments === "string" ? item.arguments : undefined;
           if (
@@ -629,66 +650,25 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
-          const finalArguments =
-            completedArguments !== undefined &&
-            (completedArguments.length > 0 || !streamedArguments)
-              ? completedArguments
-              : streamedArguments || "{}";
-          const args = parseStreamingJson(finalArguments);
-
-          let toolCall: ToolCall;
-          let contentIndex: number;
-          if (streamingToolCall) {
-            const block = streamingToolCall.block;
-            // The SDK permits the added item to omit its item id, then supplies
-            // the canonical id on completion. Upgrade the same public block so
-            // replay and its function_call_output retain both identities.
-            block.id = resolveResponsesToolCallId(item, block.id);
-            block.name = completedName;
-            // Finalize in-place and strip the scratch buffer so replay only
-            // carries parsed arguments.
-            block.arguments = args;
-            delete (block as { partialJson?: string }).partialJson;
-            toolCall = block;
-            contentIndex = streamingToolCall.contentIndex;
-          } else {
-            toolCall = {
-              type: "toolCall",
-              id: resolveResponsesToolCallId(item),
-              name: completedName,
-              arguments: args,
-            };
-            // Some compatible streams only send the completed item. Preserve
-            // the normal balanced lifecycle and persist the call for replay.
-            blocks.push(toolCall);
-            contentIndex = blockIndex();
-            stream.push({ type: "toolcall_start", contentIndex, partial: output });
-          }
-
-          if (streamingToolCall) {
-            streamingToolCalls.forget(streamingToolCall);
-            for (const slot of outputSlots.values()) {
-              if (slot.type === "toolCall" && slot.toolCall === streamingToolCall) {
-                outputSlots.forget(slot);
-              }
-            }
-          }
-          stream.push({
-            type: "toolcall_end",
-            contentIndex,
-            toolCall,
-            partial: output,
+          const validated = resolveCompletedResponsesToolCall(item, {
+            name: streamingToolCall?.block.name,
+            arguments: completedArguments || streamingToolCall?.block.partialJson || "",
           });
-          completedOutputItemIdentities.add(`function_call:${item.call_id}`);
+
+          finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-        if (streamingToolCalls.hasActive()) {
+        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
           throw new Error("Responses stream completed with unresolved tool calls");
         }
-        finalizeResponse(event.response, event.type);
+        terminal.finalizeResponse(event.response, event.type);
         if (event.type === "response.completed" || output.stopReason === "length") {
-          recoverTerminalOutput(event.response.output ?? [], event.type === "response.completed");
+          const items = event.response.output ?? [];
+          const completeToolCall =
+            event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
+          terminal.recoverTerminalOutput(items, completeToolCall);
         }
+        terminalResponse = event.type === "response.completed" ? event.response : null;
         if (
           output.stopReason === "stop" &&
           output.content.some((block) => block.type === "toolCall")
@@ -701,22 +681,23 @@ export async function processResponsesStream<TApi extends Api>(
           event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
         );
       } else if (event.type === "response.failed") {
-        const failure = normalizeResponsesFailedEvent(
-          event as unknown as Record<string, unknown>,
-          model,
-        );
-        if (failure.responseId) {
-          output.responseId = failure.responseId;
-        }
+        const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);
+        terminal.finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }
+    }
+    // openai-node turns an aborted SSE iterator into normal completion; preserve
+    // the caller's authoritative reason before classifying terminal stream state.
+    if (options?.signal?.aborted) {
+      throw transportAbortError(options.signal);
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");
     }
-    if (!terminalResponseEvent) {
+    if (terminalResponse === undefined) {
       throw new Error("OpenAI Responses stream ended before a terminal response event");
     }
+    return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
       delete (block as { partialJson?: string }).partialJson;

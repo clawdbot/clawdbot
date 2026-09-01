@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders logs screen content.
 import { html, nothing } from "lit";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
@@ -11,7 +13,7 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
@@ -19,6 +21,7 @@ type ExportFileLabel = "filtered" | "visible";
 
 type LogsProps = {
   loading: boolean;
+  refreshDisabled: boolean;
   status: PanelRefreshStatus;
   file: string | null;
   entries: LogEntry[];
@@ -34,7 +37,7 @@ type LogsProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value?: string | null) {
+function formatLogTime(value?: string | null) {
   if (!value) {
     return "";
   }
@@ -42,7 +45,7 @@ function formatTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleTimeString();
+  return formatTimeMs(date.getTime(), undefined, value);
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {
@@ -66,6 +69,22 @@ export function renderLogs(props: LogsProps) {
   });
   const exportFileLabel: ExportFileLabel = needle || levelFiltered ? "filtered" : "visible";
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
+  const streamContent = !props.status.hasLoaded
+    ? props.loading
+      ? renderLoadingState()
+      : nothing
+    : filtered.length === 0
+      ? renderSettingsEmpty(t("gatewayLogs.empty"))
+      : filtered.map(
+          (entry) => html`
+            <div class="log-row">
+              <div class="log-time mono">${formatLogTime(entry.time)}</div>
+              <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
+              <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
+              <div class="log-message mono">${entry.message ?? entry.raw}</div>
+            </div>
+          `,
+        );
 
   // The stream fills the remaining viewport height; the settings-page column
   // wrapper is intentionally skipped so the fill-height flex chain
@@ -74,7 +93,7 @@ export function renderLogs(props: LogsProps) {
     <div class="settings-section__header">
       <h2 class="settings-section__heading">${t("gatewayLogs.title")}</h2>
       <div class="settings-section__actions">
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+        <button class="btn" ?disabled=${props.refreshDisabled} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
         <button
@@ -94,6 +113,7 @@ export function renderLogs(props: LogsProps) {
     ${renderPanelRefreshStatus({
       status: props.status,
       onRetry: props.onRefresh,
+      retryDisabled: props.refreshDisabled,
       className: "logs-refresh-status",
     })}
     <div class="settings-group logs-card">
@@ -142,20 +162,7 @@ export function renderLogs(props: LogsProps) {
             </div>
           `
         : nothing}
-      <div class="log-stream" @scroll=${props.onScroll}>
-        ${filtered.length === 0
-          ? renderSettingsEmpty(t("gatewayLogs.empty"))
-          : filtered.map(
-              (entry) => html`
-                <div class="log-row">
-                  <div class="log-time mono">${formatTime(entry.time)}</div>
-                  <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
-                  <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
-                  <div class="log-message mono">${entry.message ?? entry.raw}</div>
-                </div>
-              `,
-            )}
-      </div>
+      <div class="log-stream" @scroll=${props.onScroll}>${streamContent}</div>
     </div>
   `;
 }

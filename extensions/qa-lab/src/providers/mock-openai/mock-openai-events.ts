@@ -1,14 +1,54 @@
 // QA Lab mock provider output event builders.
 
 import type { StreamEvent } from "./mock-openai-contracts.js";
-import {
-  readTargetFromPrompt,
-  buildMockFunctionCall,
-  buildToolCallEventsWithArgs,
-} from "./mock-openai-tooling.js";
-export function buildToolCallEvents(prompt: string): StreamEvent[] {
-  const targetPath = readTargetFromPrompt(prompt);
-  return buildToolCallEventsWithArgs("read", { path: targetPath });
+import { buildMockFunctionCall } from "./mock-openai-tooling.js";
+
+export function buildFailedResponseEvents(): StreamEvent[] {
+  const responseId = `resp_qa_failed_${Date.now()}`;
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
+}
+
+export function buildPartialFailureEvents(partialText: string): StreamEvent[] {
+  const responseId = "resp_qa_partial_failed_1";
+  const itemId = "msg_qa_partial_failed_1";
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: itemId,
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: partialText,
+    },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
 }
 
 export function buildReleaseAuditJson() {
@@ -108,20 +148,26 @@ export function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
-export function extractPlannedToolCallId(events: StreamEvent[]) {
+export function extractPlannedToolIdentity(events: StreamEvent[]): {
+  callId?: string;
+  itemId?: string;
+} {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; call_id?: unknown };
+    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.call_id === "string"
     ) {
-      return item.call_id;
+      return {
+        callId: item.call_id,
+        itemId: typeof item.id === "string" ? item.id : undefined,
+      };
     }
   }
-  return undefined;
+  return {};
 }
 
 export function extractPlannedToolArgs(events: StreamEvent[]) {
@@ -229,11 +275,13 @@ function appendAssistantMessageEvents(
       text: spec.text,
     });
   }
+  const item = buildAssistantOutputItem(spec);
   events.push({
     type: "response.output_item.done",
     output_index: outputIndex,
-    item: buildAssistantOutputItem(spec),
+    item,
   });
+  return item;
 }
 
 export function buildAssistantThenToolCallEvents(
@@ -311,6 +359,21 @@ export function buildAssistantEvents(
   return events;
 }
 
+export function buildStreamingFinalAnswerEvents(
+  id: string,
+  text: string,
+  previewText = text,
+): StreamEvent[] {
+  return buildAssistantEvents([
+    {
+      id,
+      phase: "final_answer",
+      streamDeltas: splitMockStreamingText(previewText),
+      text,
+    },
+  ]);
+}
+
 export function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
   const reasoningItem = {
     type: "reasoning",
@@ -354,12 +417,7 @@ export function buildReasoningAndAssistantEvents(params: {
     id: params.reasoningId,
     summary: [],
   } as const;
-  const answerItem = buildAssistantOutputItem({
-    id: params.answerId ?? "msg_mock_reasoned_answer",
-    phase: "final_answer",
-    text: params.answerText,
-  });
-  return [
+  const events: StreamEvent[] = [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -374,45 +432,25 @@ export function buildReasoningAndAssistantEvents(params: {
       output_index: 0,
       item: reasoningItem,
     },
+  ];
+  const answerItem = appendAssistantMessageEvents(
+    events,
     {
-      type: "response.output_item.added",
-      output_index: 1,
-      item: {
-        type: "message",
-        id: answerItem.id,
-        role: "assistant",
-        phase: "final_answer",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
-      delta: params.answerText,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: answerItem.id,
-      output_index: 1,
-      content_index: 0,
+      id: params.answerId ?? "msg_mock_reasoned_answer",
+      phase: "final_answer",
+      streamDeltas: [params.answerText],
       text: params.answerText,
     },
-    {
-      type: "response.output_item.done",
-      output_index: 1,
-      item: answerItem,
+    1,
+  );
+  events.push({
+    type: "response.completed",
+    response: {
+      id: `resp_${params.reasoningId}`,
+      status: "completed",
+      output: [reasoningItem, answerItem],
+      usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
     },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${params.reasoningId}`,
-        status: "completed",
-        output: [reasoningItem, answerItem],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
-  ];
+  });
+  return events;
 }

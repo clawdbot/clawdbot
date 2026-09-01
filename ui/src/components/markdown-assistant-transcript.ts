@@ -1,4 +1,4 @@
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
@@ -84,7 +84,13 @@ export function installAssistantTranscriptRoleImageRenderer(
     normalizeLabel: (value: string) => string;
     assistantLabel: () => string;
     openImageLabel: (alt: string, hasAlt: boolean) => string;
+    renderExternalImageFallback: (
+      src: string,
+      renderedLabel: string,
+      linkedImage: boolean,
+    ) => string;
     interactiveImages: (env: unknown) => boolean;
+    allowRemoteImages: (env: unknown) => boolean;
   },
 ): void {
   md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
@@ -92,18 +98,19 @@ export function installAssistantTranscriptRoleImageRenderer(
     if (!token) {
       return "";
     }
-    const src = token.attrGet("src")?.trim() ?? "";
+    const src = String(token.attrGet("src") ?? "").trim();
     // token.content preserves raw Markdown formatting in image labels.
     const alt = options.normalizeLabel(token.content);
     const roleMeta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
       ?.assistantTranscriptRoleImage;
-    if (!options.isInlineDataImage(src)) {
-      return roleMeta
+    const linkedImage = isImageWithinLink(tokens, index);
+    if (!options.isInlineDataImage(src) && !options.allowRemoteImages(env)) {
+      const renderedLabel = roleMeta
         ? renderAssistantTranscriptRoleImageLabel(roleMeta.text, roleMeta.spans, options.escapeHtml)
         : options.escapeHtml(alt);
+      return options.renderExternalImageFallback(src, renderedLabel, linkedImage);
     }
     const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
-    const linkedImage = isImageWithinLink(tokens, index);
     const interactiveImage =
       linkedImage || !options.interactiveImages(env)
         ? image

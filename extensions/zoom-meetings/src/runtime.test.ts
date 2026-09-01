@@ -6,44 +6,49 @@ import { ZoomMeetingsRuntime } from "./runtime.js";
 const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 
 const URL = "https://zoom.us/j/12345678904?pwd=runtime";
+const urlWithPasscode = (passcode: string) => URL.replace("runtime", passcode);
 
-const logger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-};
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
-function runtimeHarness(options?: {
+type RuntimeHarnessOptions = {
   inCall?: boolean;
   meetingEnded?: boolean;
   pendingReason?: "admission" | "passcode";
   tabOpen?: boolean;
-}) {
-  let tabOpen = options?.tabOpen ?? false;
-  let inCall = options?.inCall ?? true;
-  let meetingEnded = options?.meetingEnded ?? false;
-  let meetingEndedOnce = false;
+};
+
+const pendingManualAction = (reason: "admission" | "passcode") => ({
+  reason: `zoom-${reason}-required`,
+  message: reason === "admission" ? "Waiting for host admission." : "Enter the meeting passcode.",
+});
+
+function runtimeHarness(options?: RuntimeHarnessOptions) {
+  const state = {
+    tabOpen: options?.tabOpen ?? false,
+    inCall: options?.inCall ?? true,
+    meetingEnded: options?.meetingEnded ?? false,
+    meetingEndedOnce: false,
+    sessionConflict: false,
+    tabListFailures: 0,
+    targetId: "zoom-tab",
+    tabUrl: URL,
+  };
   const pendingReason = options?.pendingReason ?? "passcode";
-  let sessionConflict = false;
-  let tabListFailures = 0;
-  let targetId = "zoom-tab";
-  let tabUrl = URL;
+  const browserTab = () => ({ targetId: state.targetId, title: "Zoom call", url: state.tabUrl });
+  const browserResult = (value: Record<string, unknown>) => ({ result: JSON.stringify(value) });
   const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
     if (params.path === "/tabs") {
-      if (tabListFailures > 0) {
-        tabListFailures -= 1;
+      if (state.tabListFailures > 0) {
+        state.tabListFailures -= 1;
         throw new Error("browser node unavailable");
       }
-      return {
-        tabs: tabOpen ? [{ targetId, title: "Zoom call", url: tabUrl }] : [],
-      };
+      return { tabs: state.tabOpen ? [browserTab()] : [] };
     }
     if (params.path === "/tabs/open") {
-      tabOpen = true;
+      state.tabOpen = true;
       const requestedUrl = (params.body as { url?: unknown } | undefined)?.url;
-      tabUrl = typeof requestedUrl === "string" ? requestedUrl : URL;
-      return { targetId, title: "Zoom call", url: tabUrl };
+      state.tabUrl = typeof requestedUrl === "string" ? requestedUrl : URL;
+      return browserTab();
     }
     if (params.path === "/tabs/focus") {
       return { ok: true };
@@ -52,122 +57,117 @@ function runtimeHarness(options?: {
       const rawFn = (params.body as { fn?: unknown } | undefined)?.fn;
       const fn = typeof rawFn === "string" ? rawFn : "";
       if (fn.includes("leaveAction")) {
-        return {
-          result: JSON.stringify({ departed: true, sessionMatched: true, urlMatched: true }),
-        };
+        return browserResult({ departed: true, sessionMatched: true, urlMatched: true });
       }
       if (fn.includes("expectedSessionId")) {
-        return {
-          result: JSON.stringify({
-            urlMatched: true,
-            sessionMatched: true,
-            droppedLines: 0,
-            lines: sessionConflict ? [{ text: "Archived caption" }] : [],
-          }),
-        };
+        return browserResult({
+          urlMatched: true,
+          sessionMatched: true,
+          droppedLines: 0,
+          lines: state.sessionConflict ? [{ text: "Archived caption" }] : [],
+        });
       }
-      const reportedMeetingEnded = meetingEnded;
-      if (meetingEndedOnce) {
-        meetingEnded = false;
-        meetingEndedOnce = false;
+      const reportedMeetingEnded = state.meetingEnded;
+      if (state.meetingEndedOnce) {
+        state.meetingEnded = false;
+        state.meetingEndedOnce = false;
       }
-      return {
-        result: JSON.stringify({
-          inCall,
-          meetingEnded: reportedMeetingEnded,
-          micMuted: true,
-          cameraOff: true,
-          ...(!inCall
-            ? {
-                ...(pendingReason === "admission" ? { lobbyWaiting: true } : {}),
-                manualAction: {
-                  reason:
-                    pendingReason === "admission"
-                      ? "zoom-admission-required"
-                      : "zoom-passcode-required",
-                  message:
-                    pendingReason === "admission"
-                      ? "Waiting for host admission."
-                      : "Enter the meeting passcode.",
-                },
-              }
-            : {}),
-          ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
-            ? {
-                manualAction: {
-                  reason: "zoom-session-conflict",
-                  message: "This Zoom tab is owned by another active meeting session.",
-                },
-              }
-            : {}),
-          url: tabUrl,
-          title: "Zoom call",
-        }),
-      };
+      return browserResult({
+        inCall: state.inCall,
+        meetingEnded: reportedMeetingEnded,
+        micMuted: true,
+        cameraOff: true,
+        ...(!state.inCall
+          ? {
+              ...(pendingReason === "admission" ? { lobbyWaiting: true } : {}),
+              manualAction: pendingManualAction(pendingReason),
+            }
+          : {}),
+        ...(state.sessionConflict && fn.includes("const allowSessionAdoption = false")
+          ? {
+              manualAction: {
+                reason: "zoom-session-conflict",
+                message: "This Zoom tab is owned by another active meeting session.",
+              },
+            }
+          : {}),
+        url: state.tabUrl,
+        title: "Zoom call",
+      });
     }
-    if (params.method === "DELETE" && params.path === `/tabs/${targetId}`) {
-      tabOpen = false;
+    if (params.method === "DELETE" && params.path === `/tabs/${state.targetId}`) {
+      state.tabOpen = false;
       return { ok: true };
     }
     throw new Error(`unexpected browser request ${String(params.method)} ${String(params.path)}`);
   });
-  const runtime = {
-    gateway: {
-      isAvailable: vi.fn(async () => true),
-      request: gatewayRequest,
-    },
-    system: {
-      runCommandWithTimeout: vi.fn(async () => ({ code: 0, stdout: "", stderr: "" })),
-    },
-  } as unknown as PluginRuntime;
   return {
-    runtime,
     gatewayRequest,
-    closeTab() {
-      tabOpen = false;
-    },
-    setSessionConflict(value: boolean) {
-      sessionConflict = value;
-    },
-    setInCall(value: boolean) {
-      inCall = value;
-    },
-    setMeetingEnded(value: boolean, behavior?: { once?: boolean }) {
-      meetingEnded = value;
-      meetingEndedOnce = value && behavior?.once === true;
-    },
-    failNextTabLists(count = 1) {
-      tabListFailures = count;
-    },
-    setTargetId(value: string) {
-      targetId = value;
-    },
-    setTabUrl(value: string) {
-      tabUrl = value;
-    },
+    runtime: {
+      gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+    } as unknown as PluginRuntime,
+    state,
   };
+}
+
+type RuntimeInstance = InstanceType<typeof ZoomMeetingsRuntime>;
+type RuntimeHarness = ReturnType<typeof runtimeHarness>;
+
+function runtimeFixture(
+  options: {
+    harness?: RuntimeHarnessOptions;
+    config?: Parameters<typeof resolveZoomMeetingsConfig>[0];
+    fullConfig?: ConstructorParameters<typeof ZoomMeetingsRuntime>[0]["fullConfig"];
+  } = {},
+) {
+  const harness = runtimeHarness(options.harness);
+  const runtime = new ZoomMeetingsRuntime({
+    config: resolveZoomMeetingsConfig(
+      options.config ?? {
+        defaultMode: "transcribe",
+        chrome: { waitForInCallMs: 1 },
+      },
+    ),
+    fullConfig: options.fullConfig ?? {},
+    runtime: harness.runtime,
+    logger,
+  });
+  return { harness, runtime };
+}
+
+function browserRequests(harness: RuntimeHarness, path: string) {
+  return harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === path);
+}
+
+function browserActScripts(harness: RuntimeHarness, since = 0) {
+  return harness.gatewayRequest.mock.calls
+    .slice(since)
+    .filter(([, params]) => params.path === "/act")
+    .map(([, params]) => {
+      const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+      return typeof fn === "string" ? fn : "";
+    });
+}
+
+function joinMeeting(
+  runtime: RuntimeInstance,
+  request: Partial<Parameters<RuntimeInstance["join"]>[0]> = {},
+) {
+  return runtime.join({ url: URL, mode: "transcribe", ...request });
 }
 
 describe("Zoom meeting session flow", () => {
   it("joins, reuses, reports, snapshots, speaks safely, and leaves through core", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
+    const { harness, runtime } = runtimeFixture({
       fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
-      runtime: harness.runtime,
-      logger,
     });
 
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
+    const first = await joinMeeting(runtime);
     expect(first.session.agentId).toBe("operator");
     expect(first.session.chrome?.health).toMatchObject({ inCall: true, cameraOff: true });
 
-    const reused = await runtime.join({
+    const reused = await joinMeeting(runtime, {
       url: `${URL.split("?")[0]}?context=%7b%22Tid%22%3a%22two%22%7d`,
-      mode: "transcribe",
     });
     expect(reused.session.id).toBe(first.session.id);
     expect(runtime.list()).toHaveLength(1);
@@ -182,13 +182,7 @@ describe("Zoom meeting session flow", () => {
       lines: [],
       nextIndex: 0,
     });
-    const transcriptActScripts = harness.gatewayRequest.mock.calls
-      .slice(transcriptStartCall)
-      .filter(([, params]) => params.path === "/act")
-      .map(([, params]) => {
-        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
-        return typeof fn === "string" ? fn : "";
-      });
+    const transcriptActScripts = browserActScripts(harness, transcriptStartCall);
     expect(transcriptActScripts).toHaveLength(2);
     expect(transcriptActScripts[0]).toContain("const allowSessionAdoption = false");
     expect(transcriptActScripts[0]).toContain("const captureCaptions = true");
@@ -234,18 +228,11 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("adopts the in-call page statefully after host admission", async () => {
-    const harness = runtimeHarness({ inCall: false, pendingReason: "admission" });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
+    const { harness, runtime } = runtimeFixture({
+      harness: { inCall: false, pendingReason: "admission" },
     });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setInCall(true);
+    const joined = await joinMeeting(runtime);
+    harness.state.inCall = true;
     harness.gatewayRequest.mockClear();
 
     const status = await runtime.status(joined.session.id);
@@ -259,48 +246,31 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("reads an archived transcript without reclaiming a newer live tab owner", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setSessionConflict(true);
+    const { harness, runtime } = runtimeFixture();
+    const joined = await joinMeeting(runtime);
+    harness.state.sessionConflict = true;
     harness.gatewayRequest.mockClear();
 
     expect(await runtime.transcript(joined.session.id)).toMatchObject({
       found: true,
       lines: [{ text: "Archived caption" }],
     });
-    const actScripts = harness.gatewayRequest.mock.calls
-      .filter(([, params]) => params.path === "/act")
-      .map(([, params]) => {
-        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
-        return typeof fn === "string" ? fn : "";
-      });
+    const actScripts = browserActScripts(harness);
     expect(actScripts).toHaveLength(2);
     expect(actScripts[0]).toContain("const allowSessionAdoption = false");
     expect(actScripts[1]).toContain("expectedSessionId");
   });
 
   it("recovers and leaves a manually opened tab when Chrome launching is disabled", async () => {
-    const harness = runtimeHarness({ tabOpen: true });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
+    const { harness, runtime } = runtimeFixture({
+      harness: { tabOpen: true },
+      config: {
         defaultMode: "transcribe",
         chrome: { launch: false, waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
+      },
     });
 
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    const joined = await joinMeeting(runtime);
     expect(joined.session.chrome).toMatchObject({
       browserTab: { openedByPlugin: false, targetId: "zoom-tab" },
       launched: false,
@@ -317,18 +287,9 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("refreshes a recovered browser tab target", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setTargetId("zoom-tab-replaced");
+    const { harness, runtime } = runtimeFixture();
+    const joined = await joinMeeting(runtime);
+    harness.state.targetId = "zoom-tab-replaced";
 
     await runtime.status(joined.session.id);
 
@@ -337,7 +298,7 @@ describe("Zoom meeting session flow", () => {
       targetId: "zoom-tab-replaced",
     });
 
-    harness.setTargetId("zoom-tab-replaced-again");
+    harness.state.targetId = "zoom-tab-replaced-again";
     harness.gatewayRequest.mockClear();
     await runtime.transcript(joined.session.id);
 
@@ -355,18 +316,9 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("recovers the tracked tab after Zoom rewrites the in-call URL", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setTabUrl("https://zoom.us/");
+    const { harness, runtime } = runtimeFixture();
+    const joined = await joinMeeting(runtime);
+    harness.state.tabUrl = "https://zoom.us/";
     harness.gatewayRequest.mockClear();
 
     const status = await runtime.status(joined.session.id);
@@ -383,18 +335,9 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("ends the session when the tracked Zoom tab disappears", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.closeTab();
+    const { harness, runtime } = runtimeFixture();
+    const joined = await joinMeeting(runtime);
+    harness.state.tabOpen = false;
 
     const status = await runtime.status(joined.session.id);
 
@@ -412,131 +355,58 @@ describe("Zoom meeting session flow", () => {
     });
   });
 
-  it("opens a new session instead of reusing one whose Zoom tab disappeared", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
+  it.each([
+    ["opens a new session instead of reusing one whose Zoom tab disappeared", "missing-tab"],
+    [
+      "opens a new session when browser verification of a reusable tab fails",
+      "verification-failure",
+    ],
+    ["replaces a reusable session whose realtime bridge closed", "bridge-closed"],
+    ["closes a host-ended tab before opening its replacement", "host-ended"],
+  ] as const)("%s", async (_title, scenario) => {
+    const { harness, runtime } = runtimeFixture({
+      config: scenario === "verification-failure" ? { defaultMode: "transcribe" } : undefined,
     });
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.closeTab();
+    const first = await joinMeeting(runtime);
+    if (scenario === "missing-tab") {
+      harness.state.tabOpen = false;
+    } else if (scenario === "verification-failure") {
+      harness.state.tabListFailures = 1;
+    } else if (scenario === "bridge-closed") {
+      Object.assign(first.session.chrome?.health ?? {}, { bridgeClosed: true });
+    } else {
+      harness.state.inCall = false;
+      harness.state.meetingEnded = true;
+      harness.state.meetingEndedOnce = true;
+    }
 
-    const replacement = await runtime.join({ url: URL, mode: "transcribe" });
+    const replacement = await joinMeeting(runtime);
 
     expect(first.session.state).toBe("ended");
     expect(replacement.session.id).not.toBe(first.session.id);
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(2);
-  });
-
-  it("opens a new session when browser verification of a reusable tab fails", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({ defaultMode: "transcribe" }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.failNextTabLists();
-
-    const replacement = await runtime.join({ url: URL, mode: "transcribe" });
-
-    expect(first.session.state).toBe("ended");
-    expect(replacement.session.id).not.toBe(first.session.id);
-  });
-
-  it("replaces a reusable session whose realtime bridge closed", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
-    Object.assign(first.session.chrome?.health ?? {}, { bridgeClosed: true });
-
-    const replacement = await runtime.join({ url: URL, mode: "transcribe" });
-
-    expect(first.session.state).toBe("ended");
-    expect(replacement.session.id).not.toBe(first.session.id);
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(2);
-  });
-
-  it("closes a host-ended tab before opening its replacement", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setInCall(false);
-    harness.setMeetingEnded(true, { once: true });
-
-    const replacement = await runtime.join({ url: URL, mode: "transcribe" });
-
-    expect(first.session.state).toBe("ended");
-    expect(replacement.session.id).not.toBe(first.session.id);
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(2);
+    if (scenario !== "verification-failure") {
+      expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
+    }
   });
 
   it("rejects and closes the tab when the initial browser status is host-ended", async () => {
-    const harness = runtimeHarness({ inCall: false, meetingEnded: true });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
+    const { harness, runtime } = runtimeFixture({
+      harness: { inCall: false, meetingEnded: true },
     });
 
-    await expect(runtime.join({ url: URL, mode: "transcribe" })).rejects.toThrow(
-      "The Zoom meeting has already ended.",
-    );
+    await expect(joinMeeting(runtime)).rejects.toThrow("The Zoom meeting has already ended.");
 
     expect(runtime.list()).toEqual([]);
     expect(
-      harness.gatewayRequest.mock.calls.filter(
-        ([, params]) => params.method === "DELETE" && params.path === "/tabs/zoom-tab",
-      ),
+      browserRequests(harness, "/tabs/zoom-tab").filter(([, params]) => params.method === "DELETE"),
     ).toHaveLength(1);
   });
 
   it("ends the active session when browser status confirms the host ended it", async () => {
-    const harness = runtimeHarness();
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const joined = await runtime.join({ url: URL, mode: "transcribe" });
-    harness.setInCall(false);
-    harness.setMeetingEnded(true);
+    const { harness, runtime } = runtimeFixture();
+    const joined = await joinMeeting(runtime);
+    harness.state.inCall = false;
+    harness.state.meetingEnded = true;
 
     const status = await runtime.status(joined.session.id);
 
@@ -548,97 +418,47 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("restarts a failed join when the corrected invite changes the passcode", async () => {
-    const harness = runtimeHarness({ inCall: false });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({
-      mode: "transcribe",
-      url: "https://zoom.us/j/12345678904?pwd=old",
-    });
+    const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
+    const first = await joinMeeting(runtime, { url: urlWithPasscode("old") });
 
-    const corrected = await runtime.join({
-      mode: "transcribe",
-      url: "https://zoom.us/j/12345678904?pwd=correct",
-    });
+    const corrected = await joinMeeting(runtime, { url: urlWithPasscode("correct") });
 
     expect(corrected.session.id).not.toBe(first.session.id);
     expect(first.session.state).toBe("ended");
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(2);
+    expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
   });
 
   it("serializes concurrent corrected passcodes under the meeting join lock", async () => {
-    const harness = runtimeHarness({ inCall: false });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({
-      mode: "transcribe",
-      url: "https://zoom.us/j/12345678904?pwd=old",
-    });
+    const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
+    const first = await joinMeeting(runtime, { url: urlWithPasscode("old") });
 
     const [second, third] = await Promise.all([
-      runtime.join({
-        mode: "transcribe",
-        url: "https://zoom.us/j/12345678904?pwd=correct-one",
-      }),
-      runtime.join({
-        mode: "transcribe",
-        url: "https://zoom.us/j/12345678904?pwd=correct-two",
-      }),
+      joinMeeting(runtime, { url: urlWithPasscode("correct-one") }),
+      joinMeeting(runtime, { url: urlWithPasscode("correct-two") }),
     ]);
 
     expect(first.session.state).toBe("ended");
     expect(second.session.state).toBe("ended");
     expect(third.session.state).toBe("active");
     expect(new Set([first.session.id, second.session.id, third.session.id]).size).toBe(3);
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(3);
+    expect(browserRequests(harness, "/tabs/open")).toHaveLength(3);
   });
 
   it("serializes cross-agent reassignment through the core join owner", async () => {
-    const harness = runtimeHarness({ inCall: false });
-    const runtime = new ZoomMeetingsRuntime({
-      config: resolveZoomMeetingsConfig({
-        defaultMode: "transcribe",
-        chrome: { waitForInCallMs: 1 },
-      }),
-      fullConfig: {},
-      runtime: harness.runtime,
-      logger,
-    });
-    const first = await runtime.join({
+    const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
+    const first = await joinMeeting(runtime, {
       agentId: "support",
-      mode: "transcribe",
-      url: "https://zoom.us/j/12345678904?pwd=old",
+      url: urlWithPasscode("old"),
     });
 
-    const replacement = await runtime.join({
+    const replacement = await joinMeeting(runtime, {
       agentId: "main",
-      mode: "transcribe",
-      url: "https://zoom.us/j/12345678904?pwd=correct",
+      url: urlWithPasscode("correct"),
     });
 
     expect(first.session.state).toBe("ended");
     expect(replacement.session.agentId).toBe("main");
     expect(replacement.session.id).not.toBe(first.session.id);
-    expect(
-      harness.gatewayRequest.mock.calls.filter(([, params]) => params.path === "/tabs/open"),
-    ).toHaveLength(2);
+    expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
   });
 });

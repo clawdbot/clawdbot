@@ -1,8 +1,10 @@
 // Scans packaged dist JavaScript for relative imports and missing closure entries.
+import { createRequire } from "node:module";
 import path from "node:path";
-import ts from "typescript";
 import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
@@ -72,7 +74,7 @@ export function collectPackageDistImportErrors(params) {
 }
 
 /** Collect relative dist import edges from package JavaScript files. */
-export function collectPackageDistImports(params) {
+function collectPackageDistImports(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const imports = [];
 
@@ -91,30 +93,4 @@ export function collectPackageDistImports(params) {
   }
 
   return imports;
-}
-
-/** Expand seed dist files to include all reachable relative dist imports. */
-export function expandPackageDistImportClosure(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
-  const fileSet = new Set(files);
-  const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
-  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
-  const importsByImporter = new Map();
-  for (const { importerPath, importedPath } of imports) {
-    const importerImports = importsByImporter.get(importerPath) ?? [];
-    importerImports.push(importedPath);
-    importsByImporter.set(importerPath, importerImports);
-  }
-
-  const queue = [...expectedSet].filter((file) => fileSet.has(file));
-  for (const importerPath of queue) {
-    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
-      if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
-        expectedSet.add(importedPath);
-        queue.push(importedPath);
-      }
-    }
-  }
-
-  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
 }

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -22,18 +22,9 @@ import {
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
   readLatestSessionUsageFromTranscriptAsync,
+  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    readSessionTranscriptMessageEventPage: vi.fn(actual.readSessionTranscriptMessageEventPage),
-    readSessionTranscriptMessageEvents: vi.fn(actual.readSessionTranscriptMessageEvents),
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -43,7 +34,6 @@ describe("session transcript reader facade", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = tempDirs.make("openclaw-transcript-readers-");
     storePath = path.join(tempDir, "sessions.json");
@@ -70,72 +60,15 @@ describe("session transcript reader facade", () => {
     return scope;
   }
 
-  async function writeSqliteMessages(
-    sessionId: string,
-    messages: Array<{ content: unknown; provenance?: unknown; role: string }>,
-  ): Promise<SessionTranscriptReadScope> {
-    const scope = {
+  function markProjectionNeedsRebuild(sessionId: string): void {
+    openOpenClawAgentDatabase({
       agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: messages.map((message) => ({ message })),
-      touchSessionEntry: false,
-    });
-    return scope;
-  }
-
-  function extractReferenceText(message: unknown): string | null {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return null;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content.trim() || null;
-    }
-    if (!Array.isArray(content)) {
-      return null;
-    }
-    const text = content
-      .map((entry) =>
-        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
-          ? (entry as { text: string }).text
-          : "",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
       )
-      .filter((part) => part.trim())
-      .join("\n")
-      .trim();
-    return text || null;
-  }
-
-  async function readFullScanTitleFields(scope: SessionTranscriptReadScope) {
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "title probe parity reference",
-    });
-    const firstUser = messages.find(
-      (message) =>
-        message &&
-        typeof message === "object" &&
-        !Array.isArray(message) &&
-        (message as { role?: unknown }).role === "user" &&
-        (message as { provenance?: { kind?: unknown } }).provenance?.kind !== "inter_session",
-    );
-    return {
-      firstUserMessage: firstUser ? extractReferenceText(firstUser) : null,
-      lastMessagePreview: messages.toReversed().map(extractReferenceText).find(Boolean) ?? null,
-    };
-  }
-
-  function boundedPageEventReadCount(): number {
-    return vi
-      .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-      .mock.results.reduce(
-        (total, result) => total + (result.type === "return" ? result.value.events.length : 0),
-        0,
-      );
+      .run(sessionId);
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {
@@ -164,6 +97,17 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
     ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq }), {
+        mode: "full",
+        reason: "visitor active branch test",
+      }),
+    ).resolves.toBe(2);
+    expect(visited).toEqual([
+      { message: { role: "user", content: "root prompt" }, seq: 1 },
+      { message: { role: "assistant", content: "active answer" }, seq: 2 },
+    ]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
     await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
       found: true,
@@ -182,6 +126,92 @@ describe("session transcript reader facade", () => {
       offset: 0,
       totalMessages: 2,
     });
+  });
+
+  test.each(["visitor", "parse"] as const)(
+    "acquires messages incrementally and releases the cursor after %s failure",
+    async (failure) => {
+      const sessionId = `reader-stream-${failure}`;
+      const scope = await writeTranscript(sessionId, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "first",
+          parentId: null,
+          message: { role: "user", content: "first prompt" },
+        },
+        {
+          type: "message",
+          id: "later",
+          parentId: "first",
+          message: { role: "assistant", content: "later answer" },
+        },
+      ]);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+      // Keep the ready projection, but poison a later payload: an early abort must never parse it.
+      database.db
+        .prepare(
+          `UPDATE transcript_events SET event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
+           )`,
+        )
+        .run(sessionId, sessionId);
+      const stopped = new Error("visitor stopped");
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      const traversal = visitSessionMessagesAsync(
+        scope,
+        (message, seq) => {
+          expect(database.db.isTransaction).toBe(true);
+          visited.push({ message, seq });
+          if (failure === "visitor") {
+            throw stopped;
+          }
+        },
+        { mode: "full", reason: "incremental acquisition test" },
+      );
+      if (failure === "visitor") {
+        await expect(traversal).rejects.toBe(stopped);
+      } else {
+        await expect(traversal).rejects.toBeInstanceOf(SyntaxError);
+      }
+      expect(visited).toEqual([{ message: { role: "user", content: "first prompt" }, seq: 1 }]);
+      expect(database.db.isTransaction).toBe(false);
+      // A surviving read cursor prevents checkpointing even after transaction rollback.
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+    },
+  );
+
+  test("preserves Date.parse semantics for numeric-looking record timestamps", async () => {
+    const scope = await writeTranscript("reader-numeric-looking-timestamps", [
+      { type: "session", version: 3, id: "reader-numeric-looking-timestamps" },
+      {
+        type: "message",
+        id: "numeric-zero",
+        parentId: null,
+        timestamp: "0",
+        message: { role: "user", content: "zero" },
+      },
+      {
+        type: "message",
+        id: "numeric-year",
+        parentId: "numeric-zero",
+        timestamp: "2026",
+        message: { role: "assistant", content: "year" },
+      },
+    ]);
+
+    await expect(
+      readSessionMessagesAsync(scope, { mode: "full", reason: "timestamp contract test" }),
+    ).resolves.toMatchObject([
+      { __openclaw: { recordTimestampMs: Date.parse("0") } },
+      { __openclaw: { recordTimestampMs: Date.parse("2026") } },
+    ]);
   });
 
   test("finds an anchored reset-archive message by historical session id", async () => {
@@ -263,7 +293,7 @@ describe("session transcript reader facade", () => {
       })}\n`,
       "utf-8",
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey, storePath },
       {
         sessionId,
@@ -376,134 +406,6 @@ describe("session transcript reader facade", () => {
     });
   });
 
-  test("keeps bounded title fields at full-scan parity", async () => {
-    const scope = await writeSqliteMessages(
-      "reader-title-parity",
-      Array.from({ length: 105 }, (_, index) => {
-        if (index === 60) {
-          return { role: "user", content: "late prompt" };
-        }
-        if (index === 102) {
-          return { role: "assistant", content: "last visible" };
-        }
-        return { role: "assistant", content: index > 102 ? " " : `reply ${String(index)}` };
-      }),
-    );
-    const reference = await readFullScanTitleFields(scope);
-    expect(reference).toEqual({
-      firstUserMessage: "late prompt",
-      lastMessagePreview: "last visible",
-    });
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(reference);
-    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-  });
-
-  test("bounds title probe reads independently of transcript length", async () => {
-    const probeReadCount = async (sessionId: string, messageCount: number) => {
-      const scope = await writeSqliteMessages(
-        sessionId,
-        Array.from({ length: messageCount }, () => ({ role: "assistant", content: " " })),
-      );
-      vi.clearAllMocks();
-
-      expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-        firstUserMessage: null,
-        lastMessagePreview: null,
-      });
-      expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
-          .mock.calls.map(([, options]) => options.maxMessages),
-      ).toEqual([20, 80, 20, 80]);
-      return boundedPageEventReadCount();
-    };
-
-    await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
-    await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
-  });
-
-  test("reuses cached SQLite title fields while the transcript watermark is unchanged", async () => {
-    const scope = await writeSqliteMessages("reader-title-cache-warm", [
-      { role: "user", content: "cached prompt" },
-      { role: "assistant", content: "cached reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "cached prompt",
-      lastMessagePreview: "cached reply",
-    });
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "cached prompt",
-      lastMessagePreview: "cached reply",
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
-  });
-
-  test("invalidates cached SQLite title fields after an append advances max seq", async () => {
-    const sessionId = "reader-title-cache-append";
-    const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "append prompt" },
-      { role: "assistant", content: "first reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("first reply");
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "appended reply" } }],
-        touchSessionEntry: false,
-      },
-    );
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("appended reply");
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
-  });
-
-  test("invalidates cached SQLite title fields after the rewrite generation changes", async () => {
-    const sessionId = "reader-title-cache-generation";
-    const scope = await writeSqliteMessages(sessionId, [
-      { role: "user", content: "generation prompt" },
-      { role: "assistant", content: "generation reply" },
-    ]);
-    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe("generation prompt");
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    })
-      .db.prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
-      .run("f".repeat(32), sessionId);
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: "generation prompt",
-      lastMessagePreview: "generation reply",
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
-  });
-
-  test("returns missing title fields when the bounded head and tail caps miss", async () => {
-    const scope = await writeSqliteMessages(
-      "reader-title-cap-miss",
-      Array.from({ length: 201 }, (_, index) =>
-        index === 100
-          ? { role: "user", content: "outside both probes" }
-          : { role: "assistant", content: " " },
-      ),
-    );
-    vi.clearAllMocks();
-
-    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: null,
-    });
-    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-    expect(boundedPageEventReadCount()).toBe(200);
-  });
-
   test("promotes SQLite message idempotency into transcript metadata", async () => {
     const sessionId = "reader-sqlite-idempotency";
     const scope = {
@@ -599,14 +501,16 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-    database.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(sessionId);
+    markProjectionNeedsRebuild(sessionId);
 
+    const visited: unknown[] = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (message) => visited.push(message), {
+        mode: "full",
+        reason: "visitor unavailable projection test",
+      }),
+    ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
+    expect(visited).toEqual([]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 

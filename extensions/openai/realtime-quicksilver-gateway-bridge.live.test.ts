@@ -1,6 +1,9 @@
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
@@ -17,7 +20,7 @@ const LIVE_TIMEOUT_MS = 60_000;
 const MAX_PENDING_AUDIO_BYTES = 240_000;
 
 type TestableGatewayBridge = {
-  pendingAudio: Buffer;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
 };
 
 async function waitForLiveCondition(
@@ -55,7 +58,7 @@ async function resolveLiveOAuthProfile(): Promise<
     return undefined;
   }
   const accountId =
-    credential.accountId ?? resolveCodexAuthIdentity({ accessToken: credential.access }).accountId;
+    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 
@@ -85,7 +88,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
         model: "gpt-live-1-codex",
-        voice: "marin",
+        voice: "spruce",
         instructions:
           "This is a live transport check. Immediately say: OpenClaw gateway relay test OK.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -160,8 +163,8 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       let lateAudioBytes = 0;
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
-        model: "gpt-live-1-boulder-alpha",
-        voice: "marin",
+        model: "gpt-live-1-codex",
+        voice: "spruce",
         instructions: "Listen to the user. Do not speak or delegate.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio: (audio) => {

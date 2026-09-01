@@ -1,14 +1,11 @@
+import { addAbortListener } from "node:events";
 import {
-  buildHarnessContextEngineRuntimeContextFromUsage,
-  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+  buildEmbeddedForegroundPromptContext,
   embeddedAgentLog,
-  finalizeHarnessContextEngineTurn,
   formatErrorMessage,
-  resolveContextEngineOwnerPluginId,
   runAgentHarnessLlmOutputHook,
-  runHarnessContextEngineMaintenance,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -17,6 +14,8 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
+import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -37,7 +36,6 @@ import {
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
-import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
@@ -57,15 +55,10 @@ export async function finalizeCodexAttempt(
 ): Promise<EmbeddedRunAttemptResult> {
   const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, systemPromptReport } = prompt;
-  const { runtime, attemptTools, activeTranscriptTarget, historyState, hookContext } = context;
-  const { hookContextWindowFields, hookRunner, promptState } = context;
-  const { connection, preparedAuthBinding, activeSessionId, activeSessionFile } = runtime;
-  const {
-    buildActiveRunAttemptParams,
-    effectiveContextTokenBudget,
-    effectiveRuntimeProviderId,
-    effectiveRuntimeModelId,
-  } = runtime;
+  const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
+  const { hookContextWindowFields, hookRunner } = context;
+  const { connection, preparedAuthBinding } = runtime;
+  const { effectiveRuntimeProviderId, effectiveRuntimeModelId } = runtime;
   const {
     params,
     terminalState,
@@ -78,7 +71,6 @@ export async function finalizeCodexAttempt(
     sessionAgentId,
     contextSessionKey,
     effectiveCwd,
-    effectiveWorkspace,
     agentDir,
     attemptStartedAt,
     startupAuthProfileId,
@@ -104,8 +96,25 @@ export async function finalizeCodexAttempt(
     notifyUserMessagePersisted,
   } = activeTurn;
   await completion;
-  // Include projection work already queued when timeout completion wins.
-  await drainNotificationQueue();
+  await state.abortCleanup;
+  // Timeout and Stop still join queued projections within the abort grace;
+  // normal completion awaits the full drain.
+  const drain = drainNotificationQueue();
+  const abortGraceElapsed = createDeferred<void>();
+  let abortGraceTimer: ReturnType<typeof setTimeout> | undefined;
+  const abortListener = addAbortListener(runAbortController.signal, () => {
+    abortGraceTimer = setTimeout(
+      () => abortGraceElapsed.resolve(),
+      TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
+    );
+    abortGraceTimer.unref?.();
+  });
+  try {
+    await Promise.race([drain, abortGraceElapsed.promise]);
+  } finally {
+    abortListener[Symbol.dispose]();
+    clearTimeout(abortGraceTimer);
+  }
   const hasQuiescentCompletedAssistant =
     activeProjector.hasCompletedTerminalAssistantText() &&
     state.activeAppServerTurnRequests === 0 &&
@@ -150,15 +159,21 @@ export async function finalizeCodexAttempt(
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
+  // Transport loss aborts in-flight work mechanically, but its terminal outcome
+  // must remain a failure unless the operator explicitly canceled the attempt.
   const isFinalAborted = () =>
-    projectedTerminal.aborted ||
     terminalState.explicitCancellationObserved ||
-    (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
+    (!resourceState.executionDisconnectError &&
+      (projectedTerminal.aborted ||
+        (runAbortController.signal.aborted &&
+          !state.clientClosedAbort &&
+          !recoveredTurnWatchTimeout)));
   const clientClosedPromptErrorForFinal =
     state.clientClosedPromptError && hasRecoverableCompletedAssistant
       ? undefined
       : state.clientClosedPromptError;
   let finalPromptError =
+    resourceState.executionDisconnectError ??
     clientClosedPromptErrorForFinal ??
     (effectiveTurnCompletionIdleTimedOut
       ? state.turnCompletionIdleTimeoutMessage
@@ -226,6 +241,9 @@ export async function finalizeCodexAttempt(
       rateLimits: readRecentCodexRateLimits(resourceState.client),
     });
   }
+  // Device loss can arrive during asynchronous failure enrichment. Re-read its
+  // owner before freezing derived success, cancellation, and terminal state.
+  finalPromptError = resourceState.executionDisconnectError ?? finalPromptError;
   const finalPromptErrorSource =
     effectiveTimedOut || clientClosedPromptErrorForFinal
       ? "prompt"
@@ -283,10 +301,9 @@ export async function finalizeCodexAttempt(
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
     (completedTurnStatus === "completed" || recoveredTurnWatchTimeout || locallyCompletedTurn);
-  // buildResult retains the bridge's delivery records. Resolve omitted final
-  // intent only after the authoritative turn outcome is known, before any
-  // terminal observer consumes the result.
-  const completedSourceReply = settleCodexSourceReplyFinality(toolBridge.telemetry, turnSucceeded);
+  const completedSourceReply = toolBridge.telemetry.messagingToolSentTargets.some(
+    (target) => target.sourceReplyFinal === true,
+  );
   if (completedSourceReply) {
     // Harness classification only sees assistant/reasoning/plan projections.
     // A reply delivered entirely through the source message tool is visible
@@ -335,72 +352,26 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
-  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey } = mirrorOutcome;
+  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
+    mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
-    turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
-    result.messagesSnapshot.some((message) => message.role === "toolResult");
+    result.messagesSnapshot.some((message) => message.role === "toolResult") &&
+    (!finalPromptError || activeProjector.settledTurnFailureFinalizationAllowed);
   const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-    ? await captureCodexSettledTurnFinalizationContext({
+    ? ((await captureCodexSettledTurnFinalizationContext({
         ...activeTranscriptTarget,
         mirroredMessages: mirrorOutcome.mirroredMessages,
         settledMessages: result.messagesSnapshot,
         turnId: activeTurnId,
-      })
+      })) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
-  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
-    // The isolated child must not infer around a partial or drifting transcript.
-    // Omitting this field preserves the existing incomplete-turn failure.
+  if (settledTurnFinalizationContext?.source === "unavailable") {
+    // Unavailable evidence forbids native inference, but must not revoke this
+    // eligible turn's path to the existing host-owned fallback.
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
       threadId: resourceState.thread.threadId,
       turnId: activeTurnId,
-    });
-  }
-  if (activeContextEngine) {
-    const contextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
-    const isHeartbeat =
-      params.bootstrapContextRunKind === "heartbeat" ||
-      params.bootstrapContextRunKind === "commitment-only";
-    const finalMessages =
-      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
-      historyState.messages.concat(result.messagesSnapshot);
-    await finalizeHarnessContextEngineTurn({
-      contextEngine: activeContextEngine,
-      promptError: Boolean(finalPromptError),
-      aborted: finalAborted,
-      yieldAborted: Boolean(result.yieldDetected),
-      sessionIdUsed: activeSessionId,
-      sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
-      sessionTarget: params.sessionTarget,
-      messagesSnapshot: finalMessages,
-      prePromptMessageCount: promptState.prePromptMessageCount,
-      tokenBudget: effectiveContextTokenBudget,
-      runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
-        attempt: buildActiveRunAttemptParams(),
-        workspaceDir: effectiveWorkspace,
-        cwd: effectiveCwd,
-        agentDir,
-        activeAgentId: sessionAgentId,
-        contextEnginePluginId,
-        tokenBudget: effectiveContextTokenBudget,
-        lastCallUsage: result.attemptUsage,
-        promptCache: result.promptCache,
-      }),
-      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
-      providerId: usesSupervisionConnection
-        ? (resourceState.thread.modelProvider ?? effectiveRuntimeProviderId)
-        : params.provider,
-      requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
-      modelId: usesSupervisionConnection
-        ? (resourceState.thread.model ?? effectiveRuntimeModelId)
-        : params.modelId,
-      fallbackReason: usesSupervisionConnection ? undefined : params.fallbackReason,
-      degradedReason: usesSupervisionConnection ? undefined : params.degradedReason,
-      runMaintenance: runHarnessContextEngineMaintenance,
-      config: params.config,
-      warn: (message) => embeddedAgentLog.warn(message),
-      isHeartbeat,
     });
   }
   runAgentHarnessLlmOutputHook({
@@ -444,20 +415,11 @@ export async function finalizeCodexAttempt(
         attemptTools.toolBridge.availableSpecs,
       ).some((tool) => tool.name === "skill_workshop"),
       compacted: (result.compactionCount ?? 0) > 0,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      chatType: params.chatType,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      memberRoleIds: params.memberRoleIds,
-      spawnedBy: params.spawnedBy,
       senderId: params.senderId ?? undefined,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+        { ...params, agentId: sessionAgentId },
+        agentDir,
+      ),
     },
     hookRunner,
   });
@@ -473,6 +435,21 @@ export async function finalizeCodexAttempt(
         bindingStore,
         identity: bindingIdentity,
         threadId: resourceState.thread.threadId,
+        // Only turns whose prompt WAS a no-engine continuity projection may
+        // calibrate: a dense direct or active-engine prompt must never persist a
+        // sample that later shrinks continuity history it did not measure.
+        // Normalized usage splits total input into uncached + cacheRead + cacheWrite;
+        // the density sample needs the full input cost, or the derived ratio loosens
+        // the continuity cap in the unsafe direction.
+        continuityCalibration: context.promptState.noEngineContinuityProjectionApplied
+          ? buildCodexContinuityCalibration({
+              promptChars: prompt.turnState.codexTurnPromptText.length,
+              inputTokens:
+                (result.attemptUsage?.input ?? 0) +
+                (result.attemptUsage?.cacheRead ?? 0) +
+                (result.attemptUsage?.cacheWrite ?? 0),
+            })
+          : undefined,
       });
     } catch (error) {
       if (resourceState.thread.connectionScope === "supervision") {
@@ -540,8 +517,11 @@ export async function finalizeCodexAttempt(
           }),
         },
   );
-  return {
-    ...result,
+  // Preserve the exact result identity carrying host-issued TTS delivery provenance.
+  const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
+    ...(toolState.yieldAcknowledgment
+      ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
+      : {}),
     terminal: attemptTerminal.normalize({
       timedOut: effectiveTimedOut,
       aborted: finalAborted,
@@ -552,11 +532,17 @@ export async function finalizeCodexAttempt(
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+    ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
     systemPromptReport,
-  };
+  });
+  if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
+    resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();
+  }
+  return finalizedResult;
 }

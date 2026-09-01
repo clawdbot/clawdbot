@@ -1,22 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
   buildUsageCostWindowSummary,
-  formatCost,
+  formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
 } from "./metrics.ts";
 import type { UsageInsightStats } from "./metrics.ts";
 import type {
@@ -55,7 +55,7 @@ function pct(part: number, total: number): number {
 function formatAnalysisCost(value: number): string {
   const magnitude = Math.abs(value);
   const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatCost(value, decimals);
+  return formatUsageCost(value, decimals);
 }
 
 function handleDailyBarKeydown(
@@ -234,7 +234,7 @@ function renderCostWindowComparison(
                 ${formatAnalysisCost(summary.totals.totalCost)}
               </div>
               <div class="cost-window-card__meta">
-                ${formatTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} ·
+                ${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} ·
                 ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}
               </div>
             </div>
@@ -323,9 +323,9 @@ function renderDailyChartCompact(
               (value) =>
                 html`<span
                   >${isTokenMode
-                    ? formatTokens(value)
+                    ? formatUsageTokens(value)
                     : value === 0
-                      ? formatCost(0)
+                      ? formatUsageCost(0)
                       : formatAnalysisCost(value)}</span
                 >`,
             )}
@@ -350,15 +350,16 @@ function renderDailyChartCompact(
                   : [];
               const breakdownLines = segments.map(
                 ({ value, labelKey }) =>
-                  `${t(labelKey)} ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}`,
+                  `${t(labelKey)} ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}`,
               );
               const totalLabel = isTokenMode
-                ? formatTokens(d.totalTokens)
+                ? formatUsageTokens(d.totalTokens)
                 : formatAnalysisCost(d.totalCost);
               const dateLabel = formatFullDate(d.date);
-              const tokensLabel = `${formatTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
-                t("usage.metrics.tokens"),
-              )}`.trim();
+              const tokensLabel =
+                `${formatUsageTokens(d.totalTokens)} ${normalizeLowercaseStringOrEmpty(
+                  t("usage.metrics.tokens"),
+                )}`.trim();
               const costLabel = formatAnalysisCost(d.totalCost);
               const segmentTotal = segments.reduce((sum, segment) => sum + segment.value, 0) || 1;
               return html`
@@ -420,7 +421,7 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       className,
       labelKey,
       percentage: pct(value, total),
-      formatted: isTokenMode ? formatTokens(value) : formatAnalysisCost(value),
+      formatted: isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value),
     };
   });
 
@@ -451,7 +452,9 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
       </div>
       <div class="cost-breakdown-total">
         ${t("usage.breakdown.total")}:
-        ${isTokenMode ? formatTokens(totals.totalTokens) : formatAnalysisCost(totals.totalCost)}
+        ${isTokenMode
+          ? formatUsageTokens(totals.totalTokens)
+          : formatAnalysisCost(totals.totalCost)}
       </div>
     </div>
   `;
@@ -591,7 +594,7 @@ function renderUsageInsights(
   const errorRatePct = stats.errorRate * 100;
   const throughputLabel =
     stats.throughputTokensPerMin !== undefined
-      ? `${formatTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
+      ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
       : t("usage.common.emptyValue");
   const throughputCostLabel =
     stats.throughputCostPerMin !== undefined
@@ -599,8 +602,7 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
-      ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ??
-        t("usage.common.emptyValue"))
+      ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
       : t("usage.common.emptyValue");
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
@@ -609,7 +611,7 @@ function renderUsageInsights(
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
         rate,
       };
     })
@@ -624,7 +626,7 @@ function renderUsageInsights(
   const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
     [
       costShare(cost),
-      formatTokens(tokens),
+      formatUsageTokens(tokens),
       messageCount === undefined ? null : `${messageCount} ${t("usage.overview.messagesAbbrev")}`,
     ]
       .filter((part): part is string => part !== null)
@@ -698,7 +700,7 @@ function renderUsageInsights(
               hintId: "average-tokens",
               title: t("usage.overview.avgTokens"),
               hint: t("usage.overview.avgTokensHint"),
-              value: formatTokens(avgTokens),
+              value: formatUsageTokens(avgTokens),
               sub: t("usage.overview.acrossMessages", {
                 count: String(aggregates.messages.total || 0),
               }),
@@ -709,7 +711,7 @@ function renderUsageInsights(
               title: t("usage.overview.cacheHitRate"),
               hint: t("usage.overview.cacheHint"),
               value: cacheHitLabel,
-              sub: `${formatTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatTokens(cacheBase)} ${t("usage.overview.prompt")}`,
+              sub: `${formatUsageTokens(totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(cacheBase)} ${t("usage.overview.prompt")}`,
               tone: cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad",
               className: "usage-summary-card--medium",
             })}
@@ -785,7 +787,7 @@ function renderSessionsCard(
   sessionSortDir: "asc" | "desc",
   recentSessions: string[],
   sessionsTab: "all" | "recent",
-  onSelectSession: (key: string, shiftKey: boolean) => void,
+  onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void,
   onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
   onSessionSortDirChange: (dir: "asc" | "desc") => void,
   onSessionsTabChange: (tab: "all" | "recent") => void,
@@ -821,7 +823,7 @@ function renderSessionsCard(
         `errors:${session.usage.messageCounts.errors}`,
       showColumn("duration") &&
         session.usage?.durationMs &&
-        `dur:${formatDurationCompact(session.usage.durationMs, { spaced: true }) ?? "—"}`,
+        `dur:${formatDurationCompact(session.usage.durationMs) ?? "—"}`,
     ].filter((part): part is string => typeof part === "string" && part.length > 0);
 
   const selectedDaySet = new Set(selectedDays);
@@ -885,7 +887,11 @@ function renderSessionsCard(
     0,
   );
 
-  const renderSessionBarRow = (s: UsageSessionEntry, isSelected: boolean) => {
+  const renderSessionBarRow = (
+    s: UsageSessionEntry,
+    isSelected: boolean,
+    orderedKeys: string[],
+  ) => {
     const value = getSessionValue(s);
     const displayLabel = formatSessionListLabel(s);
     const meta = buildSessionMeta(s);
@@ -896,7 +902,7 @@ function renderSessionsCard(
           if ((event.target as Element | null)?.closest("button")) {
             return;
           }
-          onSelectSession(s.key, event.shiftKey);
+          onSelectSession(s.key, event.shiftKey, orderedKeys);
         }}
         title="${s.key}"
       >
@@ -905,7 +911,7 @@ function renderSessionsCard(
           class="session-bar-selection"
           aria-label=${displayLabel}
           aria-pressed=${isSelected ? "true" : "false"}
-          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey)}
+          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey, orderedKeys)}
         >
           <span class="session-bar-label">
             <span class="session-bar-title">${displayLabel}</span>
@@ -920,13 +926,13 @@ function renderSessionsCard(
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
-              void copyToClipboard(formatSessionListLabel(s));
+              void handleCopyButton(e, formatSessionListLabel(s), t("usage.sessions.copy"));
             }}
           >
-            ${t("usage.sessions.copy")}
+            <span data-copy-label>${t("usage.sessions.copy")}</span>
           </button>
           <div class="session-bar-value">
-            ${isTokenMode ? formatTokens(value) : formatAnalysisCost(value)}
+            ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}
           </div>
         </div>
       </div>
@@ -940,6 +946,13 @@ function renderSessionsCard(
   const recentEntries = recentSessions
     .map((key) => sessionMap.get(key))
     .filter((entry): entry is UsageSessionEntry => Boolean(entry));
+  const renderSessionBarRows = (entries: UsageSessionEntry[]) => {
+    // Selection follows this rendered group, before a click reorders recently viewed sessions.
+    const orderedKeys = entries.map((entry) => entry.key);
+    return entries.map((entry) =>
+      renderSessionBarRow(entry, selectedSet.has(entry.key), orderedKeys),
+    );
+  };
 
   return renderSettingsSection(
     { title: t("usage.sessions.title") },
@@ -956,7 +969,7 @@ function renderSessionsCard(
         <div class="sessions-card-meta">
           <div class="sessions-card-stats">
             <span>
-              ${isTokenMode ? formatTokens(avgValue) : formatAnalysisCost(avgValue)}
+              ${isTokenMode ? formatUsageTokens(avgValue) : formatAnalysisCost(avgValue)}
               ${t("usage.sessions.avg")}
             </span>
             <span
@@ -1016,16 +1029,14 @@ function renderSessionsCard(
             ? html` <div class="usage-empty-block">${t("usage.sessions.noRecent")}</div> `
             : html`
                 <div class="session-bars session-bars--recent">
-                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                  ${renderSessionBarRows(recentEntries)}
                 </div>
               `
           : sessions.length === 0
             ? html` <div class="usage-empty-block">${t("usage.sessions.noneInRange")}</div> `
             : html`
                 <div class="session-bars">
-                  ${sortedWithDir
-                    .slice(0, 50)
-                    .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+                  ${renderSessionBarRows(sortedWithDir.slice(0, 50))}
                   ${sessions.length > 50
                     ? html`
                         <div class="usage-more-sessions">
@@ -1042,7 +1053,7 @@ function renderSessionsCard(
                   ${t("usage.sessions.selected", { count: String(selectedCount) })}
                 </div>
                 <div class="session-bars session-bars--selected">
-                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
+                  ${renderSessionBarRows(selectedEntries)}
                 </div>
               </div>
             `

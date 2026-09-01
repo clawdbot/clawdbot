@@ -13,11 +13,11 @@ import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 
-setupGatewaySessionsTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 
 function requireStateDir(): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;

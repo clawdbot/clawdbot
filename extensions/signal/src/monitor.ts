@@ -1,10 +1,10 @@
 // Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  OpenClawConfig,
   ReplyToMode,
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -22,7 +22,6 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
-  createReplyReferencePlanner,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -46,9 +45,15 @@ import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runti
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
-import { signalRpcRequest, signalCheck } from "./client-adapter.js";
+import { signalRpcRequest } from "./client-adapter.js";
 import type { SignalTransportKind } from "./client-adapter.js";
-import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import { createSignalDaemonLifecycle } from "./daemon-lifecycle.js";
+import {
+  assertSignalDaemonEndpointAvailable,
+  spawnSignalDaemon,
+  type SignalDaemonHandle,
+  waitForSignalDaemonReady,
+} from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -57,11 +62,17 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { createSignalNativeReplyIdResolver } from "./native-reply.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
-import { runSignalSseLoop } from "./sse-reconnect.js";
+import {
+  publishSignalRecovering,
+  runSignalSseLoop,
+  type SignalStatusSink,
+} from "./sse-reconnect.js";
+import { normalizeSignalTransportHost } from "./transport-url.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -70,7 +81,7 @@ export type MonitorSignalOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   baseUrl?: string;
-  channelRuntime?: ChannelRuntimeSurface;
+  channelRuntime?: PluginRuntime["channel"];
   autoStart?: boolean;
   startupTimeoutMs?: number;
   cliPath?: string;
@@ -86,6 +97,7 @@ export type MonitorSignalOpts = {
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
   waitForTransportReady?: typeof waitForTransportReady;
+  statusSink?: SignalStatusSink;
 };
 
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
@@ -105,49 +117,6 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
         await Promise.allSettled(inFlight);
       }
     },
-  };
-}
-
-function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
-  let daemonHandle: SignalDaemonHandle | null = null;
-  let daemonStopRequested = false;
-  let daemonStopPromise: Promise<void> | undefined;
-  let daemonExitError: Error | undefined;
-  const daemonAbortController = new AbortController();
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, daemonAbortController.signal])
-    : daemonAbortController.signal;
-  const stop = (): Promise<void> => {
-    if (daemonStopPromise) {
-      return daemonStopPromise;
-    }
-    daemonStopRequested = true;
-    if (!daemonAbortController.signal.aborted) {
-      daemonAbortController.abort(
-        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
-      );
-    }
-    daemonStopPromise = daemonHandle?.stop() ?? Promise.resolve();
-    return daemonStopPromise;
-  };
-  const attach = (handle: SignalDaemonHandle) => {
-    daemonHandle = handle;
-    void handle.exited.then((exit) => {
-      if (daemonStopRequested || params.abortSignal?.aborted) {
-        return;
-      }
-      daemonExitError = new Error(formatSignalDaemonExit(exit));
-      if (!daemonAbortController.signal.aborted) {
-        daemonAbortController.abort(daemonExitError);
-      }
-    });
-  };
-  const getExitError = () => daemonExitError;
-  return {
-    attach,
-    stop,
-    getExitError,
-    abortSignal,
   };
 }
 
@@ -229,37 +198,6 @@ function buildSignalReactionSystemEventText(params: {
   const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
   const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
   return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
-}
-
-async function waitForSignalDaemonReady(params: {
-  baseUrl: string;
-  abortSignal?: AbortSignal;
-  timeoutMs: number;
-  logAfterMs: number;
-  logIntervalMs?: number;
-  runtime: RuntimeEnv;
-  waitForTransportReadyFn?: typeof waitForTransportReady;
-}): Promise<void> {
-  const waitForTransportReadyFn = params.waitForTransportReadyFn ?? waitForTransportReady;
-  await waitForTransportReadyFn({
-    label: "signal daemon",
-    timeoutMs: params.timeoutMs,
-    logAfterMs: params.logAfterMs,
-    logIntervalMs: params.logIntervalMs,
-    pollIntervalMs: 150,
-    abortSignal: params.abortSignal,
-    runtime: params.runtime,
-    check: async () => {
-      const res = await signalCheck(params.baseUrl, 1000);
-      if (res.ok) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        error: res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable"),
-      };
-    },
-  });
 }
 
 const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
@@ -461,43 +399,6 @@ export async function deliverReplies(params: {
   }
 }
 
-function resolveSignalNativeReplyOptions(params: {
-  payload: ReplyPayload;
-  replyContext?: SignalNativeReplyContext;
-}): Pick<Parameters<typeof sendMessageSignal>[2], "replyToId" | "replyToAuthor" | "replyToBody"> {
-  if (params.payload.replyToCurrent === false) {
-    return {};
-  }
-  const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
-  const isExplicitCurrentReply =
-    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
-  if (
-    !payloadReplyToId &&
-    !isExplicitCurrentReply &&
-    params.replyContext?.allowImplicitCurrentMessage === false
-  ) {
-    return {};
-  }
-  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
-  if (!contextReplyToId || (payloadReplyToId && payloadReplyToId !== contextReplyToId)) {
-    return {};
-  }
-  const replyToId = payloadReplyToId ?? contextReplyToId;
-  const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
-  if (!replyToAuthor) {
-    return { replyToId };
-  }
-  return {
-    replyToId,
-    replyToAuthor,
-    replyToBody: params.replyContext?.body ?? "",
-  };
-}
-
-function isSignalStatusNoticePayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
-}
-
 function createSignalNativeReplyResolver(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
@@ -506,33 +407,17 @@ function createSignalNativeReplyResolver(params: {
   Parameters<typeof sendMessageSignal>[2],
   "replyToId" | "replyToAuthor" | "replyToBody"
 > {
-  const nativeReply = resolveSignalNativeReplyOptions(params);
-  if (!nativeReply.replyToId) {
-    return () => ({});
-  }
-  const isExplicitReply =
-    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
-  const isStatusNotice = isSignalStatusNoticePayload(params.payload);
-  if (isStatusNotice && params.replyToMode === "off") {
-    return () => ({});
-  }
-  if (isExplicitReply) {
-    return () => nativeReply;
-  }
-  if (isStatusNotice) {
-    return () => nativeReply;
-  }
-  const planner = createReplyReferencePlanner({
-    replyToMode: params.replyToMode,
-    existingId: nativeReply.replyToId,
-    hasReplied: params.replyContext?.state?.hasReplied,
-  });
+  const nextReplyToId = createSignalNativeReplyIdResolver(params);
   return () => {
-    const replyToId = planner.use();
-    if (params.replyContext?.state && !isStatusNotice) {
-      params.replyContext.state.hasReplied = planner.hasReplied();
+    const replyToId = nextReplyToId();
+    if (!replyToId) {
+      return {};
     }
-    return replyToId ? { ...nativeReply, replyToId } : {};
+    const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
+    return {
+      replyToId,
+      ...(replyToAuthor ? { replyToAuthor, replyToBody: params.replyContext?.body ?? "" } : {}),
+    };
   };
 }
 
@@ -597,14 +482,51 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
   let ingressMonitor: SignalIngressMonitor | undefined;
+  const startupDeadline = Date.now() + startupTimeoutMs;
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? managedTransport?.cliPath ?? "signal-cli";
     const configPath =
       normalizeOptionalString(opts.configPath) ??
       normalizeOptionalString(managedTransport?.configPath);
-    const httpHost = opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1";
+    const httpHost = normalizeSignalTransportHost(
+      opts.httpHost ?? managedTransport?.httpHost ?? "127.0.0.1",
+    );
     const httpPort = opts.httpPort ?? managedTransport?.httpPort ?? 8080;
+    const startupTimeoutSignal = AbortSignal.timeout(startupTimeoutMs);
+    const endpointProbeSignal = opts.abortSignal
+      ? AbortSignal.any([opts.abortSignal, startupTimeoutSignal])
+      : startupTimeoutSignal;
+    // Readiness alone cannot prove ownership: an unrelated service can answer /api/v1/check
+    // while signal-cli exits on EADDRINUSE. Probe the configured bind before starting it.
+    try {
+      await assertSignalDaemonEndpointAvailable({
+        httpHost,
+        httpPort,
+        abortSignal: endpointProbeSignal,
+      });
+    } catch (error) {
+      if (opts.abortSignal?.aborted) {
+        return;
+      }
+      if (startupTimeoutSignal.aborted || Date.now() >= startupDeadline) {
+        throw new Error(
+          `signal daemon startup timed out after ${startupTimeoutMs}ms while checking its endpoint`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    // Abort can land after the probe resolves but before this continuation resumes.
+    // Recheck at the spawn boundary so a cancelled monitor never creates a daemon.
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
+    if (Date.now() >= startupDeadline) {
+      throw new Error(
+        `signal daemon startup timed out after ${startupTimeoutMs}ms before starting`,
+      );
+    }
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),
@@ -628,7 +550,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await waitForSignalDaemonReady({
         baseUrl,
         abortSignal: daemonLifecycle.abortSignal,
-        timeoutMs: startupTimeoutMs,
+        startupDeadlineMs: startupDeadline,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,
@@ -661,6 +583,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      channelRuntime: opts.channelRuntime,
       abortSignal: daemonLifecycle.abortSignal,
       runTrackedTask: (task) => {
         void monitorTaskRunner.runTask(task);
@@ -707,6 +630,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       timeoutMs: 0,
       transportKind,
       policy: opts.reconnectPolicy,
+      statusSink: opts.statusSink,
       onEvent: (event) =>
         monitorTaskRunner.runTask(async () => await ingressMonitor?.receive(event)),
     });
@@ -718,6 +642,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     const daemonExitError = daemonLifecycle.getExitError();
     if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
+    }
+    if (daemonExitError) {
+      publishSignalRecovering(opts.statusSink, daemonExitError.message);
     }
     throw err;
   } finally {

@@ -7,9 +7,9 @@ import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
-import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import { markCoreTtsToolResult } from "./tts-tool-result-provenance.js";
 
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to speak." }),
@@ -45,7 +45,7 @@ function sanitizeTranscriptForToolContent(text: string): string {
 
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentId?: string;
   agentAccountId?: string;
 }): AnyAgentTool {
@@ -58,8 +58,8 @@ export function createTtsTool(opts?: {
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const text = readStringParam(params, "text", { required: true });
-      const channel = readStringParam(params, "channel");
+      const text = readToolStringParam(params, "text", { required: true });
+      const channel = readToolStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? getRuntimeConfig();
       const result = await textToSpeech({
@@ -77,19 +77,22 @@ export function createTtsTool(opts?: {
         // still delivered via details.media. Sanitize first so a crafted
         // utterance cannot inject reply directives when the tool output is
         // rendered in verbose mode.
-        return {
-          content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
-          details: {
-            audioPath: result.audioPath,
-            provider: result.provider,
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-            media: {
-              mediaUrl: result.audioPath,
-              trustedLocalMedia: true,
-              ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
+        return markCoreTtsToolResult(
+          {
+            content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
+            details: {
+              audioPath: result.audioPath,
+              provider: result.provider,
+              ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+              media: {
+                mediaUrl: result.audioPath,
+                trustedLocalMedia: true,
+                ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
+              },
             },
           },
-        };
+          [result.audioPath],
+        );
       }
 
       throw new Error(result.error ?? "TTS conversion failed");

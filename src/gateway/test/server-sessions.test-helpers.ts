@@ -3,28 +3,21 @@
  */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
-import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
+import { beforeEach, expect, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import {
-  loadTranscriptEvents,
-  persistSessionTranscriptTurn,
-} from "../../config/sessions/session-accessor.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
-  connectOk,
-  embeddedRunMock,
-  installGatewayTestHooks,
-  agentDiscoveryMock,
-  testState,
-  writeSessionStore,
-} from "../test-helpers.js";
+  installGatewaySessionsTestResources,
+  type GatewaySessionsSuiteSetup,
+} from "./server-sessions-resources.test-helpers.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -34,8 +27,14 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
 );
 
+const getSessionAccessorModule = createLazyRuntimeModule(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
+
 export async function getSessionsHandlers() {
-  return (await import("../server-methods/sessions.js")).sessionsHandlers;
+  return (await getGatewayServerMethodsModule()).coreGatewayHandlers;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -52,6 +51,7 @@ export async function seedSessionTranscript(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<void> {
+  const { persistSessionTranscriptTurn } = await getSessionAccessorModule();
   await persistSessionTranscriptTurn(
     {
       agentId: params.agentId,
@@ -99,22 +99,13 @@ export async function loadSeededTranscriptEvents(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<unknown[]> {
+  const { loadTranscriptEvents } = await getSessionAccessorModule();
   return await loadTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-}
-
-export function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
@@ -128,7 +119,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
     );
     return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
   }),
-  stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+  stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0 })),
 }));
 
 const bootstrapCacheMocks = vi.hoisted(() => ({
@@ -302,30 +293,27 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal()),
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
 }));
 
-export function setupGatewaySessionsTestHarness() {
-  installGatewayTestHooks({ scope: "suite" });
+export function setupGatewaySessionsHandlerTestHarness() {
+  const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
+  void [getHarness, openClient];
+  return handlerFixture;
+}
 
-  let harness: GatewayServerHarness | undefined;
-  let sharedSessionStoreDir: string | undefined;
+export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetup) {
+  return createGatewaySessionsTestHarness(true, setup);
+}
+
+function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
+  const { defaultAgentWorkspace, requireHarness, requireSharedSessionStoreDir } =
+    installGatewaySessionsTestResources(startServer, setup);
   let sessionStoreCaseSeq = 0;
-
-  beforeAll(async () => {
-    harness = await startGatewayServerHarness();
-    sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  });
-
-  afterAll(async () => {
-    await harness?.close();
-    if (sharedSessionStoreDir) {
-      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
-    }
-  });
 
   beforeEach(async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
@@ -371,29 +359,20 @@ export function setupGatewaySessionsTestHarness() {
     });
   });
 
-  const requireHarness = () => {
-    if (!harness) {
-      throw new Error("Gateway sessions test harness was not started");
-    }
-    return harness;
+  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
+    // Case setup can pin config through real IO before the mocked Gateway reads it.
+    // Publish the current fixture roster so admitted agents have dispatch owners.
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    await gatewayTestHelpers.prepareGatewayReplyRuntimeForTest({ force: true });
+    return await requireHarness().openClient(opts);
   };
-
-  const requireSharedSessionStoreDir = () => {
-    if (!sharedSessionStoreDir) {
-      throw new Error("Gateway sessions shared session store dir was not created");
-    }
-    return sharedSessionStoreDir;
-  };
-
-  const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
-    await requireHarness().openClient(opts);
 
   async function createSessionStoreDir() {
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    return { dir, storePath };
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot(); // A suite server may prewarm before case setup.
+    return { dir, storePath: testState.sessionStorePath };
   }
 
   async function createSelectedGlobalSessionStore() {
@@ -422,7 +401,7 @@ export function setupGatewaySessionsTestHarness() {
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
     if (writePrimeStore) {
-      await writeSessionStore({
+      await gatewayTestHelpers.writeSessionStore({
         entries: {},
         storePath: path.join(dir, "prime-sessions.json"),
       });
@@ -432,14 +411,14 @@ export function setupGatewaySessionsTestHarness() {
     const workStorePath = storeTemplate.replace("{agentId}", "work");
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       agentId: "main",
       entries: {
         global: sessionStoreEntry("sess-main-global"),
       },
       storePath: mainStorePath,
     });
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       agentId: "work",
       entries: {
         global: sessionStoreEntry("sess-work-global", {
@@ -515,7 +494,7 @@ export function setupGatewaySessionsTestHarness() {
   async function seedActiveMainSession() {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       entries: {
         main: sessionStoreEntry("sess-main"),
       },
@@ -527,6 +506,7 @@ export function setupGatewaySessionsTestHarness() {
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
+    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
@@ -634,10 +614,12 @@ export function expectActiveRunCleanup(
   requesterSessionKey: string,
   expectedQueueKeys: string[],
   sessionId: string,
+  requesterAgentId: string,
 ) {
   expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
     cfg: expect.any(Object),
     requesterSessionKey,
+    requesterAgentId,
   });
   expectSessionQueueCleanup(expectedQueueKeys);
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
@@ -659,26 +641,40 @@ export function expectNoSessionQueueCleanup() {
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
+type SessionsHandlerOptions = Parameters<SessionsHandlers[keyof SessionsHandlers]>[0];
 
 export async function directSessionReq<TPayload = unknown>(
   method: keyof SessionsHandlers,
   params: Record<string, unknown>,
   opts?: {
     context?: Record<string, unknown>;
-    client?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["client"];
-    isWebchatConnect?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["isWebchatConnect"];
+    client?: SessionsHandlerOptions["client"];
+    isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
+    sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
-): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+): Promise<{
+  ok: boolean;
+  payload?: TPayload;
+  error?: { code?: string; message?: string; details?: unknown };
+}> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const loadGatewayModelCatalog =
+    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
+    (async () => agentDiscoveryMock.models);
   let result:
-    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | {
+        ok: boolean;
+        payload?: TPayload;
+        error?: { code?: string; message?: string; details?: unknown };
+      }
     | undefined;
-  await expectDefined(
-    sessionsHandlers[method],
-    "sessions handlers entry at method",
-  )({
+  const handler = sessionsHandlers[method];
+  if (!handler) {
+    throw new Error(`missing sessions handler for ${method}`);
+  }
+  await handler({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {
@@ -694,17 +690,20 @@ export async function directSessionReq<TPayload = unknown>(
       };
     },
     context: {
+      ...createDirectChatContext(),
       broadcastToConnIds: vi.fn(),
       chatAbortControllers: new Map(),
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog: async () => ({ entries: await loadGatewayModelCatalog() }),
       getRuntimeConfig,
       ...opts?.context,
     } as never,
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
+    sessionMutationAuthorization: opts?.sessionMutationAuthorization,
   });
   if (!result) {
     throw new Error(`${method} did not respond`);

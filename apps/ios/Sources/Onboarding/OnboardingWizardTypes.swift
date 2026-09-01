@@ -3,7 +3,6 @@ import SwiftUI
 
 enum OnboardingStep: Int, CaseIterable {
     case intro
-    case permissions
     case welcome
     case mode
     case connect
@@ -24,7 +23,6 @@ enum OnboardingStep: Int, CaseIterable {
     var title: LocalizedStringKey {
         switch self {
         case .intro: "Welcome"
-        case .permissions: "Permissions"
         case .welcome: "Connect Gateway"
         case .mode: "Gateway Setup"
         case .connect: "Gateway Details"
@@ -35,7 +33,7 @@ enum OnboardingStep: Int, CaseIterable {
 
     var canGoBack: Bool {
         switch self {
-        case .intro, .permissions, .welcome, .success:
+        case .intro, .welcome, .success:
             false
         case .mode, .connect, .auth:
             true
@@ -92,5 +90,33 @@ struct GatewaySetupLinkStaging {
         guard self.link != nil else { return false }
         self.link = nil
         return true
+    }
+}
+
+enum OnboardingQRCodeDestination: Equatable {
+    case mainUI
+    case successScreen
+}
+
+struct OnboardingQRCodeCompletion {
+    private var targetStableID: String?
+
+    mutating func stage(_ link: GatewayConnectDeepLink) {
+        self.targetStableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: link.host,
+            port: link.port,
+            contextPath: link.contextPath)
+    }
+
+    mutating func cancel() {
+        self.targetStableID = nil
+    }
+
+    mutating func destination(connectedStableID: String?) -> OnboardingQRCodeDestination {
+        guard let targetStableID else { return .successScreen }
+        self.targetStableID = nil
+        return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
+            ? .mainUI
+            : .successScreen
     }
 }

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   formatToolAggregate,
@@ -23,6 +23,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -91,7 +92,7 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  openFileBackedSessionManagerForTest(sessionFile).appendMessage(
+  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
     assistantMessage("history", Date.now()),
   );
   return {
@@ -105,6 +106,7 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
     model: createCodexTestModel(),
     thinkLevel: "medium",
     observeToolTerminal: createCodexTestToolTerminalObserver(),
+    hostCapabilities: createCodexTestHostCapabilities(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -283,11 +285,12 @@ export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNot
 export function appServerError(params: {
   message: string;
   willRetry: boolean;
+  codexErrorInfo?: string;
 }): ProjectorNotification {
   return forCurrentTurn("error", {
     error: {
       message: params.message,
-      codexErrorInfo: null,
+      codexErrorInfo: params.codexErrorInfo ?? null,
       additionalDetails: null,
     },
     willRetry: params.willRetry,

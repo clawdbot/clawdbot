@@ -1,7 +1,14 @@
 // Sms plugin module implements gateway behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { createSmsIngressSpool, type SmsIngressLog } from "./ingress-spool.js";
+import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler, type SmsWebhookHandlerParams } from "./webhook.js";
 
@@ -67,6 +74,13 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
     warnings.push(
       "- SMS: publicWebhookUrl is required for Twilio signature validation. Set dangerouslyDisableSignatureValidation=true only for local testing.",
     );
+  } else if (
+    account.publicWebhookUrl &&
+    !resolveTwilioStatusCallbackUrl(account.publicWebhookUrl)
+  ) {
+    warnings.push(
+      "- SMS: publicWebhookUrl must be a properly encoded absolute HTTP(S) URL with a valid hostname, no embedded credentials, and remain within OpenClaw's 4,000-character callback safety limit; OpenClaw will omit the per-message delivery callback until fixed.",
+    );
   }
   if (account.dmPolicy === "allowlist" && account.allowFrom.length === 0) {
     warnings.push("- SMS: dmPolicy=allowlist with empty allowFrom rejects every sender.");
@@ -102,13 +116,21 @@ async function registerSmsWebhookRoute(params: {
   });
   let unregisterRoute: () => void;
   try {
+    const webhookHandler = createSmsWebhookHandler({ ...params, ingress });
     unregisterRoute = registerPluginHttpRoute({
       path: webhookPath,
       auth: "plugin",
       pluginId: CHANNEL_ID,
       accountId: params.account.accountId,
+      throwOnFailure: true,
       log: (msg) => params.log?.info?.(msg),
-      handler: createSmsWebhookHandler({ ...params, ingress }),
+      handler: async (req, res) => {
+        const { tryHandleHostedSmsMediaRequest } = await import("./media.js");
+        if (await tryHandleHostedSmsMediaRequest(req, res, params.account.accountId)) {
+          return true;
+        }
+        return await webhookHandler(req, res);
+      },
     });
   } catch (error) {
     await Promise.allSettled([predecessorStop, ingress.stop()]);
@@ -153,9 +175,12 @@ export async function startSmsGatewayAccount(params: {
   channelRuntime: Parameters<typeof createSmsIngressSpool>[0]["channelRuntime"];
   abortSignal: AbortSignal;
   log?: SmsIngressLog;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
+  params.statusSink?.({ lifecycle: "starting" });
   if (!params.account.enabled) {
     params.log?.info?.(`SMS account ${params.account.accountId} is disabled`);
+    params.statusSink?.(channelStoppedPatch());
     return waitUntilAbort(params.abortSignal);
   }
   const warnings = collectSmsStartupWarnings(params.account);
@@ -163,6 +188,12 @@ export async function startSmsGatewayAccount(params: {
     for (const warning of warnings) {
       params.log?.warn?.(warning);
     }
+    params.statusSink?.(
+      channelBlockedPatch(warnings.join("; "), {
+        running: true,
+        connected: false,
+      }),
+    );
     return waitUntilAbort(params.abortSignal);
   }
   for (const warning of warnings) {
@@ -173,6 +204,9 @@ export async function startSmsGatewayAccount(params: {
     params.log?.info?.(
       `Registered SMS webhook route ${params.account.webhookPath} for account ${params.account.accountId}`,
     );
+    params.statusSink?.(channelReadyPatch());
   }
-  return registration.lifecycle;
+  return registration.lifecycle.finally(() => {
+    params.statusSink?.(channelStoppedPatch());
+  });
 }

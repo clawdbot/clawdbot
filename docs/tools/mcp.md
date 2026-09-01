@@ -103,6 +103,8 @@ Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition 
 
 Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
 
+For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments; this does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
+
 ### An HTTP server needs authorization
 
 Set `auth: "oauth"` plus any required `oauth` metadata, then:
@@ -111,7 +113,7 @@ Set `auth: "oauth"` plus any required `oauth` metadata, then:
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL and rerun with `--code` when prompted.
+Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
 
 ### Changes do not reach an active agent
 

@@ -8,8 +8,9 @@ import {
 } from "./web-awesome.ts";
 
 type DropdownElement = HTMLElement & { readonly updateComplete: Promise<unknown> };
+const domRoots = ["light", "shadow"] as const;
 
-async function createDropdown(label?: string) {
+async function createDropdown(label?: string, domRoot: (typeof domRoots)[number] = "light") {
   const dropdown = document.createElement("wa-dropdown") as DropdownElement;
   if (label) {
     dropdown.setAttribute("aria-label", label);
@@ -20,7 +21,11 @@ async function createDropdown(label?: string) {
   const item = document.createElement("wa-dropdown-item");
   item.textContent = "Open";
   dropdown.append(trigger, item);
-  document.body.append(dropdown);
+  const root =
+    domRoot === "shadow"
+      ? document.body.appendChild(document.createElement("div")).attachShadow({ mode: "open" })
+      : document.body;
+  root.append(dropdown);
   await dropdown.updateComplete;
   dropdown.dispatchEvent(new CustomEvent("wa-show", { bubbles: true, composed: true }));
   return { dropdown, trigger };
@@ -29,8 +34,8 @@ async function createDropdown(label?: string) {
 afterEach(() => document.body.replaceChildren());
 
 describe("Web Awesome adapters", () => {
-  it("copies an explicit dropdown label to the menu", async () => {
-    const { dropdown } = await createDropdown("Message actions");
+  it.each(domRoots)("syncs an explicit menu label only while open in %s DOM", async (domRoot) => {
+    const { dropdown } = await createDropdown("Message actions", domRoot);
 
     expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
       "Message actions",
@@ -43,6 +48,12 @@ describe("Web Awesome adapters", () => {
     expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
       "Updated actions",
     );
+    dropdown.dispatchEvent(new Event("wa-after-hide", { bubbles: true, composed: true }));
+    dropdown.setAttribute("aria-label", "Closed actions");
+    await Promise.resolve();
+    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
+      "Updated actions",
+    );
   });
 
   it("labels a dropdown menu from its trigger", async () => {
@@ -51,6 +62,61 @@ describe("Web Awesome adapters", () => {
     expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.getAttribute("aria-label")).toBe(
       "Actions",
     );
+  });
+
+  it.each(domRoots)("makes closing menus inert and restores them in %s DOM", async (domRoot) => {
+    const { dropdown } = await createDropdown(undefined, domRoot);
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu?.hasAttribute("inert")).toBe(false);
+
+    dropdown.dispatchEvent(
+      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
+    );
+
+    await Promise.resolve();
+    expect(menu?.hasAttribute("inert")).toBe(true);
+    dropdown.dispatchEvent(
+      new Event("wa-show", { bubbles: true, cancelable: true, composed: true }),
+    );
+    expect(menu?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps a canceled dropdown hide interactive", async () => {
+    const { dropdown } = await createDropdown();
+    dropdown.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
+
+    dropdown.dispatchEvent(
+      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
+    );
+
+    await Promise.resolve();
+    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps a dropdown interactive when a later document listener cancels its hide", async () => {
+    const { dropdown } = await createDropdown();
+    const cancelHide = (event: Event) => {
+      if (event.target === dropdown) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("wa-hide", cancelHide);
+
+    try {
+      const hideEvent = new Event("wa-hide", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      expect(dropdown.dispatchEvent(hideEvent)).toBe(false);
+      await Promise.resolve();
+
+      expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(
+        false,
+      );
+    } finally {
+      document.removeEventListener("wa-hide", cancelHide);
+    }
   });
 
   it("restores a durable trigger only after keyboard dismissal", async () => {

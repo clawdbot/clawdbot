@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
@@ -9,9 +10,8 @@ import {
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
   readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
-  resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
   type TranscriptMessageAppendOptions,
@@ -35,7 +35,7 @@ import type {
 } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
@@ -49,6 +49,12 @@ import {
   type SessionTranscriptMemoryHitKeyParams,
   type SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
+
+export type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+} from "../config/sessions/session-accessor.js";
+export { hasPromptImageInput } from "../media/prompt-image-input.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -148,8 +154,11 @@ export type SessionTranscriptStrictMessageAppendResult<TMessage> =
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   idempotencyKey?: string;
   mediaUrls?: string[];
+  signal?: AbortSignal;
   text?: string;
   updateMode?: SessionTranscriptUpdateMode;
 };
@@ -177,7 +186,7 @@ type SessionTranscriptMirrorAppendResult =
 export async function resolveSessionTranscriptIdentity(
   params: SessionTranscriptReadParams,
 ): Promise<SessionTranscriptIdentity> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(params);
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
   const agentId = normalizeAgentId(target.agentId);
   return {
     agentId,
@@ -194,7 +203,7 @@ export async function resolveSessionTranscriptIdentity(
 export async function resolveSessionTranscriptTarget(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptTarget> {
-  const target = await resolveSessionTranscriptRuntimeReadTarget(params);
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
   return projectPublicTarget({
     ...target,
     targetKind: "runtime-session",
@@ -285,6 +294,7 @@ export async function readLatestAssistantTextByIdentity(
 export async function appendAssistantMirrorMessageByIdentity(
   params: SessionTranscriptAssistantMirrorAppendParams,
 ): Promise<SessionTranscriptMirrorAppendResult> {
+  params.signal?.throwIfAborted();
   const text = resolveMirroredTranscriptText({
     ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.text !== undefined ? { text: params.text } : {}),
@@ -298,6 +308,7 @@ export async function appendAssistantMirrorMessageByIdentity(
     text,
   });
   return await withTranscriptWriteLock(params, async (locked) => {
+    params.signal?.throwIfAborted();
     const currentEntry = loadSessionEntry(params);
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
@@ -309,7 +320,8 @@ export async function appendAssistantMirrorMessageByIdentity(
       ...params,
       sessionId: currentEntry.sessionId,
     };
-    const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
+    const target = await resolveSessionTranscriptRuntimeTarget(scope);
+    params.signal?.throwIfAborted();
     const latestEquivalentAssistantId =
       !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(
@@ -324,6 +336,7 @@ export async function appendAssistantMirrorMessageByIdentity(
         messageId: latestEquivalentAssistantId,
       };
     }
+    params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
       ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
@@ -333,6 +346,7 @@ export async function appendAssistantMirrorMessageByIdentity(
       return { ok: false, reason: "message skipped", code: "blocked" };
     }
     if (params.updateMode !== "none" && appendResult.appended) {
+      params.signal?.throwIfAborted();
       await publishTranscriptUpdate(scope, {
         agentId: target.agentId,
         messageId: appendResult.messageId,
@@ -514,15 +528,11 @@ function extractAssistantMirrorComparableText(
     message as Parameters<typeof redactTranscriptMessage>[0],
     config,
   ) as SessionTranscriptAssistantMessage;
-  return extractAssistantVisibleText(redacted)?.trim() || undefined;
+  return extractAssistantPhaseText(redacted)?.trim() || undefined;
 }
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {

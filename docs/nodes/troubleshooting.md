@@ -1,12 +1,48 @@
 ---
 summary: "Troubleshoot node pairing, foreground requirements, permissions, and tool failures"
 read_when:
-  - Node is connected but camera/canvas/screen/exec tools fail
+  - Node is connected but camera/screen/exec tools fail
   - You need the node pairing versus approvals mental model
 title: "Node troubleshooting"
 ---
 
 Use this page when a node is visible in status but node tools fail.
+
+## Node goes offline after SSH logout (Linux)
+
+On Linux, `openclaw node install` creates a **user-level** systemd service. The
+`systemd --user` instance is torn down when your last login session ends, so the
+node service stops the moment you log out — even though it looked healthy
+(`enabled` + `running`) while you were connected.
+
+Check lingering:
+
+```bash
+loginctl show-user "$USER" -p Linger
+```
+
+If it reads `Linger=no`, enable it (may require sudo):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Then restart the node service and verify it survives logout:
+
+```bash
+openclaw node restart
+# log out, then from another machine:
+openclaw nodes status
+```
+
+`openclaw node install` prints a warning with this recovery command when it
+detects lingering is disabled. Don't mix a user-level service with a
+system-level one for the same node. The duplicate-scope guard that prevents
+two managers from running the same unit name is enforced for gateway units
+(two supervisors on the same port SIGTERM each other in a restart loop); for
+node services the installer does not raise this guard, so a leftover unit in
+the other scope can leave the node in an ambiguous state. Fully remove one
+before switching.
 
 ## Command ladder
 
@@ -32,15 +68,21 @@ Healthy signals:
 - `nodes describe` includes the capability you're calling.
 - Exec approvals show the expected mode/allowlist.
 
+If startup preparation disables container session hosting that you enabled, check the node host's
+local stderr for `node host worker hosting disabled: ...` and follow the reported
+engine or context recovery guidance. The macOS app forwards worker stderr to its
+logger under subsystem `ai.openclaw`, category `node-host-worker`; see
+[macOS logging](/platforms/mac/logging) for capture options. After fixing the cause,
+restart the node host. Explicitly disabled hosting produces no such diagnostic.
+
 ## Foreground requirements
 
-`canvas.*`, `camera.*`, and `screen.*` are foreground-only on iOS/Android nodes.
+`camera.*` and `screen.*` are foreground-only on iOS/Android nodes.
 
 Quick check and fix:
 
 ```bash
 openclaw nodes describe --node <idOrNameOrIp>
-openclaw nodes canvas snapshot --node <idOrNameOrIp>
 openclaw logs --follow
 ```
 

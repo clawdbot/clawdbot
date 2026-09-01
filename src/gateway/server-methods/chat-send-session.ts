@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-time
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import {
   loadSessionEntry,
@@ -40,11 +41,15 @@ function loadChatSendSessionContext(params: {
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
   const runtimeConfig = context.getRuntimeConfig?.();
-  const requestedAgentId = resolveRequestedChatAgentId({
+  const requestedAgent = resolveRequestedChatAgentId({
     cfg: runtimeConfig,
     requestedSessionKey: rawSessionKey,
     agentId: agentIdOverride,
   });
+  if (!requestedAgent.ok) {
+    return { ok: false as const, error: requestedAgent.error };
+  }
+  const requestedAgentId = requestedAgent.agentId;
   // Outside configured global scope, `global` + agentId is the shipped webchat
   // alias for that agent's main thread. Resolve it before every store lookup so
   // reconnect replay cannot create a parallel literal `global` transcript.
@@ -80,20 +85,24 @@ function loadChatSendSessionContext(params: {
     expectedSessionRoutingContract !== undefined &&
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
   return {
-    rawSessionKey,
-    sessionLoadKey,
-    clientRunId,
-    pendingChatSendKey,
-    sessionLoadOptions,
-    sessionLoadMs,
-    cfg,
-    storePath,
-    entry,
-    sessionKey,
-    legacyKey,
-    sessionRoutingChanged,
-    expectedLeafEntryId,
-    requestedAgentId,
+    ok: true as const,
+    value: {
+      rawSessionKey,
+      sessionLoadKey,
+      clientRunId,
+      pendingChatSendKey,
+      sessionLoadOptions,
+      sessionLoadMs,
+      cfg,
+      storePath,
+      entry,
+      sessionKey,
+      legacyKey,
+      sessionRoutingChanged,
+      expectedLeafEntryId,
+      agentIdOverride,
+      requestedAgentId,
+    },
   };
 }
 
@@ -104,9 +113,13 @@ export function prepareChatSendSession(params: {
   client: GatewayRequestHandlerOptions["client"];
 }) {
   const loaded = loadChatSendSessionContext(params);
+  if (!loaded.ok) {
+    return loaded;
+  }
+  const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loaded;
+  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, agentIdOverride } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -118,7 +131,7 @@ export function prepareChatSendSession(params: {
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: rawSessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     return { ok: false as const, error: selectedAgent.error };
@@ -140,6 +153,16 @@ export function prepareChatSendSession(params: {
     config: cfg,
     agentId: selectedAgent.agentId,
   });
+  if (!entry) {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId,
+    });
+    if (creationError) {
+      return { ok: false as const, error: creationError };
+    }
+  }
   const activeRunScopeKey = resolveChatSendActiveScopeKey({
     sessionKey,
     agentId: selectedAgent.agentId,
@@ -152,6 +175,7 @@ export function prepareChatSendSession(params: {
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
   const restartSafeRequest = createRestartSafeChatRequest({
+    goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
       isBrowserOperatorUiClient(request.clientInfo) &&
@@ -174,7 +198,7 @@ export function prepareChatSendSession(params: {
   return {
     ok: true as const,
     value: {
-      ...loaded,
+      ...loadedValue,
       selectedAgent,
       requestedSessionId,
       backingSessionId,

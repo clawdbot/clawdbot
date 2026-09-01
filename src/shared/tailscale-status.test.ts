@@ -1,11 +1,23 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
+  inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
+  resolveTailscalePublishedHost,
   resolveTailscaleServeGatewayUrlsWithRunner,
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
+    expect(
+      resolveTailscalePublishedHost({
+        tailscaleMode: "serve",
+        tailnetHost: "node.tailnet.ts.net",
+        serviceName: "svc:openclaw",
+      }),
+    ).toBe("openclaw.tailnet.ts.net");
+  });
+
   it("returns null when no runner is provided", async () => {
     await expect(resolveTailnetHostWithRunner()).resolves.toBeNull();
   });
@@ -72,19 +84,15 @@ describe("shared/tailscale-status", () => {
   });
 
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ code: null, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 1, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 0, stdout: "   " });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
-
-    const invalid = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "not-json",
-    });
-    await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+    for (const result of [
+      { code: null, stdout: "boom" },
+      { code: 1, stdout: "boom" },
+      { code: 0, stdout: "   " },
+      { code: 0, stdout: "not-json" },
+    ]) {
+      const run = vi.fn().mockResolvedValue(result);
+      await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
+    }
   });
 
   it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {
@@ -158,5 +166,19 @@ describe("shared/tailscale-status", () => {
     });
 
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it("distinguishes malformed Serve status from an empty valid configuration", async () => {
+    const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });
+
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual({
+      status: "invalid",
+    });
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, empty)).resolves.toEqual({
+      status: "ok",
+      urls: [],
+    });
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual([]);
   });
 });

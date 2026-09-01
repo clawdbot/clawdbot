@@ -12,16 +12,13 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
-import { selectableAgentsList } from "../../lib/agents/display.ts";
+import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -32,7 +29,12 @@ import {
   type AgentsState,
 } from "../../lib/agents/index.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
-import { currentConfigObject } from "../../lib/config/index.ts";
+import {
+  loadChatMetadata,
+  peekChatMetadata,
+  revalidateChatMetadata,
+} from "../../lib/chat/chat-metadata-store.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   createInitialCronState,
   loadCronJobsPage,
@@ -41,8 +43,13 @@ import {
   runCronJob,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import {
+  canCallGatewayMethod,
+  type GatewayMethodOperatorScope,
+} from "../../lib/gateway-methods.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { normalizeStringEntries } from "../../lib/string-coerce.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
@@ -61,25 +68,23 @@ import {
   syncAgentsCanonicalLocation,
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
-import { loadAgentSkills } from "./skills.ts";
+import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
-
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
 
-class AgentsPage extends OpenClawLightDomElement implements AgentsState {
+class AgentsPage
+  extends OpenClawLightDomElement
+  implements Omit<AgentsState, "agentsLoading" | "agentsError">
+{
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: AgentsRouteData;
 
-  @state() client: GatewayBrowserClient | null = null;
-  @state() connected = false;
-  @state() agentsLoading = false;
-  @state() agentsError: string | null = null;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsSelectedId: string | null = null;
   @state() toolsCatalogLoading = false;
@@ -100,6 +105,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
@@ -112,25 +118,41 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   @state() skillsFilter = "";
   @state() private cron = createInitialCronState();
 
-  requestGeneration = 0;
   private routeDataInitialized = false;
-  private hasBoundGateway = false;
-  private gatewaySource: ApplicationContext["gateway"] | null = null;
   private hasBoundAgents = false;
   private agentsSource: ApplicationContext["agents"] | null = null;
   private hasBoundAgentIdentity = false;
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
-  private chatModelCatalogClient: GatewayBrowserClient | null = null;
   private chatModelCatalogAgentId: string | null = null;
-  private readonly chatModelCatalogByAgentId = new Map<string, ModelCatalogEntry[]>();
   private chatModelCatalogRequest: {
     client: GatewayBrowserClient;
     generation: number;
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
+  private readonly githubIdentity = new GitHubIdentityController({
+    requestUpdate: () => this.requestUpdate(),
+    runExternalMutation: (task, options) =>
+      this.context.runtimeConfig.runExternalMutation(task, options),
+  });
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.resetForClientChange(),
+    invalidateRequests: (change) => {
+      if (change.identityChanged) {
+        return;
+      }
+      this.invalidateTransientRequests();
+      this.chatModelCatalog = [];
+      this.chatModelCatalogAgentId = null;
+      this.chatModelCatalogError = null;
+    },
+    onSnapshot: () => this.syncGatewayState(),
+    ensureInitialData: () => this.ensureInitialData(),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.agents,
@@ -225,30 +247,26 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           }
         };
       },
-    )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const initialBind = !this.hasBoundGateway;
-        this.hasBoundGateway = true;
-        this.gatewaySource = gateway;
-        this.applyGatewaySnapshot(gateway.snapshot, !initialBind, initialBind);
-        const stop = gateway.subscribe((snapshot) => {
-          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-            this.applyGatewaySnapshot(snapshot, false);
-          }
-        });
-        return () => {
-          stop();
-          if (this.gatewaySource === gateway) {
-            this.gatewaySource = null;
-          }
-        };
-      },
     );
 
   get sessions() {
     return this.context.sessions;
+  }
+
+  get agents() {
+    return this.context.agents;
+  }
+
+  get client() {
+    return this.gateway.client;
+  }
+
+  get connected() {
+    return this.gateway.connected;
+  }
+
+  get requestGeneration() {
+    return this.gateway.epoch;
   }
 
   get sessionsResult() {
@@ -269,10 +287,8 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   override disconnectedCallback() {
+    this.githubIdentity.dispose();
     this.subscriptions.clear();
-    this.requestGeneration += 1;
-    this.client = null;
-    this.connected = false;
     super.disconnectedCallback();
   }
 
@@ -284,30 +300,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
-  private applyGatewaySnapshot(
-    snapshot: ApplicationGatewaySnapshot,
-    forceReset: boolean,
-    initialBind = false,
-  ) {
-    const connectionChanged = this.connected !== (snapshot.phase === "connected");
-    const clientChanged = this.client !== snapshot.client;
-    this.syncGatewayState(snapshot);
-    if (forceReset || (!initialBind && clientChanged)) {
-      this.resetForClientChange();
-    } else if (!initialBind && connectionChanged) {
-      this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogClient = null;
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogByAgentId.clear();
-      this.chatModelCatalogError = null;
-    }
-    this.ensureInitialData();
-  }
-
-  private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
-    this.client = snapshot.client;
-    this.connected = snapshot.phase === "connected";
+  private syncGatewayState() {
     if (this.cron.client !== this.client || this.cron.connected !== this.connected) {
       // In-flight cron loaders mutate their captured state; same-client
       // snapshots must retain it or loading never clears in the visible state.
@@ -315,10 +308,12 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
+  private canCall(method: string, requiredScope: GatewayMethodOperatorScope): boolean {
+    return canCallGatewayMethod(this.context?.gateway?.snapshot, method, requiredScope);
+  }
+
   private syncAgentState(agents = this.context.agents) {
     const agentState = agents.state;
-    this.agentsLoading = agentState.agentsLoading;
-    this.agentsError = agentState.agentsError;
     this.agentsList = agentState.agentsList ? selectableAgentsList(agentState.agentsList) : null;
     if (this.agentsList) {
       this.ensureSelectedAgentInList(this.agentsList);
@@ -343,53 +338,45 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       return;
     }
     this.agentFilesList = status.list;
-    this.agentFilesError = status.error;
     void this.selectDefaultAgentFile(agentId);
   }
 
-  private async selectDefaultAgentFile(agentId: string) {
+  private async selectDefaultAgentFile(agentId: string, force = false) {
     const files = this.agentFilesList?.files ?? [];
-    if (this.agentFileActive && files.some((file) => file.name === this.agentFileActive)) {
-      return;
+    if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
+      this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
-    this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     if (this.agentFileActive) {
-      await loadAgentFileContent(this, agentId, this.agentFileActive);
+      await loadAgentFileContent(this, agentId, this.agentFileActive, {
+        force,
+      });
     }
   }
 
   private resetForClientChange() {
-    this.agentsLoading = false;
-    this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.chatModelCatalog = [];
-    this.chatModelCatalogClient = null;
     this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogByAgentId.clear();
     this.chatModelCatalogError = null;
     this.resetSelectionState();
   }
 
   private resetForAgentsSourceChange() {
-    this.agentsLoading = false;
-    this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
   }
 
   private invalidateTransientRequests() {
-    this.requestGeneration += 1;
-    this.agentsLoading = false;
+    this.gateway.invalidate();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentIdentityLoading = false;
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
-    this.toolsEffectiveLoading = false;
-    this.toolsEffectiveLoadingKey = null;
+    resetToolsEffectiveState(this);
     this.cron = {
       ...this.cron,
       cronLoading: false,
@@ -407,12 +394,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       return;
     }
     this.routeDataInitialized = true;
-    const gateway = this.context.gateway;
-    if (data.gateway !== gateway || data.gatewaySnapshot !== gateway.snapshot) {
+    if (!this.gateway.isRouteDataCurrent(data)) {
       return;
     }
-    this.agentsLoading = false;
-    this.agentsError = data.error;
     if (data.agentsList) {
       this.agentsList = data.agentsList;
       const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
@@ -478,7 +462,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     ) {
       void this.context.runtimeConfig.ensureLoaded();
     }
-    if (!this.agentsList && !this.agentsLoading) {
+    if (!this.agentsList && !this.context.agents.state.agentsLoading) {
       void this.loadAgentsAndCommit();
       return;
     }
@@ -518,7 +502,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       .ensure(ids)
       .catch((err: unknown) => {
         if (this.isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          this.agentIdentityError = String(err);
+          this.agentIdentityError = formatUiError(err);
         }
       })
       .finally(() => {
@@ -546,10 +530,19 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       return;
     }
     if (this.agentsPanel === "tools") {
+      this.syncGitHubIdentity(agentId);
       if (this.toolsCatalogResult?.agentId !== agentId && !this.toolsCatalogLoading) {
         void loadToolsCatalog(this, agentId);
       }
       this.loadEffectiveToolsForAgent(agentId);
+      if (
+        this.githubIdentity.statusReadable &&
+        !this.githubIdentity.status &&
+        !this.githubIdentity.loading &&
+        !this.githubIdentity.error
+      ) {
+        void this.githubIdentity.verify();
+      }
       return;
     }
     if (this.agentsPanel === "channels" && !this.context.channels.state.channelsSnapshot) {
@@ -570,16 +563,47 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
   }
 
-  private ensureModelCatalog() {
+  private syncGitHubIdentity(agentId: string | null) {
+    const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
+    const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
+      canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
+    this.githubIdentity.sync({
+      client: this.client,
+      connected: this.connected,
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
+      statusReadable: hasScope("tools.github.status", "operator.read"),
+      configurable: hasScope("tools.github.configure", "operator.admin"),
+      authorizable: [
+        "tools.github.authorize.start",
+        "tools.github.authorize.poll",
+        "tools.github.authorize.cancel",
+      ].every((method) => hasScope(method, "operator.admin")),
+      clientRevision: this.requestGeneration,
+    });
+  }
+
+  private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (this.chatModelCatalogClient === client) {
-      const cached = this.chatModelCatalogByAgentId.get(agentId);
+    if (!options.refresh) {
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
-        this.chatModelCatalog = cached;
+        this.chatModelCatalog = cached.models ?? [];
         this.chatModelCatalogAgentId = agentId;
         this.chatModelCatalogError = null;
         return;
@@ -600,24 +624,24 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     const request = { client, generation, agentId };
     this.chatModelCatalogRequest = request;
     this.chatModelCatalogError = null;
-    // Only chat metadata projects the selected agent's private provider/auth
-    // scope; models.list always resolves against the default agent.
-    void client
-      .request<{ models?: ModelCatalogEntry[] }>("chat.metadata", { agentId })
+    // Chat metadata carries the selected agent's already-prepared startup models
+    // without initiating the live discovery reserved for explicit picker use.
+    const metadataRequest = options.refresh
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
+    void metadataRequest
       .then((result) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
           const models = result.models ?? [];
           this.chatModelCatalog = models;
-          this.chatModelCatalogClient = client;
           this.chatModelCatalogAgentId = agentId;
-          this.chatModelCatalogByAgentId.set(agentId, models);
           this.chatModelCatalogError = null;
         }
       })
       .catch((error: unknown) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
           this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+          this.chatModelCatalogError = formatUiError(error);
         }
       })
       .finally(() => {
@@ -663,14 +687,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
         return;
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
-      this.agentFilesError = agents.files(agentId).error;
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
       }
     }
     if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-      await this.selectDefaultAgentFile(agentId);
+      await this.selectDefaultAgentFile(agentId, force);
     }
   }
 
@@ -702,6 +725,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private saveIdentityDraft() {
+    if (!this.canCall("agents.update", "operator.admin")) {
+      return;
+    }
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !agentId || this.identitySaving) {
@@ -717,6 +743,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       agents,
       agentIdentity,
       runtimeConfig: this.context.runtimeConfig,
+      canDispatch: () => this.canCall("agents.update", "operator.admin"),
       isCurrent: () =>
         this.isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
       onSaved: () => this.syncAgentState(agents),
@@ -724,7 +751,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private resetSelectionState() {
-    this.requestGeneration += 1;
+    this.gateway.invalidate();
     this.chatModelCatalog = [];
     this.chatModelCatalogAgentId = null;
     this.chatModelCatalogError = null;
@@ -733,6 +760,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentFileActive = null;
     this.agentFileContents = {};
     this.agentFileDrafts = {};
+    this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentSkillsReport = null;
@@ -791,6 +819,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   }
 
   private saveAgentConfig() {
+    if (!this.canCall("config.set", "operator.admin")) {
+      return;
+    }
     const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
@@ -815,25 +846,74 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     })();
   }
 
-  private saveSelectedAgentFile(agentId: string, name: string, content: string) {
+  private setDefaultAgent(agentId: string) {
+    if (!this.canCall("config.set", "operator.admin")) {
+      return;
+    }
     const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
+    const runtimeConfig = this.context.runtimeConfig;
     if (!client) {
       return;
     }
-    void saveAgentFile(this, agentId, name, content).then(() => {
-      if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-        void this.loadAgentFiles(agentId, true);
+    const canDispatch = () =>
+      this.context.runtimeConfig === runtimeConfig &&
+      this.isCurrentRequest(client, generation, undefined, { agents }) &&
+      this.canCall("config.set", "operator.admin");
+    void (async () => {
+      await runtimeConfig.ensureLoaded();
+      if (!canDispatch()) {
+        return;
       }
-    });
+      await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
+    })();
+  }
+
+  private saveSelectedAgentFile(agentId: string, name: string, content: string) {
+    if (!this.canCall("agents.files.set", "operator.admin")) {
+      return;
+    }
+    void saveAgentFile(this, agentId, name, content);
   }
 
   private reloadConfig() {
     void this.context.runtimeConfig.refresh({ discardPendingChanges: true });
   }
 
+  private clearAgentSkills(agentId: string) {
+    if (!this.canCall("config.patch", "operator.admin")) {
+      return;
+    }
+    const client = this.client;
+    const generation = this.requestGeneration;
+    const agents = this.context.agents;
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!client) {
+      return;
+    }
+    const canDispatch = () =>
+      this.context.runtimeConfig === runtimeConfig &&
+      this.isCurrentRequest(client, generation, agentId, { agents }) &&
+      this.canCall("config.patch", "operator.admin");
+    void clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then((updated) => {
+      if (!canDispatch()) {
+        return;
+      }
+      if (!updated) {
+        this.agentSkillsError =
+          runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError");
+        return;
+      }
+      this.agentSkillsError = null;
+      void loadAgentSkills(this, agentId);
+    });
+  }
+
   private runCronJobNow(jobId: string) {
+    if (!this.canCall("cron.run", "operator.admin")) {
+      return;
+    }
     if (!this.cron.cronJobs.some((entry) => entry.id === jobId)) {
       return;
     }
@@ -842,23 +922,34 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   override render() {
     const configState = this.context.runtimeConfig.state;
+    const agentsState = this.context.agents.state;
     const selectedAgentId = this.resolveSelectedAgentId();
     const config = currentConfigObject(configState);
+    const access = {
+      canCreateAgent: this.canCall("openclaw.chat", "operator.admin"),
+      canPatchConfig: this.canCall("config.patch", "operator.admin"),
+      canUpdateConfig: this.canCall("config.set", "operator.admin"),
+      canUpdateIdentity: this.canCall("agents.update", "operator.admin"),
+      canWriteFiles: this.canCall("agents.files.set", "operator.admin"),
+      canRunCron: this.canCall("cron.run", "operator.admin"),
+    };
+    this.syncGitHubIdentity(selectedAgentId);
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>
       ${renderSettingsWorkspace(
         renderAgents({
+          access,
           basePath: this.context.basePath,
           authToken: this.controlUiAuthToken(),
-          loading: this.agentsLoading,
-          error: this.agentsError,
+          loading: agentsState.agentsLoading,
+          error: agentsState.agentsError,
           agentsList: this.agentsList,
           selectedAgentId,
           activePanel: this.agentsPanel,
@@ -867,11 +958,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             loading: configState.configLoading,
             saving: configState.configSaving,
             dirty: configState.configFormDirty,
-            error:
-              configState.configAutoSaveStatus === "error" ||
-              configState.configAutoSaveStatus === "conflict"
-                ? configState.lastError
-                : null,
+            error: configState.lastError,
           },
           channels: {
             snapshot: this.context.channels.state.channelsSnapshot,
@@ -893,7 +980,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           agentFiles: {
             list: this.agentFilesList,
             loading: this.agentFilesLoading,
-            error: this.agentFilesError,
+            error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
             active: this.agentFileActive,
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,
@@ -922,6 +1009,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             error: this.toolsEffectiveError,
             result: this.toolsEffectiveResult,
           },
+          githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
@@ -931,7 +1021,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onRefresh: () => this.refreshAgents(),
           onSelectAgent: (agentId) =>
             navigateToAgent(this.context, agentId, selectedAgentId, this.agentsPanel),
-          onCreateAgent: () => this.context.navigate("custodian", { search: "?intent=new-agent" }),
+          onCreateAgent: () => {
+            if (this.canCall("openclaw.chat", "operator.admin")) {
+              this.context.navigate("custodian", { search: "?intent=new-agent" });
+            }
+          },
           onSelectPanel: (panel) =>
             navigateToAgentPanel(this.context, selectedAgentId, this.agentsPanel, panel),
           onLoadFiles: (agentId) => void this.loadAgentFiles(agentId, true),
@@ -960,6 +1054,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
           },
           onToolsProfileChange: (agentId, profile, clearAllow) => {
+            if (!this.canCall("config.set", "operator.admin")) {
+              return;
+            }
             const path = this.toolsPath(agentId, Boolean(profile || clearAllow));
             if (!path) {
               return;
@@ -974,6 +1071,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
           },
           onToolsOverridesChange: (agentId, alsoAllow, deny) => {
+            if (!this.canCall("config.set", "operator.admin")) {
+              return;
+            }
             const path = this.toolsPath(agentId, alsoAllow.length > 0 || deny.length > 0);
             if (!path) {
               return;
@@ -991,8 +1091,16 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           },
           onConfigReload: () => this.reloadConfig(),
           onConfigSave: () => this.saveAgentConfig(),
-          onIdentityFieldChange: (field, value) => setIdentityDraftField(this, field, value),
-          onIdentityAvatarSelect: (file) => selectIdentityAvatar(this, file),
+          onIdentityFieldChange: (field, value) => {
+            if (this.canCall("agents.update", "operator.admin")) {
+              setIdentityDraftField(this, field, value);
+            }
+          },
+          onIdentityAvatarSelect: (file) => {
+            if (this.canCall("agents.update", "operator.admin")) {
+              selectIdentityAvatar(this, file);
+            }
+          },
           onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onOpenMemoryImport: () => this.context.navigate("memory-import"),
@@ -1011,13 +1119,21 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
           },
           onAgentSkillToggle: (agentId, skillName, enabled) => {
+            if (!this.canCall("config.set", "operator.admin")) {
+              return;
+            }
             const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
             if (!target || !skillName.trim()) {
               return;
             }
-            const base = Array.isArray(target.entry.skills)
-              ? normalizeStringEntries(target.entry.skills)
-              : (this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ?? []);
+            const base =
+              resolveAgentSkillsFilter(
+                currentConfigObject(this.context.runtimeConfig.state),
+                agentId,
+              ) ??
+              this.agentSkillsReport?.agentSkillFilter ??
+              this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
+              [];
             const next = new Set(base);
             if (enabled) {
               next.add(skillName.trim());
@@ -1026,33 +1142,33 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
             }
             this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
           },
-          onAgentSkillsClear: (agentId) => {
-            const target = this.context.runtimeConfig.agentEntry(agentId);
-            if (target) {
-              this.context.runtimeConfig.removeFormValue([...target.path, "skills"]);
-            }
-          },
+          onAgentSkillsClear: (agentId) => this.clearAgentSkills(agentId),
           onAgentSkillsDisableAll: (agentId) => {
+            if (!this.canCall("config.set", "operator.admin")) {
+              return;
+            }
             const target = this.context.runtimeConfig.agentEntry(agentId, { ensure: true });
             if (target) {
               this.context.runtimeConfig.patchForm([...target.path, "skills"], []);
             }
           },
           onModelChange: (agentId, modelId) => {
+            if (!this.canCall("config.set", "operator.admin")) {
+              return;
+            }
             stageAgentPrimaryModel(this.context.runtimeConfig, agentId, modelId);
             void refreshVisibleToolsEffectiveForCurrentSession(this);
           },
-          onModelCatalogRetry: () => this.ensureModelCatalog(),
-          onModelFallbacksChange: (agentId, fallbacks) =>
-            stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks),
-          onSetDefault: (agentId) => {
-            void (async () => {
-              await this.context.runtimeConfig.ensureLoaded();
-              await setDefaultAgent(this.context.runtimeConfig, agentId, () =>
-                this.context.agents.refreshList(),
-              );
-            })();
+          // Availability facts (provider keys added/removed, new models) go
+          // stale in the per-agent cache; opening the picker re-reads them,
+          // mirroring the chat composer's on-open refresh.
+          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
+          onModelFallbacksChange: (agentId, fallbacks) => {
+            if (this.canCall("config.set", "operator.admin")) {
+              stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);
+            }
           },
+          onSetDefault: (agentId) => this.setDefaultAgent(agentId),
         }),
       )}
     `;

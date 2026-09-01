@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
@@ -218,9 +219,11 @@ function collectExtensionHintKeys(
   channels: ChannelUiMetadata[],
 ): Set<string> {
   const keys = new Set<string>();
+  const hintKeys = Object.keys(hints);
   const collectPrefixedHintKeys = (prefix: string) => {
-    for (const key of Object.keys(hints)) {
-      if (key === prefix || key.startsWith(`${prefix}.`)) {
+    const childPrefix = `${prefix}.`;
+    for (const key of hintKeys) {
+      if (key === prefix || key.startsWith(childPrefix)) {
         keys.add(key);
       }
     }
@@ -379,34 +382,36 @@ function applyHeartbeatTargetHints(
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
+  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
   const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
       ...current,
       help: current.help ?? help,
-      placeholder: current.placeholder ?? "last",
+      placeholder: current.placeholder ?? "owner",
     };
   }
   return next;
 }
 
-function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+/** Mutate a caller-owned schema; cached inputs must be cloned before merging. */
+function mergeExtensionSchemas(
+  schema: ConfigSchema,
+  channels: ChannelUiMetadata[],
+  plugins?: PluginUiMetadata[],
+): ConfigSchema {
+  const root = asSchemaObject(schema);
   const pluginsNode = asSchemaObject(root?.properties?.plugins);
   const entriesNode = asSchemaObject(pluginsNode?.properties?.entries);
-  if (!entriesNode) {
-    return next;
+  const entryBase = asSchemaObject(entriesNode?.additionalProperties);
+  const entryProperties = entriesNode?.properties ?? {};
+  if (entriesNode && plugins) {
+    entriesNode.properties = entryProperties;
   }
 
-  const entryBase = asSchemaObject(entriesNode.additionalProperties);
-  const entryProperties = entriesNode.properties ?? {};
-  entriesNode.properties = entryProperties;
-
-  for (const plugin of plugins) {
-    if (!plugin.configSchema) {
+  for (const plugin of plugins ?? []) {
+    if (!entriesNode || !plugin.configSchema) {
       continue;
     }
     const entrySchema = entryBase
@@ -414,14 +419,16 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
       : ({ type: "object" } as JsonSchemaObject);
     const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
     const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
-    const pluginSchema = asSchemaObject(plugin.configSchema);
+    // The merged response owns plugin fragments independently of manifest metadata.
+    const pluginConfigSchema = cloneSchema(plugin.configSchema);
+    const pluginSchema = asSchemaObject(pluginConfigSchema);
     const nextConfigSchema =
       baseConfigSchema &&
       pluginSchema &&
       isObjectSchema(baseConfigSchema) &&
       isObjectSchema(pluginSchema)
         ? mergeObjectSchema(baseConfigSchema, pluginSchema)
-        : cloneSchema(plugin.configSchema);
+        : pluginConfigSchema;
 
     entryObject.properties = {
       ...entryObject.properties,
@@ -430,15 +437,9 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
     entryProperties[plugin.id] = entryObject;
   }
 
-  return next;
-}
-
-function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
   const channelsNode = asSchemaObject(root?.properties?.channels);
   if (!channelsNode) {
-    return next;
+    return schema;
   }
   const channelProps = channelsNode.properties ?? {};
   channelsNode.properties = channelProps;
@@ -456,7 +457,7 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     }
   }
 
-  return next;
+  return schema;
 }
 
 let cachedBase: ConfigSchemaResponse | null = null;
@@ -506,12 +507,7 @@ function buildMergedSchemaCacheKey(params: {
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
-  if (mergedSchemaCache.size >= MERGED_SCHEMA_CACHE_MAX) {
-    const oldest = mergedSchemaCache.keys().next();
-    if (!oldest.done) {
-      mergedSchemaCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
   mergedSchemaCache.set(key, value);
 }
 
@@ -561,7 +557,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
-  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
+  const mergedSchema = mergeExtensionSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
     schema: mergedSchema,
@@ -571,7 +567,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;
@@ -607,7 +603,7 @@ export function buildConfigSchema(params?: {
       extensionHintKeys,
     ),
   );
-  const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
+  const mergedSchema = mergeExtensionSchemas(cloneSchema(base.schema), channels, plugins);
   const merged = {
     ...base,
     schema: mergedSchema,
@@ -673,11 +669,148 @@ function resolveLookupChildSchema(
     return items;
   }
 
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const resolved = variantSchema ? resolveLookupChildSchema(variantSchema, segment) : null;
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     return schema.additionalProperties;
   }
 
   return null;
+}
+
+type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
+
+function classifyLookupChildSchema(
+  schema: JsonSchemaObject,
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  if (schema.properties && Object.hasOwn(schema.properties, segment)) {
+    return "property";
+  }
+  if (parseConfigPathArrayIndex(segment) !== undefined && resolveItemsSchema(schema)) {
+    return "array-index";
+  }
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const kind = variantSchema ? classifyLookupChildSchema(variantSchema, segment) : null;
+      if (kind) {
+        return kind;
+      }
+    }
+  }
+  if (schema.additionalProperties === true || typeof schema.additionalProperties === "object") {
+    return propertyNameSchemaAllows(schema.propertyNames, segment)
+      ? "record-key"
+      : "invalid-record-key";
+  }
+  return null;
+}
+
+const PROPERTY_NAME_SCHEMA_KEYS = new Set([
+  "$id",
+  "$schema",
+  "title",
+  "description",
+  "type",
+  "const",
+  "enum",
+  "pattern",
+  "minLength",
+  "maxLength",
+  "anyOf",
+  "oneOf",
+  "allOf",
+]);
+
+function propertyNameSchemaAllows(schema: unknown, value: string): boolean {
+  if (schema === undefined || schema === true) {
+    return true;
+  }
+  if (schema === false) {
+    return false;
+  }
+  const object = asSchemaObject(schema);
+  if (!object || Object.keys(object).some((key) => !PROPERTY_NAME_SCHEMA_KEYS.has(key))) {
+    return false;
+  }
+  const types = Array.isArray(object.type) ? object.type : [object.type];
+  if (object.type !== undefined && !types.includes("string")) {
+    return false;
+  }
+  if (object.const !== undefined && object.const !== value) {
+    return false;
+  }
+  if (Array.isArray(object.enum) && !object.enum.includes(value)) {
+    return false;
+  }
+  if (typeof object.minLength === "number" && value.length < object.minLength) {
+    return false;
+  }
+  if (typeof object.maxLength === "number" && value.length > object.maxLength) {
+    return false;
+  }
+  if (typeof object.pattern === "string") {
+    try {
+      if (!new RegExp(object.pattern).test(value)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  if (object.allOf?.some((candidate) => !propertyNameSchemaAllows(candidate, value))) {
+    return false;
+  }
+  if (
+    object.anyOf &&
+    !object.anyOf.some((candidate) => propertyNameSchemaAllows(candidate, value))
+  ) {
+    return false;
+  }
+  if (
+    object.oneOf &&
+    object.oneOf.filter((candidate) => propertyNameSchemaAllows(candidate, value)).length !== 1
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Classify one already-parsed path segment without losing dots inside record keys. */
+export function classifyConfigSchemaPathSegment(
+  response: ConfigSchemaResponse,
+  parentParts: readonly string[],
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  let current = asSchemaObject(response.schema);
+  if (!current) {
+    return null;
+  }
+  for (const parentPart of parentParts) {
+    const next = resolveLookupChildSchema(current, parentPart);
+    if (!next) {
+      return null;
+    }
+    current = next;
+  }
+  return classifyLookupChildSchema(current, segment);
 }
 
 function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {

@@ -12,8 +12,10 @@ type AcpSessionIdentifiersRuntime = typeof import("@openclaw/acp-core/runtime/se
 type DeliveryRuntime = typeof import("./delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./cli-compaction.js");
+type AgentRunnerMemoryRuntime = typeof import("../../auto-reply/reply/agent-runner-memory.js");
 type TranscriptResolveRuntime =
   typeof import("../../config/sessions/transcript-resolve.runtime.js");
+type TranscriptAppendRuntime = typeof import("../../config/sessions/transcript.runtime.js");
 type CliDepsRuntime = typeof import("../../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("../exec-defaults.js");
 type SkillsRuntime = {
@@ -45,8 +47,14 @@ const sessionStoreRuntimeLoader = createLazyImportLoader<SessionStoreRuntime>(
 const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
   () => import("./cli-compaction.js"),
 );
+const agentRunnerMemoryRuntimeLoader = createLazyImportLoader<AgentRunnerMemoryRuntime>(
+  () => import("../../auto-reply/reply/agent-runner-memory.js"),
+);
 const transcriptResolveRuntimeLoader = createLazyImportLoader<TranscriptResolveRuntime>(
   () => import("../../config/sessions/transcript-resolve.runtime.js"),
+);
+const transcriptAppendRuntimeLoader = createLazyImportLoader<TranscriptAppendRuntime>(
+  () => import("../../config/sessions/transcript.runtime.js"),
 );
 const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(
   () => import("../../cli/deps.js"),
@@ -97,8 +105,16 @@ export function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
   return cliCompactionRuntimeLoader.load();
 }
 
+export function loadAgentRunnerMemoryRuntime(): Promise<AgentRunnerMemoryRuntime> {
+  return agentRunnerMemoryRuntimeLoader.load();
+}
+
 export function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
   return transcriptResolveRuntimeLoader.load();
+}
+
+export function loadTranscriptAppendRuntime(): Promise<TranscriptAppendRuntime> {
+  return transcriptAppendRuntimeLoader.load();
 }
 
 export function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {

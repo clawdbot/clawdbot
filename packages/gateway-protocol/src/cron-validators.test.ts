@@ -1,6 +1,9 @@
 // Gateway Protocol tests cover cron validators behavior.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  type CronRunLogEntry,
   validateCronAddParams,
   validateCronGetParams,
   validateCronListParams,
@@ -9,6 +12,7 @@ import {
   validateCronRunsParams,
   validateCronUpdateParams,
 } from "./index.js";
+import { CronAddResultSchema, CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
 
 /**
  * Cron validator regressions for public scheduler RPC payloads.
@@ -45,6 +49,107 @@ describe("cron protocol validators", () => {
     expectCases(validateCronAddParams, true, [minimalAddParams]);
   });
 
+  it("accepts create results with a dry-run delivery preview", () => {
+    const job = {
+      ...minimalAddParams,
+      id: "job-1",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      state: {},
+    };
+    const deliveryPreview = {
+      label: "announce -> last",
+      detail: "last -> no route, will fail-closed",
+    };
+    expect(Value.Check(CronAddResultSchema, job)).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { ...job, deliveryPreview })).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { created: true, job, deliveryPreview })).toBe(true);
+    expect(
+      Value.Check(CronAddResultSchema, { ...job, deliveryPreview: { label: "announce" } }),
+    ).toBe(false);
+  });
+
+  it("reports auto-disable state without accepting it in writable patches", () => {
+    const job = {
+      ...minimalAddParams,
+      id: "job-1",
+      enabled: false,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: {
+          reason: "consecutive-failures",
+          atMs: MAX_DATE_TIMESTAMP_MS,
+          consecutiveErrors: 10,
+        },
+      },
+    };
+    expect(Value.Check(CronJobSchema, job)).toBe(true);
+    expect(
+      Value.Check(CronJobSchema, {
+        ...job,
+        state: {
+          ...job.state,
+          autoDisabled: { ...job.state.autoDisabled, atMs: MAX_DATE_TIMESTAMP_MS + 1 },
+        },
+      }),
+    ).toBe(false);
+    expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
+  });
+
+  it("models the delivery trace returned in cron run history", () => {
+    const entry = {
+      ts: 1,
+      jobId: "job-1",
+      action: "finished",
+      status: "ok",
+      delivery: {
+        intended: { channel: "telegram", to: "chat-1", source: "explicit" },
+        resolved: { channel: "telegram", to: "chat-1", ok: true },
+        messageToolSentTo: [{ channel: "telegram", to: "chat-1", threadId: "topic-1" }],
+        fallbackUsed: false,
+        delivered: true,
+      },
+    } as const satisfies CronRunLogEntry;
+
+    expect(Value.Check(CronRunLogEntrySchema, entry)).toBe(true);
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ...entry,
+        delivery: { ...entry.delivery, unsupported: true },
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["succeeded", "failed", "unknown"] as const)(
+    "accepts additive cron completion status %s",
+    (completionStatus) => {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          completionStatus,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown cron completion status values", () => {
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        completionStatus: "partial",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects client-authored scheduled authority provenance", () => {
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     expectCases(validateCronAddParams, false, [add({ scheduledToolPolicy })]);
@@ -75,6 +180,32 @@ describe("cron protocol validators", () => {
     expectCases(validateCronUpdateParams, false, [
       update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: unsafe } }),
       update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: unsafe } }),
+    ]);
+  });
+
+  it("rejects every schedule numbers outside the ECMAScript Date range", () => {
+    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
+    expectCases(validateCronAddParams, false, [
+      add({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
+      add({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
+      add({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
+    ]);
+    expectCases(validateCronUpdateParams, false, [
+      update({ schedule: { kind: "every", everyMs: invalidTimestamp } }),
+      update({ schedule: { kind: "every", everyMs: 60_000, anchorMs: invalidTimestamp } }),
+      update({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: invalidTimestamp } }),
+    ]);
+  });
+
+  it("rejects mutable scheduler state outside the ECMAScript Date range", () => {
+    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
+    expectCases(validateCronUpdateParams, false, [
+      update({ state: { nextRunAtMs: invalidTimestamp } }),
+      update({ state: { runningAtMs: invalidTimestamp } }),
+      update({ state: { lastRunAtMs: invalidTimestamp } }),
+    ]);
+    expectCases(validateCronUpdateParams, true, [
+      update({ state: { nextRunAtMs: MAX_DATE_TIMESTAMP_MS } }),
     ]);
   });
 
@@ -213,6 +344,29 @@ describe("cron protocol validators", () => {
     ]);
   });
 
+  it("accepts completion webhooks only alongside announce delivery", () => {
+    const completionDestination = {
+      mode: "webhook",
+      to: "https://example.invalid/complete",
+    } as const;
+    expectCases(validateCronAddParams, true, [
+      add({ delivery: { mode: "announce", completionDestination } }),
+    ]);
+    expectCases(validateCronAddParams, false, [
+      add({ delivery: { mode: "none", completionDestination } }),
+      add({ delivery: { mode: "webhook", to: "https://example.invalid", completionDestination } }),
+      add({ delivery: { mode: "announce", completionDestination: null } }),
+    ]);
+    expectCases(validateCronUpdateParams, true, [
+      update({ delivery: { completionDestination } }),
+      update({ delivery: { completionDestination: null } }),
+    ]);
+    expectCases(validateCronUpdateParams, false, [
+      update({ delivery: { completionDestination: {} } }),
+      update({ delivery: { completionDestination: { mode: "announce", to: "https://x.test" } } }),
+    ]);
+  });
+
   it("accepts nullable delivery clears on update params", () => {
     expectCases(validateCronUpdateParams, true, [
       update({
@@ -249,6 +403,7 @@ describe("cron protocol validators", () => {
     expectCases(validateCronRunParams, true, [
       { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" },
       { jobId: "job-2", mode: "due" },
+      { jobId: "job-3", mode: "if-enabled" },
     ]);
     expectCases(validateCronRunParams, false, [{ id: "job-1", expectedProcessInstanceId: "" }]);
   });
@@ -263,6 +418,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -275,6 +431,7 @@ describe("cron protocol validators", () => {
       { agentId: "" },
       { scheduleKind: "yearly" },
       { lastRunStatus: "pending" },
+      { trigger: "configured" },
     ]);
   });
 

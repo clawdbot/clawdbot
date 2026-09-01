@@ -41,7 +41,7 @@ describe("web_search tool schema", () => {
 
     expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
     expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ error: "provider_error"; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; tookMs?: number } | { content: string; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number } | { data: unknown; kind: "raw"; provider: string }',
+      '{ error: "provider_error"; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; tookMs?: number; truncated?: true } | { content: string; externalContent: { provider: string; source: "web_search"; untrusted: true; wrapped: true }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number; truncated?: true } | { data: unknown; kind: "raw"; provider: string }',
     );
   });
 });

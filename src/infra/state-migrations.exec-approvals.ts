@@ -1,12 +1,15 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err } from "@openclaw/normalization-core/result";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  parsePersistedExecApprovals,
   resolveExecApprovalsPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
-import { resetLegacyExecApprovalsPresenceCache } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -43,6 +46,34 @@ type MigrationDecision =
   | "legacy-imported"
   | "malformed-legacy-preserved"
   | "receipt-authoritative";
+
+function normalizeLegacyNullableUsageMetadata(raw: string): string {
+  const parsed = safeParseJsonRecord(raw);
+  if (!parsed || !isRecord(parsed.agents)) {
+    return raw;
+  }
+
+  let changed = false;
+  for (const agent of Object.values(parsed.agents)) {
+    if (!isRecord(agent) || !Array.isArray(agent.allowlist)) {
+      continue;
+    }
+    for (const entry of agent.allowlist) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      // Legacy files can contain null usage metadata. Repair only these fields at
+      // import so canonical policy validation remains strict.
+      for (const key of ["lastUsedAt", "lastUsedCommand"]) {
+        if (entry[key] === null) {
+          delete entry[key];
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? JSON.stringify(parsed) : raw;
+}
 
 /** Detect retired approvals only when an explicit Doctor flow opts in. */
 export function detectLegacyExecApprovals(params: {
@@ -83,12 +114,15 @@ function decideAndRecordMigration(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
-}): { decision: MigrationDecision; removeSource: boolean; sourceKey: string } {
+}): { message: string; removeSource: boolean; sourceKey: string } {
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
-  const legacyFile =
-    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+  const legacy =
+    params.snapshot.raw === null
+      ? err<never, string>("invalid UTF-8 encoding")
+      : parsePersistedExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
+  const legacyFile = legacy.ok ? legacy.value : null;
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -183,7 +217,12 @@ function decideAndRecordMigration(params: {
         reportJson,
         upsert: true,
       });
-      return { decision, removeSource, sourceKey };
+      const message =
+        decisionMessage(decision, removeSource) +
+        (legacy.ok
+          ? ""
+          : ` First problem: ${legacy.error}. Repair exec-approvals.json locally, then rerun \`openclaw doctor --fix\` with the same OPENCLAW_STATE_DIR.`);
+      return { message, removeSource, sourceKey };
     },
     { env: params.env },
     { operationLabel: "state-migration.exec-approvals" },
@@ -291,7 +330,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     return {
       changes: [],
       warnings: [
-        `${decisionMessage(result.decision, result.removeSource)}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
+        `${result.message}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
       ],
     };
   }
@@ -321,9 +360,8 @@ async function migrateWithExclusiveStateOwnership(params: {
       `Legacy exec approvals were removed, but their receipt could not be finalized: ${String(error)}`,
     );
   }
-  resetLegacyExecApprovalsPresenceCache(params.env);
   return {
-    changes: [decisionMessage(result.decision, result.removeSource)],
+    changes: [result.message],
     warnings,
     notices: ["Removed retired exec approvals JSON after recording its migration decision."],
   };

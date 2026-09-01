@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  loadBundledPluginPublicSurface,
+  loadBundledPluginFacade,
   resolveBundledPluginPublicModulePath,
 } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled.js";
@@ -186,7 +186,7 @@ function isMissingBundledDirectoryContractArtifact(error: unknown, id: ChannelId
 async function loadBundledChannelDirectoryContractSurface(
   id: ChannelId,
 ): Promise<ChannelDirectoryContractModule> {
-  return await loadBundledPluginPublicSurface<ChannelDirectoryContractModule>({
+  return await loadBundledPluginFacade<ChannelDirectoryContractModule>({
     pluginId: id,
     artifactBasename: "directory-contract-api.js",
   }).catch((error: unknown) => {
@@ -236,7 +236,7 @@ export async function getBundledChannelPluginAsync(
 
   // Cache both resolved plugins and in-flight loads so sharded contract suites
   // do not repeatedly import the same generated plugin artifact.
-  const loading = loadBundledPluginPublicSurface<ChannelPluginApiModule>({
+  const loading = loadBundledPluginFacade<ChannelPluginApiModule>({
     pluginId: id,
     artifactBasename: "channel-plugin-api.js",
   })
@@ -318,7 +318,7 @@ async function getOptionalBundledChannelArtifactAsync<T extends object>(
   id: ChannelId,
   artifactBasename: string,
 ): Promise<T | null> {
-  return await loadBundledPluginPublicSurface<T>({
+  return await loadBundledPluginFacade<T>({
     pluginId: id,
     artifactBasename,
   }).catch((error: unknown) => {

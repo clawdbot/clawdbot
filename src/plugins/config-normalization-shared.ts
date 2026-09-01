@@ -237,7 +237,7 @@ function normalizePluginEntries(
 }
 
 /** Normalizes plugin config while allowing callers to resolve aliases first. */
-export function normalizePluginsConfigWithResolver(
+export function normalizePluginsConfigWithResolverCore(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
@@ -255,44 +255,19 @@ export function normalizePluginsConfigWithResolver(
   };
 }
 
-export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): boolean {
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  return false;
-}
-
 export function isBundledChannelEnabledByChannelConfig(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
 ): boolean {
-  if (!cfg) {
+  const channels = cfg?.channels as Record<string, unknown> | undefined;
+  if (!channels) {
     return false;
   }
   const channelId = normalizeChatChannelId(pluginId);
   if (!channelId) {
     return false;
   }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
+  const entry = channels[channelId];
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }

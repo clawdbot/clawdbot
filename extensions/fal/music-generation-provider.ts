@@ -106,11 +106,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_MUSIC_MODEL,
     models: [...FAL_MUSIC_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,

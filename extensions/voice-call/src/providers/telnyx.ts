@@ -120,6 +120,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       reason: result.reason,
       isReplay: result.isReplay,
       verifiedRequestKey: result.verifiedRequestKey,
+      releaseReplay: result.releaseReplay,
     };
   }
 
@@ -192,15 +193,20 @@ export class TelnyxProvider implements VoiceCallProvider {
           text: data.payload?.text || "",
         };
 
-      case "call.transcription":
+      case "call.transcription": {
+        const transcript =
+          data.payload?.transcription_data?.transcript ?? data.payload?.transcription ?? "";
+        if (!transcript.trim()) {
+          return null;
+        }
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript:
-            data.payload?.transcription_data?.transcript ?? data.payload?.transcription ?? "",
+          transcript,
           isFinal: data.payload?.transcription_data?.is_final ?? data.payload?.is_final ?? true,
           confidence: data.payload?.transcription_data?.confidence ?? data.payload?.confidence,
         };
+      }
 
       case "call.hangup":
         return {

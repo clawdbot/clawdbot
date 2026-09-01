@@ -27,9 +27,19 @@ import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./stor
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-/** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
+/** Default per-file media-store byte cap used by store and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
+
+// The outgoing tree is owned by the SQLite managed-media reaper: originals
+// there are referenced by durable chat-history records, and the legacy
+// records/*.json files are the pre-SQLite migration barrier. An mtime-only
+// sweep would delete both out from under that reaper.
+const MANAGED_OUTGOING_SUBDIR = "outgoing";
+const OUTBOUND_STAGING_SUBDIR = "outbound";
+// Match delivery-queue orphan grace: staged files get a full day to reach
+// every direct, streamed, fan-out, or queue-owned delivery path.
+const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
@@ -78,7 +88,7 @@ function resolveMediaSubdir(subdir: string, caller: string): string {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`${caller}: unsafe media subdir: ${JSON.stringify(subdir)}`);
   }
-  return path.join(...segments);
+  return path.posix.join(...segments);
 }
 
 function resolveMediaScopedDir(subdir: string, caller: string): string {
@@ -96,7 +106,7 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
     throw new Error(`${caller}: unsafe media ID: ${JSON.stringify(id)}`);
   }
   const safeSubdir = resolveMediaSubdir(subdir, caller);
-  return safeSubdir ? path.join(safeSubdir, id) : id;
+  return safeSubdir ? path.posix.join(safeSubdir, id) : id;
 }
 
 function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
@@ -165,7 +175,9 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function isMissingPathError(err: unknown): boolean {
+function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
+  // Recursive mkdir repairs only the ENOENT race where cleanup pruned the directory.
+  // Structural ENOTDIR and generic fs-safe absence remain terminal diagnostics.
   return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
@@ -182,7 +194,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: isMissingPathError,
+      shouldRetry: hasRecoverableMissingMediaDirCause,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
@@ -237,7 +249,11 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
   await openMediaStore().pruneExpired({ ttlMs, recursive: false, maxDepth: 0 });
   const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === PLAYBACK_TRANSCODE_SUBDIR) {
+    if (
+      !entry.isDirectory() ||
+      entry.name === PLAYBACK_TRANSCODE_SUBDIR ||
+      entry.name === MANAGED_OUTGOING_SUBDIR
+    ) {
       continue;
     }
     const scopedDir = path.join(mediaDir, entry.name);
@@ -290,11 +306,12 @@ async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
   await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
 }
 
-async function prunePlaybackTranscodeCacheRetention(): Promise<void> {
+/** Prunes expired playback renditions and reapplies the fixed cache size budget. */
+export async function prunePlaybackTranscodeCache(): Promise<void> {
   await queuePlaybackCacheOperation(async () => {
     const cacheDir = resolveMediaScopedDir(
       PLAYBACK_TRANSCODE_SUBDIR,
-      "prunePlaybackTranscodeCacheRetention",
+      "prunePlaybackTranscodeCache",
     );
     await openMediaStore(MAX_BYTES, cacheDir).pruneExpired({
       ttlMs: PLAYBACK_TRANSCODE_TTL_MS,
@@ -305,10 +322,21 @@ async function prunePlaybackTranscodeCacheRetention(): Promise<void> {
   });
 }
 
-/** Prunes expired media files, optionally recursing into scoped media subdirectories. */
+/** Prunes stale delivery staging without touching inbound replay or SQLite-owned outgoing media. */
+export async function pruneOutboundMedia(): Promise<void> {
+  const outboundDir = resolveMediaScopedDir(OUTBOUND_STAGING_SUBDIR, "pruneOutboundMedia");
+  await openMediaStore(MAX_BYTES, outboundDir).pruneExpired({
+    ttlMs: OUTBOUND_STAGING_TTL_MS,
+    recursive: true,
+    pruneEmptyDirs: true,
+  });
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
+}
+
+/** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await pruneNonPlaybackMedia(ttlMs, options);
-  await prunePlaybackTranscodeCacheRetention();
   // Trust metadata must not outlive the staged file that it authorizes.
   const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
   await pruneStaleTrustedGeneratedHtmlMarkers();
@@ -446,7 +474,7 @@ async function writeMediaStreamToFile(params: {
   maxBytes: number;
 }): Promise<{ sniffBuffer: Buffer; size: number }> {
   const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
-  const sniffChunks: Buffer[] = [];
+  const sniffBuffer = Buffer.allocUnsafe(16384);
   let sniffLen = 0;
   let total = 0;
   try {
@@ -470,15 +498,14 @@ async function writeMediaStreamToFile(params: {
       if (total > params.maxBytes) {
         throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
       }
-      if (sniffLen < 16384) {
-        const remaining = 16384 - sniffLen;
-        sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
-        sniffLen += Math.min(buffer.byteLength, remaining);
+      if (sniffLen < sniffBuffer.length) {
+        // The next pull may reuse the chunk; retain only the prefix we own.
+        sniffLen += buffer.copy(sniffBuffer, sniffLen);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
-      sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
+      sniffBuffer: sniffBuffer.subarray(0, sniffLen),
       size: total,
     };
   } finally {

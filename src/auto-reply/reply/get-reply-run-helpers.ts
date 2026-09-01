@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -15,7 +15,6 @@ import {
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
 import type { ExecOverrides } from "./get-reply-run.types.js";
 import {
   resolvePersistedPromptProvider,
@@ -92,6 +91,28 @@ export function buildPersistedMediaImageLayout(params: {
   };
 }
 
+/**
+ * Marks prompt-media facts whose original ctx positions are unresolved so every
+ * downstream runner skips them instead of attempting (and failing) hydration.
+ * Uses position identity, not path/URL, so distinct facts sharing the same path
+ * are not conflated.
+ */
+export function suppressUnresolvedPromptMedia(params: {
+  promptMedia: readonly MediaFact[];
+  inboundMediaIndexes: readonly number[];
+  unresolvedSourceIndexes: ReadonlySet<number>;
+}): MediaFact[] {
+  if (params.unresolvedSourceIndexes.size === 0) {
+    return [...params.promptMedia];
+  }
+  return params.promptMedia.map((fact, promptIndex) =>
+    params.inboundMediaIndexes[promptIndex] !== undefined &&
+    params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
+      ? { ...fact, hydrationSuppressed: true }
+      : fact,
+  );
+}
+
 export function routeThreadIdsMatch(
   activeThreadId: string | number | undefined,
   currentThreadId: string | number | undefined,
@@ -110,24 +131,6 @@ export function normalizeMessageTimestampMs(value: unknown): number | undefined 
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
-}
-
-export function projectSkillSuggestionForTurn(
-  entry: SessionEntry | undefined,
-  suggestion: PendingSkillSuggestion | undefined,
-): SessionEntry | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  if (suggestion) {
-    return { ...entry, pendingSkillSuggestion: suggestion };
-  }
-  if (!entry.pendingSkillSuggestion) {
-    return entry;
-  }
-  const projected = { ...entry };
-  delete projected.pendingSkillSuggestion;
-  return projected;
 }
 
 export async function updateRoomEventAmbientTranscriptWatermark(params: {
@@ -178,14 +181,14 @@ export function resolvePromptSilentReplyConversationType(params: {
 export function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
-  ctx?: Pick<MsgContext, "Provider">;
+  ctx?: Pick<MsgContext, "InternalTurnSource">;
   isHeartbeat?: boolean;
 }): TemplateContext {
   const { sessionCtx, sessionEntry } = params;
   const isSystemEvent =
     params.isHeartbeat === true ||
-    isSystemEventProvider(params.ctx?.Provider) ||
-    isSystemEventProvider(sessionCtx.Provider);
+    params.ctx?.InternalTurnSource !== undefined ||
+    sessionCtx.InternalTurnSource !== undefined;
   if (!isSystemEvent || !sessionEntry) {
     return sessionCtx;
   }
@@ -200,14 +203,8 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   const persistedSurface = resolvePersistedPromptSurface(sessionEntry);
   const liveProvider = normalizeOptionalString(sessionCtx.Provider);
   const liveSurface = normalizeOptionalString(sessionCtx.Surface);
-  const nextProvider =
-    liveProvider && !isSystemEventProvider(liveProvider)
-      ? liveProvider
-      : (persistedProvider ?? liveProvider);
-  const nextSurface =
-    liveSurface && !isSystemEventProvider(liveSurface)
-      ? liveSurface
-      : (persistedSurface ?? liveSurface);
+  const nextProvider = liveProvider ?? persistedProvider;
+  const nextSurface = liveSurface ?? persistedSurface;
 
   const next: TemplateContext = { ...sessionCtx };
   let changed = false;
@@ -292,6 +289,14 @@ const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
 
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
+
 export function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();
 }
@@ -302,18 +307,6 @@ export function loadAgentRunnerRuntime() {
 
 export function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-export function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
 }
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {

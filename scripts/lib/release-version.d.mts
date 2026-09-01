@@ -1,4 +1,4 @@
-export type ParsedReleaseVersion = {
+type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
@@ -9,12 +9,14 @@ export type ParsedReleaseVersion = {
   betaNumber?: number;
   correctionNumber?: number;
 };
-export type ReleaseTrain =
+
+type ReleaseTrain =
   | "alpha"
   | "beta"
   | "stable"
   | "extended-stable"
   | "unsupported-extended-stable-correction";
+
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null;
 export function classifyReleaseTrain(parsedVersion: ParsedReleaseVersion): ReleaseTrain;
 export function collectReleaseVersionFloorErrors(

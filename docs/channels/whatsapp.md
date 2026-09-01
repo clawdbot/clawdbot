@@ -123,7 +123,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
   </Accordion>
 
   <Accordion title="Personal-number fallback">
-    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. Runtime self-chat protections key off the linked self number plus `allowFrom`.
+    Onboarding supports personal-number mode and writes a self-chat-friendly baseline: `dmPolicy: "allowlist"`, `allowFrom` including your own number, `selfChatMode: true`. See [Personal-number and self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior) for admission and safeguard rules.
   </Accordion>
 </AccordionGroup>
 
@@ -134,7 +134,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Outbound sends require an active WhatsApp listener for the target account; sends fail fast otherwise.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens (in text and media captions) when the token matches current participant metadata, including LID-backed groups.
 - Status and broadcast chats (`@status`, `@broadcast`) are ignored.
-- Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). Group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
+- Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). With the default `session.groupScope: "per-group"`, group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
 
@@ -274,7 +274,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
 
     - pairings persist in the channel allow-store and merge with configured `allowFrom`
     - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron/heartbeat recipients
-    - if no allowlist is configured, the linked self number is allowed by default
+    - same-number self-DMs are allowed unless `selfChatMode: false` or `dmPolicy: "disabled"`; see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send yourself from the linked device)
 
   </Tab>
@@ -343,7 +343,16 @@ Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowl
 
 ## Personal-number and self-chat behavior
 
-When the linked self number is also present in `allowFrom`, self-chat safeguards activate: skip read receipts for self-chat turns, ignore mention-JID auto-trigger behavior that would ping yourself, and default replies to `[{identity.name}]` (or `[openclaw]`) when the channel/account `responsePrefix` is unset.
+`channels.whatsapp.selfChatMode` controls same-number DM admission and self-chat safeguards. Set it at the channel level or override it per account with `channels.whatsapp.accounts.<id>.selfChatMode`.
+
+- **`true` or unset:** DMs from the linked number to itself are admitted as agent input, even when that number is absent from `allowFrom`. `dmPolicy: "disabled"` still blocks all DMs.
+- **`false`:** self-originated DMs are ignored, even when your number is in `allowFrom`. Other inbound DMs and group messages still follow their access policies; this setting does not make the account outbound-only.
+
+The implicit self-number allowance applies only to DMs, not group allowlists.
+
+Self-chat safeguards are enabled by `true` and disabled by `false`. When the setting is unset, OpenClaw enables them if the linked self number appears in the configured `allowFrom`. These safeguards skip read receipts, suppress native self-mention triggers, and supply an identity reply prefix when no response prefix is configured.
+
+A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
 ## Message normalization and context
 
@@ -388,7 +397,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     { channels: { whatsapp: { sendReadReceipts: false } } }
     ```
 
-    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat turns skip read receipts even when globally enabled.
+    Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
   </Accordion>
 </AccordionGroup>
@@ -398,6 +407,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
 <AccordionGroup>
   <Accordion title="Text chunking">
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
+    - Markdown is converted before chunks are sent, preserving styles across message boundaries and counting WhatsApp formatting markers toward the limit
     - `channels.whatsapp.streaming.chunkMode = "length" | "newline"`; `newline` prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
 
   </Accordion>
@@ -410,6 +420,7 @@ When the linked self number is also present in `allowFrom`, self-chat safeguards
     - `gifPlayback: true` on video sends enables animated GIF playback
     - `forceDocument`/`asDocument` routes outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp's media compression, preserving the resolved filename and MIME type
     - captions apply to the first media item in a multi-media reply, except PTT voice notes: the audio sends first with no caption, then the caption sends as a separate text message (WhatsApp clients do not render voice-note captions consistently)
+    - when a later captioned reply repeats pending attachments, only attachments accepted by WhatsApp replace their pending copies; unmatched attachments remain queued for delivery
     - media source can be HTTP(S), `file://`, or a local path
 
   </Accordion>
@@ -459,23 +470,18 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 
 ## Acknowledgment reactions
 
-`channels.whatsapp.ackReaction` sends an immediate reaction on inbound receipt, gated by `reactionLevel` (suppressed when `"off"`):
+`messages.ackReaction` sends an immediate reaction on inbound receipt, gated by the active WhatsApp account's `reactionLevel` (suppressed when `"off"`). `messages.ackReactionScope` selects direct messages, groups, or both:
 
 ```json5
 {
-  channels: {
-    whatsapp: {
-      ackReaction: {
-        emoji: "👀",
-        direct: true,
-        group: "mentions", // always | mentions | never
-      },
-    },
+  messages: {
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions", // all | direct | group-all | group-mentions | off
   },
 }
 ```
 
-Notes: sent immediately after inbound is accepted (pre-reply); if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji falling back to "👀" (omit `ackReaction` or set `emoji: ""` for no ack); failures are logged but do not block reply delivery; group mode `mentions` reacts only on mention-triggered turns, while group activation `always` bypasses that check; WhatsApp uses `channels.whatsapp.ackReaction` only (legacy `messages.ackReaction` does not apply here).
+Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups. In a group whose activation is `always`, `"group-mentions"` acks every message rather than only mention-triggered turns, because activation stands in for the mention check.
 
 ## Lifecycle status reactions
 
@@ -491,13 +497,32 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 }
 ```
 
-Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
+Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
+
+## Active-turn typing
+
+For admitted automatic turns where typing is allowed, WhatsApp sends a
+`composing` presence update when agent execution begins and refreshes it while
+the turn remains active. Refreshing stops when the run completes, including
+terminal failure or cancellation. The controller seals and cleans up when the
+reply dispatcher reports idle, or after a short safety timeout if that signal
+does not arrive. Turns for which the existing typing and suppression policy
+disables typing do not start this activity.
+
+Typing presence is ephemeral, best-effort activity feedback. It is not a
+persisted message, delivery receipt, or guarantee that every WhatsApp client
+will display continuous activity; reconnects and client behavior can make the
+indicator disappear. Lifecycle status reactions remain the persistent-looking
+opt-in status surface described above.
 
 ## Multi-account and credentials
 
 <AccordionGroup>
   <Accordion title="Account selection and defaults">
     Account ids come from `channels.whatsapp.accounts`. Default account selection is `default` if present, otherwise the first configured account id (alphabetically sorted). Account ids are normalized internally for lookup.
+
+    Named accounts resolve shared settings in this order: the account, `accounts.default`, then the channel root. This includes `dmPolicy` and `groupPolicy`: omission inherits, while an explicit value wins. With no policy configured, DMs use `pairing` and groups use `allowlist`. The default account's `authDir`, `enabled`, `name`, and `selfChatMode` are not shared with named accounts.
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">
@@ -586,7 +611,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 
@@ -609,7 +634,7 @@ Resolution for direct messages follows the identical pattern against the `direct
 This account-replaces-root behavior for prompt resolution is a plain shallow override: any account `groups`/`direct` key, including an explicit empty object, replaces the root map. It differs from the group-membership allowlist check described above, which has a single-account safety net for an accidentally empty `groups: {}`.
 </Note>
 
-**Difference from Telegram:** Telegram suppresses root `groups` for every account in a multi-account setup (even accounts with no `groups` of their own) to stop a bot receiving group messages for groups it does not belong to. WhatsApp does not apply that guard — root `groups`/`direct` are inherited by any account without its own override, regardless of account count. In a multi-account WhatsApp setup, define the full map under each account explicitly if you want per-account prompts.
+**Difference from Telegram:** Telegram uses the same whole-map account override for `groups` in multi-account configs, but a single account's empty `groups: {}` falls back to root groups as a migration safety net. Telegram's `direct` map also has separate DM-topic semantics. In WhatsApp—or for one account among several Telegram accounts—use an explicit empty `groups: {}` when that account should not inherit root group defaults.
 
 Important behavior:
 
@@ -665,10 +690,11 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
 | Access           | `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`                                             |
-| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`      |
+| Delivery         | `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `reactionLevel`                     |
 | Multi-account    | `accounts.<id>.enabled`, `accounts.<id>.authDir`, and other per-account overrides                              |
 | Operations       | `configWrites`, `enabled`                                                                                      |
 | Inbound batching | `messages.inbound.debounceMs`, `messages.inbound.byChannel.whatsapp`                                           |
+| Acknowledgments  | `messages.ackReaction`, `messages.ackReactionScope`                                                            |
 | Session behavior | `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`                                   |
 | Prompts          | `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt` |
 

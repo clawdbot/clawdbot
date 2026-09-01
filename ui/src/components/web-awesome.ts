@@ -71,10 +71,13 @@ function labelDropdownMenu(dropdown: HTMLElement) {
 const dropdownLabelObservers = new WeakMap<HTMLElement, MutationObserver>();
 
 function startDropdownLabelSync(event: Event) {
-  const dropdown = event.target;
+  // Document listeners otherwise see the containing component's shadow host.
+  const dropdown = event.composedPath()[0];
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
+  // Reopening must restore the menu before Web Awesome moves focus into it.
+  dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.removeAttribute("inert");
   labelDropdownMenu(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
   if (typeof MutationObserver === "undefined") {
@@ -93,8 +96,27 @@ function startDropdownLabelSync(event: Event) {
   dropdownLabelObservers.set(dropdown, observer);
 }
 
+function disableClosingDropdownMenu(event: Event) {
+  const dropdown = event.composedPath()[0];
+  if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
+    return;
+  }
+  // Later document listeners may still cancel the hide. Its final outcome is
+  // known in the next microtask, before a native Tab can enter the fading menu.
+  queueMicrotask(() => {
+    if (
+      event.defaultPrevented ||
+      !dropdown.isConnected ||
+      (dropdown as HTMLElement & { open?: boolean }).open
+    ) {
+      return;
+    }
+    dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.setAttribute("inert", "");
+  });
+}
+
 function stopDropdownLabelSync(event: Event) {
-  const dropdown = event.target;
+  const dropdown = event.composedPath()[0];
   if (!(dropdown instanceof HTMLElement) || dropdown.localName !== "wa-dropdown") {
     return;
   }
@@ -104,5 +126,6 @@ function stopDropdownLabelSync(event: Event) {
 
 if (typeof document !== "undefined") {
   document.addEventListener("wa-show", startDropdownLabelSync);
+  document.addEventListener("wa-hide", disableClosingDropdownMenu);
   document.addEventListener("wa-after-hide", stopDropdownLabelSync);
 }

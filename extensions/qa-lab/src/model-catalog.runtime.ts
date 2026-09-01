@@ -4,6 +4,7 @@ import path from "node:path";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { splitQaModelRef } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import {
   isPreferredQaLiveFrontierCatalogModel,
@@ -33,22 +34,11 @@ export type QaRunnerModelOption = {
   preferred: boolean;
 };
 
-function splitModelKey(key: string) {
-  const slash = key.indexOf("/");
-  if (slash <= 0 || slash === key.length - 1) {
-    return null;
-  }
-  return {
-    provider: key.slice(0, slash),
-    model: key.slice(slash + 1),
-  };
-}
-
 function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
   const options = rows
     .filter((row) => row.available === true && !row.missing)
     .map((row) => {
-      const parsed = splitModelKey(row.key);
+      const parsed = splitQaModelRef(row.key);
       return {
         key: row.key,
         name: row.name,

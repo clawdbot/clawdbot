@@ -1,8 +1,11 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { AgentOwnershipSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
+import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionPersonSchema } from "./session-participant.js";
 
 /**
  * Gateway state snapshot schemas.
@@ -18,26 +21,32 @@ export const PresenceEntrySchema = closedObject({
   platform: Type.Optional(NonEmptyString),
   deviceFamily: Type.Optional(NonEmptyString),
   modelIdentifier: Type.Optional(NonEmptyString),
+  timeZone: Type.Optional(NonEmptyString),
   mode: Type.Optional(NonEmptyString),
   lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   reason: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   text: Type.Optional(Type.String()),
+  /** Heartbeat freshness, not online duration or user activity. */
   ts: Type.Integer({ minimum: 0 }),
+  /** Server timestamps for the person's continuous online interval and last accepted activity. */
+  onlineSince: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
   deviceId: Type.Optional(NonEmptyString),
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
   instanceId: Type.Optional(NonEmptyString),
   user: Type.Optional(
     closedObject({
-      /** Opaque identity key: authenticated email today, durable profile id later. Clients group presence by this. */
+      /** Canonical profile id when resolved, otherwise authenticated identity; grouping also uses identity qualification. */
       id: NonEmptyString,
+      identity: Type.Optional(SessionPersonSchema.properties.identity),
       email: Type.Optional(NonEmptyString),
       name: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),
     }),
   ),
-  /** Session keys this connection is actively subscribed to (watching). Sorted lexicographically for deterministic snapshots. */
+  /** Sessions this connection declares it is viewing, independent of transport subscriptions. Sorted lexicographically. */
   watchedSessions: Type.Optional(Type.Array(NonEmptyString)),
 });
 
@@ -62,6 +71,7 @@ const HealthSnapshotSchema = closedObject({
   eventLoop: Type.Optional(
     closedObject({
       degraded: Type.Boolean(),
+      degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
       reasons: Type.Array(
         Type.Union([
           Type.Literal("event_loop_delay"),
@@ -127,6 +137,29 @@ const HealthSnapshotSchema = closedObject({
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
       ),
+      ingressFailed: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            count: Type.Integer({ minimum: 0 }),
+            oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          }),
+        ),
+      ),
+      ingressPressure: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            laneCount: Type.Integer({ minimum: 0 }),
+            pendingCount: Type.Integer({ minimum: 0 }),
+            claimedCount: Type.Integer({ minimum: 0 }),
+            blockedCount: Type.Integer({ minimum: 0 }),
+            oldestReceivedAt: Type.Integer({ minimum: 0 }),
+          }),
+        ),
+      ),
     }),
   ),
   modelPricing: Type.Optional(
@@ -174,6 +207,7 @@ const HealthSnapshotSchema = closedObject({
           prompt: Type.String(),
           target: Type.String(),
           model: Type.Optional(Type.String()),
+          session: Type.Optional(Type.String()),
           ackMaxChars: Type.Integer({ minimum: 0 }),
         }),
         sessions: HealthSessionSummarySchema,
@@ -186,6 +220,9 @@ const HealthSnapshotSchema = closedObject({
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
   defaultAgentId: NonEmptyString,
+  modelConfigured: Type.Optional(Type.Boolean()),
+  ownership: Type.Optional(AgentOwnershipSchema),
+  selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   mainSessionKey: NonEmptyString,
   scope: Type.Optional(NonEmptyString),
@@ -216,13 +253,8 @@ export const SnapshotSchema = closedObject({
       Type.Literal("trusted-proxy"),
     ]),
   ),
-  updateAvailable: Type.Optional(
-    Type.Object({
-      currentVersion: NonEmptyString,
-      latestVersion: NonEmptyString,
-      channel: NonEmptyString,
-    }),
-  ),
+  updateAvailable: Type.Optional(UpdateAvailableSchema),
+  updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

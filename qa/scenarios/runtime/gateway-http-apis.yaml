@@ -1,0 +1,32 @@
+title: Gateway HTTP APIs
+
+scenario:
+  id: gateway-http-apis
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.openai-compatible-apis
+      - gateway.tool-invocation-api
+      - gateway.hook-ingress
+  objective: Verify the Gateway's public HTTP boundaries over real TCP with deterministic agent, embedding, tool, and hook outcomes.
+  successCriteria:
+    - The models, chat completions, responses, and embeddings routes return deterministic OpenAI-compatible results, including agent dispatch and a real local embedding provider fixture.
+    - The tool invocation route executes the real agents_list tool and rejects a malformed request.
+    - Hook ingress rejects a missing token without side effects and records an authenticated wake as a real system event.
+  docsRefs:
+    - docs/gateway/openai-http-api.md
+    - docs/gateway/openresponses-http-api.md
+    - docs/gateway/tools-invoke-http-api.md
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/gateway/models-http.ts
+    - src/gateway/openai-http.ts
+    - src/gateway/openresponses-http.ts
+    - src/gateway/embeddings-http.ts
+    - src/gateway/tools-invoke-http.ts
+    - src/gateway/server/hooks.ts
+    - test/e2e/qa-lab/runtime/gateway-http-apis.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-http-apis.e2e.test.ts
+    summary: Starts the full Gateway and proves its OpenAI-compatible, tool invocation, and hook ingress HTTP APIs over real TCP.

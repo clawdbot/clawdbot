@@ -10,7 +10,9 @@ export {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   listMemoryFiles,
+  matchesExtraMemoryPathEntry,
   MEMORY_CHUNKING_VERSION,
+  normalizeExtraMemoryPathEntries,
   normalizeProjectAnnotationKey,
   normalizeExtraMemoryPaths,
   parseEmbedding,
@@ -22,6 +24,7 @@ export {
   type CuratedProjectAnnotations,
   type MemoryChunk,
   type MemoryFileEntry,
+  type NormalizedExtraMemoryPath,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
 export { isTransientMemoryReadError, retryTransientMemoryRead } from "./host/read-retry.js";
@@ -30,18 +33,21 @@ export {
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   DEFAULT_MEMORY_READ_MAX_CHARS,
+  type LegacyMemoryReadResult,
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
-export { resolveMemorySearchStaleness } from "./host/types.js";
-export type {
-  ResolvedMemoryBackendConfig,
-  ResolvedQmdConfig,
-  ResolvedQmdMcporterConfig,
-} from "./host/backend-config.js";
+export {
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
+  resolveMemoryIndexIdentityReason,
+  resolveMemorySearchStaleness,
+} from "./host/types.js";
+export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
+  MemoryExtraPath,
   MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -52,6 +58,7 @@ export type {
   MemorySource,
   MemorySyncParams,
   MemorySyncProgressUpdate,
+  MemoryVectorIndexState,
 } from "./host/types.js";
 export {
   dropMemoryPathFtsTriggers,

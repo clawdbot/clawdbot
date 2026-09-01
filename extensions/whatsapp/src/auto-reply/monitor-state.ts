@@ -1,9 +1,20 @@
 // Whatsapp plugin module implements monitor state behavior.
 import {
-  createConnectedChannelStatusPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { WebChannelHealthState, WebChannelStatus } from "./types.js";
+
+const LIFECYCLE_BY_HEALTH_STATE = {
+  starting: "starting",
+  healthy: "ready",
+  stale: "recovering",
+  reconnecting: "recovering",
+  conflict: "blocked",
+  "logged-out": "blocked",
+  stopped: "blocked", // Retry exhaustion is terminal; manual stops bypass this mapping.
+} satisfies Record<WebChannelHealthState, NonNullable<WebChannelStatus["lifecycle"]>>;
 
 function cloneStatus(status: WebChannelStatus): WebChannelStatus {
   return {
@@ -31,6 +42,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     busy: false,
     lastRunActivityAt: null,
     healthState: "starting",
+    lifecycle: "starting",
   };
 
   const emit = () => {
@@ -41,16 +53,14 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     emit,
     snapshot: () => status,
     noteConnected(at = Date.now()) {
-      Object.assign(status, createConnectedChannelStatusPatch(at));
+      Object.assign(status, channelReadyPatch({ lastConnectedAt: at, lastEventAt: at }));
       Object.assign(status, createTransportActivityStatusPatch(at));
       if (lastDisconnectWasWatchdogRecovery) {
         status.lastDisconnect = null;
         status.reconnectAttempts = 0;
         lastDisconnectWasWatchdogRecovery = false;
       }
-      status.lastError = null;
       status.healthState = "healthy";
-      status.terminalDisconnect = undefined;
       emit();
     },
     noteInbound(at = Date.now()) {
@@ -60,6 +70,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       Object.assign(status, createTransportActivityStatusPatch(at));
       if (status.connected) {
         status.healthState = "healthy";
+        status.lifecycle = "ready";
       }
       emit();
     },
@@ -78,6 +89,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.lastRunActivityAt = at;
       if (status.connected && busy) {
         status.healthState = "healthy";
+        status.lifecycle = "ready";
       }
       emit();
     },
@@ -85,6 +97,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.lastEventAt = at;
       if (status.connected) {
         status.healthState = "stale";
+        status.lifecycle = "recovering";
       }
       emit();
     },
@@ -114,16 +127,21 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.lastError = params.error ?? null;
       status.reconnectAttempts = params.reconnectAttempts;
       status.healthState = params.healthState;
+      status.lifecycle = LIFECYCLE_BY_HEALTH_STATE[params.healthState];
       emit();
     },
     markStopped(at = Date.now()) {
-      status.running = false;
-      status.connected = false;
-      status.lastEventAt = at;
-      status.terminalDisconnect =
-        status.healthState === "logged-out" || status.healthState === "conflict";
+      const terminalDisconnect = status.lifecycle === "blocked";
       if (!isTerminalHealthState(status.healthState)) {
+        Object.assign(status, channelStoppedPatch({ lastEventAt: at, terminalDisconnect }));
         status.healthState = "stopped";
+      } else {
+        Object.assign(status, {
+          running: false,
+          connected: false,
+          lastEventAt: at,
+          terminalDisconnect,
+        });
       }
       emit();
     },

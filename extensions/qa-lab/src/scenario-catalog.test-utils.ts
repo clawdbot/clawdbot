@@ -32,6 +32,20 @@ export function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScena
   return scenario;
 }
 
+export function readFlowAssertExpression(action: unknown): string {
+  if (!action || typeof action !== "object" || !("assert" in action)) {
+    return "";
+  }
+  const assertion = action.assert;
+  if (typeof assertion === "string") {
+    return assertion;
+  }
+  if (!assertion || typeof assertion !== "object" || !("expr" in assertion)) {
+    return "";
+  }
+  return typeof assertion.expr === "string" ? assertion.expr : "";
+}
+
 export function flowContainsCall(value: unknown, callName: string): boolean {
   if (Array.isArray(value)) {
     return value.some((entry) => flowContainsCall(entry, callName));

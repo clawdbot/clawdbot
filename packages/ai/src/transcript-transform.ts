@@ -1,6 +1,5 @@
-// Package-owned transcript transform used by providers and the inert transport host.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
 import type {
   Api,
   AssistantMessage,
@@ -9,42 +8,27 @@ import type {
   Model,
   TextContent,
   ToolCall,
-  ToolResultMessage,
 } from "./types.js";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
 
-function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return (
-    isRecord(block) &&
-    block.type === "image" &&
-    typeof block.data === "string" &&
-    block.data.trim().length > 0
-  );
-}
-
 function replaceImagesWithPlaceholder(
   content: (TextContent | ImageContent)[],
   placeholder: string,
-): TextContent[] {
-  const result: TextContent[] = [];
-  let previousWasPlaceholder = false;
+): (TextContent | ImageContent)[] {
+  const result: (TextContent | ImageContent)[] = [];
 
   for (const block of content) {
-    if (block.type === "image") {
-      if (!isImageWithMediaPayload(block)) {
-        continue;
-      }
-      if (!previousWasPlaceholder) {
-        result.push({ type: "text", text: placeholder });
-      }
-      previousWasPlaceholder = true;
+    if (block.type !== "image") {
+      result.push(block);
       continue;
     }
-
-    result.push(block);
-    previousWasPlaceholder = block.text === placeholder;
+    const previous = result.at(-1);
+    const repeated = previous?.type === "text" && previous.text === placeholder;
+    if (isImageWithMediaPayload(block) && !repeated) {
+      result.push({ type: "text", text: placeholder });
+    }
   }
 
   return result;
@@ -58,216 +42,136 @@ function downgradeUnsupportedImages<TApi extends Api>(
     return messages;
   }
 
-  return messages.map((msg) => {
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      return {
-        ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
-      };
+  return messages.map((message) => {
+    if (message.role === "assistant" || typeof message.content === "string") {
+      return message;
     }
-
-    if (msg.role === "toolResult") {
-      return {
-        ...msg,
-        content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
-      };
-    }
-
-    return msg;
+    const placeholder =
+      message.role === "user"
+        ? NON_VISION_USER_IMAGE_PLACEHOLDER
+        : NON_VISION_TOOL_IMAGE_PLACEHOLDER;
+    return { ...message, content: replaceImagesWithPlaceholder(message.content, placeholder) };
   });
 }
 
-/**
- * Normalize tool call ID for cross-provider compatibility.
- * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
- * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
- */
+function transformAssistant<TApi extends Api>(
+  message: AssistantMessage,
+  model: Model<TApi>,
+  toolCallIdMap: Map<string, string>,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): AssistantMessage {
+  const replayMode = resolveModelBoundThinkingReplayMode({
+    source: {
+      provider: message.provider,
+      api: message.api,
+      modelId: message.model,
+      responseModelId: message.responseModel,
+    },
+    target: {
+      provider: model.provider,
+      api: model.api,
+      modelId: model.id,
+      modelParams: model.params,
+    },
+  });
+  const sameModel =
+    replayMode === "preserve" ||
+    (message.provider === model.provider &&
+      message.api === model.api &&
+      message.model === model.id);
+  const blocks =
+    typeof message.content === "string"
+      ? [{ type: "text" as const, text: message.content }]
+      : message.content;
+  const content = blocks.flatMap((block) => {
+    if (block.type === "thinking") {
+      if (replayMode === "drop") {
+        return [];
+      }
+      if (block.redacted) {
+        return sameModel ? block : [];
+      }
+      if (sameModel && block.thinkingSignature) {
+        return block;
+      }
+      if (!block.thinking?.trim()) {
+        return [];
+      }
+      return sameModel ? block : { type: "text" as const, text: block.thinking };
+    }
+    if (block.type === "text") {
+      return sameModel ? block : { type: "text" as const, text: block.text };
+    }
+    const { thoughtSignature: _, ...unsigned } = block;
+    // Pairing uses these IDs as shared keys, before model-specific normalization runs.
+    const trimmedId = block.id.trim();
+    if (sameModel) {
+      return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
+    }
+    const id = normalizeToolCallId?.(trimmedId, model, message) ?? trimmedId;
+    if (id !== trimmedId) {
+      toolCallIdMap.set(trimmedId, id);
+    }
+    return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
+  });
+  return { ...message, content };
+}
+
 export function transformMessages<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 ): Message[] {
-  // Build a map of original tool call IDs to normalized IDs
   const toolCallIdMap = new Map<string, string>();
-  const normalizedMessages = messages.map((msg) =>
-    msg.content == null ? { ...msg, content: [] } : msg,
+  const normalized = messages.map((message) =>
+    message.content == null ? Object.assign({}, message, { content: [] }) : message,
   );
-  const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
-
-  // First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
-  const transformed = imageAwareMessages.map((msg) => {
-    // User messages pass through unchanged
-    if (msg.role === "user") {
-      return msg;
+  const transformed = downgradeUnsupportedImages(normalized, model).map((message) => {
+    if (message.role === "assistant") {
+      return transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
     }
-
-    // Handle toolResult messages - normalize toolCallId if we have a mapping
-    if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
-      if (normalizedId && normalizedId !== msg.toolCallId) {
-        return Object.assign({}, msg, { toolCallId: normalizedId });
-      }
-      return msg;
+    if (message.role !== "toolResult") {
+      return message;
     }
-
-    // Assistant messages need transformation check
-    if (msg.role === "assistant") {
-      const assistantMsg = msg;
-      const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
-        source: {
-          provider: assistantMsg.provider,
-          api: assistantMsg.api,
-          modelId: assistantMsg.model,
-          responseModelId: assistantMsg.responseModel,
-        },
-        target: {
-          provider: model.provider,
-          api: model.api,
-          modelId: model.id,
-          modelParams: model.params,
-        },
-      });
-      const isSameModel =
-        modelBoundThinkingReplayMode === "preserve" ||
-        (assistantMsg.provider === model.provider &&
-          assistantMsg.api === model.api &&
-          assistantMsg.model === model.id);
-
-      // Public plugin-sdk/llm exports transformMessages; keep accepting legacy
-      // assistant strings from external provider adapters even though session
-      // JSONL replay normalizes them at ingest.
-      const contentBlocks =
-        typeof assistantMsg.content === "string"
-          ? [{ type: "text" as const, text: assistantMsg.content }]
-          : assistantMsg.content;
-
-      const transformedContent = contentBlocks.flatMap((block) => {
-        if (block.type === "thinking") {
-          if (modelBoundThinkingReplayMode === "drop") {
-            return [];
-          }
-          // Redacted thinking is opaque encrypted content, only valid for the same model.
-          // Drop it for cross-model to avoid API errors.
-          if (block.redacted) {
-            return isSameModel ? block : [];
-          }
-          // For same model: keep thinking blocks with signatures (needed for replay)
-          // even if the thinking text is empty (OpenAI encrypted reasoning)
-          if (isSameModel && block.thinkingSignature) {
-            return block;
-          }
-          // Skip empty thinking blocks, convert others to plain text
-          if (!block.thinking || block.thinking.trim() === "") {
-            return [];
-          }
-          if (isSameModel) {
-            return block;
-          }
-          return {
-            type: "text" as const,
-            text: block.thinking,
-          };
-        }
-
-        if (block.type === "text") {
-          if (isSameModel) {
-            return block;
-          }
-          return {
-            type: "text" as const,
-            text: block.text,
-          };
-        }
-
-        if (block.type === "toolCall") {
-          const toolCall = block;
-          let normalizedToolCall: ToolCall = toolCall;
-
-          if (!isSameModel && toolCall.thoughtSignature) {
-            normalizedToolCall = Object.assign({}, toolCall);
-            delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
-          }
-
-          if (!isSameModel && normalizeToolCallId) {
-            const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
-            if (normalizedId !== toolCall.id) {
-              toolCallIdMap.set(toolCall.id, normalizedId);
-              normalizedToolCall = Object.assign({}, normalizedToolCall, { id: normalizedId });
-            }
-          }
-
-          return normalizedToolCall;
-        }
-
-        return block;
-      });
-
-      return Object.assign({}, assistantMsg, { content: transformedContent });
-    }
-    return msg;
+    const trimmedId = message.toolCallId.trim();
+    const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+    return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
 
-  // Second pass: insert synthetic empty tool results for orphaned tool calls
-  // This preserves thinking signatures and satisfies API requirements
   const result: Message[] = [];
   let pendingToolCalls: ToolCall[] = [];
   let existingToolResultIds = new Set<string>();
-  const insertSyntheticToolResults = () => {
-    if (pendingToolCalls.length > 0) {
-      for (const tc of pendingToolCalls) {
-        if (!existingToolResultIds.has(tc.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: tc.id,
-            toolName: tc.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          } as ToolResultMessage);
-        }
+  const flushToolCalls = () => {
+    for (const call of pendingToolCalls) {
+      if (!existingToolResultIds.has(call.id)) {
+        result.push({
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: [{ type: "text", text: "No result provided" }],
+          isError: true,
+          timestamp: Date.now(),
+        });
       }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
     }
+    pendingToolCalls = [];
+    existingToolResultIds = new Set();
   };
 
-  for (const msg of transformed) {
-    if (msg.role === "assistant") {
-      // If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
-      insertSyntheticToolResults();
-
-      // Skip errored/aborted assistant messages entirely.
-      // These are incomplete turns that shouldn't be replayed:
-      // - May have partial content (reasoning without message, incomplete tool calls)
-      // - Replaying them can cause API errors (e.g., OpenAI "reasoning without following item")
-      // - The model should retry from the last valid state
-      const assistantMsg = msg as AssistantMessage;
-      if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+  for (const message of transformed) {
+    if (message.role === "assistant") {
+      flushToolCalls();
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
         continue;
       }
-
-      // Track tool calls from this assistant message
-      const toolCalls = assistantMsg.content.filter((b) => b.type === "toolCall");
-      if (toolCalls.length > 0) {
-        pendingToolCalls = toolCalls;
-        existingToolResultIds = new Set();
-      }
-
-      result.push(msg);
-    } else if (msg.role === "toolResult") {
-      existingToolResultIds.add(msg.toolCallId);
-      result.push(msg);
-    } else if (msg.role === "user") {
-      // User message interrupts tool flow - insert synthetic results for orphaned calls
-      insertSyntheticToolResults();
-      result.push(msg);
+      pendingToolCalls = message.content.filter((block) => block.type === "toolCall");
+    } else if (message.role === "toolResult") {
+      existingToolResultIds.add(message.toolCallId);
     } else {
-      result.push(msg);
+      flushToolCalls();
     }
+    result.push(message);
   }
-
-  // If the conversation ends with unresolved tool calls, synthesize results now.
-  insertSyntheticToolResults();
-
+  flushToolCalls();
   return result;
 }

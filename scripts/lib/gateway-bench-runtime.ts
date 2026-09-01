@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { expectDefined } from "../../packages/normalization-core/src/expect.js";
-import { parseStrictIntegerOption } from "./dev-tooling-safety.ts";
+import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
+import { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;

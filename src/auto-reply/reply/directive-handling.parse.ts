@@ -1,7 +1,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
-import { extractModelDirective } from "../model.js";
+import { extractModelDirective, type ModelSelectionScope } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
@@ -21,7 +22,7 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { extractQueueDirective } from "./queue/directive.js";
-import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
+import type { QueueDropPolicy } from "./queue/types.js";
 
 const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
   think: true,
@@ -96,6 +97,9 @@ export type InlineDirectives = {
   rawModelDirective?: string;
   rawModelProfile?: string;
   rawModelRuntime?: string;
+  modelDirectiveSource?: "alias" | "model";
+  modelScope?: ModelSelectionScope;
+  modelScopeConflict: boolean;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -110,7 +114,7 @@ export type InlineDirectives = {
 };
 
 /** Parses supported inline directives in the same order they are stripped from text. */
-export function parseInlineDirectives(
+export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];
@@ -170,7 +174,7 @@ export function parseInlineDirectives(
   const queue = parseScopedDirective("queue", extractQueueDirective);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: hasAnyDirective ? cleaned : body.trim(),
+    cleaned,
     ...(nativeCommand && hasAnyDirective
       ? {
           nativeCommand: {
@@ -218,6 +222,9 @@ export function parseInlineDirectives(
     rawModelDirective: model.rawModel,
     rawModelProfile: model.rawProfile,
     rawModelRuntime: model.rawRuntime,
+    modelDirectiveSource: model.source,
+    modelScope: model.scope,
+    modelScopeConflict: model.scopeConflict,
     hasQueueDirective: queue.hasDirective,
     queueMode: queue.queueMode,
     queueReset: queue.queueReset,
