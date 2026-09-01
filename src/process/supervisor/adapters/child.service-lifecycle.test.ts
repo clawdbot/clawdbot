@@ -71,21 +71,22 @@ describe.skipIf(process.platform === "win32")("POSIX child invocation identity",
       const tempDir = tempDirs.make(`openclaw-${mode}-argv0-`);
       const executableAlias = path.join(tempDir, "claude-shim");
       await symlink(process.execPath, executableAlias);
-      const input = {
+      const run = await createProcessSupervisor().spawn({
+        mode: "child",
         argv: [process.execPath, "-e", "process.stdout.write(process.argv0)"],
         argv0: executableAlias,
+        sessionId: `argv0-${mode}`,
+        backendId: "argv0-test",
         stdinMode: "pipe-closed" as const,
-      };
-
-      const adapter = await createChildAdapter(input);
-      let output = "";
-      adapter.onStdout((chunk) => {
-        output += chunk;
       });
 
-      await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-      expect(output).toBe(executableAlias);
-      await adapter.waitForExtinction?.();
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        stdout: executableAlias,
+      });
+      await run.waitForExtinction?.();
     },
   );
 });
