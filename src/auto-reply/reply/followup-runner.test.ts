@@ -148,7 +148,12 @@ beforeEach(() => {
 describe("createFollowupRunner", () => {
   it("waits for the queued owner release before seeking reply-lane admission", async () => {
     const ownerRelease = createDeferred();
-    const queued = createQueuedRun({ queueOwnerRelease: ownerRelease.promise });
+    const abortController = new AbortController();
+    const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
+    const queued = createQueuedRun({
+      queueOwnerRelease: ownerRelease.promise,
+      queueAbortSignal: abortController.signal,
+    });
     state.admit.mockResolvedValue({ kind: "skipped", reason: "aborted" });
 
     const run = createFollowupRunner({
@@ -162,6 +167,7 @@ describe("createFollowupRunner", () => {
     ownerRelease.resolve();
     await run;
     expect(state.admit).toHaveBeenCalledOnce();
+    expect(removeAbortListener).toHaveBeenCalledOnce();
   });
 
   it.each(["before", "during"] as const)(

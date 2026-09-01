@@ -1,6 +1,6 @@
 /** Composes queued admission, canonical execution, accounting, and delivery. */
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { waitForAbortSignal } from "../../infra/abort-signal.js";
+import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -37,9 +37,13 @@ export function createFollowupRunner(
     let queuedFollowupAdmitted = false;
     const abortSignal = resolveFollowupAbortSignal(queued);
     if (queued.queueOwnerRelease && !abortSignal?.aborted) {
-      await (abortSignal
-        ? Promise.race([queued.queueOwnerRelease, waitForAbortSignal(abortSignal)])
-        : queued.queueOwnerRelease);
+      try {
+        await racePromiseWithAbortSignal(queued.queueOwnerRelease, abortSignal);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          throw error;
+        }
+      }
     }
     const initiallyAborted =
       queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
