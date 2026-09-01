@@ -4,8 +4,10 @@ import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 
 const testConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
@@ -17,6 +19,7 @@ let createTestRegistry: typeof import("../test-utils/channel-plugins.js").create
 let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
 let startPluginServices: typeof import("../plugins/services.js").startPluginServices;
 let pluginServicesHandle: PluginServicesHandle | undefined;
+let inventoryPlugins: ChannelPlugin[] = [];
 
 describe("collectGatewayHealthSnapshot plugin state", () => {
   beforeAll(async () => {
@@ -31,7 +34,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
     }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
-      listReadOnlyChannelPluginsForConfig: () => [],
+      listReadOnlyChannelPluginsForConfig: () => inventoryPlugins,
     }));
 
     const [pluginsRuntime, degradedState, channelTestUtils, health, pluginServices] =
@@ -60,6 +63,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     await pluginServicesHandle?.stop();
     pluginServicesHandle = undefined;
     setActiveDegradedPlugins([]);
+    inventoryPlugins = [];
     setActivePluginRegistry(createTestRegistry([]));
     tempDirs.cleanup();
   });
@@ -139,6 +143,75 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         error: "healthy override has an unrelated import error",
       },
     ]);
+  });
+
+  it("projects the recorded channel load failure instead of stale successful probes", async () => {
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    inventoryPlugins = [
+      { ...createChannelTestPluginBase({ id: "broken-channel" }), status: { probeAccount } },
+    ];
+    const registry = {
+      ...createTestRegistry([]),
+      plugins: [
+        createPluginRecord({
+          id: "broken-owner",
+          enabled: true,
+          activated: true,
+          status: "error",
+          failurePhase: "load",
+          channelIds: ["broken-channel"],
+          error: "missing SDK export",
+        }),
+      ],
+    };
+    setActivePluginRegistry(registry);
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 1000,
+      probe: true,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          "broken-channel": {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              probe: { ok: true },
+            },
+          },
+        },
+      },
+    });
+    expect(snap.channels["broken-channel"]).toMatchObject({
+      configured: true,
+      running: false,
+      lifecycle: "blocked",
+      lastError: expect.stringContaining("missing SDK export"),
+    });
+    expect(snap.channels["broken-channel"]).not.toHaveProperty("probe");
+    expect(probeAccount).not.toHaveBeenCalled();
+
+    // A different live owner wins over a failed plugin declaring the same channel.
+    setActivePluginRegistry({
+      ...registry,
+      ...createTestRegistry([
+        {
+          pluginId: "healthy-owner",
+          plugin: inventoryPlugins[0],
+          source: "test",
+        },
+      ]),
+      plugins: registry.plugins,
+    });
+    const { resolveUnavailableChannelAccountSnapshot } =
+      await import("../channels/status/account-state.js");
+    expect(
+      resolveUnavailableChannelAccountSnapshot({
+        channelId: "broken-channel",
+        accountId: "default",
+      }),
+    ).toBeUndefined();
   });
 
   it("surfaces a failed service while continuing healthy siblings", async () => {

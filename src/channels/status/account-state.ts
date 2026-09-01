@@ -1,3 +1,4 @@
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   findActiveDegradedSecretOwner,
@@ -44,19 +45,32 @@ export function resolveUnavailableChannelAccountSnapshot(params: {
     "account",
     `${params.channelId}:${normalizeAccountId(params.accountId)}`,
   );
-  if (!owner) {
-    return undefined;
-  }
+  const registry = getActivePluginRegistry();
+  const registered = registry?.channels.some(({ plugin }) => plugin.id === params.channelId);
+  const failedPlugin =
+    !registered &&
+    registry?.plugins.find(
+      (plugin) =>
+        plugin.enabled && plugin.status === "error" && plugin.channelIds.includes(params.channelId),
+    );
   // Cold owners have no operational account to resolve or probe. Stale owners
   // retain usable credentials and are excluded by the secrets runtime lookup.
-  const lastError = new SecretSurfaceUnavailableError(owner).message;
+  const lastError = owner
+    ? new SecretSurfaceUnavailableError(owner).message
+    : failedPlugin &&
+      `Plugin ${failedPlugin.id} failed: ${failedPlugin.error}; run openclaw doctor`;
+  if (!lastError) {
+    return undefined;
+  }
+  // A failed plugin has no live account; prior probes and activity cannot describe this generation.
+  const runtime = failedPlugin ? undefined : params.runtime;
   return {
-    ...params.runtime,
+    ...runtime,
     accountId: params.accountId,
-    enabled: params.runtime?.enabled ?? true,
+    enabled: runtime?.enabled ?? true,
     configured: true,
     running: false,
-    ...(typeof params.runtime?.connected === "boolean" ? { connected: false } : {}),
+    ...(typeof runtime?.connected === "boolean" ? { connected: false } : {}),
     restartPending: false,
     lifecycle: "blocked",
     stateReason: lastError,
