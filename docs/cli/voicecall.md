@@ -52,8 +52,8 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
 | `status`   | Inspect active calls (or one by `--call-id`).                   |
-| `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
-| `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
+| `tail`     | Tail persisted call records or an explicit custom JSONL log.    |
+| `latency`  | Summarize turn latency from call history or a custom JSONL log. |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
 
 ## Setup and smoke
