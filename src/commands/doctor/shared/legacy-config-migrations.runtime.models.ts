@@ -212,9 +212,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
       }
 
       // Default selections and model-map keys stay fixed while params and provider rows migrate.
-      let defaultModelIds: string[] | undefined;
+      let cachedDefaultModelIds: string[] | undefined;
       const getDefaultModelIds = () =>
-        (defaultModelIds ??= [
+        (cachedDefaultModelIds ??= [
           ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
           ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
         ]);
