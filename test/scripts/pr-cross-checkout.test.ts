@@ -22,7 +22,9 @@ function fixture() {
   const owner = join(root, "owner");
   const caller = join(root, "caller");
   const bin = join(root, "bin");
-  for (const dir of [owner, caller, bin]) mkdirSync(dir);
+  for (const dir of [owner, caller, bin]) {
+    mkdirSync(dir);
+  }
   // Recovery and metadata checks need these preflight commands but must never execute them.
   for (const command of ["rg", "pnpm"]) {
     writeFileSync(
