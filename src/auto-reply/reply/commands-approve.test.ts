@@ -17,9 +17,19 @@ import { handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
+const startExternalVerificationForReviewerMock = vi.hoisted(() => vi.fn());
+const routeReplyMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 vi.mock("../../infra/approval-gateway-resolver.js", () => ({
   resolveApprovalOverGateway: resolveApprovalOverGatewayMock,
+}));
+
+vi.mock("../../gateway/plugin-external-verification-runtime.js", () => ({
+  startExternalVerificationForReviewer: startExternalVerificationForReviewerMock,
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: routeReplyMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -129,6 +139,9 @@ function buildApproveParams(
     SenderId?: string;
     GatewayClientScopes?: string[];
     AccountId?: string;
+    ApprovalReviewerDeviceId?: string;
+    MessageSid?: string;
+    OriginatingTo?: string;
   },
 ): HandleCommandsParams {
   const provider = ctxOverrides?.Provider ?? "whatsapp";
@@ -141,6 +154,9 @@ function buildApproveParams(
       SenderId: ctxOverrides?.SenderId,
       GatewayClientScopes: ctxOverrides?.GatewayClientScopes,
       AccountId: ctxOverrides?.AccountId,
+      ApprovalReviewerDeviceId: ctxOverrides?.ApprovalReviewerDeviceId,
+      MessageSid: ctxOverrides?.MessageSid,
+      OriginatingTo: ctxOverrides?.OriginatingTo,
     },
     command: {
       commandBodyNormalized,
@@ -221,6 +237,101 @@ describe("handleApproveCommand", () => {
     );
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Usage: /approve");
+  });
+
+  it("starts the plugin-bound external verifier without submitting a generic allow", async () => {
+    startExternalVerificationForReviewerMock.mockImplementation(
+      async (request: { present: (message: string) => Promise<void> }) => {
+        await request.present("Open the World verifier.");
+        return {
+          id: "external:attempt-1",
+          approvalId: "plugin:approval-1",
+          pluginId: "agentkit",
+          runId: "run-1",
+          toolName: "dangerous-tool",
+          decision: "allow-once",
+          label: "Verify with World",
+          createdAtMs: 1,
+          expiresAtMs: 2,
+        };
+      },
+    );
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve plugin:approval-1 external allow-once",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        {
+          ApprovalReviewerDeviceId: "device-tui-reviewer",
+          SenderId: "owner",
+          MessageSid: "message-1",
+          OriginatingTo: "owner",
+        },
+      ),
+      true,
+    );
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    expect(startExternalVerificationForReviewerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "plugin:approval-1",
+        decision: "allow-once",
+        interactionId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        reviewerDeviceId: "device-tui-reviewer",
+      }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Open the World verifier." },
+        channel: "whatsapp",
+        to: "owner",
+        mirror: false,
+      }),
+    );
+  });
+
+  it("fails closed when an external command has no stable message identity", async () => {
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve plugin:approval-1 external allow-once",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { SenderId: "owner", OriginatingTo: "owner" },
+      ),
+      true,
+    );
+    expect(result?.reply?.text).toContain("stable authenticated message route");
+    expect(startExternalVerificationForReviewerMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "/approve plugin:approval-1 external deny",
+    "/approve plugin:approval-1 external allow-once extra",
+  ])("rejects malformed external verification syntax: %s", async (command) => {
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        command,
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        {
+          SenderId: "owner",
+          MessageSid: "message-1",
+          OriginatingTo: "owner",
+        },
+      ),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Usage: /approve");
+    expect(startExternalVerificationForReviewerMock).not.toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -10,6 +10,8 @@ export const GATEWAY_AUX_METHODS = [
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
   "plugin.approval.list",
+  "plugin.approval.external.prepare",
+  "plugin.approval.external.start",
   "plugin.approval.request",
   "plugin.approval.waitDecision",
   "plugin.approval.resolve",

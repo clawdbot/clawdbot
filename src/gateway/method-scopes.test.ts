@@ -944,6 +944,8 @@ describe("operator scope authorization", () => {
   });
 
   it.each([
+    "plugin.approval.external.prepare",
+    "plugin.approval.external.start",
     "plugin.approval.list",
     "plugin.approval.request",
     "plugin.approval.waitDecision",
@@ -980,6 +982,8 @@ describe("operator scope authorization", () => {
 describe("plugin approval method registration", () => {
   it("lists all plugin approval methods", () => {
     const methods = listGatewayMethods();
+    expect(methods).toContain("plugin.approval.external.prepare");
+    expect(methods).toContain("plugin.approval.external.start");
     expect(methods).toContain("plugin.approval.list");
     expect(methods).toContain("plugin.approval.request");
     expect(methods).toContain("plugin.approval.waitDecision");
@@ -987,6 +991,8 @@ describe("plugin approval method registration", () => {
   });
 
   it("classifies plugin approval methods", () => {
+    expect(isGatewayMethodClassified("plugin.approval.external.prepare")).toBe(true);
+    expect(isGatewayMethodClassified("plugin.approval.external.start")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.list")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);

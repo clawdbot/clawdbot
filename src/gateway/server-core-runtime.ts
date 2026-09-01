@@ -305,6 +305,7 @@ export async function startGatewayCoreRuntime(input: {
 
   const {
     execApprovalManager,
+    externalVerificationRuntime,
     questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,
@@ -360,6 +361,11 @@ export async function startGatewayCoreRuntime(input: {
   kernel.addGatewayLifetimeSidecar({
     stop: async () => {
       unregisterApprovalAuthorityObserver();
+    },
+  });
+  kernel.addGatewayLifetimeSidecar({
+    stop: async () => {
+      externalVerificationRuntime.shutdown();
     },
   });
   approvalManagersForReplay.set("exec", execApprovalManager);
@@ -690,6 +696,7 @@ export async function startGatewayCoreRuntime(input: {
     sessionObserver,
     approvalSessionEvents,
     execApprovalManager,
+    externalVerificationRuntime,
     questionManager,
     cancelRunBoundApprovals,
     forwardPluginApprovalRequest,

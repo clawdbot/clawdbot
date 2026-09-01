@@ -31,7 +31,7 @@ export async function tryFastApproveFromMessage(params: {
     commandAuthorized: params.ctx.CommandAuthorized,
   });
   const result = await handleApproveCommandFromContext(
-    { cfg: params.cfg, ctx: params.ctx, command },
+    { cfg: params.cfg, ctx: params.ctx, command, sessionKey: params.sessionKey },
     shouldHandleTextCommands({
       cfg: params.cfg,
       surface: command.surface,

@@ -218,12 +218,18 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         agentId: undefined,
         allowedDecisions: undefined,
         description: "Test approval request",
+        runId: undefined,
+        sessionId: undefined,
         sessionKey: undefined,
         severity: "info",
         timeoutMs: 120_000,
         title: "Needs approval",
         toolCallId: "call-1",
         toolName: "exec",
+        turnSourceAccountId: undefined,
+        turnSourceChannel: undefined,
+        turnSourceThreadId: undefined,
+        turnSourceTo: undefined,
         twoPhase: true,
       },
       { expectFinal: false },
@@ -525,6 +531,82 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request.timeoutMs).toBe(5_000);
     expect(approvalCall.request.twoPhase).toBe(true);
     expect(approvalCall.options.expectFinal).toBe(false);
+  });
+
+  it("routes external verification through the host even in embedded mode", async () => {
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "agentkit",
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        externalResolution: {
+          label: "Verify with World",
+          decisions: ["allow-once", "allow-always"],
+        },
+      },
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:external-1", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:external-1",
+        decision: PluginApprovalResolutions.ALLOW_ALWAYS,
+      });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "dangerous-tool",
+      params: { action: "execute" },
+      toolCallId: "call-external",
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        runId: "run-1",
+      },
+    });
+
+    expect(result).toMatchObject({
+      blocked: false,
+      approvalResolution: PluginApprovalResolutions.ALLOW_ALWAYS,
+    });
+    const approvalCall = requireApprovalRequestCall("external verification approval request");
+    expect(approvalCall.request).toMatchObject({
+      toolName: "dangerous-tool",
+      toolCallId: "call-external",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedDecisions: ["deny"],
+      externalResolution: {
+        label: "Verify with World",
+        decisions: ["allow-once", "allow-always"],
+      },
+    });
+  });
+
+  it("fails closed before dispatch when external verification has no run binding", async () => {
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "agentkit",
+        title: "World verification",
+        description: "Verify personhood before continuing.",
+        externalResolution: { label: "Verify with World" },
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "dangerous-tool",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: expect.stringContaining("requires a host-derived run id"),
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("preserves hook params override after an approval allow decision", async () => {

@@ -892,6 +892,10 @@ describe("unified approval handlers", () => {
       id: "completed-run-approval",
       request: { runId: "run-completed", toolCallId: "tool-completed" },
     });
+    const plugin = registerPlugin(managers.plugin, {
+      id: "aborted-run-plugin-approval",
+      request: { runId: "run-active", toolCallId: "plugin-tool-active" },
+    });
     const context = createContext();
     const publish = vi.fn();
 
@@ -900,11 +904,21 @@ describe("unified approval handlers", () => {
         runId: "run-active",
         manager: managers.exec,
         publish,
-      }),
-    ).toBe(1);
+      }) +
+        cancelUnboundRunApprovals({
+          runId: "run-active",
+          manager: managers.plugin,
+          publish,
+        }),
+    ).toBe(2);
 
     await expect(aborted.decision).resolves.toBeNull();
+    await expect(plugin.decision).resolves.toBeNull();
     expect(managers.exec.getSnapshot(aborted.record.id)).toMatchObject({
+      status: "cancelled",
+      terminalReason: "run-aborted",
+    });
+    expect(managers.plugin.getSnapshot(plugin.record.id)).toMatchObject({
       status: "cancelled",
       terminalReason: "run-aborted",
     });
