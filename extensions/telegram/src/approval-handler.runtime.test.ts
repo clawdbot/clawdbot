@@ -544,6 +544,50 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("sends the origin result when the approver card edit fails", async () => {
+    const editMessage = vi.fn().mockRejectedValue(new Error("message was deleted"));
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+    const request = {
+      approvalKind: "system-agent" as const,
+      id: "system-agent:origin-edit-failure",
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "f".repeat(64),
+        allowedDecisions: ["allow-once", "deny"] as const,
+        sessionId: "delegation-origin-edit-failure",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "1234",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    };
+
+    await expect(
+      telegramApprovalNativeRuntime.transport.updateEntry?.({
+        cfg: {} as never,
+        accountId: "default",
+        context: { token: "tg-token", deps: { editMessage, sendMessage } },
+        entry: { chatId: "5678", messageId: "m1" },
+        request,
+        approvalKind: "system-agent",
+        payload: { text: "⚠️ OpenClaw change approved, but it was not applied." },
+        phase: "resolved",
+      }),
+    ).rejects.toThrow("message was deleted");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1234",
+      "⚠️ OpenClaw change approved, but it was not applied.",
+      {
+        cfg: {},
+        token: "tg-token",
+        accountId: "default",
+        textMode: "html",
+      },
+    );
+  });
+
   it("passes topic thread ids to typing and message delivery", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({

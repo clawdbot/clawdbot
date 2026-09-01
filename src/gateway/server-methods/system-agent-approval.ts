@@ -17,6 +17,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
+import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import {
   broadcastApprovalResolvedEvent,
   buildRequestedApprovalEvent,
@@ -40,7 +41,7 @@ function sameApprovalAuthority(
     return false;
   }
   return left.kind === "worker" && right.kind === "worker"
-    ? left.turnClaim === right.turnClaim
+    ? sameWorkerSessionTurnClaim(left.turnClaim, right.turnClaim)
     : true;
 }
 
@@ -118,8 +119,26 @@ export function queueDelegatedApproval(params: {
   }
   record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
   const approvalAuthorityCheck = record.approvalAuthority;
-  record.approvalAuthority = () =>
-    validateAgentRunDelegatedAuthority(approvalAuthority) && approvalAuthorityCheck?.() !== false;
+  record.approvalAuthority = () => {
+    if (
+      !validateAgentRunDelegatedAuthority(approvalAuthority) ||
+      approvalAuthorityCheck?.() === false
+    ) {
+      return false;
+    }
+    if (runtimeApprovalAuthority.kind === "local") {
+      return true;
+    }
+    return (
+      params.context.validateAgentRuntimeApprovalAuthority?.({
+        kind: "agentRuntime",
+        agentId: callerIdentity.agentId,
+        sessionKey: callerIdentity.sessionKey,
+        operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
+        delegatedAuthority: runtimeApprovalAuthority,
+      }) === true
+    );
+  };
   if (callerIdentity?.approvalSignals?.length) {
     record.approvalSignals = callerIdentity.approvalSignals;
   }

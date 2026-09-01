@@ -254,13 +254,18 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         return;
       }
       const editMessage = resolved.context.deps?.editMessage ?? editMessageTelegram;
-      await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
-        textMode: "html",
-        buttons: [],
-      });
+      let editError: unknown;
+      try {
+        await editMessage(entry.chatId, entry.messageId, escapeTelegramHtml(payload.text), {
+          cfg,
+          token: resolved.context.token,
+          accountId: resolved.accountId,
+          textMode: "html",
+          buttons: [],
+        });
+      } catch (error) {
+        editError = error;
+      }
       if (
         approvalKind === "system-agent" &&
         request &&
@@ -271,7 +276,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const originChatId = parsedOrigin
           ? normalizeTelegramChatId(parsedOrigin.chatId)
           : undefined;
-        if (originChatId && entry.chatId !== originChatId) {
+        if (originChatId && (entry.chatId !== originChatId || editError !== undefined)) {
           if (!terminalizedSystemAgentApprovals.has(request.id)) {
             const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
             const originTo =
@@ -290,6 +295,9 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         } else if (originChatId) {
           terminalizedSystemAgentApprovals.add(request.id);
         }
+      }
+      if (editError !== undefined) {
+        throw editError;
       }
     },
   },

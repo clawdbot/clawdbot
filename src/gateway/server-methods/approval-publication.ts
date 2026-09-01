@@ -95,11 +95,13 @@ export async function publishAppliedApprovalResolution(params: {
   ) {
     // Native approval routes are instance-local, so publish the canonical CAS
     // winner directly instead of reconnecting to the Gateway over WebSocket.
-    runSynchronousSideEffect({
-      context: params.context,
-      approvalKind: nativeApprovalKind,
-      run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
-    });
+    if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
+      runSynchronousSideEffect({
+        context: params.context,
+        approvalKind: nativeApprovalKind,
+        run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
+      });
+    }
     const webPushDelivery = params.context.approvalWebPushDelivery;
     if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
       await runSideEffect({
