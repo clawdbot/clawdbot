@@ -2100,7 +2100,7 @@ describe("package acceptance workflow", () => {
     for (const [name, script] of [
       ["Validate publishable plugin metadata", "plugin-npm-release-check.ts"],
       ["Resolve plugin release plan", "plugin-npm-release-plan.ts"],
-    ]) {
+    ] as const) {
       const planner = workflowStep(job, name);
       expect(planner.run).toContain(`node --import tsx .release-tooling/scripts/${script}`);
       expect(planner.env?.TSX_TSCONFIG_PATH).toBe(
