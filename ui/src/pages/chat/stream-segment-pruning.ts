@@ -1,4 +1,7 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import {
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+} from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   accumulatedStreamText,
@@ -7,7 +10,6 @@ import {
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
 import {
   streamCausalInterval,
   resolveCumulativeAssistantTail,

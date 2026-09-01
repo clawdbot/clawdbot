@@ -119,6 +119,18 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("keeps Chromium files in the UI CI owner and Node-driven Playwright files in Node stripes", () => {
+    const shards = createNodeTestShards();
+    const uiStripes = shards.filter((shard) =>
+      shard.shardName.startsWith("core-runtime-media-ui-"),
+    );
+    const files = uiStripes.flatMap((shard) => shard.includePatterns ?? []);
+    expect(files).toContain("ui/src/components/form-controls.browser.test.ts");
+    expect(files).not.toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
+    expect(shards.flatMap((shard) => shard.configs)).not.toContain(
+      "test/vitest/vitest.ui-browser.config.ts",
+    );
+  });
   it.each(["github", "hybrid"])("keeps oversized sparse groups nonempty on %s", (runnerBackend) => {
     const native = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const targets = [1, 2].map((count) =>

@@ -418,13 +418,23 @@ catalog, API-key auth, and dynamic model resolution.
 
     Official plugins use the private, pure
     `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes
-    `normalizeModelPricingCatalog(rows, normalizePricing, readPricing?)` for
+    `normalizeModelPricingCatalog(rows, normalizePricing, options?)` for
     provider-owned pricing feeds. It returns a map of complete costs: absent
     prices are omitted, while malformed declared prices, invalid or duplicate
     model IDs, and a feed with no usable prices return `undefined`. Supply the
-    provider's unit conversion and optional price-field selector; the default
-    selector reads `model.pricing`. No auth, discovery, or runtime loader is
-    imported.
+    provider's unit conversion. Options can select `readModelId(model)` (default
+    `model.id`), `readPricing(model)` (default `model.pricing`), and
+    `isSupportedPricing(rawPricing)` (default `true`). Declared prices are
+    normalized and validated before unsupported schedules are omitted; duplicate
+    IDs are rejected even on unpriced or unsupported rows. Non-token domains
+    can return `undefined` from `readPricing`. No auth, discovery, or runtime
+    loader is imported.
+
+    DeepInfra's `pricing-api.ts` uses these selectors for its native array and
+    `model_name` identities. Release plugins using the options contract (including
+    DeepInfra and Venice) with a matching host, and coordinate their plugin API
+    and minimum-host floors at release time. The private subpath is not an
+    independently versioned third-party compatibility API.
 
     This subpath also exposes `normalizeOpenRouterModelPricing(pricing)` for
     native OpenRouter pricing objects. It converts per-token rates and static

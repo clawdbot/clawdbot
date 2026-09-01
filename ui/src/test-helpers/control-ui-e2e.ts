@@ -1162,6 +1162,7 @@ function installControlUiMockGateway(
   const requests: MockGatewayRequest[] = [];
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
   const methodResponseSequenceIndexes = new Map<string, number>();
+  const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
   const sessions = createSessions({
     rows: scenario.sessions,
     mainKey: scenario.mainSessionKey,
@@ -1513,10 +1514,21 @@ function installControlUiMockGateway(
   }
 
   // Immediate and explicitly resolved deferred replies share one commit point.
-  // Wire errors and rejected deferrals must leave canonical fixture rows untouched.
-  function commitSessionResponse(method: string, params: unknown, response: unknown): unknown {
+  // Wire errors and rejected deferrals must leave canonical fixture state untouched.
+  function commitFixtureResponse(method: string, params: unknown, response: unknown): unknown {
     if (isRecord(response) && (response["__mockError"] || response.ok === false)) {
       return response;
+    }
+    if (isRecord(params) && typeof params.id === "string") {
+      const kind =
+        method === "approval.resolve"
+          ? params.kind === "system-agent"
+            ? "openclaw"
+            : params.kind
+          : /^(exec|plugin)\.approval\.resolve$/u.exec(method)?.[1];
+      if (typeof kind === "string") {
+        pendingApprovals.get(`${kind}.approval.list`)?.delete(params.id);
+      }
     }
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
       const result = sessions.patch(params.key, params);
@@ -1531,6 +1543,27 @@ function installControlUiMockGateway(
       recordMaterializedSession(params, response);
     }
     return response;
+  }
+
+  function emitGatewayEvent(
+    socket: { deliver: (frame: unknown) => void } | null,
+    event: string,
+    payload: unknown,
+  ): void {
+    const approval = /^(exec|plugin|openclaw)\.approval\.(requested|resolved)$/u.exec(event);
+    if (approval && isRecord(payload) && typeof payload.id === "string") {
+      // The Gateway registers pending state before publishing its event. A later
+      // bootstrap/reconnect list must describe the same approval as the live stream.
+      const method = `${approval[1]}.approval.list`;
+      const queue = pendingApprovals.get(method) ?? new Map<string, Record<string, unknown>>();
+      if (approval[2] === "requested") {
+        queue.set(payload.id, payload);
+      } else {
+        queue.delete(payload.id);
+      }
+      pendingApprovals.set(method, queue);
+    }
+    socket?.deliver({ event, payload, seq: ++seq, type: "event" });
   }
 
   function recordMaterializedSession(params: unknown, response: unknown): void {
@@ -1750,6 +1783,13 @@ function installControlUiMockGateway(
         : configuredValue;
     }
     switch (method) {
+      case "exec.approval.list":
+      case "plugin.approval.list":
+      case "openclaw.approval.list":
+        return [...(pendingApprovals.get(method)?.values() ?? [])].filter(
+          (approval) =>
+            typeof approval.expiresAtMs === "number" && approval.expiresAtMs > Date.now(),
+        );
       case "connect": {
         const auth = isRecord(params) && isRecord(params.auth) ? params.auth : null;
         const connectedDeviceToken =
@@ -2257,7 +2297,7 @@ function installControlUiMockGateway(
         return;
       }
       const respond = (response: unknown) => {
-        const payload = commitSessionResponse(method, frame.params, response);
+        const payload = commitFixtureResponse(method, frame.params, response);
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
         this.deliver(
@@ -2302,7 +2342,7 @@ function installControlUiMockGateway(
           handler({
             params: frame.params,
             respond,
-            emit: (event, payload) => this.deliver({ event, payload, seq: ++seq, type: "event" }),
+            emit: (event, payload) => emitGatewayEvent(this, event, payload),
           });
         } else {
           respond(buildResponse(method, frame.params));
@@ -2336,12 +2376,7 @@ function installControlUiMockGateway(
       deferredMethods.push({ method, match });
     },
     emit(event, payload) {
-      MockWebSocket.latest?.deliver({
-        event,
-        payload,
-        seq: ++seq,
-        type: "event",
-      });
+      emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
     findRequests(method) {
       return method ? requests.filter((request) => request.method === method) : [...requests];
@@ -2364,7 +2399,7 @@ function installControlUiMockGateway(
     requests,
     resolveDeferred(method, payload) {
       for (const response of takeDeferredResponses(method)) {
-        const resolvedPayload = commitSessionResponse(
+        const resolvedPayload = commitFixtureResponse(
           response.method,
           response.params,
           applyScenarioAgentModel(

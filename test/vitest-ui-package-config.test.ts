@@ -8,6 +8,7 @@ import uiNodeConfig from "../ui/vitest.node.config.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 type ExpectedTestConfig = {
   experimental?: ReturnType<typeof loadVitestExperimentalConfig>["experimental"];
@@ -68,12 +69,60 @@ describe("ui package vitest config", () => {
     ]);
   });
 
+  it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {
+    const includeFile = path.join(tempDirs.make("ui-node-selection-"), "include.json");
+    writeFileSync(includeFile, JSON.stringify(["ui/src/**/*.test.ts"]));
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", includeFile);
+    vi.resetModules();
+    const config = (await import("../ui/vitest.config.ts")).default;
+    const uiRoot = path.join(process.cwd(), "ui");
+    const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
+    const browser = projects.find((project) => project.browser?.enabled);
+    const node = projects.find((project) => project.name === "unit-node");
+    const root = requireTestConfig(createUiVitestConfig());
+    const nativeFiles = globSync(browser?.include ?? [], {
+      cwd: uiRoot,
+      exclude: browser?.exclude,
+    }).map((file) => `ui/${file}`);
+    const nodeFiles = globSync(node?.include ?? [], {
+      cwd: uiRoot,
+      exclude: node?.exclude,
+    })
+      .filter((file) => file.endsWith(".browser.test.ts"))
+      .map((file) => `ui/${file}`);
+    const rootFiles = globSync(root.include ?? [], { exclude: root.exclude });
+    expect(nativeFiles).toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
+    expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
+    expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
+    expect(rootFiles).toEqual(expect.arrayContaining(nodeFiles));
+    expect([...nativeFiles, ...nodeFiles].toSorted()).toEqual(
+      globSync("ui/src/**/*.browser.test.ts").toSorted(),
+    );
+    writeFileSync(includeFile, JSON.stringify([...nativeFiles, ...nodeFiles]));
+    const scopedRoot = requireTestConfig(
+      createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+    );
+    expect(globSync(scopedRoot.include ?? [], { exclude: scopedRoot.exclude }).toSorted()).toEqual(
+      nodeFiles.toSorted(),
+    );
+  });
+
   it.each([
     [
       ["ui/src/pages/chat/chat-view.test.ts", "ui/src/pages/chat/chat-pane-lifecycle.test.ts"],
       ["ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/chat-view.test.ts"],
     ],
     [["src/pages/chat/chat-view.test.ts"], []],
+    [
+      [
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+        "ui/src/components/form-controls.browser.test.ts",
+      ],
+      [
+        "ui/src/components/form-controls.browser.test.ts",
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+      ],
+    ],
     [[], []],
   ])("intersects a repository include list with every project: %j", async (requested, expected) => {
     const includeFile = path.join(tempDirs.make("ui-package-selection-"), "include.json");

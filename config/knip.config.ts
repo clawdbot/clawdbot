@@ -111,6 +111,9 @@ const repositoryScriptEntries = [
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
   "scripts/run-stylelint.mts!",
+  // Path-spawned test roots are development entries; `!` would audit dev tools as production.
+  "scripts/run-vitest-child.mts",
+  "scripts/test-projects-child.mts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",

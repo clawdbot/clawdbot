@@ -237,6 +237,12 @@ watch dependency tracking still determines when tests rerun.
 
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
+A failed invocation ends with one `[test] FAILED (exit N)` line after child
+processes, cleanup, and report publication settle. Direct `run-vitest.mts` calls
+use `[vitest]` instead. Nested runners retain their diagnostics and exit status;
+the top-level CLI owns the final failure line. Successful runs emit no failure
+trailer.
+
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm test`                                       | Explicit file/directory targets route through scoped Vitest lanes. Untargeted runs are full-suite proof: fixed shard groups expand to leaf configs for local parallel execution, with the expected shard fanout printed before starting. The extension group always expands to per-extension shard configs instead of one giant root-project process. |

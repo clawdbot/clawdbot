@@ -75,6 +75,7 @@ import {
   isUiIsolatedTestFile,
   uiIsolatedTestFiles,
 } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { isUiBrowserTestFile } from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
@@ -455,6 +456,7 @@ const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
 const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UI_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.ui-isolated.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
@@ -523,6 +525,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   plugin: PLUGINS_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
   uiIsolated: UI_ISOLATED_VITEST_CONFIG,
+  uiBrowser: UI_BROWSER_VITEST_CONFIG,
   uiE2e: UI_E2E_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
@@ -1277,6 +1280,13 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string) {
   const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
   return targetArgs.flatMap((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (isPathAtOrUnder(relative, "ui") && isGlobTarget(relative)) {
+      // Expand mixed browser globs before assigning files to their disjoint runners.
+      const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
+        (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
     const prefixTargets = resolveExplicitTestPrefixTargets(targetArg, cwd);
     if (prefixTargets) {
       return prefixTargets;
@@ -3426,6 +3436,9 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
+  if (isUiBrowserTestFile(relative)) {
+    return "uiBrowser";
+  }
   if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
@@ -3787,6 +3800,16 @@ export function buildVitestRunPlans(
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
+  if (
+    watchMode &&
+    requestedTargetArgs.some(
+      (target) => isPathAtOrUnder(toRepoRelativeTarget(target, cwd), "ui") && isGlobTarget(target),
+    )
+  ) {
+    throw new Error(
+      "watch mode with UI glob targets is not supported; use a literal test path, directory, or dedicated UI suite",
+    );
+  }
   const activeTargetArgs = expandBroadToolingScriptTargets(
     expandExplicitSourceTestTargets(requestedTargetArgs, cwd),
     cwd,
@@ -3884,6 +3907,25 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
+  const broadUiTargets = uiTargets.filter(
+    (targetArg) => !isTestFileTarget(toRepoRelativeTarget(targetArg, cwd)),
+  );
+  if (broadUiTargets.length > 0) {
+    const browserTargets = listExplicitTestTargetFilesForCwd(cwd).filter(
+      (file) =>
+        isUiBrowserTestFile(file) &&
+        broadUiTargets.some(
+          (targetArg) =>
+            shouldUseWholeConfigTarget("ui", targetArg, cwd) ||
+            includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
+        ),
+    );
+    if (browserTargets.length > 0) {
+      groupedTargets.set("uiBrowser", [
+        ...new Set([...(groupedTargets.get("uiBrowser") ?? []), ...browserTargets]),
+      ]);
+    }
+  }
   const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
     uiTargets.some((targetArg) =>
       includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),

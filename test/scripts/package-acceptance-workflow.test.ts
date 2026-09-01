@@ -144,7 +144,7 @@ const SETUP_NODE_V6 = "actions/setup-node@820762786026740c76f36085b0efc47a31fe50
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const RUN_TESTBOX_WITH_FAILURE_REPORTING =
-  "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d";
+  "steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
@@ -5342,14 +5342,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
-    for (const step of [
-      runTestboxStep,
-      runArmTestboxStep,
-      runBuildArtifactsTestboxStep,
-      windowsTestboxActionMarker,
-    ]) {
+    for (const step of [runTestboxStep, runArmTestboxStep, runBuildArtifactsTestboxStep]) {
       expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
     }
+    expect(windowsTestboxActionMarker.uses).toBe(
+      "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d",
+    );
+    expect(windowsTestboxActionMarker.if).toBe("${{ false }}");
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(

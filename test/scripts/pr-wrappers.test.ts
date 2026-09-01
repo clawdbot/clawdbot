@@ -675,7 +675,7 @@ describe("scripts/pr wrappers", () => {
 
         // The trusted planner reads candidate sources without executing them. A
         // non-sibling importer exercises its real source-scanning child as well.
-        mkdirSync(join(fixture.linked, "src"));
+        mkdirSync(join(fixture.linked, "src"), { recursive: true });
         mkdirSync(join(fixture.linked, "test/probe"), { recursive: true });
         writeFileSync(join(fixture.linked, "src/anchor-value.ts"), "export const value = 1;\n");
         writeFileSync(

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectRunJobsFromPages,
@@ -373,8 +373,22 @@ describe("scripts/ci-run-timings.mjs", () => {
     const fakeGhPath = path.join(fixtureDir, "gh");
     const reportPath = path.join(fixtureDir, "reports", "trend.json");
     const retryMarkerPath = path.join(fixtureDir, "retried");
+    const retryWaitsPath = path.join(fixtureDir, "retry-waits.txt");
+    const retryClockPath = path.join(fixtureDir, "retry-clock.mjs");
     const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
     const fixtureNowMs = Date.now();
+    writeFileSync(retryWaitsPath, "");
+    // Only this CLI child skips elapsed backoff; the requested delay remains asserted.
+    writeFileSync(
+      retryClockPath,
+      `import { appendFileSync } from "node:fs";
+const wait = Atomics.wait;
+Atomics.wait = (array, index, value, timeout) => {
+  appendFileSync(${JSON.stringify(retryWaitsPath)}, String(timeout) + "\\n");
+  return wait(array, index, value, 0);
+};
+`,
+    );
     writeFileSync(
       fakeGhPath,
       `#!/usr/bin/env node
@@ -424,6 +438,8 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
       const result = spawnSync(
         process.execPath,
         [
+          "--import",
+          pathToFileURL(retryClockPath).href,
           "scripts/ci-run-timings.mjs",
           "--trend-hours",
           "24",
@@ -442,12 +458,14 @@ if (endpoint.includes("actions/workflows/ci.yml/runs?")) {
             ...process.env,
             FIXTURE_NOW_MS: String(fixtureNowMs),
             FIXTURE_RETRY_MARKER: retryMarkerPath,
+            GH_TOKEN: "fixture-ci-timing-token",
             OPENCLAW_GH_BIN: fakeGhPath,
           },
         },
       );
 
       expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(retryWaitsPath, "utf8")).toBe("1000\n");
       const report = JSON.parse(result.stdout);
       expect(JSON.parse(readFileSync(reportPath, "utf8"))).toEqual(report);
       expect(report.apiRequests).toEqual({ jobs: 3, runList: 1, total: 4 });
