@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 
@@ -21,7 +22,8 @@ async function main(): Promise<void> {
   process.stdout.write(JSON.stringify(result));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node resolves the bundle through shared node_modules; compare canonical paths.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   void main().catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;
