@@ -145,6 +145,8 @@ async function runGuidedOnboardingFlow(
   const offerQuickstart =
     custodianMode &&
     (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    // An interrupted setup's ask-first consent must survive; quick start assumes full discovery.
+    existingConfig.wizard?.accessMode !== "guarded" &&
     opts.nonInteractive !== true &&
     opts.skipUi !== true &&
     opts.tui !== true;

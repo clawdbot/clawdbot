@@ -126,6 +126,40 @@ describe("runGuidedOnboarding quick start", () => {
     },
   );
 
+  it("preserves guarded discovery consent in an incomplete config", async () => {
+    localOnboarding.persisted.config = {
+      wizard: { securityAcknowledgedAt: "2026-08-01T00:00:00.000Z", accessMode: "guarded" },
+    };
+    const prompter = createWizardPrompter();
+    vi.mocked(prompter.select).mockImplementation(async ({ options, initialValue }) => {
+      // Accept saved defaults, but decline discovery if its consent prompt appears.
+      const choice =
+        options.find(({ value }) => value === "manual") ??
+        options.find(({ value }) => value === initialValue);
+      return choice!.value;
+    });
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboardingImpl({ agentName: "main" }, makeRuntime(), deps);
+
+    expect(prompter.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "How would you like to start?" }),
+    );
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "How should I set things up?",
+        initialValue: "guarded",
+      }),
+    );
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "May I look around to find your AI access?" }),
+    );
+    expect(deps.detect).not.toHaveBeenCalled();
+    expect(deps.listManualOptions).toHaveBeenCalledOnce();
+    expect(deps.persistAccessMode).not.toHaveBeenCalledWith("full");
+    expect(localOnboarding.persisted.config?.wizard?.accessMode).toBe("guarded");
+  });
+
   it("custom setup keeps telemetry, first-agent, access, and route prompts in order", async () => {
     const prompter = createWizardPrompter(
       { text: vi.fn(async () => "helper"), confirm: vi.fn(async () => true) },
