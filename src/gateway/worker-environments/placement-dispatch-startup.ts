@@ -13,9 +13,11 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import type {
-  WorkerPlacementAuthorization,
-  WorkerPlacementDispatchRequest,
+import { readWorkerProjectSnapshot } from "./project-preparation.js";
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementAuthorization,
+  type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
 import type { WorkerEnvironmentReconcileCore, WorkerEnvironmentService } from "./service.js";
 
@@ -26,6 +28,7 @@ export type WorkerPlacementRecoveryBarrier = (params: {
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   environmentId: string;
   expectedGeneration: number;
+  signal?: AbortSignal;
   run: (localPath: string) => Promise<void>;
 }) => Promise<void>;
 
@@ -105,6 +108,20 @@ export function createWorkerPlacementDispatchStartup(options: {
 }) {
   const { environments, failure, placements } = options;
 
+  const validateDevicePlacement = async (request: WorkerPlacementDispatchRequest) => {
+    if (!request.deviceId) {
+      return;
+    }
+    const eligibility = await resolveDevicePlacementEligibility({
+      environmentService: environments,
+      deviceId: request.deviceId,
+      requirement: request.devicePlacement,
+      config: getRuntimeConfig(),
+    });
+    if (!eligibility.ok) {
+      throw new Error(eligibility.error);
+    }
+  };
   const requireNodePlacementEligibility = async (
     request: WorkerPlacementDispatchRequest,
     environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
@@ -150,12 +167,14 @@ export function createWorkerPlacementDispatchStartup(options: {
     localPath: string;
     onTransition?: (placement: WorkerDispatchPlacement) => void;
     authorize?: WorkerPlacementAuthorization;
+    signal?: AbortSignal;
     recovery?: true;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
     }
     const { request } = params;
+    params.signal?.throwIfAborted();
     const provisioned = requireProvisionedEnvironment(
       params.environment,
       params.expectedEnvironmentId,
@@ -163,6 +182,9 @@ export function createWorkerPlacementDispatchStartup(options: {
       environments,
     );
     const admittedNode = await requireNodePlacementEligibility(request, params.environment);
+    // Provisioning and transport setup yield; revoked callers must not attach or upload.
+    params.signal?.throwIfAborted();
+    params.authorize?.();
     let placement = placements.transition({
       sessionId: request.sessionId,
       from: "provisioning",
@@ -174,107 +196,150 @@ export function createWorkerPlacementDispatchStartup(options: {
       },
     });
     options.reportTransition(params.onTransition, placement);
+    params.signal?.throwIfAborted();
     const credential = await environments.attachSession({
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
     });
+    params.signal?.throwIfAborted();
+    params.authorize?.();
     const ownerEpoch = credential.ownerEpoch;
-    const tunnel = await environments.startTunnel({
-      environmentId: provisioned.environmentId,
-      ownerEpoch,
-    });
-    const gitAuthor = options.resolveGitAuthor?.(request.agentId);
-    const synced = await tunnel.syncWorkspace({
-      localPath: params.localPath,
-      sessionId: request.sessionId,
-      generation: placement.generation,
-      ...(gitAuthor ? { gitAuthor } : {}),
-    });
-    placement = placements.transition({
-      sessionId: request.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: synced.manifestRef,
-        remoteWorkspaceDir: synced.remoteWorkspaceDir,
-      },
-    });
-    options.reportTransition(params.onTransition, placement);
-    const startingPlacement = placement;
-    const requireAttachedEnvironment = () => {
-      const attachedEnvironment = environments.get(provisioned.environmentId);
-      if (
-        !attachedEnvironment ||
-        attachedEnvironment.state !== "attached" ||
-        attachedEnvironment.ownerEpoch !== ownerEpoch ||
-        attachedEnvironment.attachedSessionIds.length !== 1 ||
-        attachedEnvironment.attachedSessionIds[0] !== request.sessionId ||
-        attachedEnvironment.nodeDeviceId !== params.environment.nodeDeviceId ||
-        attachedEnvironment.leaseId !== params.environment.leaseId ||
-        attachedEnvironment.bootstrapReceipt?.bundleHash !== provisioned.bundleHash
-      ) {
-        throw new Error("Worker dispatch lost its exact environment owner before activation");
-      }
-      return attachedEnvironment;
+    let activated = false;
+    let stoppingTunnel: Promise<void> | undefined;
+    const stopAttemptTunnel = () => {
+      stoppingTunnel ??= environments.stopTunnel(provisioned.environmentId, ownerEpoch);
+      void stoppingTunnel.catch(() => undefined);
     };
-    await requireNodePlacementEligibility(
-      request,
-      requireAttachedEnvironment(),
-      admittedNode?.node,
-    );
-    requireAttachedEnvironment();
-    const activate = (): WorkerActiveDispatchPlacement => {
-      requireAttachedEnvironment();
-      if (
-        admittedNode &&
-        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
-      ) {
-        throw new Error(
-          "Worker dispatch lost its current node connection, pairing generation, command authorization, or capacity before activation",
-        );
-      }
-      const activated = placements.transition({
-        sessionId: request.sessionId,
-        from: "starting",
-        to: "active",
-        expectedGeneration: startingPlacement.generation,
-        patch: { activeOwnerEpoch: ownerEpoch },
-      });
-      if (activated.state !== "active") {
-        throw new Error("Worker dispatch activation did not produce an active placement");
-      }
-      options.reportTransition(params.onTransition, activated);
-      return activated;
-    };
-    // Recovery retains the exact session/placement lifecycle fence through activation.
-    const activePlacement = params.recovery
-      ? activate()
-      : await options.runActivationBarrier({
-          sessionId: request.sessionId,
-          sessionKey: request.sessionKey,
-          agentId: request.agentId,
-          executionMode: request.executionMode,
-          authorize: params.authorize,
-          activate,
-        });
+    params.signal?.addEventListener("abort", stopAttemptTunnel, { once: true });
     try {
-      options.onActivated?.(request);
-    } catch {
-      // Maintenance scheduling cannot overturn a durable placement activation.
+      const tunnel = await environments.startTunnel({
+        environmentId: provisioned.environmentId,
+        ownerEpoch,
+      });
+      params.signal?.throwIfAborted();
+      params.authorize?.();
+      const gitAuthor = options.resolveGitAuthor?.(request.agentId);
+      const project = readWorkerProjectSnapshot(params.environment.profileSnapshot.project);
+      const synced = await tunnel.syncWorkspace({
+        localPath: params.localPath,
+        sessionId: request.sessionId,
+        generation: placement.generation,
+        ...(gitAuthor ? { gitAuthor } : {}),
+        ...(project ? { projectKey: project.key } : {}),
+      });
+      params.signal?.throwIfAborted();
+      params.authorize?.();
+      placement = placements.transition({
+        sessionId: request.sessionId,
+        from: "syncing",
+        to: "starting",
+        expectedGeneration: placement.generation,
+        patch: {
+          workspaceBaseManifestRef: synced.manifestRef,
+          remoteWorkspaceDir: synced.remoteWorkspaceDir,
+        },
+      });
+      options.reportTransition(params.onTransition, placement);
+      const startingPlacement = placement;
+      const requireAttachedEnvironment = () => {
+        params.signal?.throwIfAborted();
+        const attachedEnvironment = environments.get(provisioned.environmentId);
+        if (
+          !attachedEnvironment ||
+          attachedEnvironment.state !== "attached" ||
+          attachedEnvironment.ownerEpoch !== ownerEpoch ||
+          attachedEnvironment.attachedSessionIds.length !== 1 ||
+          attachedEnvironment.attachedSessionIds[0] !== request.sessionId ||
+          attachedEnvironment.nodeDeviceId !== params.environment.nodeDeviceId ||
+          attachedEnvironment.leaseId !== params.environment.leaseId ||
+          attachedEnvironment.bootstrapReceipt?.bundleHash !== provisioned.bundleHash
+        ) {
+          throw new Error("Worker dispatch lost its exact environment owner before activation");
+        }
+        return attachedEnvironment;
+      };
+      await requireNodePlacementEligibility(
+        request,
+        requireAttachedEnvironment(),
+        admittedNode?.node,
+      );
+      requireAttachedEnvironment();
+      const activate = (): WorkerActiveDispatchPlacement => {
+        requireAttachedEnvironment();
+        if (
+          admittedNode &&
+          !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
+        ) {
+          throw new Error(
+            "Worker dispatch lost its current node connection, pairing generation, command authorization, or capacity before activation",
+          );
+        }
+        const active = placements.transition({
+          sessionId: request.sessionId,
+          from: "starting",
+          to: "active",
+          expectedGeneration: startingPlacement.generation,
+          patch: { activeOwnerEpoch: ownerEpoch },
+        });
+        if (active.state !== "active") {
+          throw new Error("Worker dispatch activation did not produce an active placement");
+        }
+        // Activation transfers the tunnel to session reconciliation before observers can Stop.
+        activated = true;
+        params.signal?.removeEventListener("abort", stopAttemptTunnel);
+        options.reportTransition(params.onTransition, active);
+        return active;
+      };
+      // Recovery retains the exact session/placement lifecycle fence through activation.
+      const activePlacement = params.recovery
+        ? activate()
+        : await options.runActivationBarrier({
+            sessionId: request.sessionId,
+            sessionKey: request.sessionKey,
+            agentId: request.agentId,
+            executionMode: request.executionMode,
+            authorize: params.authorize,
+            signal: params.signal,
+            activate,
+          });
+      try {
+        options.onActivated?.(request);
+      } catch {
+        // Maintenance scheduling cannot overturn a durable placement activation.
+      }
+      return activePlacement;
+    } finally {
+      params.signal?.removeEventListener("abort", stopAttemptTunnel);
+      if (!activated && params.signal?.aborted) {
+        // Start may publish its owner after the first abort. Join that exact epoch as well
+        // as the original stop, including initialization, SSH children and scratch cleanup.
+        await environments.stopTunnel(provisioned.environmentId, ownerEpoch);
+      }
+      await stoppingTunnel;
     }
-    return activePlacement;
   };
 
   const resumeProvisioning = async (
     placement: WorkerProvisioningDispatchPlacement,
     reconcileEnvironmentCore: WorkerEnvironmentReconcileCore,
-  ): Promise<void> => {
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
+    runAdmitted: (
+      run: (signal?: AbortSignal) => Promise<WorkerDispatchPlacement | undefined>,
+    ) => Promise<WorkerDispatchPlacement | undefined> = (run) => run(),
+  ): Promise<WorkerDispatchPlacement | undefined> => {
     const environmentId = placement.environmentId;
     let recoveryRunStarted = false;
+    let result: WorkerDispatchPlacement | undefined;
     let recoveryOwnedPlacement: WorkerDispatchPlacement = placement;
-    const handleRecoveryFailure = async (error: unknown): Promise<void> => {
+    const report = (next: WorkerDispatchPlacement) => {
+      recoveryOwnedPlacement = next;
+      options.reportTransition(onTransition, next);
+    };
+    report(placement);
+    const handleRecoveryFailure = async (
+      error: unknown,
+    ): Promise<WorkerDispatchPlacement | undefined> => {
       const current = placements.get(placement.sessionId);
       if (
         !current ||
@@ -288,7 +353,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         current.agentId !== placement.agentId ||
         current.executionMode !== placement.executionMode
       ) {
-        return;
+        return undefined;
       }
       const environment = environmentId ? environments.get(environmentId) : undefined;
       // Only a provider replay entered with exact authority may retain its durable operation.
@@ -297,96 +362,114 @@ export function createWorkerPlacementDispatchStartup(options: {
         current.state === "provisioning" &&
         isPendingProvisioningEnvironment(environment, environmentId)
       ) {
-        return;
+        return undefined;
       }
       const exactEnvironment = environment?.environmentId === environmentId ? environment : null;
-      await failure.teardownEnvironment({
+      const failed = await failure.teardownEnvironment({
         placement: current,
         environmentId: exactEnvironment?.environmentId ?? null,
         ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
         primaryError: error,
       });
+      report(failed);
+      return failed;
+    };
+    const recover = async (signal?: AbortSignal) => {
+      try {
+        if (!environmentId) {
+          throw new Error("Provisioning worker placement has no environment owner");
+        }
+        await options.runRecoveryBarrier({
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+          executionMode: placement.executionMode,
+          environmentId,
+          expectedGeneration: placement.generation,
+          signal,
+          run: async (localPath) => {
+            recoveryRunStarted = true;
+            try {
+              signal?.throwIfAborted();
+              const initialEnvironment = environments.get(environmentId);
+              if (initialEnvironment?.environmentId !== environmentId) {
+                throw new Error("Provisioning worker environment record is missing");
+              }
+              if (initialEnvironment.destroyRequestedAtMs !== null) {
+                throw new Error("Provisioning worker environment destruction was requested");
+              }
+              await reconcileEnvironmentCore(signal);
+              signal?.throwIfAborted();
+              const current = placements.get(placement.sessionId);
+              if (
+                current?.state !== "provisioning" ||
+                current.generation !== placement.generation ||
+                current.environmentId !== environmentId
+              ) {
+                throw new Error("Provisioning worker placement changed during restart recovery");
+              }
+              const environment = environments.get(environmentId);
+              if (environment?.environmentId !== environmentId) {
+                throw new Error("Provisioning worker environment record is missing");
+              }
+              if (isPendingProvisioningEnvironment(environment, environmentId)) {
+                return;
+              }
+              let devicePlacement: DevicePlacementRequirement | undefined;
+              if (environment.nodeDeviceId) {
+                if (!options.resolveDevicePlacementRequirement) {
+                  throw new Error("Node-backed recovery has no authoritative runtime requirement");
+                }
+                devicePlacement = await options.resolveDevicePlacementRequirement({
+                  sessionId: placement.sessionId,
+                  sessionKey: placement.sessionKey,
+                  agentId: placement.agentId,
+                  executionMode: placement.executionMode,
+                });
+              }
+              result = await continueProvisionedDispatch({
+                request: {
+                  sessionId: placement.sessionId,
+                  sessionKey: placement.sessionKey,
+                  agentId: placement.agentId,
+                  profileId: environment.profileId,
+                  executionMode: placement.executionMode,
+                  ...(devicePlacement ? { devicePlacement } : {}),
+                  ...(environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+                  environment.nodeDeviceId
+                    ? { deviceId: environment.nodeDeviceId }
+                    : {}),
+                },
+                placement: current,
+                environment,
+                expectedEnvironmentId: environmentId,
+                localPath,
+                onTransition: report,
+                signal,
+                recovery: true,
+              });
+            } catch (error) {
+              // Keep teardown under the same session lifecycle fence that admitted recovery.
+              result = await handleRecoveryFailure(error);
+            }
+          },
+        });
+      } catch (error) {
+        result = await handleRecoveryFailure(error);
+      }
+      return result;
     };
     try {
-      if (!environmentId) {
-        throw new Error("Provisioning worker placement has no environment owner");
-      }
-      await options.runRecoveryBarrier({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        executionMode: placement.executionMode,
-        environmentId,
-        expectedGeneration: placement.generation,
-        run: async (localPath) => {
-          recoveryRunStarted = true;
-          try {
-            const initialEnvironment = environments.get(environmentId);
-            if (initialEnvironment?.environmentId !== environmentId) {
-              throw new Error("Provisioning worker environment record is missing");
-            }
-            if (initialEnvironment.destroyRequestedAtMs !== null) {
-              throw new Error("Provisioning worker environment destruction was requested");
-            }
-            await reconcileEnvironmentCore();
-            const current = placements.get(placement.sessionId);
-            if (
-              current?.state !== "provisioning" ||
-              current.generation !== placement.generation ||
-              current.environmentId !== environmentId
-            ) {
-              throw new Error("Provisioning worker placement changed during restart recovery");
-            }
-            const environment = environments.get(environmentId);
-            if (environment?.environmentId !== environmentId) {
-              throw new Error("Provisioning worker environment record is missing");
-            }
-            if (isPendingProvisioningEnvironment(environment, environmentId)) {
-              return;
-            }
-            let devicePlacement: DevicePlacementRequirement | undefined;
-            if (environment.nodeDeviceId) {
-              if (!options.resolveDevicePlacementRequirement) {
-                throw new Error("Node-backed recovery has no authoritative runtime requirement");
-              }
-              devicePlacement = await options.resolveDevicePlacementRequirement({
-                sessionId: placement.sessionId,
-                sessionKey: placement.sessionKey,
-                agentId: placement.agentId,
-                executionMode: placement.executionMode,
-              });
-            }
-            await continueProvisionedDispatch({
-              request: {
-                sessionId: placement.sessionId,
-                sessionKey: placement.sessionKey,
-                agentId: placement.agentId,
-                profileId: environment.profileId,
-                executionMode: placement.executionMode,
-                ...(devicePlacement ? { devicePlacement } : {}),
-                ...(environment.providerId === DEVICE_WORKER_PROVIDER_ID && environment.nodeDeviceId
-                  ? { deviceId: environment.nodeDeviceId }
-                  : {}),
-              },
-              placement: current,
-              environment,
-              expectedEnvironmentId: environmentId,
-              localPath,
-              onTransition: (next) => {
-                recoveryOwnedPlacement = next;
-              },
-              recovery: true,
-            });
-          } catch (error) {
-            // Keep teardown under the same session lifecycle fence that admitted recovery.
-            await handleRecoveryFailure(error);
-          }
-        },
-      });
+      return await runAdmitted(recover);
     } catch (error) {
-      await handleRecoveryFailure(error);
+      // A refused session owner still owes cleanup. Shutdown and queued cancellation
+      // remain with their existing owners and must not destroy an adoptable allocation.
+      if (!(error instanceof WorkerPlacementAdmissionTargetError)) {
+        throw error;
+      }
+      return await handleRecoveryFailure(error);
     }
   };
 
-  return { continueProvisionedDispatch, resumeProvisioning };
+  return { validateDevicePlacement, continueProvisionedDispatch, resumeProvisioning };
 }

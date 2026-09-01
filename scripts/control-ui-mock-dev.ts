@@ -21,10 +21,12 @@ import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-s
 import type { UpdateRunResult } from "../src/infra/update-runner.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
+  controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -391,23 +393,15 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
   const { model, modelProvider, ...extra } = options;
-  return {
+  return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    kind: "direct",
-    label,
     model: (model as string | undefined) ?? "gpt-5.6-luna",
     modelProvider: (modelProvider as string | undefined) ?? "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
     ...extra,
-  };
+  });
 }
 
-function sessionsListResponse(sessions: unknown[], options: SessionListOptions) {
+function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
   return {
     count: sessions.length,
     defaults: {
@@ -421,14 +415,15 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     ...(options.owners ? { owners: options.owners } : {}),
     offset: options.offset ?? 0,
     path: "",
-    sessions,
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: sessions.map(({ key }) => ({ key })),
     totalCount: options.totalCount,
     ts: Date.now(),
   };
 }
 
 function pagedSessionsListResponse(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   offset: number,
   owners?: readonly SessionActorFixture[],
 ) {
@@ -465,7 +460,7 @@ function buildSessionRows(params: {
 }
 
 function buildSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   matchBase: Record<string, unknown> = {},
   owners?: readonly SessionActorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
@@ -484,7 +479,7 @@ function buildSessionListCases(
 }
 
 function buildSearchSessionListCases(
-  sessions: unknown[],
+  sessions: Array<{ key: string }>,
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
@@ -1762,6 +1757,32 @@ async function createChatPickerScenario(
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
     }),
+    sessionRow("agent:main:cloud-refactor", "Cloud refactor worker", baseTime - 70_000, {
+      hasActiveRun: true,
+      status: "running",
+      startedAt: baseTime - 3_500_000,
+      execCwd: "/workspace/openclaw",
+      placement: {
+        state: "active",
+        generation: 3,
+        createdAtMs: baseTime - 3_600_000,
+        updatedAtMs: baseTime - 20_000,
+        stateChangedAtMs: baseTime - 3_500_000,
+        environmentId: "worker:9f2c4e7a81d24b06a5c3f8e1b7d94c1a",
+        providerId: "machine0",
+        profileId: "team",
+        activeOwnerEpoch: 4,
+        workerBundleHash: "b".repeat(64),
+        workspaceBaseManifestRef: "sha256:cloud-refactor-base",
+        remoteWorkspaceDir: "/workspace/openclaw",
+        diskSpace: {
+          status: "ok",
+          availableBytes: 61 * 1024 ** 3,
+          totalBytes: 100 * 1024 ** 3,
+          observedAtMs: baseTime - 20_000,
+        },
+      },
+    }),
     sessionRow(
       "agent:main:production-export",
       "Investigate transcript scroll-anchor regression when the final code block expands",
@@ -1948,7 +1969,7 @@ async function createChatPickerScenario(
   };
   const planChatHistory = {
     messages: historyMessages,
-    sessionId: "control-ui-e2e-session",
+    sessionId: "session:agent:main:main",
     sessionInfo: planSessionInfo,
     inFlightRun: planInFlightRun,
     thinkingLevel: null,
@@ -2016,6 +2037,8 @@ async function createChatPickerScenario(
     featureMethods: [
       "browser.request",
       "chat.abort",
+      "chat.history",
+      "chat.send",
       "config.schema",
       "chat.metadata",
       "chat.startup",
@@ -2179,7 +2202,6 @@ async function createChatPickerScenario(
                 "gpt-realtime-2.1-mini",
                 "gpt-realtime-2",
                 "gpt-live-1-codex",
-                "gpt-live-1-boulder-alpha",
               ],
               voices: [
                 "alloy",
@@ -3069,6 +3091,7 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
+    sessions: [...sessions, ...archivedSessions, mainChildRow, taxChildRow],
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
@@ -3400,7 +3423,9 @@ const server = await createServer({
 });
 
 await server.listen();
-console.log(`[control-ui-mock] ${resolveServerUrl(server, options.host)}`);
+console.log(
+  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+);
 console.log(
   `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
 );

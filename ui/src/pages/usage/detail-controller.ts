@@ -10,8 +10,8 @@ import {
   requestSessionUsageContextWeight,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
-} from "../../lib/sessions/index.ts";
-import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
+  type SessionUsageQuery,
+} from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";

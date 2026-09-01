@@ -80,6 +80,9 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
       supportsModuleFlows: true,
       // Every worker owns a uniquely named disposable homeserver, Gateway, and state tree.
       isolatesInstances: true,
+      async prepareSelectedScenarios(scenarioIds) {
+        await (await loadMatrixQaAdapterRuntime()).prepareMatrixQaSelectedScenarios(scenarioIds);
+      },
       async create(context) {
         return (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
       },

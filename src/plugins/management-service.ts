@@ -916,7 +916,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
-      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config);
+      const enabled = isInstalledPluginEnabled(metadata.index, record.pluginId, params.config, env);
       const manifest = metadata.byPluginId.get(record.pluginId);
       const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
       const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
@@ -1389,12 +1389,13 @@ async function persistManagedSourceInstall(params: {
       try {
         await params.transaction?.rollback();
       } catch (rollbackError) {
-        // oxlint-disable-next-line preserve-caught-error -- Oxlint 1.78 ignores AggregateError's third-argument cause.
-        throw new AggregateError(
+        // Both errors are retained; the install failure remains the primary cause.
+        const aggregate = new AggregateError(
           [error, rollbackError],
           "Plugin install failed and payload rollback failed",
-          { cause: rollbackError },
         );
+        aggregate.cause = error;
+        throw aggregate;
       }
     }
     throw error;

@@ -1,61 +1,8 @@
-import type { RouteLocation, RouteMatch } from "@openclaw/uirouter";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
 import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { renderPanelErrorState } from "../../components/lazy-view-error.ts";
-import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
-import type { ChatRouteData } from "./route-loader.ts";
-
-type SessionOwnerMatch = Pick<RouteMatch, "data">;
-const CHAT_PAGE_OWNER_KEY = "chat-page";
-
-function navigateTo(href: string) {
-  window.history.pushState({}, "", href);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
-function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
-  return html`
-    <section class="card">
-      <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
-      <p>
-        ${data.candidates.length > 1
-          ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
-          : t("chat.sessionRoute.additionalMatches")}
-      </p>
-      ${data.candidates.map(
-        (candidate) => html`
-          <p>
-            <a href=${candidate.href}>${candidate.displayName}</a><br />
-            <small>${candidate.agentId} · ${candidate.idPrefix}</small>
-          </p>
-        `,
-      )}
-      ${data.truncated && data.candidates.length > 1
-        ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
-        : null}
-    </section>
-  `;
-}
-
-function renderMissingSession(data: Extract<ChatRouteData, { kind: "missing-session" }>) {
-  return renderPanelErrorState({
-    className: "session-route-not-found",
-    role: "status",
-    title: t("chat.sessionRoute.notFoundTitle"),
-    subtitle: t("chat.sessionRoute.notFoundExplanation"),
-    actions: html`
-      <button class="btn primary" type="button" @click=${() => navigateTo(data.currentSessionHref)}>
-        ${t("chat.sessionRoute.goToMain")}
-      </button>
-      <button class="btn" type="button" @click=${() => navigateTo(data.sessionsHref)}>
-        ${t("chat.sessionRoute.viewSessions")}
-      </button>
-    `,
-  });
-}
 
 function sessionLoaderDeps(
   face: BoardFace,
@@ -76,14 +23,6 @@ function sessionLoaderDeps(
   }`;
 }
 
-function sessionRenderOwnerKey(
-  match: SessionOwnerMatch,
-  settled: SessionOwnerMatch | undefined,
-): string | undefined {
-  const data = (match.data ?? settled?.data) as ChatRouteData | undefined;
-  return data?.kind === "session" ? CHAT_PAGE_OWNER_KEY : undefined;
-}
-
 function sessionPage(face: BoardFace) {
   return definePage({
     ...routePageSpec(face),
@@ -98,26 +37,15 @@ function sessionPage(face: BoardFace) {
     component: () =>
       Promise.all([
         import("./chat-page.ts"),
+        import("./route-view.ts"),
         import("../../styles/chat/composer-progress.css"),
         import("../../styles/chat/composer-queue.css"),
-      ]).then(() => ({
+      ]).then(([, { renderChatRoute, sessionRenderOwnerKey }]) => ({
         header: true,
         // ChatPage's bounded inner cache owns per-session teardown, so session
         // routes share the outer owner while their data and URL keep changing.
         renderOwnerKey: sessionRenderOwnerKey,
-        render: (data: unknown) => {
-          const routeData = data as ChatRouteData | undefined;
-          if (!routeData) {
-            return nothing;
-          }
-          if (routeData.kind === "ambiguous") {
-            return renderAmbiguous(routeData);
-          }
-          if (routeData.kind === "missing-session") {
-            return renderMissingSession(routeData);
-          }
-          return html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;
-        },
+        render: renderChatRoute,
       })),
   });
 }

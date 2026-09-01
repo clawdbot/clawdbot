@@ -1,7 +1,8 @@
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
-import { desktopFocusPath } from "../../components/desktop/desktop-focus-window.ts";
+import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderPanelLoadingSkeleton,
@@ -32,9 +33,12 @@ type SidebarPanelDefinitionParams = {
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: boolean;
+  browserRefreshOnPresentation: boolean;
+  preferredBrowserTab?: BrowserTabSelection;
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
+  desktopSource: string | null;
   hasBoard: boolean;
   chat: TemplateResult;
   workspace: TemplateResult | typeof nothing;
@@ -92,7 +96,9 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
-  const desktopFocusHref = state ? desktopFocusPath(state.basePath) : null;
+  const desktopFocusHref = state
+    ? buildControlUiFocusPath({ kind: "desktop", session: state.sessionKey }, state.basePath)
+    : null;
   const definePanel = (
     slot: SidebarSlotId,
     textKey: SidebarPanelTextKey,
@@ -130,6 +136,9 @@ export function sidebarPanelDefinitions(
           .client=${state.connected ? state.client : null}
           .available=${state.browserPanelAvailable}
           .presented=${params?.browserPresented ?? false}
+          .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
+          .sessionKey=${state.sessionKey}
+          .preferredTab=${params?.preferredBrowserTab}
           .resourceBasePath=${state.resourceBasePath}
           .authToken=${resolveAssistantAttachmentAuthToken(state)}
         ></openclaw-browser-panel>`
@@ -160,6 +169,8 @@ export function sidebarPanelDefinitions(
           .available=${desktopAvailable}
           .presented=${params?.desktopPresented ?? false}
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
+          .requestedSource=${params?.desktopSource ?? null}
+          .sessionKey=${state.sessionKey}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion

@@ -256,12 +256,14 @@ describe("dispatchReplyFromConfig", () => {
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async (ctx) => {
-        markCommandSessionMetadataChanged({ ctx, sessionKey });
+        markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
         return { text: "goal updated" };
       },
     });
 
-    expect(result.sessionMetadataChanges).toEqual([{ sessionKey, reason: "command-metadata" }]);
+    expect(result.sessionMetadataChanges).toEqual([
+      { sessionKey, agentId: "main", reason: "command-metadata" },
+    ]);
   });
 
   it("notifies session metadata changes before later dispatch errors", async () => {
@@ -283,14 +285,14 @@ describe("dispatchReplyFromConfig", () => {
         dispatcher,
         onSessionMetadataChanges,
         replyResolver: async (ctx) => {
-          markCommandSessionMetadataChanged({ ctx, sessionKey });
+          markCommandSessionMetadataChanged({ ctx, sessionKey, agentId: "main" });
           return { text: "goal updated" };
         },
       }),
     ).rejects.toThrow("delivery failed");
 
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
-      { sessionKey, reason: "command-metadata" },
+      { sessionKey, agentId: "main", reason: "command-metadata" },
     ]);
   });
 
@@ -1079,19 +1081,25 @@ describe("dispatchReplyFromConfig", () => {
   it("bounds Slack bypass lease cleanup when dispatcher idle never settles", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } = createActiveSlackThread("U4");
     const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
     dispatcher.waitForIdle = vi.fn(async () => await new Promise<void>(() => {}));
     dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy = () => ({
       maxTimeoutMs: 25,
       shouldExtend: () => false,
     });
 
+    vi.useFakeTimers();
     try {
-      const result = await dispatchReplyFromConfig({
+      const dispatch = dispatchReplyFromConfig({
         ctx: createCtx({ BodyForAgent: "hung delivery barrier" }),
         cfg: emptyConfig,
         dispatcher,
-        replyResolver: async () => undefined,
+        replyResolver,
       });
+      await vi.waitFor(() => expect(replyResolver).toHaveBeenCalled());
+      // Advance settlement only; the cleanup assertion must still reject an overlong lease.
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await dispatch;
 
       // An unsettled custom dispatcher has no receipt, so the turn cannot claim delivery.
       expect(result.queuedFinal).toBe(false);
@@ -1106,6 +1114,7 @@ describe("dispatchReplyFromConfig", () => {
       );
     } finally {
       activeOperation.complete();
+      vi.useRealTimers();
     }
   });
 
@@ -1291,6 +1300,47 @@ describe("dispatchReplyFromConfig", () => {
     } finally {
       activeOperation.complete();
       await resultPromise;
+    }
+  });
+
+  it("lets low-level channel turns reach queue resolution while a reply operation is active", async () => {
+    setNoAbort();
+    const { createRuntimeChannel } = await import("../../plugins/runtime/runtime-channel.js");
+    const lowLevelDispatch = createRuntimeChannel().reply.dispatchReplyFromConfig;
+    const sessionKey = "agent:main:dingtalk-connector:direct:1";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      activeOperation.abortByUser();
+      activeOperation.complete();
+      return { text: "newest reply" } satisfies ReplyPayload;
+    });
+    const resultPromise = lowLevelDispatch({
+      ctx: buildTestCtx({
+        Provider: "dingtalk-connector",
+        Surface: "dingtalk-connector",
+        SessionKey: sessionKey,
+        BodyForAgent: "interrupt this active turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    try {
+      await vi.waitFor(() => expect(replyResolver).toHaveBeenCalledOnce());
+      await expect(resultPromise).resolves.toMatchObject({ queuedFinal: true });
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "newest reply" });
+    } finally {
+      if (!activeOperation.result) {
+        activeOperation.complete();
+      }
+      await Promise.allSettled([resultPromise]);
     }
   });
 

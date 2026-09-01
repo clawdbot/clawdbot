@@ -197,10 +197,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Bind a Discord thread to a subagent or session target so follow-up messages there stay on that bound session.
 
     - Spawn with `sessions_spawn` using `thread: true` (optionally `mode: "session"` for persistent follow-up).
-    - Or bind manually with `/focus <target>`.
     - `/agents` inspects binding state.
-    - `/session idle <duration|off>` and `/session max-age <duration|off>` control auto-unfocus.
-    - `/unfocus` detaches the thread.
+    - `/session idle <duration|off>` and `/session max-age <duration|off>` control automatic expiry.
+    - `/session unbind` detaches the thread without closing the agent session.
 
     Config: `session.threadBindings.enabled` (global switch), `session.threadBindings.idleHours` (default `24`, `0` disables), `session.threadBindings.maxAgeHours` (default `0` = no hard cap), and `session.threadBindings.spawnSessions` for auto-bind on spawn (default `true`).
 
@@ -354,7 +353,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or configure `agents.defaults.skills` / `agents.entries.*.skills` to limit visibility. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
 
-    See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/tools/clawhub).
+    See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/clawhub).
 
   </Accordion>
 
@@ -680,8 +679,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - A direct edit that breaks startup or hot reload makes the Gateway fail closed or skip the reload; it does not rewrite `openclaw.json`.
-    - `openclaw doctor --fix` owns repair, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 

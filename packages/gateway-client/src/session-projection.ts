@@ -295,7 +295,7 @@ function entryMatches(
     !pending.identity.isImported &&
     !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity.runId &&
+    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
     (pending.identity.sequence === null ||
       authoritative.identity.sequence === null ||
       pending.identity.sequence === authoritative.identity.sequence),

@@ -67,6 +67,8 @@ Password-based (token is cached after first login):
 }
 ```
 
+Token and password SecretRefs follow the shared [source-specific provider-alias rules](/gateway/secrets#provider-config), including for named accounts. An explicit matching `env` provider still enforces its allowlist; an empty allowlist denies all variables.
+
 ### Auto-join
 
 `channels.matrix.autoJoin` defaults to `"off"`: the bot will not appear in new rooms or DMs from fresh invites until you join manually. OpenClaw cannot tell at invite time whether an invite is a DM or a group, so every invite goes through `autoJoin` first; `dm.policy` only applies later, after the bot has joined and the room is classified.
@@ -566,11 +568,11 @@ Explicit conversation bindings always win over `sessionScope`; bound rooms and t
 - Inbound threaded messages include the thread root message as extra agent context.
 - Message-tool sends auto-inherit the current Matrix thread when targeting the same room (or the same DM user target), unless an explicit `threadId` is provided.
 - DM user-target reuse only kicks in when current session metadata proves the same DM peer on the same Matrix account; otherwise OpenClaw falls back to normal user-scoped routing.
-- `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` all work in Matrix rooms and DMs.
-- Top-level `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSessions` is enabled.
-- Running `/focus` or `/acp spawn --thread here` inside an existing Matrix thread binds that thread in place.
+- `/session unbind`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` all work in Matrix rooms and DMs.
+- `/acp spawn --thread auto` creates a new Matrix thread when `threadBindings.spawnSessions` is enabled.
+- Running `/acp spawn --thread here` inside an existing Matrix thread binds that thread in place.
 
-When OpenClaw detects a Matrix DM room colliding with another DM room on the same shared session, it posts a one-time `m.notice` pointing to the `/focus` escape hatch and suggesting a `dm.sessionScope` change. The notice only appears when thread bindings are enabled.
+When OpenClaw detects a Matrix DM room colliding with another DM room on the same shared session, it posts a one-time `m.notice` suggesting `dm.sessionScope: "per-room"` to isolate the rooms. The notice only appears when thread bindings are enabled.
 
 ## ACP conversation bindings
 
@@ -597,7 +599,7 @@ Matrix inherits global defaults from `session.threadBindings` and supports per-c
 - Deprecated `threadBindings.spawnSubagentSessions` / `threadBindings.spawnAcpSessions` keys are migrated to `spawnSessions` by `openclaw doctor --fix`.
 - `threadBindings.defaultSpawnContext`
 
-Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
+Matrix thread-bound session spawns default on. Set `threadBindings.spawnSessions: false` to block native subagent and ACP thread spawns from creating/binding Matrix threads. Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
 
 ## Reactions
 
@@ -739,7 +741,7 @@ Related: [Exec approvals](/tools/exec-approvals).
 
 ## Slash commands
 
-Slash commands (`/new`, `/reset`, `/model`, `/focus`, `/unfocus`, `/agents`, `/session`, `/acp`, `/approve`, etc.) work directly in DMs. In rooms, OpenClaw also recognizes commands prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without a custom mention regex - this keeps the bot responsive to the room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
+Slash commands (`/new`, `/reset`, `/model`, `/agents`, `/session`, `/acp`, `/approve`, etc.) work directly in DMs. In rooms, OpenClaw also recognizes commands prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without a custom mention regex - this keeps the bot responsive to the room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
 
 Authorization rules still apply: command senders must satisfy the same DM or room allowlist/owner policies as plain messages.
 

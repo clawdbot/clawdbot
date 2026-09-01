@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 347255,
-  "reason": "compact mobile session sharing with preserved draft state and a bounded member drilldown; recorded at the CI build-artifacts lane (347255 B)",
-  "updatedAt": "2026-08-28"
+  "startupJsGzipBytes": 346777,
+  "reason": "Sender-agent avatars on forwarded cross-session messages (PR #133439): agent-avatar resolution, attribution label rules, and direct-thread identity chrome measured 346777 B, +592 B over the prior baseline; below the 358400 B ceiling; hard cap and allowances unchanged",
+  "updatedAt": "2026-08-30"
 }

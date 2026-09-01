@@ -3,9 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
@@ -20,7 +22,6 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
-const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadContextMocks = vi.hoisted(() => ({
   actualResolve: undefined as
@@ -28,16 +29,46 @@ const loadContextMocks = vi.hoisted(() => ({
     | undefined,
   resolve: vi.fn(),
 }));
-
-vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
-  loadPluginRegistryHandle: (params: unknown) => loadOpenClawPluginsMock(params),
-  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
-    resolveCompatibleRuntimePluginRegistryMock(params),
-  resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
-  resolveRuntimePluginRegistry: (params: unknown) =>
-    resolveCompatibleRuntimePluginRegistryMock(params),
+const activeRegistryMocks = vi.hoisted(() => ({
+  actualGetLoadedRegistry: undefined as
+    | typeof import("./active-runtime-registry.js").getLoadedRuntimePluginRegistry
+    | undefined,
+  getLoadedRegistry: vi.fn(),
 }));
+
+// Only the load entry points are intercepted. The registry-resolution bindings
+// stay wired to their real owners so a consumer that crosses them observes
+// production behavior instead of a double that no production path reaches.
+vi.mock("./loader.js", async () => {
+  const [activeRuntimeRegistry, loaderCache] = await Promise.all([
+    import("./active-runtime-registry.js"),
+    import("./loader-cache.js"),
+  ]);
+  const loadPluginRegistryHandle = (params: unknown) => loadOpenClawPluginsMock(params);
+  return {
+    loadOpenClawPlugins: loadPluginRegistryHandle,
+    loadPluginRegistryHandle,
+    resolveCompatibleRuntimePluginRegistry:
+      activeRuntimeRegistry.resolveCompatibleRuntimePluginRegistry,
+    resolvePluginRegistryLoadCacheKey: loaderCache.resolvePluginRegistryLoadCacheKey,
+    resolveRuntimePluginRegistry: (options?: PluginLoadOptions) =>
+      activeRuntimeRegistry.resolveCompatibleRuntimePluginRegistry(options) ??
+      loadPluginRegistryHandle({ ...options, activate: false }),
+  };
+});
+
+// resolvePluginToolRegistry reads the active registry through this module, so
+// this is the seam that decides reuse-vs-rebuild. It delegates to the real
+// implementation; tests drive it by installing an active registry.
+vi.mock("./active-runtime-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./active-runtime-registry.js")>();
+  activeRegistryMocks.actualGetLoadedRegistry = actual.getLoadedRuntimePluginRegistry;
+  return {
+    ...actual,
+    getLoadedRuntimePluginRegistry: (...args: unknown[]) =>
+      activeRegistryMocks.getLoadedRegistry(...args),
+  };
+});
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: unknown) => applyPluginAutoEnableMock(params),
@@ -54,8 +85,8 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
-let getPluginToolMeta: typeof import("./tools.js").getPluginToolMeta;
+let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
+let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
@@ -407,6 +438,7 @@ function installToolManifestSnapshots(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -506,6 +538,10 @@ function mockCallParams(
   return call[0] as Record<string, unknown>;
 }
 
+function activeRegistryRequiredPluginIds(index = 0): unknown {
+  return mockCallParams(activeRegistryMocks.getLoadedRegistry, index).requiredPluginIds;
+}
+
 function expectLoaderSelectedOnlyPluginIds(expectedPluginIds: readonly string[]) {
   const selectedPluginIds = loadOpenClawPluginsMock.mock.calls.map(
     ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
@@ -540,12 +576,8 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({
-      buildPluginToolMetadataKey,
-      ensureStandalonePluginToolRegistryLoaded,
-      getPluginToolMeta,
-      resolvePluginTools,
-    } = await import("./tools.js"));
+    ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
@@ -558,10 +590,13 @@ describe("resolvePluginTools optional tools", () => {
 
   beforeEach(() => {
     loadOpenClawPluginsMock.mockReset();
-    resolveCompatibleRuntimePluginRegistryMock.mockReset();
-    resolveCompatibleRuntimePluginRegistryMock.mockImplementation(() =>
-      getActivePluginRegistry?.(),
-    );
+    activeRegistryMocks.getLoadedRegistry.mockReset();
+    activeRegistryMocks.getLoadedRegistry.mockImplementation((...args: unknown[]) => {
+      if (!activeRegistryMocks.actualGetLoadedRegistry) {
+        throw new Error("active-runtime-registry mock was not initialized");
+      }
+      return activeRegistryMocks.actualGetLoadedRegistry(...(args as [never]));
+    });
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
       config,
@@ -1142,7 +1177,6 @@ describe("resolvePluginTools optional tools", () => {
       "gateway-bindable",
       "/tmp",
     );
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(partialRegistry);
     loadOpenClawPluginsMock.mockReturnValue(fullRegistry);
 
     const tools = resolvePluginTools(
@@ -1153,6 +1187,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveReturnedWith(partialRegistry);
     const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
       activate?: unknown;
       cache?: unknown;
@@ -1230,7 +1265,6 @@ describe("resolvePluginTools optional tools", () => {
       "gateway-bindable",
       "/tmp",
     );
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(staleRegistry);
     loadOpenClawPluginsMock.mockReturnValue(freshRegistry);
 
     const tools = resolvePluginTools(
@@ -1241,6 +1275,7 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveReturnedWith(staleRegistry);
     expect(getActivePluginRegistry?.()).toBe(staleRegistry);
     expectLoaderSelectedOnlyPluginIds(["multi", "optional-demo"]);
     expect(freshRegistry.diagnostics).toStrictEqual([]);
@@ -1292,7 +1327,29 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads plugin-owned tools when manifest config signals point at configured non-env SecretRefs", () => {
+  it.each<{
+    name: string;
+    apiKey: SecretRef;
+    secrets: OpenClawConfig["secrets"];
+  }>([
+    {
+      name: "explicit file provider",
+      apiKey: { source: "file", provider: "vault", id: "/xai/tool-key" },
+      secrets: {
+        providers: {
+          vault: { source: "file", path: "/tmp/openclaw-secrets.json", mode: "json" },
+        },
+      },
+    },
+    {
+      name: "store default shadowing file",
+      apiKey: { source: "store", provider: "shared", id: "TOOL_API_KEY" },
+      secrets: {
+        defaults: { store: "shared" },
+        providers: { shared: { source: "file", path: "/tmp/unused-store-alias-fixture.json" } },
+      },
+    },
+  ])("loads plugin-owned tools when manifest config signals use $name", ({ apiKey, secrets }) => {
     const base = createContext();
     const config = {
       ...base.config,
@@ -1302,25 +1359,13 @@ describe("resolvePluginTools optional tools", () => {
           xai: {
             config: {
               webSearch: {
-                apiKey: {
-                  source: "file",
-                  provider: "vault",
-                  id: "/xai/tool-key",
-                },
+                apiKey,
               },
             },
           },
         },
       },
-      secrets: {
-        providers: {
-          vault: {
-            source: "file",
-            path: "/tmp/openclaw-secrets.json",
-            mode: "json",
-          },
-        },
-      },
+      secrets,
     } as const;
     installToolManifestSnapshot({
       config,
@@ -2830,7 +2875,6 @@ describe("resolvePluginTools optional tools", () => {
       status: "loaded",
     });
     setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock
       .mockReturnValueOnce(gatewayRegistry)
@@ -3061,7 +3105,6 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses a compatible active registry instead of loading again", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -3070,13 +3113,13 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveReturnedWith(activeRegistry);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("reuses the gateway-bindable registry when it covers the tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -3086,7 +3129,8 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveBeenCalledOnce();
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveReturnedWith(activeRegistry);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3114,7 +3158,6 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
     loadOpenClawPluginsMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
@@ -3126,7 +3169,8 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(heavyFactory).not.toHaveBeenCalled();
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveBeenCalledOnce();
+    expect(activeRegistryRequiredPluginIds()).toEqual(["optional-demo"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3173,7 +3217,6 @@ describe("resolvePluginTools optional tools", () => {
       diagnostics: [],
     };
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
     loadOpenClawPluginsMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
@@ -3186,7 +3229,10 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["memory_search", "memory_get"]);
     expect(memorySearchFactory).toHaveBeenCalledTimes(1);
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveBeenCalledOnce();
+    // The disabled owner must never enter the runtime scope: asking the active
+    // registry for it would miss and force a pointless cold load.
+    expect(activeRegistryRequiredPluginIds()).toEqual(["memory-core"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -3243,7 +3289,6 @@ describe("resolvePluginTools optional tools", () => {
       "gateway-bindable",
       "/tmp",
     );
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
     loadOpenClawPluginsMock.mockReturnValue(loadedRegistry);
 
     const tools = resolvePluginTools(
@@ -3291,7 +3336,6 @@ describe("resolvePluginTools optional tools", () => {
       ],
     });
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
-    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
     loadOpenClawPluginsMock.mockReturnValue(createToolRegistry([]));
 
     resolvePluginTools({
@@ -3302,7 +3346,7 @@ describe("resolvePluginTools optional tools", () => {
       toolAllowlist: ["*", "tavily"],
       allowGatewaySubagentBinding: true,
     });
-    expect(resolveCompatibleRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    expect(activeRegistryMocks.getLoadedRegistry).toHaveBeenCalledOnce();
     const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
       onlyPluginIds?: string[];
       toolDiscovery?: unknown;
@@ -3397,7 +3441,7 @@ describe("resolvePluginTools optional tools", () => {
 
 describe("buildPluginToolMetadataKey", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
   });
 
   it("does not collide when ids or names contain separator-like characters", () => {

@@ -17,6 +17,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   delete globalThis.__openclawNamespaces;
   const bridgeSequences = new Map();
   const timers = new Map();
+  // Keep rejection ownership in the snapshot so a handler attached after wait
+  // can clear it; an unawaited failure must not become a successful cell.
+  const unhandledRejections = new Map();
   let nextTimerId = 0;
 
   function safe(value) {
@@ -320,6 +323,13 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     __openclawSettleBridge: { value: settle },
     __openclawSerializeCatalogHandles: { value: serializeCatalogHandles },
     __openclawTakeOutput: { value: () => output.splice(0) },
+    __openclawTrackRejection: {
+      value: (promise, reason, handled) => {
+        if (handled) unhandledRejections.delete(promise);
+        else unhandledRejections.set(promise, reason);
+      },
+    },
+    __openclawUnhandledRejection: { value: () => unhandledRejections.keys().next().value },
   });
 })();
 `;

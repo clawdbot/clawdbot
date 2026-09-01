@@ -25,6 +25,15 @@ export const browserPanelStyles = css`
   .bp-actions {
     flex: none;
   }
+  .bp-profile {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
   .bp-toolbar {
     display: flex;
     align-items: center;

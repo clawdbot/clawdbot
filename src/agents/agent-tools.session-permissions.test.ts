@@ -292,9 +292,7 @@ describe("session permission filesystem tools", () => {
             input:
               "*** Begin Patch\n*** Update File: ../../shared.txt\n@@\n-shared\n+patched\n*** End Patch",
           });
-          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe(
-            "patched\n",
-          );
+          await expect(fs.readFile(path.join(root, "shared.txt"), "utf8")).resolves.toBe("patched");
           await expect(readTool.execute("outside-read", { path: outside })).rejects.toThrow(
             /sandbox root/i,
           );
@@ -339,6 +337,23 @@ describe("session permission filesystem tools", () => {
       } finally {
         await fs.rm(outside, { force: true });
       }
+    });
+  });
+
+  it("denies exec when a turn tightens the dispatch-provided full mode", async () => {
+    await withTempDir("openclaw-permission-exec-", async (root) => {
+      const tools = createOpenClawCodingTools({
+        workspaceDir: root,
+        sessionPermissionPolicy: { root, mode: "full" },
+        exec: { host: "gateway", mode: "full", security: "deny", ask: "off" },
+      });
+      const exec = tools.find((tool) => tool.name === "exec");
+      if (!exec) {
+        throw new Error("expected exec tool");
+      }
+      await expect(
+        exec.execute("tightened-exec", { command: "echo exec-policy-proof" }),
+      ).rejects.toThrow(/security=deny/);
     });
   });
 

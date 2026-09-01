@@ -752,7 +752,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: "",
-        resolutionKey: "runtime-core:image-generation-core",
       }),
     ).toEqual({
       allowed: true,
@@ -769,7 +768,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: "",
-        resolutionKey: "runtime-core:speech-core",
       }),
     ).toEqual({
       allowed: false,
@@ -817,7 +815,6 @@ describe("plugin-sdk facade runtime", () => {
           boundaryRoot: dir,
         },
         sourceExtensionsRoot: dir,
-        resolutionKey: "source-snapshot-demo",
       }),
     ).toEqual({
       allowed: true,
@@ -873,6 +870,7 @@ describe("plugin-sdk facade runtime", () => {
           setupProviders: new Map(),
           commandAliases: new Map(),
           contracts: new Map(),
+          modelIdNormalizationPolicies: new Map(),
         },
         metrics: {
           registrySnapshotMs: 0,
@@ -941,7 +939,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: dir,
-        resolutionKey: "snapshot-validate-demo",
       }),
     ).toEqual({
       allowed: false,
@@ -956,7 +953,6 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "runtime-api.js",
         location: null,
         sourceExtensionsRoot: dir,
-        resolutionKey: "snapshot-validate-demo",
       }),
     ).toEqual({
       allowed: true,

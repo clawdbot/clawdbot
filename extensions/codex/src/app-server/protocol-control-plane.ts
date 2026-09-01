@@ -12,6 +12,12 @@ export type CodexPluginSummary = {
   mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
+  disabledReason?:
+    | "disabled_by_admin"
+    | "plan_not_eligible"
+    | "required_app_unavailable"
+    | "unknown"
+    | null;
   interface?: JsonValue;
 };
 
@@ -106,6 +112,8 @@ export type CodexAppInfo = {
   isAccessible: boolean;
   isEnabled: boolean;
   pluginDisplayNames: string[];
+  /** Present when app/read was requested with includeTools. */
+  toolSummaries?: CodexAppToolSummary[];
 };
 
 export type CodexAppsListParams = {
@@ -166,6 +174,11 @@ export type CodexAppsReadParams = {
 export type CodexAppsReadResponse = {
   apps: CodexConnectorMetadata[];
   missingAppIds: string[];
+};
+
+export type CodexExperimentalFeatureListResponse = {
+  data: { name: string; enabled: boolean }[];
+  nextCursor: string | null;
 };
 
 export type CodexSkillsListParams = {

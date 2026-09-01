@@ -104,6 +104,8 @@ describe("ChatVideoPlayer", () => {
     player.sourceIdentity = "media:clip";
     player.label = "clip.avi";
     player.playback = "transcode";
+    const onExpand = vi.fn();
+    player.onExpand = onExpand;
     document.body.append(player);
     await player.updateComplete;
     const video = player.querySelector("video");
@@ -115,6 +117,12 @@ describe("ChatVideoPlayer", () => {
 
     expect(player.querySelector("video")).toBe(video);
     expect(video?.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
+    const pause = vi.spyOn(video!, "pause").mockImplementation(() => {});
+    player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(pause).toHaveBeenCalledOnce();
+    expect(onExpand).toHaveBeenCalledWith(
+      "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket&playback=1",
+    );
   });
 
   it("does not preserve a previous attachment when a new rendition fails", async () => {
@@ -122,6 +130,10 @@ describe("ChatVideoPlayer", () => {
     player.src = "https://example.com/first.mp4";
     player.sourceIdentity = "media:first";
     player.label = "first.mp4";
+    const onExpand = vi.fn();
+    const onFallbackExpand = vi.fn();
+    player.onExpand = onExpand;
+    player.onFallbackExpand = onFallbackExpand;
     document.body.append(player);
     await player.updateComplete;
     expect(player.querySelector("video")?.getAttribute("src")).toBe(
@@ -141,6 +153,9 @@ describe("ChatVideoPlayer", () => {
     );
     expect(player.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
     expect(player.querySelector("video")).toBeNull();
+    player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(onFallbackExpand).toHaveBeenCalledOnce();
+    expect(onExpand).not.toHaveBeenCalled();
 
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=recovered";

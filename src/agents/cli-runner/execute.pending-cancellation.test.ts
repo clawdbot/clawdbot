@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import * as failoverErrors from "../failover-error.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun } from "./execute.js";
 import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
@@ -23,24 +24,29 @@ type ChildAdapter = Awaited<
 
 type TestAdapter = ChildAdapter & {
   emitStdout: (chunk: string) => void;
+  emitStderr: (chunk: string) => void;
   settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
 };
 
 function createTestAdapter(): TestAdapter {
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
   let stdoutListener: ((chunk: string) => void) | undefined;
+  let stderrListener: ((chunk: string) => void) | undefined;
   const adapter: TestAdapter = {
     pid: 1234,
     onStdout: (listener) => {
       stdoutListener = listener;
     },
-    onStderr: () => {},
+    onStderr: (listener) => {
+      stderrListener = listener;
+    },
     wait: async () => await exit.promise,
     kill: vi.fn((signal?: NodeJS.Signals) => {
       exit.resolve({ code: null, signal: signal ?? "SIGTERM" });
     }),
     dispose: vi.fn(),
     emitStdout: (chunk) => stdoutListener?.(chunk),
+    emitStderr: (chunk) => stderrListener?.(chunk),
     settle: (code, signal = null) => exit.resolve({ code, signal }),
   };
   return adapter;
@@ -82,6 +88,7 @@ function createRunContext(params: {
       config: backend,
       bundleMcp: false,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: {},
@@ -244,15 +251,33 @@ describe("local CLI pending process cancellation", () => {
     context.preparedBackend.backend.systemPromptArg = "--append-system-prompt";
     let executionArgs: readonly string[] | undefined;
     let executionPrompt: string | undefined;
-    context.preparedBackend.execute = async function* (execution) {
-      executionArgs = execution.args;
-      executionPrompt = execution.systemPrompt;
-      yield { type: "result", subtype: "success", result: "completed" };
+    let executionContext: unknown;
+    context.promptContext = {
+      prependContext: "private red prefix",
+      appendContext: "private red suffix",
+    };
+    context.backendResolved.textTransforms = { input: [{ from: "red", to: "blue" }] };
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute(execution) {
+        executionContext = execution;
+        executionArgs = execution.args;
+        executionPrompt = execution.systemPrompt;
+        yield { type: "result", subtype: "success", result: "completed" };
+      },
     };
 
     await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "completed" });
 
     expect(executionPrompt).toBe("system");
+    expect(executionContext).toEqual(
+      expect.objectContaining({
+        promptContext: {
+          prependContext: "private blue prefix",
+          appendContext: "private blue suffix",
+        },
+      }),
+    );
     expect(executionArgs).not.toContain("--append-system-prompt-file");
     expect(executionArgs).not.toContain("--append-system-prompt");
     expect(writeCliSystemPromptFile).not.toHaveBeenCalled();
@@ -324,4 +349,118 @@ describe("local CLI pending process cancellation", () => {
     expect(abortListener).toBeTypeOf("function");
     expect(removeListener).toHaveBeenCalledWith("abort", abortListener);
   });
+
+  it.each([
+    ["unknown option", true, "unknown option '--checkpoint'", true],
+    ["unexpected option", true, "unexpected option '--checkpoint'", true],
+    ["unrecognized option", true, "unrecognized option '--checkpoint'", true],
+    ["not recognized", true, "option '--checkpoint' is not recognized", true],
+    ["configured but not attempted", false, "unknown option '--checkpoint'", false],
+    ["different option", true, "unknown option '--another-option'", false],
+    ["wording fragment", true, "exited unexpectedly using --checkpoint", false],
+    ["provider error", true, "provider request failed", false],
+  ] as const)(
+    "recognizes only an attempted checkpoint rejection before provider coercion: %s",
+    async (name, attempted, stderr, localRejection) => {
+      const providerFailure = new Error("provider coercion was consulted");
+      const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
+        throw providerFailure;
+      });
+      const runId = `checkpoint-${name}`;
+      const context = createRunContext({ runId });
+      context.preparedBackend.backend.resumeAtArg = "--checkpoint";
+      if (attempted) {
+        context.params.cliSessionResumeAt = "assistant-checkpoint";
+      }
+      const adapter = createTestAdapter();
+      createChildAdapterMock.mockResolvedValueOnce(adapter);
+
+      const result = executePreparedCliRun(context, "resume-1").catch((error: unknown) => error);
+      let error: unknown;
+      try {
+        await vi.waitFor(() => {
+          expect(supervisor.getRecord(runId)).toMatchObject({ state: "running" });
+        });
+        adapter.emitStderr(stderr);
+      } finally {
+        adapter.settle(1);
+        error = await result;
+      }
+
+      if (localRejection) {
+        expect(error).toMatchObject({
+          name: "FailoverError",
+          reason: "session_expired",
+          code: "cli_resume_at_unsupported",
+          provider: "test-cli",
+          model: "test-model",
+          sessionId: "session-1",
+        });
+        expect(coerce).not.toHaveBeenCalled();
+      } else {
+        expect(error).toBe(providerFailure);
+        expect(coerce).toHaveBeenCalledWith(
+          stderr,
+          expect.objectContaining({ provider: "test-cli" }),
+        );
+      }
+    },
+  );
+
+  it.each(["rejected option", "abort", "terminal", "observed activity", "other error"] as const)(
+    "preserves plugin checkpoint failure ownership: %s",
+    async (kind) => {
+      const message = "unknown option '--checkpoint'";
+      const failure =
+        kind === "terminal"
+          ? new failoverErrors.FailoverError(message, {
+              reason: "unknown",
+              code: "cli_max_turns",
+            })
+          : new Error(kind === "other error" ? "plugin execution failed" : message);
+      if (kind === "abort") {
+        failure.name = "AbortError";
+      }
+      const coerce = vi.spyOn(failoverErrors, "coerceToFailoverError").mockImplementation(() => {
+        throw new Error("provider coercion was consulted");
+      });
+      const context = createRunContext({ runId: `plugin-checkpoint-${kind}` });
+      Object.assign(context.preparedBackend.backend, {
+        command: "/bin/sh",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        resumeAtArg: "--checkpoint",
+      });
+      context.params.cliSessionResumeAt = "assistant-checkpoint";
+      context.executionTarget = {
+        kind: "plugin",
+        async *execute() {
+          if (kind === "observed activity") {
+            yield {
+              type: "assistant",
+              message: {
+                role: "assistant",
+                stop_reason: null,
+                content: [{ type: "text", text: "already started" }],
+              },
+            };
+          }
+          throw failure;
+        },
+      };
+
+      const result = executePreparedCliRun(context, "resume-1");
+      if (kind === "rejected option") {
+        await expect(result).rejects.toMatchObject({
+          reason: "session_expired",
+          code: "cli_resume_at_unsupported",
+          cause: failure,
+        });
+      } else {
+        await expect(result).rejects.toBe(failure);
+      }
+      expect(coerce).not.toHaveBeenCalled();
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+    },
+  );
 });

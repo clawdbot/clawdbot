@@ -23,6 +23,14 @@ export class PluginLruCache<T> {
     this.#entries.clear();
   }
 
+  deleteValue(value: T): void {
+    for (const [key, entry] of this.#entries) {
+      if (entry === value) {
+        this.#entries.delete(key);
+      }
+    }
+  }
+
   /** Returns a cached value and refreshes its recency when present. */
   get(cacheKey: string): T | undefined {
     const cached = this.getResult(cacheKey);

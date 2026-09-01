@@ -178,6 +178,7 @@ export async function runPackageInstallUpdate(params: {
         ...doctorProgressInfo,
         durationMs: completedDoctorStep.durationMs,
         exitCode: completedDoctorStep.exitCode,
+        stdoutTail: completedDoctorStep.stdoutTail,
         stderrTail: completedDoctorStep.stderrTail,
         signal: completedDoctorStep.signal,
         killed: completedDoctorStep.killed,
@@ -196,6 +197,7 @@ export async function runPackageInstallUpdate(params: {
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
     steps: packageUpdate.steps,
+    recovery: packageUpdate.recovery,
     durationMs: Date.now() - params.startedAt,
   };
 }

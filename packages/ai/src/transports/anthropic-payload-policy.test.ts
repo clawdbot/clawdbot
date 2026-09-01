@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAnthropicEphemeralCacheControl } from "./anthropic-payload-policy.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import {
+  resolveAnthropicEphemeralCacheControl,
+  resolveAnthropicServerCompactionPlan,
+} from "./anthropic-payload-policy.js";
 
 describe("resolveAnthropicEphemeralCacheControl", () => {
   afterEach(() => {
@@ -32,5 +36,36 @@ describe("resolveAnthropicEphemeralCacheControl", () => {
     expect(
       resolveAnthropicEphemeralCacheControl("https://proxy.example.test/vertex", "long"),
     ).toEqual({ type: "ephemeral", ttl: "1h" });
+  });
+});
+
+describe("Anthropic compaction authentication eligibility", () => {
+  const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
+  const extraParams = { anthropicServerCompaction: true };
+
+  it("rejects OAuth credentials without changing config-only threshold planning", () => {
+    expect(resolveAnthropicServerCompactionPlan(model, extraParams)).toEqual({
+      enabled: true,
+      threshold: 140_000,
+    });
+    expect(resolveAnthropicServerCompactionPlan(model, extraParams, "test-api-key")).toEqual({
+      enabled: true,
+      threshold: 140_000,
+    });
+    expect(
+      resolveAnthropicServerCompactionPlan(model, extraParams, "test-sk-ant-oat-fixture"),
+    ).toEqual({ enabled: false });
+  });
+
+  it("uses the same host-resolved credential shape as the transport", () => {
+    const host = getAiTransportHost();
+    configureAiTransportHost({ ...host, resolveSecretSentinel: () => "test-sk-ant-oat-fixture" });
+    try {
+      expect(
+        resolveAnthropicServerCompactionPlan(model, extraParams, "credential-sentinel"),
+      ).toEqual({ enabled: false });
+    } finally {
+      configureAiTransportHost(host);
+    }
   });
 });

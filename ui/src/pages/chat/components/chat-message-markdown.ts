@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -79,9 +80,8 @@ export function jsonSummaryLabel(parsed: unknown): string {
 
 export type MessageActionDetails = {
   markdown?: string;
-  messageId?: string;
+  fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
-  shouldFetchFullMessage: boolean;
 };
 
 function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
@@ -126,12 +126,7 @@ export function resolveMessageActionDetails(params: {
 }): MessageActionDetails | null {
   const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
-  const transcriptMeta =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : null;
+  const transcriptMeta = asNullableRecord(record["__openclaw"]);
   const messageId =
     typeof transcriptMeta?.id === "string"
       ? transcriptMeta.id
@@ -140,33 +135,33 @@ export function resolveMessageActionDetails(params: {
         : undefined;
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const pendingInput = messageId?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX) === true;
   const previewMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   // The Gateway records every display-cap truncation as __openclaw.truncated, so
   // that marker is the whole contract: sniffing the in-band sentinel would fetch
-  // for any reply that merely contains the text. Assistant-only because the
-  // expander renders loaded content for assistant rows alone.
-  const shouldFetchFullMessage = Boolean(
-    role === "assistant" &&
+  // for any reply that merely contains the text. Pending user inputs share the
+  // same read-only expansion, without becoming transcript reply/rewind targets.
+  const fullMessage =
+    (role === "assistant" || pendingInput) &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    transcriptMeta?.truncated === true,
-  );
-  const expansion =
-    role === "assistant" && shouldFetchFullMessage && messageId
-      ? params.getAssistantMessageExpansion?.(messageId)
+    transcriptMeta?.truncated === true
+      ? { messageId, state: params.getAssistantMessageExpansion?.(messageId) }
       : undefined;
+  const expansion = fullMessage?.state;
+  const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
   const visibleMarkdown =
-    expansion?.status === "loaded" ? stripThinkingTags(expansion.markdown).trim() : previewMarkdown;
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
-  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
+    role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
+  const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
+  const replyText = onReply && !pendingInput ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  if (!markdown && !replyText && !fullMessage) {
     return null;
   }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
     ...(markdown === undefined ? {} : { markdown }),
-    messageId,
+    fullMessage,
     ...(replyText
       ? {
           replyTarget: {
@@ -177,7 +172,6 @@ export function resolveMessageActionDetails(params: {
           },
         }
       : {}),
-    shouldFetchFullMessage,
   };
 }
 
@@ -255,19 +249,53 @@ function userMessageOverflowRef(expanded: boolean) {
   };
 }
 
-export function renderUserMessageMarkdown(
+export function renderMessageMarkdown(
   markdown: string,
   messageKey: string,
   opts: {
+    role: string;
     isStreaming: boolean;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
+    assistantMessageDisclosure?: AssistantMessageDisclosure;
   },
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
 ) {
-  if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
-    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
+  const disclosure = opts.assistantMessageDisclosure;
+  const isAssistant = opts.role === "assistant";
+  const recoverFullMessage =
+    isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
+  const recovered = recoverFullMessage && disclosure?.expanded;
+  const text = renderMarkdownText(
+    recovered ? (disclosure.markdown ?? markdown) : markdown,
+    opts.isStreaming,
+    recovered ? { ...markdownRenderOptions, mode: "document" } : markdownRenderOptions,
+    duplicateSuffix,
+    isAssistant && opts.isStreaming ? messageKey : undefined,
+  );
+  // Exhausted recovery keeps the preview visible and offers manual re-entry.
+  if (recoverFullMessage && disclosure?.onRetryFullMessage) {
+    return html`
+      ${text}
+      <div class="chat-message-load-error">
+        ${t("chat.messages.fullContentLoadExhausted")}
+        <button
+          type="button"
+          class="chat-message-load-error__retry"
+          @click=${disclosure.onRetryFullMessage}
+        >
+          ${t("common.retry")}
+        </button>
+      </div>
+    `;
+  }
+  if (
+    opts.role !== "user" ||
+    !opts.onToggleUserMessageExpanded ||
+    !shouldCollapseUserMessage(markdown)
+  ) {
+    return text;
   }
 
   const disclosureId = `user-message:${messageKey}`;
@@ -275,7 +303,7 @@ export function renderUserMessageMarkdown(
   return html`
     <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
-        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
+        ${text}
       </div>
       <button
         class="chat-message-disclosure__toggle"
@@ -298,42 +326,7 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
-export function renderAssistantMessageMarkdown(
-  previewMarkdown: string,
-  isStreaming: boolean,
-  disclosure: AssistantMessageDisclosure | undefined,
-  markdownRenderOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
-) {
-  const markdown = disclosure?.expanded
-    ? (disclosure.markdown ?? previewMarkdown)
-    : previewMarkdown;
-  const renderOptions = disclosure?.expanded
-    ? { ...markdownRenderOptions, mode: "document" as const }
-    : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
-  if (!disclosure?.onRetryFullMessage) {
-    return text;
-  }
-  // Exhausted automatic retries must not leave a silent truncated preview:
-  // name the failure and offer a manual re-entry into the loader.
-  return html`
-    ${text}
-    <div class="chat-message-load-error">
-      ${t("chat.messages.fullContentLoadExhausted")}
-      <button
-        type="button"
-        class="chat-message-load-error__retry"
-        @click=${disclosure.onRetryFullMessage}
-      >
-        ${t("common.retry")}
-      </button>
-    </div>
-  `;
-}
-
-export function renderMarkdownText(
+function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,

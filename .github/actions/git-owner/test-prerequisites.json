@@ -1,0 +1,10 @@
+{
+  "outboundMessageTerminalReader": {
+    "commit": "5dc4cf602bc5e263e83cd16a12bb1e100544f4c3",
+    "file": "src/audit/message-delivery-progress-store.test.ts",
+    "configs": [
+      "test/vitest/vitest.unit-src.config.ts",
+      "test/vitest/vitest.full-core-unit-src.config.ts"
+    ]
+  }
+}

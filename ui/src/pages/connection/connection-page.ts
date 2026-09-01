@@ -12,7 +12,12 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  resolveGatewayCredentialsForUrlEdit,
+  type UiSettings,
+} from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -238,6 +243,20 @@ export class ConnectionPage extends OpenClawLightDomElement {
     });
   }
 
+  private updateConnection(patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) {
+    if (patch.gatewayUrl !== undefined) {
+      const credentials = resolveGatewayCredentialsForUrlEdit(
+        this.settings.gatewayUrl,
+        patch.gatewayUrl,
+        { token: this.settings.token, password: this.password },
+      );
+      this.password = credentials.password;
+      this.settings = { ...this.settings, ...patch, token: credentials.token };
+      return;
+    }
+    this.settings = { ...this.settings, ...patch };
+  }
+
   override render() {
     const gateway = this.context.gateway.snapshot;
     const body = renderConnection({
@@ -251,9 +270,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       systemInfoUnavailable: this.systemInfoUnavailable,
       showGatewayToken: this.gatewayTokenVisible,
       showGatewayPassword: this.gatewayPasswordVisible,
-      onConnectionChange: (patch) => {
-        this.settings = { ...this.settings, ...patch };
-      },
+      onConnectionChange: (patch) => this.updateConnection(patch),
       onPasswordChange: (next) => (this.password = next),
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;

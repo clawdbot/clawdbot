@@ -15,10 +15,8 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import {
-  requestCloudWorkerStop,
-  resolveCloudWorkerStopAction,
-} from "../../components/cloud-worker-stop.ts";
+import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
@@ -29,7 +27,6 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -63,6 +60,10 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  runSessionNavigationAction,
+} from "../../lib/sessions/session-menu-navigation.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -512,7 +513,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.loading = snapshot.loading;
     this.error = snapshot.error;
     const result = snapshot.result;
-    if (this.sessionMutationPending || !result || result === this.appliedListResult) {
+    if (!result || result === this.appliedListResult) {
       return;
     }
     const previous = this.result;
@@ -735,14 +736,6 @@ class SessionsPage extends OpenClawLightDomElement {
           selected.delete(key);
         }
         this.selectedKeys = selected;
-        if (this.result) {
-          const sessions = this.result.sessions.filter((row) => !deleted.has(row.key));
-          this.result = {
-            ...this.result,
-            count: Math.max(0, this.result.count - (this.result.sessions.length - sessions.length)),
-            sessions,
-          };
-        }
         if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
           this.expandedSessionKey = null;
         }
@@ -887,10 +880,14 @@ class SessionsPage extends OpenClawLightDomElement {
     let mutationError: string | null = null;
     try {
       const agentId = parseAgentSessionKey(row.key)?.agentId;
-      await requestCloudWorkerStop(scope.client, {
-        key: row.key,
-        ...(agentId ? { agentId } : {}),
-      });
+      await requestCloudWorkerStop(
+        scope.client,
+        {
+          key: row.key,
+          ...(agentId ? { agentId } : {}),
+        },
+        scope.context.placementStartup,
+      );
       if (this.isRequestScopeCurrent(scope)) {
         await this.refreshSessionList(scope);
       }
@@ -1434,11 +1431,15 @@ class SessionsPage extends OpenClawLightDomElement {
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
           icon: normalizeOptionalString(row.icon) ?? null,
+          color: normalizeOptionalString(row.color) ?? null,
           categoryClearReturnsToGroups: false,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
+        .navigationAllowed=${true}
+        .copyMarkdownAllowed=${canCopySessionMarkdown(gateway)}
+        .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
           session: row,
@@ -1467,8 +1468,17 @@ class SessionsPage extends OpenClawLightDomElement {
               openEditor(action.editor, action.path);
               break;
             case "copy-session-id":
-              void copyToClipboard(row.sessionId ?? "").then((copied) => {
-                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            case "copy-session-link":
+            case "copy-markdown":
+            case "open-new-tab":
+            case "open-new-window":
+            case "split-right":
+            case "split-below":
+              void runSessionNavigationAction(action.kind, {
+                context,
+                session: row,
+                agentId: row.agentId,
+                isCurrent: () => this.isConnected && this.context === context,
               });
               break;
             case "toggle-pin":
@@ -1480,8 +1490,14 @@ class SessionsPage extends OpenClawLightDomElement {
             case "rename":
               void this.renameSession(row);
               break;
+            case "set-color":
+              void this.patchSession(row.key, { color: action.color });
+              break;
             case "set-icon":
               void this.patchSession(row.key, { icon: action.icon });
+              break;
+            case "reset-appearance":
+              void this.patchSession(row.key, { icon: null, color: null });
               break;
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);

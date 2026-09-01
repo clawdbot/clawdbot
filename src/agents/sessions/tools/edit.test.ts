@@ -390,44 +390,62 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
-  it("renders previews through custom edit operations", async () => {
-    // Preview rendering must use injected operations so remote/sandbox files are
-    // shown without accidentally reading from the host filesystem.
-    const readFile = vi.fn(async () => Buffer.from("remote original\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      statFile: async () => null,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [{ oldText: "remote original", newText: "remote changed" }],
-    };
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: vi.fn(),
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview",
-    };
+  it.each(["local", "injected"] as const)(
+    "renders @ previews through %s operations",
+    async (backend) => {
+      await createTempFile("plain sibling\n");
+      await fs.writeFile(path.join(tmpDir, "@demo.txt"), "local original\n");
+      const readFile = vi.fn(async () => Buffer.from("remote original\n"));
+      const operations: EditOperations = {
+        access: async () => {},
+        readFile,
+        statFile: async () => null,
+        writeFile: async () => {},
+      };
+      const tool = createEditToolDefinition(
+        tmpDir,
+        backend === "injected" ? { operations } : undefined,
+      );
+      const owner = backend === "injected" ? "remote" : "local";
+      const args = {
+        path: "@demo.txt",
+        edits: [{ oldText: `${owner} original`, newText: `${owner} changed` }],
+      };
+      const context = {
+        args,
+        argsComplete: true,
+        cwd: tmpDir,
+        executionStarted: false,
+        expanded: false,
+        invalidate: vi.fn(),
+        isError: false,
+        isPartial: false,
+        lastComponent: undefined,
+        showImages: false,
+        state: {},
+        toolCallId: "call-preview",
+      };
 
-    const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+      const component = tool.renderCall?.(args, testTheme, context);
+      await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
 
-    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
-    expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
-      "remote changed",
-    );
-  });
+      if (backend === "injected") {
+        expect(readFile).toHaveBeenCalledWith(path.join(tmpDir, "demo.txt"));
+      } else {
+        expect(readFile).not.toHaveBeenCalled();
+      }
+      const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+        ?.preview;
+      expect(preview?.error).toBeUndefined();
+      expect(preview?.diff).toContain(`${owner} changed`);
+      await expect(fs.readFile(path.join(tmpDir, "@demo.txt"), "utf8")).resolves.toBe(
+        "local original\n",
+      );
+      await expect(fs.readFile(path.join(tmpDir, "demo.txt"), "utf8")).resolves.toBe(
+        "plain sibling\n",
+      );
+    },
+  );
 
   it("renders fuzzy Unicode previews from the original source bytes", async () => {
     const readFile = vi.fn(async () =>
@@ -723,7 +741,7 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
-  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+  it("applies exact formatting beside a disjoint content replacement", async () => {
     const filePath = await createTempFile("foo  \nkeep  \n");
     const tool = createEditTool(tmpDir);
 
@@ -739,7 +757,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\nchanged  \n");
   });
 
   it("rejects duplicate no-op entries", async () => {

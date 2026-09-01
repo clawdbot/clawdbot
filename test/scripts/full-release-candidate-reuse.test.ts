@@ -24,6 +24,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const NOW = Date.parse("2026-08-28T12:00:00Z");
 const EXPIRES_AT = "2026-09-04T12:00:00Z";
 const REPOSITORY = "openclaw/openclaw";
+const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -344,6 +345,94 @@ describe("trusted full release candidate selection", () => {
 });
 
 describe("full release candidate discovery CLI", () => {
+  it("preserves canonical request arrays when checking the expected digest", () => {
+    const root = tempDirs.make("full-release-candidate-canonical-");
+    const bin = join(root, "bin");
+    const rawInputPath = join(root, "raw-request-input.json");
+    const requestPath = join(root, "request.json");
+    const outputPath = join(root, "github-output");
+    const callLogPath = join(root, "gh-calls");
+    mkdirSync(bin);
+    const ghPath = join(bin, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_GH_CALL_LOG"
+printf '%s\n' '{"artifacts":[]}'
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    writeFileSync(
+      rawInputPath,
+      JSON.stringify(
+        fullReleaseCandidateRequestInput({
+          upgradeSurvivorBaselines: "openclaw@latest",
+          upgradeSurvivorScenarios: "base",
+        }),
+      ),
+    );
+    const contractResult = spawnSync(
+      process.execPath,
+      [CONTRACT_SCRIPT, "request", "--input", rawInputPath, "--output", requestPath],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(contractResult.status, contractResult.stderr).toBe(0);
+    const contract = JSON.parse(contractResult.stdout) as {
+      requestJson: string;
+      requestSha256: string;
+    };
+    const requestBeforeDiscovery = readFileSync(requestPath, "utf8");
+    const request = JSON.parse(requestBeforeDiscovery) as {
+      upgradeSurvivorBaselines: string[];
+      upgradeSurvivorScenarios: string[];
+    };
+    expect(request.upgradeSurvivorBaselines).toEqual(["openclaw@latest"]);
+    expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        SCRIPT,
+        "discover",
+        "--request-input",
+        requestPath,
+        "--expected-request-sha256",
+        contract.requestSha256,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_GH_CALL_LOG: callLogPath,
+          GH_TOKEN: "test-token",
+          GITHUB_OUTPUT: outputPath,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        timeout: 10_000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const outputs = Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
+    expect(outputs).toMatchObject({
+      request_json: contract.requestJson,
+      request_sha256: contract.requestSha256,
+      reused: "false",
+      state: "miss",
+    });
+    expect(readFileSync(requestPath, "utf8")).toBe(requestBeforeDiscovery);
+    expect(readFileSync(callLogPath, "utf8").trim()).toBe(
+      `api repos/${REPOSITORY}/actions/artifacts?name=full-release-candidate-v2-${contract.requestSha256}&per_page=100&page=1`,
+    );
+  });
+
   it("marks exhausted transient reads unavailable instead of permitting preparation", () => {
     const root = tempDirs.make("full-release-candidate-discovery-");
     const bin = join(root, "bin");
@@ -364,7 +453,7 @@ exit 1
 `,
     );
     chmodSync(ghPath, 0o755);
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
       env: {
@@ -405,7 +494,7 @@ cat "$FAKE_GH_PAYLOAD"
 `,
     );
     chmodSync(ghPath, 0o755);
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(
       payloadPath,
       JSON.stringify({ artifacts: Array.from({ length: 100 }, () => ({})) }),
@@ -482,7 +571,7 @@ esac
         },
       });
     });
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
     const result = spawnSync(process.execPath, [SCRIPT, "discover", "--request-input", inputPath], {
       encoding: "utf8",
@@ -550,7 +639,7 @@ esac
     );
     chmodSync(ghPath, 0o755);
     const { archive, manifest, metadata } = await fixture();
-    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
+    writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
     writeFileSync(workflowRunPath, JSON.stringify(workflowRun()));

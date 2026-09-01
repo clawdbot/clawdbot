@@ -244,25 +244,11 @@ export async function refreshCodexPluginRuntimeState(params: {
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
-    // Scope the invalidation to the activated plugin's apps so the follow-up
-    // targeted refresh (immediate or deferred union) can revalidate the entry.
-    params.appCache.invalidate(
-      params.appCacheKey,
-      "Codex plugin activation changed app inventory",
-      undefined,
-      params.targetAppIds,
-    );
-    if (params.deferAppInventoryRefresh) {
-      return { diagnostics };
-    }
-    const request: CodexAppInventoryRequest = async (method, requestParams) =>
-      (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
     try {
-      await params.appCache.refreshNow({
-        key: params.appCacheKey,
-        request,
-        forceRefetch: true,
-        targetAppIds: params.targetAppIds,
+      await refreshCodexPluginAppRuntimeState({
+        ...params,
+        appCache: params.appCache,
+        appCacheKey: params.appCacheKey,
       });
     } catch (error) {
       diagnostics.push({
@@ -272,6 +258,35 @@ export async function refreshCodexPluginRuntimeState(params: {
   }
 
   return { diagnostics };
+}
+
+/** Refreshes hosted app tools without reloading unrelated active threads. */
+export async function refreshCodexPluginAppRuntimeState(params: {
+  request: CodexPluginRuntimeRequest;
+  appCache: CodexAppInventoryCache;
+  appCacheKey: string;
+  targetAppIds?: readonly string[];
+  deferAppInventoryRefresh?: boolean;
+}): Promise<void> {
+  // Retire pre-refresh reads before any await. A failed recheck must leave the
+  // previous snapshot stale, and a targeted refresh may only revalidate its apps.
+  params.appCache.invalidate(
+    params.appCacheKey,
+    "Codex plugin app inventory refresh requested",
+    undefined,
+    params.targetAppIds,
+  );
+  if (params.deferAppInventoryRefresh) {
+    return;
+  }
+  const request: CodexAppInventoryRequest = async (method, requestParams) =>
+    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
+  await params.appCache.refreshNow({
+    key: params.appCacheKey,
+    request,
+    forceRefetch: true,
+    targetAppIds: params.targetAppIds,
+  });
 }
 
 async function listCuratedCodexPluginMetadata(

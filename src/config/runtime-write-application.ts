@@ -3,6 +3,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 export type RuntimeConfigWriteApplicationStatus =
   | "applied"
   | "applied-restart-required"
+  // Restart admission accepted the saved config; the current runtime is not updated.
+  | "restart-pending"
   | "superseded"
   | "failed"
   | "stopped"

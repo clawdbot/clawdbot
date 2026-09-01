@@ -8,6 +8,10 @@ import {
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  readCliImageTurnContext,
+  stripCliImageTurnContext,
+} from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -408,6 +412,11 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    const cliImageTurnKey =
+      typeof content === "string" ? readCliImageTurnContext(content) : undefined;
+    if (cliImageTurnKey && typeof content === "string") {
+      content = stripCliImageTurnContext(content, cliImageTurnKey);
+    }
     // Record provenance here, where the native flags are known, so downstream
     // display never has to infer operator authorship from message text.
     const harnessInjected = isClaudeCliVisibleHarnessContext(entry);
@@ -420,7 +429,7 @@ export function parseClaudeCliHistoryEntry(
           : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
-      baseMeta,
+      { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
     ) as TranscriptLikeMessage;
   }
 

@@ -1,9 +1,6 @@
 import { prepareAgentRuntimeAuth } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveSessionAgentIds,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -65,12 +62,12 @@ export type CodexControlRequestOptions = {
   ) => Promise<void>;
 };
 
-async function prepareControlAuth(
+/** Selects the same prepared auth partition as an admitted session turn. */
+export async function prepareCodexControlSessionAuth(
   options: CodexControlRequestOptions,
   startOptions: CodexAppServerStartOptions,
 ) {
   if (
-    !options.onResponse ||
     !options.config ||
     !options.sessionKey ||
     options.authProfileId === null ||
@@ -82,7 +79,7 @@ async function prepareControlAuth(
     };
   }
   const config = options.config;
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     config,
     sessionKey: options.sessionKey,
     agentId: options.agentId,
@@ -210,7 +207,12 @@ export async function codexControlRequest(
     ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
     : resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const startOptions = options.startOptions ?? runtime.start;
-  const auth = await prepareControlAuth(options, startOptions);
+  const auth = options.onResponse
+    ? await prepareCodexControlSessionAuth(options, startOptions)
+    : {
+        authProfileId: options.authProfileId ?? undefined,
+        clientOptions: { authProfileId: options.authProfileId },
+      };
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     startOptions,

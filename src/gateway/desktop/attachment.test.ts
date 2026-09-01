@@ -1,6 +1,8 @@
 import net from "node:net";
 import { PassThrough } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { connectRfbAttachment } from "./attachment.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
@@ -82,18 +84,96 @@ describe("RFB attachments", () => {
     await registry.stopAll();
   });
 
-  it("refreshes the cleanup deadline when an idle stream session is reactivated", async () => {
+  it.each(["acquire", "activate"] as const)("refreshes idle cleanup after %s", async (method) => {
     vi.useFakeTimers();
     const teardown = vi.fn(async () => undefined);
     const registry = createDesktopSessionRegistry({ lingerMs: 25 });
-    await registry.activate({ sourceKey: "node:one", ownerEpoch: 1, teardown });
+    const request = {
+      sourceKey: "node:one",
+      ownerEpoch: 1,
+      teardown,
+      start: async () => ({ attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 } as const }),
+    };
+    await registry[method](request);
     await vi.advanceTimersByTimeAsync(20);
-    await registry.activate({ sourceKey: "node:one", ownerEpoch: 1 });
+    await registry[method](request);
     await vi.advanceTimersByTimeAsync(20);
     expect(teardown).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5);
     expect(teardown).toHaveBeenCalled();
+    await registry.stopAll();
+  });
+
+  it.each(["stop", "stopAll"] as const)("%s joins teardown already in progress", async (method) => {
+    const registry = createDesktopSessionRegistry();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    await registry.activate({
+      sourceKey: "node:one",
+      ownerEpoch: 1,
+      teardown: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const completed: string[] = [];
+    let reentrantStop: Promise<void> | undefined;
+    registry.attachObserver("node:one", {
+      ownerEpoch: 1,
+      control: false,
+      close: () => {
+        reentrantStop = registry.stop("node:one", 1).then(() => {
+          completed.push("observer");
+        });
+      },
+    });
+    const first = registry.stop("node:one", 1);
+    await entered.promise;
+    const second = (method === "stop" ? registry.stop("node:one", 1) : registry.stopAll()).then(
+      () => {
+        completed.push("second");
+      },
+    );
+    try {
+      await setImmediate();
+      expect(completed).toEqual([]);
+      expect(reentrantStop).toBeDefined();
+      expect(registry.reserveObserver("node:one", 1)).toBeUndefined();
+    } finally {
+      release.resolve();
+      await Promise.all([first, second, reentrantStop]);
+    }
+    expect(completed.toSorted()).toEqual(["observer", "second"]);
+  });
+
+  it.each([1, 2])("waits for stopped resources before acquiring epoch %s", async (ownerEpoch) => {
+    const registry = createDesktopSessionRegistry();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const attachment = { kind: "tcp", host: "127.0.0.1", port: 5900 } as const;
+    await registry.acquire({
+      sourceKey: "node:one",
+      ownerEpoch: 1,
+      start: async () => ({ attachment }),
+      teardown: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const stopping = registry.stop("node:one", 1);
+    await entered.promise;
+    const start = vi.fn(async () => ({ attachment }));
+    const acquiring = registry.acquire({ sourceKey: "node:one", ownerEpoch, start });
+    try {
+      await setImmediate();
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.all([stopping, acquiring]);
+      await registry.stopAll();
+    }
+    expect(start).toHaveBeenCalledOnce();
   });
 
   it("bounds pending observer reservations before streams are started", async () => {

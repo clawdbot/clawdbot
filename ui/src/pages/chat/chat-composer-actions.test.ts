@@ -21,7 +21,7 @@ afterEach(async () => {
 
 function pressComposerEnter(
   container: Element,
-  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey"> = {},
+  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat"> = {},
 ) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
   if (!textarea) {
@@ -312,7 +312,7 @@ describe("renderChatComposer controls", () => {
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
   });
 
-  it("steers the oldest visible-queue message when Enter is pressed on empty", () => {
+  it.each([false, true])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();
     const { container } = renderComposer({
@@ -334,12 +334,10 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-
-    container.querySelector("textarea")?.dispatchEvent(event);
+    const event = pressComposerEnter(container, { repeat });
 
     expect(event.defaultPrevented).toBe(true);
-    expect(onQueueSteer).toHaveBeenCalledWith("pending-unscoped");
+    expect(onQueueSteer.mock.calls).toEqual(repeat ? [] : [["pending-unscoped"]]);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -440,6 +438,10 @@ describe("renderChatComposer controls", () => {
 
         expect(onSend).toHaveBeenCalledOnce();
         expect(onSend).toHaveBeenCalledWith(alternateMode, action);
+
+        const held = pressComposerEnter(container, { ...modifiers, repeat: true });
+        expect(held.defaultPrevented).toBe(true);
+        expect(onSend).toHaveBeenCalledOnce();
       },
     );
   });
@@ -504,22 +506,30 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("keeps Shift+modified Enter as a newline", () => {
-    const onSend = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      draft: "Keep editing",
-      followUpMode: "queue",
-      onAbort: vi.fn(),
-      onSend,
-      sendShortcut: "enter",
-    });
+  it.each(["enter", "modifier-enter"] as const)(
+    "keeps newline keys, including repeats, for %s",
+    (sendShortcut) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft: "Keep editing",
+        followUpMode: "queue",
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut,
+      });
 
-    const event = pressComposerEnter(container, { ctrlKey: true, shiftKey: true });
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(onSend).not.toHaveBeenCalled();
-  });
+      for (const repeat of [false, true]) {
+        const event = pressComposerEnter(container, {
+          ctrlKey: sendShortcut === "enter",
+          shiftKey: sendShortcut === "enter",
+          repeat,
+        });
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(onSend).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],

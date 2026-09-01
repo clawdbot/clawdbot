@@ -1,4 +1,5 @@
-import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
@@ -50,11 +51,11 @@ type CommandAppServerScope = Pick<
   "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
 > & { agentId: string; agentDir: string };
 
-export async function resolveCommandAppServerScope(
+export async function resolveCommandAppServerContext(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-): Promise<CommandAppServerScope> {
+) {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const agentDir = target?.agentDir ?? fallback.agentDir;
@@ -72,7 +73,7 @@ export async function resolveCommandAppServerScope(
     authProfileId,
     pluginConfig,
   });
-  return {
+  const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
     ...(connection.clientAuthProfileId !== undefined
@@ -82,6 +83,15 @@ export async function resolveCommandAppServerScope(
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
     ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
   };
+  return { scope, target, binding };
+}
+
+export async function resolveCommandAppServerScope(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+): Promise<CommandAppServerScope> {
+  return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
 }
 
 export function conversationBindingIdentity(
@@ -94,7 +104,7 @@ export function resolveCodexConversationControlScope(ctx: PluginCommandContext):
   agentId: string;
   agentDir: string;
 } {
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: ctx.sessionKey,
     agentId: ctx.agentId,
     config: ctx.config,

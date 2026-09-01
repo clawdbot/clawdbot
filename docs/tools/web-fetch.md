@@ -83,6 +83,11 @@ truncated. The caller's requested URL is preserved.
   </Step>
 </Steps>
 
+Set `tools.web.fetch.cacheTtlMinutes: 0` to bypass OpenClaw's fetch cache for both
+reads and writes. A positive value limits reuse by the current request's TTL;
+cached entries still expire at their original deadline. Provider-side caching,
+such as Firecrawl's `maxAgeMs`, is configured separately.
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending
@@ -95,6 +100,13 @@ Fetching page content...
 Fast cache hits and quick network responses finish before the timer fires, so
 they never show a progress line. Canceling the call clears the timer. The
 progress line is channel UI state only and never contains fetched page content.
+
+OpenClaw passes cancellation to fallback providers. Providers that honor the
+signal can stop their requests; core rejects late results even when a provider
+ignores cancellation. Already-canceled calls reject even when a cached result
+exists. If cancellation occurs during fetching, fallback processing, or
+connection cleanup, OpenClaw rejects the call instead of returning success or
+adding a result to the fetch cache.
 
 ## Config
 

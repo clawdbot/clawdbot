@@ -46,11 +46,13 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
@@ -94,6 +96,7 @@ type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
   workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
+  workerComputer?: NodeWorkerComputer;
 };
 
 const execHostEnforced =
@@ -614,6 +617,18 @@ async function dispatchInvoke(
   runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  if (
+    (command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND && !runtime.workerComputer) ||
+    (runtime.workerComputer && (command === "screen.snapshot" || command === "computer.act"))
+  ) {
+    await sendErrorResult(
+      client,
+      frame,
+      "UNAVAILABLE",
+      "computer command is unavailable on this node transport",
+    );
+    return;
+  }
   const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
     command,
     paramsJSON: frame.paramsJSON,
@@ -844,7 +859,15 @@ async function dispatchInvoke(
         : context;
     let pluginResult: string | null;
     try {
-      pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+      pluginResult =
+        command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND
+          ? await invokeNodeWorkerComputerCommand({
+              paramsJSON: frame.paramsJSON,
+              computer: runtime.workerComputer!,
+              invoke: (innerCommand, paramsJSON) =>
+                invokePlugin(innerCommand, paramsJSON, undefined, invokeContext),
+            })
+          : await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     } finally {
       pluginInvocationActive = false;
     }

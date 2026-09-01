@@ -936,47 +936,8 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("renders normalized base64 video with inline playback and Files actions", () => {
-    const source = "data:video/mp4;base64,AAAA";
-    const container = document.body.appendChild(document.createElement("div"));
-    const onOpenSidebar = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "video",
-              label: "inline.mp4",
-              mimeType: "video/mp4",
-              url: source,
-            },
-          },
-        ],
-        {},
-        onOpenSidebar,
-      ),
-      container,
-    );
-
-    const player = container.querySelector("openclaw-chat-video-player");
-    expect(player).toMatchObject({
-      label: "inline.mp4",
-      mimeType: "video/mp4",
-      onExpand: expect.any(Function),
-      sourceIdentity: source,
-      src: source,
-    });
-    expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
-    (player as HTMLElement & { onExpand: () => void }).onExpand();
-    expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({ attachmentKind: "video", src: source }),
-    );
-    container.remove();
-  });
-
   it("resolves an open local sidebar attachment with the current runtime credentials", async () => {
-    const source = "/tmp/openclaw/clip.mp4";
+    const source = "/tmp/openclaw/clip.mp3";
     const container = document.body.appendChild(document.createElement("div"));
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const token = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
@@ -999,9 +960,9 @@ describe("attachment sidebar source ownership", () => {
             {
               type: "attachment",
               attachment: {
-                kind: "video",
-                label: "clip.mp4",
-                mimeType: "video/mp4",
+                kind: "audio",
+                label: "clip.mp3",
+                mimeType: "audio/mpeg",
                 url: source,
               },
             },

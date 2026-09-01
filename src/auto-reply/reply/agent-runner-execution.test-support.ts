@@ -1,8 +1,11 @@
 // Shared mocks and fixtures for agent-runner execution tests.
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
@@ -59,12 +62,12 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentEntryMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
-  isCliProviderMock: vi.fn((_: unknown) => false),
-  isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isCliProviderMock: vi.fn((_provider: unknown) => false),
+  isInternalMessageChannelMock: vi.fn((_channel: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
-  isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
-  isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
-  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isCompactionFailureErrorMock: vi.fn((_message: string | undefined) => false),
+  isContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_message: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
@@ -345,12 +348,18 @@ export async function getExecuteAgentTurnForTest() {
         directlySentBlockKeys: outcome.directlySentBlockKeys,
         directlySentBlockPayloads: outcome.directlySentBlockPayloads,
         terminalFailurePayload: outcome.terminalFailurePayload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
     if (outcome.kind === "rejected") {
-      return { kind: "final" as const, payload: outcome.payload };
+      return {
+        kind: "final" as const,
+        payload: outcome.payload,
+        postCompactionModelFailure: outcome.postCompactionModelFailure,
+      };
     }
-    return { kind: "final" as const, payload: { text: "NO_REPLY" } };
+    const payload: ReplyPayload = { text: "NO_REPLY" };
+    return { kind: "final" as const, payload };
   };
 }
 
@@ -392,6 +401,7 @@ export type EmbeddedAgentParams = {
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase:
@@ -422,6 +432,7 @@ export type EmbeddedAgentParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onAutoCompactionSucceeded?: (count: number) => void;
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -466,22 +477,36 @@ export function createMockTypingSignaler(): TypingSignaler {
 }
 
 export function createFollowupRun(): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-");
   return {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      // Missing fixture modalities trigger real provider catalog discovery during execution.
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "claude-cli", id: "sonnet-4.6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-sonnet-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-6", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-7", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-5", input: ["text", "image"] },
+        { provider: "claude-cli", id: "claude-opus-4-8", input: ["text", "image"] },
+        { provider: "codex-cli", id: "gpt-5.4", input: ["text", "image"] },
+        { provider: "codex-cli", id: "gpt-5.5", input: ["text", "image"] },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {
@@ -576,6 +601,18 @@ export function expectBlockReplyCall(
   fields: Record<string, unknown>,
 ) {
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
+}
+
+/**
+ * Session-store paths reach production resolution, which derives a real agent
+ * SQLite file from the store's directory. A shared /tmp path would therefore
+ * open the machine-wide agent database and make unrelated suites depend on it.
+ */
+export function makeTestSessionStorePath(): string {
+  return path.join(
+    useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
+    "sessions.json",
+  );
 }
 
 export function createMinimalRunAgentTurnParams(overrides?: {

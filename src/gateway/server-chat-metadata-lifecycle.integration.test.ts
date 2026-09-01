@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
@@ -20,6 +21,10 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {
   buildModelsListResult,
@@ -36,6 +41,7 @@ import {
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const mocks = getPreparedModelRuntimeMocks();
+let state: OpenClawTestState;
 const config = {
   agents: {
     defaults: {
@@ -53,14 +59,16 @@ const model = {
   api: "openai-chatgpt-responses" as const,
 };
 const context = {
+  broadcast: vi.fn(),
   getRuntimeConfig: () => config,
   logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 } as unknown as GatewayRequestContext;
 let sidecars: GatewayPostReadySidecarHandle[] = [];
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
-  resetPreparedModelRuntimeHarness();
+  state = await createOpenClawTestState({ label: "prepared-model-runtime" });
+  resetPreparedModelRuntimeHarness(state);
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
     openai: {
@@ -77,7 +85,10 @@ beforeEach(() => {
   sidecars = [];
 });
 
-function configureAuthFixture(kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref") {
+function configureAuthFixture(
+  kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref",
+  catalogAuthRejected = false,
+) {
   if (kind === "external-oauth") {
     return;
   }
@@ -85,6 +96,18 @@ function configureAuthFixture(kind: "secret-ref" | "external-oauth" | "unresolve
   mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
     entries: [apiKeyModel],
     routeVariants: [apiKeyModel],
+    ...(catalogAuthRejected
+      ? {
+          providerOutcomes: [
+            {
+              provider: "openai",
+              profileId: "openai:default",
+              rejectionScope: "catalog",
+              status: "auth-rejected",
+            },
+          ],
+        }
+      : {}),
   });
   mocks.authStorage.getAll.mockReturnValue({
     openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
@@ -118,11 +141,12 @@ function configureHarnessOwnedUnresolvedAuth() {
   };
 }
 
-afterEach(async () => {
-  vi.unstubAllEnvs();
+afterEach(async ({ task }) => {
   for (const sidecar of sidecars) {
     await sidecar.stop();
   }
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  vi.unstubAllEnvs();
 });
 
 async function createLifecycle(getConfig: () => OpenClawConfig = () => config) {
@@ -245,6 +269,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       });
       const entered = createDeferredCore();
       const resume = createDeferredCore();
+      let result: ReturnType<typeof buildModelsListResult> | undefined;
       try {
         await publishOwner(nativeConfig);
         const owner = getPreparedModelCatalogOwnerSnapshot({
@@ -287,7 +312,7 @@ describe("gateway chat metadata lifecycle composition", () => {
           },
           catalogProjector: projector,
         };
-        const result = buildModelsListResult(request);
+        result = buildModelsListResult(request);
         await entered.promise;
         ready = !initialReady;
         resume.resolve();
@@ -316,6 +341,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(loadModelCatalog).not.toHaveBeenCalled();
       } finally {
         resume.resolve();
+        await Promise.allSettled([result]);
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
     },
@@ -360,7 +386,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         expect(scope).toMatchObject({
           config: nativeConfig,
           agentId: "main",
-          agentDir: "/tmp/configured-main",
+          agentDir: state.agentDir("main"),
           workspaceDir: "/tmp/workspace-main",
           provider: "openai",
           modelId: "codex-latest",
@@ -415,9 +441,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         }
         const expectNativeAvailable = async (available: boolean) => {
           const expected = { models: expectedModels(available) };
-          await expect(
-            lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
-          ).resolves.toMatchObject({ metadata: expected });
+          const catalogs = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
+          expect(catalogs?.sessionModelCatalog).toBe(catalogs?.defaultModelCatalog);
+          expect(catalogs).not.toHaveProperty("metadata");
           await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toMatchObject({
             metadata: expected,
@@ -471,13 +497,21 @@ describe("gateway chat metadata lifecycle composition", () => {
             ? []
             : [expect.objectContaining({ id: "codex-latest", available: false })],
         });
+        const lockedStartup = await lifecycle.readStartup({
+          agentId: "main",
+          sessionEntry: lockedSession,
+        });
+        expect(lockedStartup?.metadata).toEqual(lockedMetadata);
         await expect(
           lifecycle.readStartup({
             agentId: "main",
             sessionEntry: lockedSession,
             readPolicy: "ready",
           }),
-        ).resolves.toMatchObject({ metadata: lockedMetadata });
+        ).resolves.toEqual({
+          sessionModelCatalog: lockedStartup?.sessionModelCatalog,
+          defaultModelCatalog: lockedStartup?.defaultModelCatalog,
+        });
 
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();
@@ -513,17 +547,21 @@ describe("gateway chat metadata lifecycle composition", () => {
   );
 
   it.each([
-    ["SecretRef-only runtime auth", "secret-ref", true],
-    ["external CLI OAuth bootstrap", "external-oauth", true],
-    ["unresolved SecretRef", "unresolved-secret-ref", false],
-  ] as const)("converges chat metadata and models.list for %s", async (_, kind, available) => {
-    configureAuthFixture(kind);
-    await publishOwner();
-    const lifecycle = await createLifecycle();
-    await lifecycle.attachContext(context, sidecars);
+    ["SecretRef-only runtime auth", "secret-ref", true, false],
+    ["SecretRef auth after profile-scoped catalog rejection", "secret-ref", true, true],
+    ["external CLI OAuth bootstrap", "external-oauth", true, false],
+    ["unresolved SecretRef", "unresolved-secret-ref", false, false],
+  ] as const)(
+    "converges chat metadata and models.list for %s",
+    async (_, kind, available, rejected) => {
+      configureAuthFixture(kind, rejected);
+      await publishOwner();
+      const lifecycle = await createLifecycle();
+      await lifecycle.attachContext(context, sidecars);
 
-    await expectAvailable(lifecycle, available);
-  });
+      await expectAvailable(lifecycle, available);
+    },
+  );
 
   it("catches up when the prepared owner publishes before attachment", async () => {
     await publishOwner();
@@ -600,7 +638,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         },
       } as EmbeddedRunAttemptResult,
       provider: "openai",
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       modelId: "gpt-5.4",
       modelApi: "openai-chatgpt-responses",
       modelBaseUrl: "https://chatgpt.com/backend-api/codex",
@@ -627,7 +665,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     await vi.waitFor(async () => await expectAvailable(lifecycle));
 
     revokeRuntimeAuthMaterializations({
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       provider: "openai",
       runtimeOwnerId: "codex",
     });
@@ -664,7 +702,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       },
       attempt: {} as EmbeddedRunAttemptResult,
       provider: "openai",
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
@@ -693,7 +731,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     );
 
     revokeRuntimeAuthMaterializations({
-      agentDir: "/tmp/configured-main",
+      agentDir: state.agentDir("main"),
       provider: "openai",
       runtimeOwnerId: "codex",
     });

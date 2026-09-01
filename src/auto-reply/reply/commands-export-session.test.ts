@@ -140,6 +140,7 @@ function makeParams(): HandleCommandsParams {
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir: "/tmp/workspace",
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },

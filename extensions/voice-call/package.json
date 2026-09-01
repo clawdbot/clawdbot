@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.16",
+    "typebox": "1.3.17",
     "ws": "8.21.3",
     "zod": "4.4.3"
   },
@@ -28,6 +28,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-api.ts",
     "install": {
       "npmSpec": "@openclaw/voice-call",
       "defaultChoice": "npm",

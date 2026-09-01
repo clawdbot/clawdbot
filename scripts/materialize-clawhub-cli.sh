@@ -8,7 +8,7 @@ github_output="${3:-}"
 
 package_json="${source_root}/package.json"
 package_lock="${source_root}/package-lock.json"
-expected_lock_sha256="9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83"
+expected_lock_sha256="adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9"
 expected_clawhub_integrity="sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ=="
 test -f "${package_json}"
 test -f "${package_lock}"

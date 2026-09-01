@@ -49,4 +49,11 @@ describe("safeMediaAttachmentHref", () => {
       "https://cdn.example/audio.mp3",
     );
   });
+
+  it("requires the matching media kind when one is supplied", () => {
+    expect(safeMediaAttachmentHref("data:video/mp4;base64,AAAA", "video")).toBe(
+      "data:video/mp4;base64,AAAA",
+    );
+    expect(safeMediaAttachmentHref("data:audio/mp3;base64,AAAA", "video")).toBeUndefined();
+  });
 });

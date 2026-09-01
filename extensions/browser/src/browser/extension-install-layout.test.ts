@@ -15,18 +15,17 @@ import {
   resolveChromeExtensionLoadPath,
 } from "./extension-install.js";
 import {
-  createExtensionInstallFixtures,
   FOUNDATION_STORE_ID,
   predictedId,
-  writeSecurePreferences,
+  useExtensionInstallFixture,
+  writeChromePreferences,
 } from "./extension-install.test-support.js";
 
 const ID_A = "abcdefghijklmnopabcdefghijklmnop";
-const { fixture, cleanup } = createExtensionInstallFixtures();
+const fixture = useExtensionInstallFixture();
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await cleanup();
 });
 
 function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, uid: number): T {
@@ -205,7 +204,7 @@ describe("deterministic unpacked extension ID", () => {
   });
 });
 
-describe("Secure Preferences discovery", () => {
+describe.each(["Preferences", "Secure Preferences"] as const)("%s discovery", (filename) => {
   it("discovers multiple exact unpacked IDs and ignores name, location, and path lookalikes", async () => {
     const value = await fixture();
     const installed = await installStableChromeExtension(value.bundledDir, value.deps);
@@ -215,7 +214,8 @@ describe("Secure Preferences discovery", () => {
     }
     const installedId = await predictedId(installed, value.deps.platform);
     const bundledId = await predictedId(value.bundledDir, value.deps.platform);
-    await writeSecurePreferences({
+    await writeChromePreferences({
+      filename,
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: {
@@ -228,7 +228,8 @@ describe("Secure Preferences discovery", () => {
         ["p".repeat(32)]: { location: 1, path: installed, manifest: { name: "OpenClaw" } },
       },
     });
-    await writeSecurePreferences({
+    await writeChromePreferences({
+      filename,
       userDataDir: chrome.userDataDir,
       profile: "Profile 1",
       entries: {
@@ -248,6 +249,31 @@ describe("Secure Preferences discovery", () => {
       ["Default", installedId],
       ["Profile 1", bundledId],
     ]);
+    await fs.symlink(
+      path.join(chrome.userDataDir, "Default"),
+      path.join(chrome.userDataDir, "Profile 2"),
+    );
+    const otherFilename = filename === "Preferences" ? "Secure Preferences" : "Preferences";
+    for (const profile of ["Default", "Profile 1"]) {
+      const profileDir = path.join(chrome.userDataDir, profile);
+      await fs.copyFile(path.join(profileDir, filename), path.join(profileDir, otherFilename));
+    }
+    const duplicated = await discoverChromeExtensionIds({
+      approvedDirs: [installed, value.bundledDir],
+      storeExtensionId: FOUNDATION_STORE_ID,
+      deps: value.deps,
+    });
+    expect(duplicated).toEqual({
+      ...result,
+      discovered: result.discovered.map((entry) => ({
+        ...entry,
+        securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
+      })),
+      storeDiscovered: result.storeDiscovered.map((entry) => ({
+        ...entry,
+        securePreferencesPath: path.join(chrome.userDataDir, entry.profile, "Secure Preferences"),
+      })),
+    });
     for (const entry of result.discovered) {
       expect(entry.extensionId).toBe(
         generateChromeExtensionIdForPath(entry.extensionPath, value.deps.platform),
@@ -270,7 +296,8 @@ describe("Secure Preferences discovery", () => {
       throw new Error("missing Chrome fixture root");
     }
     const expected = await predictedId(installed, value.deps.platform);
-    await writeSecurePreferences({
+    await writeChromePreferences({
+      filename,
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [ID_A]: { location: 4, path: installed } },
@@ -286,47 +313,78 @@ describe("Secure Preferences discovery", () => {
     expect(result.issues[0]).toContain(`does not match predicted ID ${expected}`);
   });
 
-  it("fails closed on malformed, oversized, locked, and symlinked profile metadata", async () => {
-    const value = await fixture();
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const malformed = await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: {},
-    });
-    await fs.writeFile(malformed, "{partial", { mode: 0o600 });
-    const profileLink = path.join(chrome.userDataDir, "Profile 2");
-    await fs.symlink(path.join(chrome.userDataDir, "Default"), profileLink);
-    const oversized = await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Profile 3",
-      entries: {},
-    });
-    await fs.truncate(oversized, 32 * 1024 * 1024 + 1);
-    const canLockFile = process.platform !== "win32" && process.getuid?.() !== 0;
-    if (canLockFile) {
-      const locked = await writeSecurePreferences({
+  it.for([
+    { failure: "malformed", issue: "JSON" },
+    { failure: "oversized", issue: "32 MiB inspection limit" },
+    { failure: "locked", issue: "EACCES" },
+    { failure: "symlink", issue: "Unsafe file" },
+    { failure: "directory", issue: "Unsafe file" },
+    { failure: "unsafe-mode", issue: "group/world-writable" },
+    { failure: "foreign-owner", issue: "foreign owner" },
+  ])(
+    "rejects $failure metadata even when the other store contains a valid identity",
+    async ({ failure, issue }, { skip }) => {
+      if (
+        (process.platform === "win32" &&
+          ["locked", "unsafe-mode", "foreign-owner"].includes(failure)) ||
+        (failure === "locked" && process.getuid?.() === 0)
+      ) {
+        skip();
+      }
+      const value = await fixture();
+      const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
+      if (!chrome) {
+        throw new Error("missing Chrome fixture root");
+      }
+      const extensionId = await predictedId(value.bundledDir, value.deps.platform);
+      const entries = { [extensionId]: { location: 4, path: value.bundledDir } };
+      const unsafe = await writeChromePreferences({
+        filename,
         userDataDir: chrome.userDataDir,
-        profile: "Profile 4",
-        entries: {},
+        profile: "Default",
+        entries,
       });
-      await fs.chmod(locked, 0o000);
-    }
-
-    const result = await discoverChromeExtensionIds({
-      approvedDirs: [value.bundledDir],
-      deps: value.deps,
-    });
-    expect(result.discovered).toEqual([]);
-    expect(result.issues.join("\n")).toContain("Default");
-    expect(result.issues.join("\n")).toContain("Profile 3");
-    if (canLockFile) {
-      expect(result.issues.join("\n")).toContain("Profile 4");
-    }
-  });
+      const valid = await writeChromePreferences({
+        filename: filename === "Preferences" ? "Secure Preferences" : "Preferences",
+        userDataDir: chrome.userDataDir,
+        profile: "Default",
+        entries,
+      });
+      if (failure === "malformed") {
+        await fs.writeFile(unsafe, "{partial");
+      } else if (failure === "oversized") {
+        await fs.truncate(unsafe, 32 * 1024 * 1024 + 1);
+      } else if (failure === "locked" || failure === "unsafe-mode") {
+        await fs.chmod(unsafe, failure === "locked" ? 0o000 : 0o662);
+      } else if (failure === "foreign-owner") {
+        const realLstat = fs.lstat.bind(fs);
+        vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+          const info = await realLstat(target);
+          return String(target) === unsafe
+            ? statsWithUid(info, (process.getuid?.() ?? 0) + 1)
+            : info;
+        });
+      } else {
+        await fs.unlink(unsafe);
+        if (failure === "symlink") {
+          await fs.symlink(valid, unsafe);
+        } else {
+          await fs.mkdir(unsafe);
+        }
+      }
+      const result = await discoverChromeExtensionIds({
+        approvedDirs: [value.bundledDir],
+        deps: value.deps,
+      });
+      expect(result.discovered).toEqual([
+        expect.objectContaining({ extensionId, securePreferencesPath: valid }),
+      ]);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toContain("Default");
+      expect(result.issues[0]).toContain(filename);
+      expect(result.issues[0]).toContain(issue);
+    },
+  );
 
   it("does not approve a foreign stable copy in status discovery", async () => {
     const value = await fixture();
@@ -337,7 +395,8 @@ describe("Secure Preferences discovery", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
+      filename,
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [await predictedId(target, value.deps.platform)]: { location: 4, path: target } },

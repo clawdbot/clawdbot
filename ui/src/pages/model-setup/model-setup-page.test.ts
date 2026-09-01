@@ -13,6 +13,7 @@ import {
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
 import "./model-setup-page.ts";
+import type { ModelSetupPageState } from "./state.ts";
 
 type TestModelSetupPage = HTMLElement & {
   routeData?: ModelSetupRouteData;
@@ -63,7 +64,9 @@ const detection: SystemAgentSetupDetectResult = {
 
 function createContext() {
   const request = vi.fn<GatewayBrowserClient["request"]>();
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = {
+    request: (...args: Parameters<GatewayBrowserClient["request"]>) => request(...args),
+  } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
     phase: "connected",
@@ -76,7 +79,7 @@ function createContext() {
           "config.set",
           "openclaw.setup.detect",
           "openclaw.setup.verify",
-          "openclaw.setup.activate",
+          "openclaw.setup.activate.start",
           "openclaw.setup.prepare.start",
         ],
       },
@@ -125,22 +128,19 @@ function createContext() {
 
 async function mountPage(
   context: ApplicationContext,
-  routeData: Omit<ModelSetupRouteData, "connection"> & { client: GatewayBrowserClient | null },
+  fixture: ModelSetupRouteData & {
+    state: Extract<ModelSetupPageState, { phase: "ready" }>;
+    client: GatewayBrowserClient;
+  },
 ): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-  const { client, ...data } = routeData;
-  page.routeData = {
-    ...data,
-    connection: {
-      client,
-      hello: context.gateway.snapshot.hello,
-      agentId: context.agentSelection.state.selectedId,
-    },
-  };
+  vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
+  page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
+  await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };
 }
 
@@ -174,19 +174,26 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.innerHTML).not.toContain(recommendedIconUrl);
   });
 
-  it("redacts secrets in displayed detection failures", async () => {
-    const { context, client, request, runtimeConfig } = createContext();
-    request.mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
-    const { page } = await mountPage(context, {
-      state: { phase: "ready", result: detection },
-      client,
-      firstRun: false,
+  it("redacts initial detection failures and recovers through Retry", async () => {
+    const { context, request, runtimeConfig } = createContext();
+    request.mockRejectedValueOnce(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    request.mockResolvedValue(detection);
+    const provider = createApplicationContextProvider(context);
+    const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+    page.routeData = { firstRun: false };
+    provider.append(page);
+    document.body.append(provider);
+
+    await waitForFast(() => {
+      expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
+      expect(page.textContent).not.toContain("sk-1234567890abcdef");
     });
-
-    await (page as unknown as { detect: () => Promise<unknown> }).detect();
-
-    expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
-    expect(page.textContent).not.toContain("sk-1234567890abcdef");
+    page.querySelector<HTMLButtonElement>(".model-setup .btn")?.click();
+    await waitForFast(() => {
+      expect(page.querySelector('[data-prepare-choice="llama-cpp"]')).not.toBeNull();
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(request).toHaveBeenCalledTimes(2);
     runtimeConfig.dispose();
   });
 
@@ -243,7 +250,9 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.innerHTML).not.toContain(customIconUrl);
 
     page.remove();
+    await page.updateComplete;
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:acme-icon");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("keeps legacy known-provider artwork on the authenticated proxy path", async () => {
@@ -386,12 +395,11 @@ describe("ModelSetupPage catalog icons", () => {
           ],
         };
       }
-      if (method === "openclaw.setup.activate") {
+      if (method === "openclaw.setup.activate.start") {
         return {
-          ok: true,
-          modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-          latencyMs: 731,
-          lines: ["Model ready"],
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m" },
         };
       }
       return {};
@@ -406,17 +414,17 @@ describe("ModelSetupPage catalog icons", () => {
 
     await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
-        "openclaw.setup.activate",
+        "openclaw.setup.activate.start",
         {
+          sessionId: expect.any(String),
           agentId: "main",
           kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
           modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
         },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        { timeoutMs: null },
       );
       expect(page.textContent).toContain("Connection verified");
       expect(page.textContent).toContain("llama-cpp/gemma-4-e4b-it-q4_k_m");
-      expect(page.textContent).toContain("Verified in 731 ms");
     });
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.detect",
@@ -459,13 +467,13 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
     expect(page.textContent).not.toContain("Connection verified");
     expect(request).not.toHaveBeenCalledWith(
-      "openclaw.setup.activate",
+      "openclaw.setup.activate.start",
       expect.anything(),
       expect.anything(),
     );
   });
 
-  it("flushes a pending config draft before one-shot activation and refreshes afterward", async () => {
+  it("flushes a pending config draft before activation review and refreshes afterward", async () => {
     vi.useFakeTimers();
     const { context, client, request, runtimeConfig } = createContext();
     const order: string[] = [];
@@ -489,11 +497,11 @@ describe("ModelSetupPage catalog icons", () => {
         hash = "hash-2";
         return { hash };
       }
-      if (method === "openclaw.setup.activate") {
+      if (method === "openclaw.setup.activate.start") {
         order.push(method);
         config = { ...config, configuredModel: "openai/gpt-5" };
         hash = "hash-3";
-        return { ok: true, modelRef: "openai/gpt-5", latencyMs: 42, lines: [] };
+        return { done: true, status: "done", modelActivation: { modelRef: "openai/gpt-5" } };
       }
       throw new Error(`Unexpected method ${method}`);
     });
@@ -525,7 +533,7 @@ describe("ModelSetupPage catalog icons", () => {
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
     await vi.waitFor(() => {
-      expect(order).toEqual(["config.set", "openclaw.setup.activate", "config.get"]);
+      expect(order).toEqual(["config.set", "openclaw.setup.activate.start", "config.get"]);
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
     expect(runtimeConfig.state.configForm).toMatchObject({
@@ -563,7 +571,7 @@ describe("ModelSetupPage catalog icons", () => {
       if (method === "wizard.next") {
         config = { ...config, configuredModel: "provider/model" };
         hash = "hash-3";
-        return { done: true, status: "done" };
+        return { done: true, status: "done", modelActivation: { modelRef: "provider/model" } };
       }
       if (method === "openclaw.setup.detect") {
         return {
@@ -597,7 +605,6 @@ describe("ModelSetupPage catalog icons", () => {
         "openclaw.setup.auth.start",
         "wizard.next",
         "config.get",
-        "openclaw.setup.detect",
       ]);
       expect(page.textContent).toContain("Connection verified");
     });
@@ -775,52 +782,109 @@ describe("ModelSetupPage catalog icons", () => {
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
     await waitForFast(() => {
-      expect(page.textContent).toContain("Connection changed before model activation started.");
+      expect(page.textContent).toContain("Connection changed before model setup continued.");
     });
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps a committed activation successful while surfacing a config refresh warning", async () => {
-    const { context: baseContext, client } = createContext();
-    const context = {
-      ...baseContext,
-      runtimeConfig: {
-        runExternalMutation: vi.fn(async () => ({
-          ok: true as const,
-          value: { ok: true, modelRef: "openai/gpt-5", latencyMs: 42, lines: [] },
-          refresh: { ok: false as const, error: "config.get failed after model commit" },
-        })),
-      } as unknown as ApplicationContext["runtimeConfig"],
-    } as ApplicationContext;
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [
-            {
-              kind: "codex-cli",
-              brandId: "openai",
-              label: "Codex CLI",
-              detail: "Signed in locally",
-              modelRef: "openai/gpt-5",
-              recommended: true,
-              credentials: true,
-            },
-          ],
+  it.each(
+    ["candidate", "provider sign-in"].flatMap((entry) =>
+      [
+        {
+          feedback: "config refresh",
+          restart: false,
+          refreshError: "config.get failed after model commit",
+          warnings: ["config.get failed after model commit"],
         },
-      },
-      client,
-      firstRun: false,
-    });
-
-    page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
-
-    await waitForFast(() => {
-      expect(page.textContent).toContain("Connection verified");
-      expect(page.textContent).toContain("config.get failed after model commit");
-    });
-  });
+        {
+          feedback: "pending restart",
+          restart: true,
+          refreshError: null,
+          warnings: ["Gateway restart required."],
+        },
+        {
+          feedback: "restart and config refresh",
+          restart: true,
+          refreshError: "config.get failed after model commit",
+          warnings: ["Gateway restart required.", "config.get failed after model commit"],
+        },
+      ].map((outcome) => Object.assign({}, outcome, { entry })),
+    ),
+  )(
+    "keeps verified $entry success visible with $feedback feedback",
+    async ({ entry, restart, refreshError, warnings }) => {
+      const { context: baseContext, client, request } = createContext();
+      const modelActivation = {
+        modelRef: "provider/verified",
+        ...(restart ? { gatewayRestartRequired: true as const } : {}),
+      };
+      request.mockImplementation(async (method) => {
+        if (method === "openclaw.setup.activate.start") {
+          return { done: true, status: "done", modelActivation };
+        }
+        if (method === "openclaw.setup.auth.start") {
+          return { sessionId: "warning-auth", done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          return { done: true, status: "done", modelActivation };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const context = {
+        ...baseContext,
+        runtimeConfig: {
+          runExternalMutation: vi.fn(
+            async (task: (client: GatewayBrowserClient) => Promise<unknown>) => ({
+              ok: true as const,
+              value: await task(client),
+              refresh: refreshError
+                ? { ok: false as const, error: refreshError }
+                : { ok: true as const },
+            }),
+          ),
+        } as unknown as ApplicationContext["runtimeConfig"],
+      } as ApplicationContext;
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            candidates: [
+              {
+                kind: "openai-api-key",
+                label: "Detected provider",
+                detail: "Available",
+                modelRef: modelActivation.modelRef,
+                recommended: true,
+                credentials: true,
+              },
+            ],
+            authOptions: [
+              { id: "provider-auth", label: "Provider", kind: "oauth", featured: true },
+            ],
+          },
+        },
+        client,
+        firstRun: false,
+      });
+      const selector =
+        entry === "candidate"
+          ? '[data-candidate-kind="openai-api-key"] button'
+          : '[data-auth-choice="provider-auth"] button';
+      page.querySelector<HTMLButtonElement>(selector)?.click();
+      await waitForFast(() => {
+        expect(page.textContent).toContain("Connection verified");
+        const warning = page.querySelector(".model-setup-success__warning")?.textContent;
+        for (const expected of warnings) {
+          expect(warning).toContain(expected);
+        }
+        expect(page.textContent).not.toContain("You can start chatting now.");
+        expect(page.querySelector(".model-setup-success .btn.primary")?.textContent?.trim()).toBe(
+          "Chat",
+        );
+      });
+    },
+  );
 
   it("coordinates wizard requests and keeps an authoritative refresh warning visible", async () => {
     const { context: baseContext, client, request } = createContext();

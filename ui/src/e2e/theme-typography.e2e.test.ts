@@ -10,6 +10,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -24,7 +25,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
  */
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDirectory = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/theme-typography");
 
 const suite = createControlUiE2eSuite({
   name: "Control UI theme typography",
@@ -114,9 +114,11 @@ async function captureTypography(
   name: string,
 ) {
   if (captureUiProof) {
-    await mkdir(proofDirectory, { recursive: true });
+    await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
     await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({ path: path.join(proofDirectory, `${name}.png`) });
+    await page.screenshot({
+      path: path.join(path.join(suite.artifactDir, "theme-typography"), `${name}.png`),
+    });
   }
 }
 
@@ -241,6 +243,10 @@ suite.define(() => {
       "antialiased",
     ],
     ["phosphor", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
+    ["crt", "JetBrains Mono", "JetBrains Mono", ["jetbrains-mono"], "antialiased"],
+    ["manuscript", "Lora", "Lora", ["lora"], "auto"],
+    ["rose", "DM Sans", "DM Sans", ["dm-sans"], "antialiased"],
+    ["miami", "Space Grotesk", "Space Grotesk", ["space-grotesk"], "antialiased"],
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
     async (theme, body, chat, faces, chatSmoothing) => {
@@ -311,8 +317,13 @@ suite.define(() => {
     );
 
     if (captureUiProof) {
-      await mkdir(proofDirectory, { recursive: true });
-      await page.screenshot({ path: path.join(proofDirectory, "phosphor-settings-shortcut.png") });
+      await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
+      await page.screenshot({
+        path: path.join(
+          path.join(suite.artifactDir, "theme-typography"),
+          "phosphor-settings-shortcut.png",
+        ),
+      });
     }
 
     const modelShortcutFont = await page.evaluate(() => {
@@ -354,6 +365,10 @@ suite.define(() => {
     ["tide", "tide", "#10151b", "#f7f9fb"],
     ["beacon", "beacon", "#000000", "#ffffff"],
     ["phosphor", "phosphor", "#0a0f0a", "#f4f7f4"],
+    ["crt", "crt", "#090a09", "#f5f5f4"],
+    ["manuscript", "manuscript", "#211e18", "#f6f1e4"],
+    ["rose", "rose", "#191724", "#faf4ed"],
+    ["miami", "miami", "#140f1e", "#f7f3f6"],
   ])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {
@@ -384,8 +399,116 @@ suite.define(() => {
     },
   );
 
+  it("keeps system chrome with the mounted route across shell and viewport lifecycles", async () => {
+    const { page } = await openThemedChat("claw", "light");
+    await page.setViewportSize({ width: 720, height: 900 });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+
+    const readChrome = () =>
+      page.evaluate(() => ({
+        color: document.documentElement.style.getPropertyValue(
+          "--control-ui-system-chrome-background",
+        ),
+        metas: Array.from(
+          document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
+          (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
+        ),
+      }));
+    const expectChrome = async (color: string) => {
+      await expect.poll(readChrome).toEqual({
+        color,
+        metas: [
+          { color, media: null },
+          { color, media: null },
+        ],
+      });
+    };
+    const pageColor = "#faf9f7";
+    const chatColor = "#f4f1ec";
+    await expectChrome(chatColor);
+
+    // Use the shell's actual shortcut and browser history without rebuilding the runtime.
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("ControlOrMeta+Shift+,");
+    await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
+    await expectChrome(pageColor);
+    await page.goBack();
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await expectChrome(chatColor);
+    await page.locator(".chat-pane__nav-toggle").first().click();
+    await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+    await page.locator(".new-session-page__message").waitFor();
+    await expectChrome(chatColor);
+
+    for (const [width, height, color] of [
+      [1280, 900, pageColor],
+      [900, 450, chatColor],
+      [900, 900, pageColor],
+      [720, 900, chatColor],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await expectChrome(color);
+    }
+
+    // Runtime removal renders nothing; restoration must rebind the existing router.
+    const runtimeLifecycle = await page.locator("openclaw-app-shell").evaluate(async (element) => {
+      const shell = element as HTMLElement & {
+        runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
+        updateComplete: Promise<boolean>;
+      };
+      const runtime = shell.runtime;
+      const color = () =>
+        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
+      try {
+        shell.runtime = undefined;
+        await shell.updateComplete;
+        const removed = { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) };
+        shell.runtime = runtime;
+        await shell.updateComplete;
+        return {
+          removed,
+          restored: { color: color(), chat: Boolean(shell.querySelector(".shell--chat")) },
+        };
+      } finally {
+        shell.runtime = runtime;
+      }
+    });
+    expect(runtimeLifecycle).toEqual({
+      removed: { color: pageColor, chat: false },
+      restored: { color: chatColor, chat: true },
+    });
+    await expectChrome(chatColor);
+
+    const reconnect = await page.locator("openclaw-app-shell").evaluate(async (element) => {
+      const shell = element as HTMLElement & { updateComplete: Promise<boolean> };
+      const parent = shell.parentNode!;
+      const next = shell.nextSibling;
+      const color = () =>
+        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
+      try {
+        shell.remove();
+        const removed = color();
+        parent.insertBefore(shell, next);
+        await shell.updateComplete;
+        return {
+          removed,
+          reconnected: color(),
+          sameShell: document.querySelector("openclaw-app-shell") === shell,
+        };
+      } finally {
+        if (!shell.isConnected) {
+          parent.insertBefore(shell, next);
+        }
+      }
+    });
+    expect(reconnect).toEqual({ removed: pageColor, reconnected: chatColor, sameShell: true });
+    await expectChrome(chatColor);
+  });
+
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
-    const { page, gateway } = await openThemedChat("knot", "dark");
+    const { page, gateway } = await openThemedChat("knot", "light");
+    await page.setViewportSize({ width: 720, height: 900 });
     let releasePalette!: () => void;
     const paletteGate = new Promise<void>((resolve) => {
       releasePalette = resolve;
@@ -399,7 +522,7 @@ suite.define(() => {
     await page.evaluate(() => {
       const root = document.documentElement;
       new MutationObserver(() => {
-        if (root.dataset.theme === "tide") {
+        if (root.dataset.theme === "tide-light") {
           root.dataset.observedThemeBackground = getComputedStyle(root)
             .getPropertyValue("--bg")
             .trim();
@@ -407,21 +530,21 @@ suite.define(() => {
       }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     });
     const changeTheme = async (theme: string) => {
-      await gateway.setMethodResponse("config.get", themeConfigResponse(theme, "dark"));
+      await gateway.setMethodResponse("config.get", themeConfigResponse(theme, "light"));
       await gateway.emitGatewayEvent("config.changed", { hash: `theme-${theme}`, ts: Date.now() });
     };
     try {
       const request = page.waitForRequest("**/themes/tide.css");
       await changeTheme("tide");
       await request;
-      expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot");
+      expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot-light");
       expect(
         await page.evaluate(() =>
           getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
         ),
-      ).toBe("#080808");
+      ).toBe("#f9f9fb");
       await changeTheme("beacon");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon-light");
       const response = page.waitForResponse("**/themes/tide.css");
       releasePalette();
       await response;
@@ -431,16 +554,16 @@ suite.define(() => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
-      expect(await page.locator("html").getAttribute("data-theme")).toBe("beacon");
+      expect(await page.locator("html").getAttribute("data-theme")).toBe("beacon-light");
       await changeTheme("tide");
       await expect
         .poll(() => page.locator("html").getAttribute("data-observed-theme-background"))
-        .toBe("#10151b");
+        .toBe("#f7f9fb");
       expect(await page.locator('meta[name="theme-color"]').first().getAttribute("content")).toBe(
-        "#10151b",
+        "#eef2f7",
       );
       await changeTheme("claw");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("light");
     } finally {
       releasePalette();
     }

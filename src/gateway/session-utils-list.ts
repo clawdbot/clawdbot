@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -48,16 +49,14 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   deriveSessionTitle,
+  buildStoreChildSessionIndex,
+  getSingleRowChildSessionCandidates,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
-import {
-  buildSessionListRowContext,
-  buildSessionListRowMetadataContext,
-  buildSingleRowStoreChildSessionsByKey,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import {
   appendStoredSessionModelSearchFields,
@@ -73,16 +72,12 @@ import type {
   SessionsListResult,
 } from "./session-utils.types.js";
 
-/**
- * Number of session rows to build per batch before yielding to the event loop.
- * Keeps the main thread responsive during large session list operations while
- * avoiding excessive yielding overhead for small stores.
- */
-const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
+// Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
+const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
+const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
 
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
-const SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES = 64 * 1024;
 
 type ListSessionsFromStoreParams = {
   cfg: OpenClawConfig;
@@ -91,7 +86,6 @@ type ListSessionsFromStoreParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
-  lightweightListRows?: boolean;
   opts: SessionsListParams;
   involvingActorId?: string;
   ownerFirstActorId?: string;
@@ -454,7 +448,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const configuredAgentIds = new Set(listAgentIds(cfg));
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
-    rowContext ??= buildSessionListRowContext({ store, now, userProfileIdentityById });
+    rowContext ??= buildSessionListRowMetadataContext({ now, userProfileIdentityById });
     return rowContext;
   };
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
@@ -484,27 +478,29 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     involvingActorId: params.involvingActorId,
     ownerFirstActorId: params.ownerFirstActorId,
   });
-  const fullRowContext =
-    rowContext ||
+  // The two registry caches can differ after an external worker write. Preserve
+  // live child reads where the existing short-list path did not prepare a snapshot.
+  const usePreparedChildReads =
+    Boolean(rowContext) ||
     hasSpawnedByFilter ||
     filteredSessionKeys.size > 0 ||
-    selection.entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
-      ? getRowContext()
-      : undefined;
-  if (fullRowContext && filteredSessionKeys.size > 0) {
-    // The predicate replaces a filtered-store object; keep its hidden child links out too.
-    for (const [parentKey, childKeys] of fullRowContext.storeChildSessionsByKey) {
-      fullRowContext.storeChildSessionsByKey.set(
-        parentKey,
-        childKeys.filter((key) => !filteredSessionKeys.has(key)),
-      );
-    }
-  }
+    selection.entries.length > SESSIONS_LIST_ROW_CONTEXT_THRESHOLD;
   const sharedRowContext =
-    fullRowContext ??
-    (selection.entries.length > 0
-      ? buildSessionListRowMetadataContext({ now, userProfileIdentityById })
-      : undefined);
+    usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
+  const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
+  const childCandidates =
+    !usePreparedChildReads && selection.entries.length > 0
+      ? getSingleRowChildSessionCandidates({ storePath, store })
+      : undefined;
+  const storeChildSessionsByKey = buildStoreChildSessionIndex({
+    store,
+    keys: selection.entries.map(([key]) => key),
+    now,
+    subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
+    candidates: childCandidates,
+    excludedChildKeys: filteredSessionKeys,
+    requireCurrentController: !usePreparedChildReads,
+  });
   populateSessionListAcpMetadata({
     cfg,
     entries: selection.entries,
@@ -520,33 +516,33 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     now,
     configuredAgentIds,
     rowContext: sharedRowContext,
-    storeChildSessionsByKey: fullRowContext?.storeChildSessionsByKey,
-    storePath: hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath),
+    storeChildSessionsByKey,
+    storePath,
   };
 }
 
-function buildSessionsListResult(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  list: ReturnType<typeof prepareSessionList>;
-  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
-  sessions: GatewaySessionRow[];
-}): SessionsListResult {
-  const { list, sessions } = params;
+function buildSessionsListResult(
+  params: ListSessionsFromStoreParams,
+  list: ReturnType<typeof prepareSessionList>,
+  sessions: GatewaySessionRow[],
+): SessionsListResult {
+  const { cfg, opts, modelCatalog } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
-  // Legacy plain-array catalogs (direct listSessionsFromStore callers) pass through
+  // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(
-          params.agentId
-            ? normalizeAgentId(params.agentId)
+  const preparedDefaultsCatalog =
+    modelCatalog instanceof Map
+      ? modelCatalog.get(
+          opts.agentId
+            ? normalizeAgentId(opts.agentId)
             : normalizeAgentId(
-                tryResolveLegacyCompatibilityAgentId(params.cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
+                tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
               ),
         )
-      : params.modelCatalog;
+      : undefined;
+  const defaultsCatalog =
+    modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
   return {
     ts: list.now,
     path: list.storePath,
@@ -565,9 +561,10 @@ function buildSessionsListResult(params: {
           peopleSessionCount: list.peopleSessionCount,
         }
       : {}),
-    defaults: getSessionDefaults(params.cfg, defaultsCatalog, {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
+    defaults: getSessionDefaults(cfg, defaultsCatalog, {
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       allowPluginNormalization: false,
+      providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
     }),
     sessions,
   };
@@ -575,69 +572,17 @@ function buildSessionsListResult(params: {
 
 export function filterAndSortSessionEntries(params: {
   cfg: OpenClawConfig;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
   store: Record<string, SessionEntry>;
   opts: SessionsListParams;
   now: number;
+  getRowContext?: SessionListRowContextProvider;
   involvingActorId?: string;
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }
 
-export function listSessionsFromStore(params: ListSessionsFromStoreParams): SessionsListResult {
-  const { cfg, store, opts } = params;
-  const list = prepareSessionList(params);
-  const sessions = list.entries.map(([key, entry], index) => {
-    const includeTranscriptFields = index < list.transcriptFieldRows;
-    const rowAgentId =
-      !parseAgentSessionKey(key) && typeof opts.agentId === "string"
-        ? normalizeAgentId(opts.agentId)
-        : undefined;
-    const storeChildSessionsByKey =
-      list.storeChildSessionsByKey ??
-      buildSingleRowStoreChildSessionsByKey({
-        store,
-        storePath: list.storePath,
-        key,
-        now: list.now,
-      });
-    return buildGatewaySessionRow({
-      cfg,
-      storePath: list.storePath,
-      store,
-      key,
-      entry,
-      agentId: rowAgentId,
-      modelCatalog: params.modelCatalog,
-      now: list.now,
-      includeDerivedTitles: includeTranscriptFields && list.includeDerivedTitles,
-      includeLastMessage: includeTranscriptFields && list.includeLastMessage,
-      transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
-      storeChildSessionsByKey,
-      rowContext: list.rowContext,
-      configuredAgentIds: list.configuredAgentIds,
-      skipTranscriptUsageFallback: params.lightweightListRows === true,
-      lightweightListRow: params.lightweightListRows === true,
-    });
-  });
-  return buildSessionsListResult({
-    cfg,
-    list,
-    modelCatalog: params.modelCatalog,
-    sessions,
-    agentId: opts.agentId,
-  });
-}
-
-/**
- * Async version of listSessionsFromStore that yields to the event loop between
- * batches of session row builds. This prevents large session stores from
- * blocking the event loop during sessions.list requests.
- *
- * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
- * reads for derived titles and last-message previews) is the dominant blocker.
- * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
- * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
- */
+/** Projects lightweight list rows while sharing the event loop with other requests. */
 export async function listSessionsFromStoreAsync(
   params: ListSessionsFromStoreParams,
 ): Promise<SessionsListResult> {
@@ -647,6 +592,7 @@ export async function listSessionsFromStoreAsync(
   // between rows, the memo never hits, and each row triggers a full
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
+    let workStartedAt = performance.now();
     const { cfg, store, opts } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
@@ -679,14 +625,6 @@ export async function listSessionsFromStoreAsync(
         !parseAgentSessionKey(key) && typeof opts.agentId === "string"
           ? normalizeAgentId(opts.agentId)
           : undefined;
-      const storeChildSessionsByKey =
-        list.storeChildSessionsByKey ??
-        buildSingleRowStoreChildSessionsByKey({
-          store,
-          storePath: list.storePath,
-          key,
-          now: list.now,
-        });
       const row = buildGatewaySessionRow({
         cfg,
         storePath: list.storePath,
@@ -698,9 +636,9 @@ export async function listSessionsFromStoreAsync(
         now: list.now,
         includeDerivedTitles: false,
         includeLastMessage: false,
-        transcriptUsageMaxBytes: SESSIONS_LIST_TRANSCRIPT_USAGE_MAX_BYTES,
-        storeChildSessionsByKey,
+        storeChildSessionsByKey: list.storeChildSessionsByKey,
         rowContext: list.rowContext,
+        configuredAgentIds: list.configuredAgentIds,
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
@@ -722,21 +660,18 @@ export async function listSessionsFromStoreAsync(
         }
       }
       sessions.push(row);
-      // Yield to the event loop between batches so WebSocket heartbeats,
-      // channel I/O, and concurrent RPC calls are not starved.
-      if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < list.entries.length) {
+      if (
+        i + 1 < list.entries.length &&
+        performance.now() - workStartedAt >= SESSIONS_LIST_YIELD_INTERVAL_MS
+      ) {
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
+        // Waiting behind other work is not projection work; start the next budget on resume.
+        workStartedAt = performance.now();
       }
     }
 
-    return buildSessionsListResult({
-      cfg,
-      list,
-      modelCatalog: params.modelCatalog,
-      sessions,
-      agentId: opts.agentId,
-    });
+    return buildSessionsListResult(params, list, sessions);
   });
 }

@@ -3,7 +3,7 @@ import { installCodexComputerUse, readCodexComputerUseStatus } from "./app-serve
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import type { CodexPluginsManagementIO } from "./command-plugins-management.js";
+import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import {
   codexControlRequest,
   readCodexStatusProbes,

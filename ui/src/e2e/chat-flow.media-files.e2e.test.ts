@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {
   buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
@@ -10,12 +11,12 @@ import {
   expectDefined,
   installMockGateway,
   installPlainHttpClipboardCapture,
-  managedImageCacheProofDir,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 suite.define(() => {
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
@@ -89,13 +90,17 @@ suite.define(() => {
     },
     {
       kind: "audio",
-      source: `FILE:${path.join(managedImageCacheProofDir, "bootstrap-structured-audio.mp3")}`,
+      source: "bootstrap-structured-audio.mp3",
       ticket: "ticket-bootstrap-structured-audio",
       structured: true,
     },
   ] as const)(
     "renders local assistant $kind through server metadata before preview roots load",
-    async ({ kind, source, ticket, ...options }) => {
+    async ({ kind, source: fixtureSource, ticket, ...options }) => {
+      const source =
+        "structured" in options
+          ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
+          : fixtureSource;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -200,12 +205,10 @@ suite.define(() => {
             .toBe(180);
         }
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
+            path: path.join(suite.artifactDir, `bootstrap-local-${kind}-${ticket}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -286,12 +289,10 @@ suite.define(() => {
         expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
         expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           await page.screenshot({
             fullPage: true,
-            path: path.join(artifactDir, `bootstrap-blocked-${code}.png`),
+            path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
           });
         }
         if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
@@ -425,6 +426,168 @@ suite.define(() => {
     }
   });
 
+  it("moves a managed document batch from skeletons directly to final cards", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+      ? suite.artifactDir
+      : undefined;
+    const managedAttachmentSource = (artifactId: string) =>
+      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_media_".length)}/full`;
+    const attachments = [
+      {
+        artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+        label: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 8_231,
+      },
+      {
+        artifactId: "artifact_managed_media_22222222-2222-4222-8222-222222222222",
+        label: "table.csv",
+        mimeType: "text/csv",
+        sizeBytes: 2_774,
+      },
+      {
+        artifactId: "artifact_managed_media_33333333-3333-4333-8333-333333333333",
+        label: "notes.txt",
+        mimeType: "text/plain",
+        sizeBytes: 981,
+      },
+      {
+        artifactId: "artifact_managed_media_44444444-4444-4444-8444-444444444444",
+        label: "bundle.zip",
+        mimeType: "application/zip",
+        sizeBytes: 42_831,
+      },
+    ] as const;
+    const methodCases = attachments.map((attachment) => {
+      const id = attachment.artifactId.slice("artifact_managed_media_".length);
+      return {
+        match: { artifactId: attachment.artifactId, sessionKey: "agent:main:main" },
+        response: {
+          artifact: {
+            id: attachment.artifactId,
+            type: "attachment",
+            title: attachment.label,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            download: { mode: "url" },
+          },
+          url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full?mediaTicket=ticket-${id}`,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      };
+    });
+    const gateway = await installMockGateway(page, {
+      heldMethods: ["artifacts.download"],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: attachments.map((attachment) => ({
+            type: "attachment",
+            attachment: {
+              artifactId: attachment.artifactId,
+              url: managedAttachmentSource(attachment.artifactId),
+              kind: "document",
+              label: attachment.label,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            },
+          })),
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "artifacts.download": { cases: methodCases },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const checkingCards = page.locator(".chat-assistant-attachment-card--checking");
+      await checkingCards.first().waitFor({ state: "visible", timeout: 10_000 });
+      expect(await checkingCards.count()).toBe(4);
+      const skeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__status-meta.skeleton",
+      );
+      expect(await skeletons.count()).toBe(4);
+      expect(await skeletons.first().getAttribute("aria-hidden")).toBe("true");
+      expect(
+        await skeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
+      const metadataSize = await skeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
+      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.width).toBeGreaterThanOrEqual(112);
+      expect(metadataSize.width).toBeLessThanOrEqual(144);
+      const actionSkeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__action-skeleton.skeleton",
+      );
+      expect(await actionSkeletons.count()).toBe(4);
+      const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
+      expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
+      expect(actionSkeletonSize.width).toBeCloseTo(64, 3);
+      expect(
+        await actionSkeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
+      const pendingActionWidths = await checkingCards
+        .locator(".chat-assistant-attachment-card__actions--loading")
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
+      expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "media-batch-skeletons.png") });
+      }
+
+      await gateway.resolveDeferred("artifacts.download");
+      await expect
+        .poll(() => page.locator(".chat-assistant-attachment-card--compact").count())
+        .toBe(4);
+      expect(await checkingCards.count()).toBe(0);
+      expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const finalActionWidths = await page
+        .locator(
+          ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().width),
+        );
+      expect(finalActionWidths).toHaveLength(pendingActionWidths.length);
+      for (const [index, width] of finalActionWidths.entries()) {
+        expect(Math.abs(width - (pendingActionWidths[index] ?? 0))).toBeLessThanOrEqual(0.5);
+      }
+      for (const attachment of attachments) {
+        const card = page
+          .locator(".chat-assistant-attachment-card--compact")
+          .filter({ hasText: attachment.label });
+        expect(await card.count()).toBe(1);
+        expect(await card.locator(".chat-assistant-attachment-card__expand").count()).toBe(1);
+        expect(await card.locator(".chat-assistant-attachment-card__download").count()).toBe(1);
+      }
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "media-batch-final.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([
     {
       name: "canonical inbound",
@@ -441,7 +604,9 @@ suite.define(() => {
   ] as const)(
     "renders a $name image through the ticketed media route",
     async ({ source, workspaceDir, screenshotName }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
+        ? suite.artifactDir
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -509,7 +674,6 @@ suite.define(() => {
           )
           .toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             fullPage: true,
             path: `${artifactDir}/${screenshotName}.png`,
@@ -728,7 +892,7 @@ suite.define(() => {
         revokedBlobUrls: finalProof.revoked.length,
       };
       if (captureUiProofEnabled) {
-        await mkdir(managedImageCacheProofDir, { recursive: true });
+        const managedImageCacheProofDir = path.join(suite.artifactDir, "managed-image-cache");
         await page.evaluate((summary) => {
           const panel = document.createElement("pre");
           panel.setAttribute("data-managed-image-cache-proof", "true");

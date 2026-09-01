@@ -109,7 +109,7 @@ suite.define(() => {
             };
           })
           .toEqual({ horizontal: true, vertical: true });
-        await captureUiProof(page, `group-defaults-folder-picker-${viewport.name}.png`);
+        await captureUiProof(suite, page, `group-defaults-folder-picker-${viewport.name}.png`);
       }
       await folderPicker.getByRole("button", { name: "Use this folder" }).click();
       await page.setViewportSize({ height: 900, width: 1280 });
@@ -182,65 +182,75 @@ suite.define(() => {
     }
   });
 
-  it("blocks saving a worktree default until repository inspection succeeds", async () => {
-    const groupCwd = "/home/peter/client-work";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-        "worktrees.branches": {
-          branches: [],
-          repositoryStatus: "unavailable",
+  it.each(["/home/peter/client-work", ""])(
+    "blocks saving a worktree default until repository inspection succeeds (%s)",
+    async (groupCwd) => {
+      const context = await suite.browser.newContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([]),
+          "worktrees.branches": {
+            branches: [],
+            repositoryStatus: "unavailable",
+          },
         },
-      },
-      sessionGroups: ["Client work"],
-      sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
-      workspace: "/home/peter/openclaw",
-      workspaceGit: true,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const group = page.locator('[data-session-section="category:Client work"]');
-      await group.waitFor({ state: "visible", timeout: 10_000 });
-      await group.locator(".sidebar-recent-sessions__head").hover();
-      await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
-      const dialog = page.locator(
-        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
-      );
-      await dialog.waitFor({ state: "visible" });
-
-      const environment = dialog.locator("[data-session-group-environment]");
-      await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
-      const save = dialog.getByRole("button", { name: "Save" });
-      await expect.poll(() => save.isDisabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
-
-      await gateway.setMethodResponse("worktrees.branches", {
-        branches: [{ kind: "local", name: "main" }],
-        defaultBranch: "main",
-        repositoryStatus: "git",
+        sessionGroups: ["Client work"],
+        sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: true } },
+        workspace: "/home/peter/openclaw",
+        workspaceGit: true,
       });
-      await dialog.getByRole("button", { name: "Retry" }).click();
-      const modeTrigger = dialog.locator("#session-group-defaults-mode-trigger");
-      await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
-      await expect.poll(() => save.isEnabled()).toBe(true);
-      await save.click();
-      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
-        name: "Client work",
-        cwd: groupCwd,
-        worktree: true,
-      });
-    } finally {
-      await context.close();
-    }
-  });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const group = page.locator('[data-session-section="category:Client work"]');
+        await group.waitFor({ state: "visible", timeout: 10_000 });
+        await group.locator(".sidebar-recent-sessions__head").hover();
+        await group.getByRole("button", { name: "Group options for Client work" }).click();
+        await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+        const dialog = page.locator(
+          `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+        );
+        await dialog.waitFor({ state: "visible" });
+
+        const environment = dialog.locator("[data-session-group-environment]");
+        await expect
+          .poll(() => environment.getAttribute("data-session-group-environment"))
+          .not.toBe("checking");
+        await captureUiProof(
+          suite,
+          page,
+          `group-defaults-${groupCwd ? "folder" : "workspace"}.png`,
+        );
+        await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
+        const save = dialog.getByRole("button", { name: "Save" });
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+        await gateway.setMethodResponse("worktrees.branches", {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        });
+        await dialog.getByRole("button", { name: "Retry" }).click();
+        const modeTrigger = dialog.locator("#session-group-defaults-mode-trigger");
+        await expect.poll(() => modeTrigger.getAttribute("data-value")).toBe("worktree");
+        await expect.poll(() => save.isEnabled()).toBe(true);
+        await save.click();
+        expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+          name: "Client work",
+          cwd: groupCwd || null,
+          worktree: true,
+        });
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("omits the group category for a legacy Gateway", async () => {
     const context = await suite.browser.newContext({

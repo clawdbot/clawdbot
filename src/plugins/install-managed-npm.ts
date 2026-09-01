@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import {
+  formatNpmCommandFailureOutput,
+  type NpmIntegrityDrift,
+  type NpmSpecResolution,
+} from "../infra/install-source-utils.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -24,7 +28,6 @@ import {
   cleanupManagedNpmRootPreparedDependency,
   createManagedNpmPluginInstallRollbackSnapshot,
   formatManagedNpmProjectQuarantineArtifacts,
-  formatNpmCommandFailureOutput,
   isManagedNpmProjectCorruptionInstallFailure,
   isNpmAliasOverrideCompatibilityError,
   listManagedNpmRootPackageNames,

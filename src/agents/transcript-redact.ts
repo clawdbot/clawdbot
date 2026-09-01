@@ -15,6 +15,7 @@ import {
   redactSensitiveText,
   redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
+import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -75,6 +76,7 @@ type TranscriptValueLocation =
   | "root"
   | "assistant-content-array"
   | "assistant-content-block"
+  | "nested-tool-details"
   | "nested";
 
 type TranscriptAssistantRoute = {
@@ -243,6 +245,7 @@ const replaySanitizerHelpers = {
   isOpenAIResponsesRoute,
   isPlainTranscriptObject,
   isStructurallyValidOpaqueReplayToken,
+  redactTranscriptStructuredValue,
   redactTranscriptText,
 };
 
@@ -558,7 +561,13 @@ function redactTranscriptStructuredValue(
     if (
       typeof item === "string" &&
       ((location === "root" && source.role === "toolResult" && key === "toolCallId") ||
-        (location === "assistant-content-block" && source.type === "toolCall" && key === "id"))
+        (location === "assistant-content-block" && source.type === "toolCall" && key === "id") ||
+        (location === "nested-tool-details" &&
+          (key === "toolCallId" ||
+            key === "parentToolCallId" ||
+            key === "runId" ||
+            key === "scopeId" ||
+            key === "afterEntryId")))
     ) {
       continue;
     }
@@ -685,7 +694,9 @@ function redactTranscriptStructuredValue(
               key === "content" &&
               Array.isArray(item)
               ? "assistant-content-array"
-              : "nested",
+              : location === "root" && key === "details" && readNestedToolActivity(source)
+                ? "nested-tool-details"
+                : "nested",
             currentAssistantRoute,
             modelVisibleToolResult ||
               (location === "root" && source.role === "toolResult" && key === "content"),
@@ -699,6 +710,15 @@ function redactTranscriptStructuredValue(
     }
     next ??= { ...source };
     next[key] = redacted;
+  }
+  // Redacted source facts no longer identify the producer's sender. Keep display
+  // redaction, but never qualify the replacement bytes as a person or remote actor.
+  if (
+    fieldKey === "__openclaw" &&
+    next &&
+    (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId)
+  ) {
+    delete next.senderIdentity;
   }
   seen.delete(value);
   return next ?? value;

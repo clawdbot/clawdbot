@@ -31,7 +31,6 @@ import {
   MAX_SESSION_ID_LENGTH,
   requireBoundThread,
 } from "./session-catalog-parsing.js";
-import { requireCatalogEligibleThread } from "./session-catalog-terminal.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import {
   codexLastTerminalTurnId,
@@ -360,6 +359,7 @@ async function createOrReuseAdoptedSession(params: {
       config: params.config,
       key: adoptionSessionKey(params.sourceThread.id, params.sourceHomeId),
       agentId: params.agentId,
+      displayName: params.sourceThread.name ?? undefined,
       thread: params.sourceThread,
       throughTurnId: pendingLastTurnId ?? null,
       recoverMatchingInitialEntry: true,
@@ -451,7 +451,7 @@ type ContinueLocalCodexSessionParams = {
 async function continueLocalCodexSessionInner(
   params: ContinueLocalCodexSessionParams,
 ): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
-  await requireCatalogEligibleThread(params.control, params.threadId);
+  await params.control.requireEligibleThread(params.threadId);
   const existing = await findAdoptedSessionEntry({ ...params, runtime: params.api.runtime });
   if (existing) {
     const boundThreadId = requireBoundThread(existing);

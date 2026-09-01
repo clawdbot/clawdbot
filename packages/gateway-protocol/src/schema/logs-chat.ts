@@ -1,9 +1,14 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { CHAT_HISTORY_MAX_ENTRIES } from "./chat-history-constants.js";
+import {
+  CHAT_HISTORY_MAX_ENTRIES,
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
+  CHAT_INPUT_RUN_ID_MAX_CHARS,
+} from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 /** Cursor-based request for the gateway log tail endpoint. */
 export const LogsTailParamsSchema = closedObject({
@@ -20,6 +25,7 @@ export const LogsTailResultSchema = closedObject({
   lines: Type.Array(Type.String()),
   truncated: Type.Optional(Type.Boolean()),
   reset: Type.Optional(Type.Boolean()),
+  skippedBytes: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Session-scoped history request used by WebChat and native WebSocket clients. */
@@ -29,10 +35,62 @@ export const ChatHistoryParamsSchema = closedObject({
   cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+  inputRunIds: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+      minItems: 1,
+      maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
+      uniqueItems: true,
+    }),
+  ),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/** Accepted input awaiting a turn, separate from canonical model history. */
+export const ChatPendingInputsPageSchema = closedObject({
+  items: Type.Array(
+    closedObject({
+      id: NonEmptyString,
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS })),
+      message: Type.Unknown(),
+      acceptedAt: Type.Number(),
+      state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
+    }),
+    { maxItems: 20 },
+  ),
+  total: Type.Integer({ minimum: 0 }),
+  nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
+
+/** Exact accepted-input custody, independent of display pagination and message identity. */
+export const ChatInputReceiptsSchema = Type.Array(
+  Type.Union([
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("pending"),
+    }),
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("consumed"),
+      consumedByEventId: NonEmptyString,
+    }),
+  ]),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputReceipts = Static<typeof ChatInputReceiptsSchema>;
+
+/** Consumed-only compatibility projection for existing v4 clients. */
+export const ChatInputConsumptionsSchema = Type.Array(
+  closedObject({
+    runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+    consumedByEventId: NonEmptyString,
+  }),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
@@ -47,6 +105,9 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   agentsList: Type.Optional(Type.Unknown()),
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
+  pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+  inputReceipts: Type.Optional(ChatInputReceiptsSchema),
+  inputConsumptions: Type.Optional(ChatInputConsumptionsSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */
@@ -60,9 +121,16 @@ export const ChatHistoryCursorResultSchema = Type.Union([
   ChatHistoryResetResultSchema,
 ]);
 
-/** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
+/** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
 export const ChatMetadataParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+    }),
+  ),
 });
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
@@ -178,6 +246,8 @@ export const ChatSendParamsSchema = closedObject({
   // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   idempotencyKey: NonEmptyString,
 });
 

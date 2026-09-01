@@ -1,4 +1,3 @@
-// QR terminal tests cover text normalization and terminal render calls.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { create, toString } = vi.hoisted(() => ({
@@ -11,17 +10,9 @@ const { create, toString } = vi.hoisted(() => ({
   toString: vi.fn(async () => "ASCII-QR"),
 }));
 
-vi.mock("qrcode", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("qrcode")>();
-  return {
-    ...actual,
-    default: {
-      ...(actual.default ?? actual),
-      create,
-      toString,
-    },
-  };
-});
+vi.mock("./qr-runtime.ts", () => ({
+  loadQrCodeRuntime: async () => ({ create, toString }),
+}));
 
 let renderQrTerminal: typeof import("./qr-terminal.ts").renderQrTerminal;
 
@@ -53,6 +44,6 @@ describe("renderQrTerminal", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("qrcode");
+  vi.doUnmock("./qr-runtime.ts");
   vi.resetModules();
 });

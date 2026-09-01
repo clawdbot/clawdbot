@@ -242,7 +242,7 @@ describe("prepareChatSendUserTurn", () => {
 
       expect(prepared.ctx.SessionCreation).toEqual({
         via: "operator",
-        actor: { type: "human", id: profile.id },
+        actor: { type: "human", source: "profile", id: profile.id },
         sandbox: "required",
       });
     });

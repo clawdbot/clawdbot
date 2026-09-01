@@ -416,6 +416,8 @@ describe("session placement recovery", () => {
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
+    { name: "a null Fast Mode", value: { fastMode: null } },
     { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {

@@ -1,10 +1,10 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -18,14 +18,24 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
-const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let TOAST_PROOF_DIR: string;
+beforeEach(() => {
+  TOAST_PROOF_DIR = createControlUiE2eArtifactDir("toast-layering");
+});
+const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let railProofDir: string | undefined;
+beforeEach(() => {
+  railProofDir = railProofDirParent
+    ? createControlUiE2eArtifactDir("native-nav-sidebar-toggle", railProofDirParent)
+    : undefined;
+});
 const limitedScopes = ["operator.read", "operator.write"];
 const UPDATE_AVAILABLE = {
   channel: "stable",
@@ -129,29 +139,7 @@ suite.define(() => {
       });
     }
     if (options.webChrome) {
-      await page.addInitScript(() => {
-        const nativeWindow = window as Window & {
-          __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-          __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
-        };
-        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
-        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
-          canGoBack: false,
-          canGoForward: false,
-        };
-        const stamp = () => {
-          document.documentElement.classList.add(
-            "openclaw-native-macos",
-            "openclaw-native-web-chrome",
-          );
-          document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
-        };
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
+      await installNativeWebChrome(page);
     }
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -174,6 +162,14 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
+    expect(
+      await page.evaluate(() => ({
+        titlebarRegistered: customElements.get("openclaw-macos-titlebar-controls") !== undefined,
+        titlebarRequested: performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("macos-titlebar-controls")),
+      })),
+    ).toEqual({ titlebarRegistered: false, titlebarRequested: false });
     expect(
       await page.evaluate(() =>
         performance
@@ -484,7 +480,6 @@ suite.define(() => {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         path: path.join(railProofDir, "native-web-top-left-controls.png"),
@@ -590,7 +585,6 @@ suite.define(() => {
       await panelControls.nth(index).click({ trial: true });
     }
     if (railProofDir) {
-      await mkdir(railProofDir, { recursive: true });
       await page.screenshot({
         fullPage: true,
         path: path.join(

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -236,15 +237,22 @@ describe("config application settlement", () => {
     );
   });
 
-  it.each(["config.patch", "config.apply"] as const)(
-    "reports %s post-commit recovery without claiming the active config was unapplied",
-    async (method) => {
+  it.each(
+    (["config.patch", "config.apply"] as const).flatMap((method) =>
+      (["applied-restart-required", "restart-pending"] as const).map((outcome) => ({
+        method,
+        outcome,
+      })),
+    ),
+  )(
+    "reports $method $outcome without misrepresenting active config",
+    async ({ method, outcome }) => {
       const queueFollowUp = vi.fn();
       configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
         path: "/tmp/openclaw.json",
         config: { hooks: { enabled: true } },
-        hash: "recovery-hash",
-        application: Promise.resolve("applied-restart-required"),
+        hash: "restart-hash",
+        application: Promise.resolve(outcome),
         queueFollowUp,
       });
 
@@ -254,15 +262,21 @@ describe("config application settlement", () => {
       });
       await operation;
 
+      const expectedMessage =
+        outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
       expect(harness.respond).toHaveBeenCalledWith(
         false,
         undefined,
         expect.objectContaining({
           code: "UNAVAILABLE",
-          message: expect.stringContaining("updated the active Gateway"),
+          message: expect.stringContaining(expectedMessage),
         }),
       );
-      for (const excluded of ["was not applied", "reapply"]) {
+      const excludedMessages =
+        outcome === "restart-pending"
+          ? ["updated the active Gateway", "recovery restart", "reapply"]
+          : ["was not applied", "reapply"];
+      for (const excluded of excludedMessages) {
         expect(harness.respond).toHaveBeenCalledWith(
           false,
           undefined,
@@ -276,6 +290,7 @@ describe("config application settlement", () => {
           message: expect.stringContaining("wait for the Gateway to restart"),
         }),
       );
+      expect(harness.respond).toHaveBeenCalledOnce();
       expect(queueFollowUp).toHaveBeenCalledOnce();
     },
   );
@@ -721,9 +736,10 @@ describe("config.patch ID-keyed arrays", () => {
 
 describe("config.patch model input normalization", () => {
   it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = {
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
+          id: "myproxy-normalizer",
           modelIdNormalization: {
             providers: {
               myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
@@ -731,7 +747,7 @@ describe("config.patch model input normalization", () => {
           },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     storedConfig = {
       models: {
         providers: {

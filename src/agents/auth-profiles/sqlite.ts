@@ -335,11 +335,12 @@ function closeAuthProfileReadDatabase(databasePath: string): void {
   if (!db) {
     return;
   }
-  authProfileReadDatabases.delete(pathname);
   clearNodeSqliteKyselyCacheForDatabase(db);
   if (db.isOpen) {
     db.close();
   }
+  // Failed closes remain owned so scoped disposal can retain the root and retry.
+  authProfileReadDatabases.delete(pathname);
   if (authProfileReadDatabases.size === 0) {
     unregisterReadHandleExitClose?.();
     unregisterReadHandleExitClose = null;
