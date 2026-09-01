@@ -3654,7 +3654,7 @@ src/shared/frontmatter.ts	5
 src/shared/global-singleton.ts	4
 src/shared/google-turn-ordering.ts	2
 src/shared/ignore-rules.ts	10
-src/shared/json-schema-defaults.ts	38
+src/shared/json-schema-defaults.ts	28
 src/shared/lazy-runtime.ts	1
 src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
