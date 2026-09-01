@@ -186,14 +186,16 @@ describe("SQLite session entry cache", () => {
       },
     });
 
-    const fullEntry = listSessionEntriesCore({ ...scope, clone: false, projection: "full" })[0]
-      ?.entry;
-    expect(fullEntry).toBeDefined();
-    if (!fullEntry) {
-      throw new Error("missing seeded lazy-list-projection entry");
-    }
     const cloneSpy = vi.spyOn(globalThis, "structuredClone");
     try {
+      const fullEntry = listSessionEntriesCore({
+        agentId: scope.agentId,
+        env: scope.env,
+      })[0]?.entry;
+      expect(fullEntry).toBeDefined();
+      if (!fullEntry) {
+        throw new Error("missing seeded lazy-list-projection entry");
+      }
       parseSessionEntryCalls.mockClear();
       const first = listSessionEntriesCore({
         ...scope,
@@ -221,11 +223,20 @@ describe("SQLite session entry cache", () => {
       expect(cached.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
       expect(cached.entries.get(scope.sessionKey)?.systemPromptReport).toBeUndefined();
 
-      const fullAgain = listSessionEntriesCore({ ...scope, clone: false, projection: "full" })[0]
-        ?.entry;
-      expect(fullAgain).toEqual(fullEntry);
+      fullEntry.worktree!.branch = "mutated full read";
+      fullEntry.skillsSnapshot!.prompt = "mutated full prompt";
+      const fullAgain = listSessionEntriesCore({ ...scope, projection: "full" })[0]?.entry;
+      expect(fullAgain?.worktree?.branch).toBe("main");
       expect(fullAgain?.skillsSnapshot?.prompt).toBe(prompt);
       expect(fullAgain?.systemPromptReport?.source).toBe("run");
+      expect(cloneSpy).not.toHaveBeenCalled();
+      expect(first?.worktree?.branch).toBe("main");
+
+      const copiedListEntry = listSessionEntriesCore(scope)[0]?.entry;
+      expect(copiedListEntry?.worktree?.branch).toBe("main");
+      expect(copiedListEntry?.worktree).not.toBe(first?.worktree);
+      copiedListEntry!.worktree!.branch = "mutated list copy";
+      expect(first?.worktree?.branch).toBe("main");
       expect(listSessionEntriesCore({ ...scope, clone: false, projection: "list" })[0]?.entry).toBe(
         first,
       );
