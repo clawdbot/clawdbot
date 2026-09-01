@@ -12,6 +12,7 @@ import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import { tryAcquireMemoryReindexLock, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 
@@ -68,7 +69,7 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
     cacheEnabled?: boolean;
   }): OpenClawConfig {
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           provider: params.provider ?? "openai",
@@ -85,7 +86,7 @@ describe("memory manager reindex recovery", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    });
   }
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {

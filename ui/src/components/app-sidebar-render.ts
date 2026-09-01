@@ -318,7 +318,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
             </span>
-            <span class="sidebar-recent-sessions__label-text">${label}</span>
+            <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
             ${collapsed
               ? html`<span class="sidebar-online__facepile">
                   <openclaw-viewer-facepile

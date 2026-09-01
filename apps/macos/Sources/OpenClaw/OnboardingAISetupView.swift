@@ -99,6 +99,7 @@ struct OnboardingAISetupView: View {
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
+    @State private var manualEntryRequest = 0
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
@@ -109,6 +110,25 @@ struct OnboardingAISetupView: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                self.content
+                    .padding(.vertical, 4)
+                    .padding(.trailing, 12)
+            }
+            .scrollIndicators(.automatic)
+            .onChange(of: self.manualEntryRequest) {
+                withAnimation { scroll.scrollTo("manual-entry", anchor: .top) }
+            }
+            .onChange(of: self.model.manualError) { _, error in
+                if error != nil {
+                    withAnimation { scroll.scrollTo("manual-entry", anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch self.model.phase {
             case .idle, .detecting:
@@ -492,6 +512,8 @@ struct OnboardingAISetupView: View {
         Button {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.model.showManualEntry = true
+                // The form can already exist below the viewport; every tap must reveal it.
+                self.manualEntryRequest += 1
             }
         } label: {
             HStack(spacing: 10) {
@@ -779,6 +801,7 @@ struct OnboardingAISetupView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(OnboardingSurface(cornerRadius: 12))
+        .id("manual-entry")
     }
 
     private var manualProviderHelp: String {
@@ -803,6 +826,8 @@ struct OnboardingErrorCard: View {
     var secondaryTitle: String?
     var secondary: (() -> Void)?
 
+    /// Keep retry required so Swift binds a lone trailing closure to the primary
+    /// action instead of the defaulted secondary action.
     init(
         title: String,
         message: String,
@@ -811,7 +836,7 @@ struct OnboardingErrorCard: View {
         retryTitle: String? = nil,
         secondaryTitle: String? = nil,
         secondary: (() -> Void)? = nil,
-        retry: (() -> Void)? = nil)
+        retry: (() -> Void)?)
     {
         self.title = title
         self.message = message

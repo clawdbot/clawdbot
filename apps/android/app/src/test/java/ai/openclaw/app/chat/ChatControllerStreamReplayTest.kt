@@ -364,11 +364,13 @@ class ChatControllerStreamReplayTest {
       val staleMainGate = CompletableDeferred<Unit>()
       gateway.respond("chat.history") { paramsJson ->
         when (gateway.sessionKeyOf(paramsJson)) {
-          "other" ->
+          "other" -> {
             historyResponse(
               sessionId = "session-other",
               messages = listOf(ReplayHistoryMessage("assistant", "other transcript", 3_000)),
             )
+          }
+
           else -> {
             staleMainGate.await()
             historyResponse(

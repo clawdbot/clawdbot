@@ -2008,7 +2008,7 @@ function installControlUiMockGateway(
       case "sessions.describe": {
         const key =
           isRecord(params) && typeof params.key === "string" ? params.key : scenario.sessionKey;
-        return { session: sessions.read(key) };
+        return { session: sessions.sessionInfo(key) ?? null };
       }
       case "chat.metadata":
         return {

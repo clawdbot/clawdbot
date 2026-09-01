@@ -572,7 +572,6 @@ export async function executePreparedCliRun(
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
         nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
-        usePluginOwnedExecution,
         initialGatewayCaptureKey,
         useResume,
         cliSessionIdToUse,

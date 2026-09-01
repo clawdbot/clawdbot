@@ -793,6 +793,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":

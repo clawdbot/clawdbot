@@ -39,6 +39,7 @@ import {
   recordSkillLibraryEvent,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
+  requireSkillLibraryUpload,
   resolveSkillLibraryActor,
   selectSkillLibraryRevision,
   selectSkillLibraryRow,
@@ -280,15 +281,12 @@ export async function saveSkillLibrary(
       ({ db }) => {
         const actor = requireSkillLibraryProfile(db, authority);
         if (uploadId) {
-          const upload = executeSqliteQuerySync(
-            db,
-            skillLibraryDb(db)
-              .selectFrom("skill_library_uploads")
-              .selectAll()
-              .where("upload_id", "=", uploadId),
-          ).rows[0];
-          if (!upload || upload.slug !== params.slug || upload.expires_at <= Date.now()) {
-            throw new SkillLibraryError("NOT_FOUND", "Upload expired; start the import again.");
+          const upload = requireSkillLibraryUpload(db, uploadId, authority);
+          if (upload.slug !== params.slug) {
+            throw new SkillLibraryError(
+              "NOT_FOUND",
+              "Upload slug changed; start the import again.",
+            );
           }
           if (upload.published_skill_id) {
             return skillLibraryReceipt(
