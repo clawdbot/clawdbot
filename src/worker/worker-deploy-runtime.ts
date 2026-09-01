@@ -1,4 +1,4 @@
-import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+import { configureFsSafeNative } from "../infra/fs-safe-defaults.js";
 import { resolveSecureTempRoot } from "../infra/secure-temp-root.js";
 import highlightJsRuntime from "./worker-deploy-highlight-runtime.mjs";
 import json5Runtime from "./worker-deploy-json5-runtime.mjs";

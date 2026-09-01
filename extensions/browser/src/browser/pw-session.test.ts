@@ -309,11 +309,10 @@ describe("pw-session ensurePageState", () => {
     expect(savedPathB).not.toBe(managedPathB);
     for (const savedPath of [savedPathA, savedPathB]) {
       expect(savedPath.length).toBeGreaterThan(0);
-      const savedParentName = path.basename(path.dirname(savedPath));
-      expect(
-        savedParentName.includes("fs-safe-output") ||
-          savedParentName === path.basename(DEFAULT_DOWNLOAD_DIR),
-      ).toBe(true);
+      const relativeStagedPath = path.relative(await fs.realpath(DEFAULT_DOWNLOAD_DIR), savedPath);
+      expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
+      expect(path.isAbsolute(relativeStagedPath)).toBe(false);
+      await expect(fs.access(path.dirname(savedPath))).rejects.toMatchObject({ code: "ENOENT" });
     }
     await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
     await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
