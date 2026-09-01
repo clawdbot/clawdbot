@@ -1312,6 +1312,48 @@ describe("capability cli", () => {
     expect(firstCompletionCall()?.options?.reasoning).toBe("max");
   });
 
+  it("honors the prepared catalog entry's reasoning policy over the prepared model", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "zai",
+        id: "glm-5.3-flash",
+        name: "GLM-5.3 Flash",
+        reasoning: false,
+      },
+    ] as never);
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "zai",
+        modelId: "glm-5.3-flash",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "zai",
+        id: "glm-5.3-flash",
+        name: "GLM-5.3 Flash",
+        reasoning: true,
+        maxTokens: 128,
+      },
+      auth: {
+        apiKey: "zai-test",
+        source: "env:ZAI_API_KEY",
+        mode: "api-key",
+      },
+    } as never);
+
+    await runCapability(
+      "model",
+      "run",
+      "--model",
+      "zai/glm-5.3-flash",
+      "--prompt",
+      "hello",
+      "--json",
+    );
+
+    expect(firstCompletionCall()?.options?.reasoning).toBe("off");
+  });
+
   it("keeps explicit thinking overrides ahead of prepared model defaults", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--thinking", "high", "--json");
 

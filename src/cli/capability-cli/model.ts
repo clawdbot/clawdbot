@@ -20,7 +20,7 @@ import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store
 import { buildExplicitSessionIdSessionKey } from "../../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../../agents/model-selection.js";
-import { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
+import { resolveThinkingDefaultWithRuntimeCatalog } from "../../agents/model-thinking-default.js";
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -225,19 +225,12 @@ async function runModelRun(params: {
       prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
     const effectiveThinking =
       params.thinking ??
-      resolveThinkingDefault({
+      (await resolveThinkingDefaultWithRuntimeCatalog({
         cfg,
         provider: prepared.selection.provider,
         model: prepared.selection.modelId,
-        catalog: [
-          {
-            provider: prepared.selection.provider,
-            id: prepared.selection.modelId,
-            name: prepared.model.name ?? prepared.selection.modelId,
-            reasoning: prepared.model.reasoning,
-          },
-        ],
-      });
+        loadRuntimeCatalog: () => loadPreparedModelCatalog({ config: cfg, readOnly: true }),
+      }));
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
