@@ -20,11 +20,13 @@ let testWorkspace: TempWorkspace;
 const previousEnv = {
   CODEX_CONFIG: process.env.CODEX_CONFIG,
   CODEX_HOME: process.env.CODEX_HOME,
+  MODEL_PROVIDER: process.env.MODEL_PROVIDER,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
 beforeEach(async () => {
   delete process.env.CODEX_CONFIG;
+  delete process.env.MODEL_PROVIDER;
   testWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-acpx-codex-auth-",
@@ -144,6 +146,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_CONFIG");
   restoreEnv("CODEX_HOME");
+  restoreEnv("MODEL_PROVIDER");
   restoreEnv("OPENCLAW_AGENT_DIR");
   await testWorkspace.cleanup();
 });

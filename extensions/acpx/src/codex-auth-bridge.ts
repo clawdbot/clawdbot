@@ -960,11 +960,11 @@ async function resolvePreparedCodexModelIdentity(params: {
     }
   }
   if (params.migratedConfig) {
-    // The legacy wrapper applies its migrated config after ambient CODEX_CONFIG at launch.
-    // Derive authorization identity from that same final precedence.
+    // Mirror launch precedence: migrated config overrides CODEX_CONFIG, then the adapter
+    // applies MODEL_PROVIDER separately when starting the Codex session.
     config = mergeConfigRecords(config, params.migratedConfig);
   }
-  const configuredProvider = config.model_provider;
+  const configuredProvider = process.env.MODEL_PROVIDER ?? config.model_provider;
   const codexModelProvider =
     configuredProvider === undefined
       ? "openai"

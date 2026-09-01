@@ -19,10 +19,12 @@ let testWorkspace: TempWorkspace;
 const previousEnv = {
   CODEX_CONFIG: process.env.CODEX_CONFIG,
   CODEX_HOME: process.env.CODEX_HOME,
+  MODEL_PROVIDER: process.env.MODEL_PROVIDER,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
 beforeEach(async () => {
+  delete process.env.MODEL_PROVIDER;
   testWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-acpx-codex-auth-",
@@ -77,12 +79,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_CONFIG");
   restoreEnv("CODEX_HOME");
+  restoreEnv("MODEL_PROVIDER");
   restoreEnv("OPENCLAW_AGENT_DIR");
   await testWorkspace.cleanup();
 });
 
 describe("prepareAcpxCodexAuthConfig command migration", () => {
-  it("uses final migrated legacy Codex overrides for policy identity", async () => {
+  it("uses the adapter launch precedence for policy identity", async () => {
     const root = testWorkspace.dir;
     const stateDir = path.join(root, "state");
     process.env.CODEX_CONFIG = JSON.stringify({
@@ -109,6 +112,16 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
 
     expect(resolved.codexModel).toBe("legacy-model");
     expect(resolved.codexModelProvider).toBe("azure_foundry");
+
+    process.env.MODEL_PROVIDER = "synthetic-provider";
+    const envResolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir: path.join(root, "env-state"),
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    expect(envResolved.codexModel).toBe("legacy-model");
+    expect(envResolved.codexModelProvider).toBe("synthetic-provider");
   });
 
   it("migrates an explicitly configured Zed Codex ACP command to the local wrapper", async () => {
