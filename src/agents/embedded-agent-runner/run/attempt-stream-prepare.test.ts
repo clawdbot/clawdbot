@@ -8,11 +8,13 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
 } from "../../run-termination.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
 
 const mocks = vi.hoisted(() => ({
@@ -60,6 +62,8 @@ function prepareCatalogExecutor(
     onAttemptAbort?: () => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
+    toolProgressDetail?: "explain" | "raw";
+    onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -70,11 +74,14 @@ function prepareCatalogExecutor(
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
+      toolProgressDetail: options?.toolProgressDetail,
+      onAgentEvent: options?.onAgentEvent,
     } as never,
     activeSession: {
       agent: {},
       isStreaming: false,
       sessionManager: SessionManager.inMemory(),
+      subscribe: () => () => {},
     } as never,
     hookRunner: undefined as never,
     hookAgentId: "main",
@@ -113,11 +120,67 @@ describe("prepareEmbeddedAttemptStream", () => {
     );
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
+      runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
+        try {
+          const result = await execute(() => undefined);
+          await onTerminal?.({
+            result,
+            isError: isToolResultError(result),
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          return result;
+        } catch (error) {
+          await onTerminal?.({
+            result: buildToolLifecycleErrorResult(error),
+            isError: true,
+            executedArguments: structuredClone(args),
+            effectReceipt: { state: "uncertain" },
+          });
+          throw error;
+        }
+      }),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
+
+  it.each([
+    [undefined, "check git status"],
+    ["explain", "check git status"],
+    ["raw", "check git status, `git status`"],
+  ] as const)(
+    "renders %s progress detail through the real subscription",
+    async (toolProgressDetail, meta) => {
+      const { subscribeEmbeddedAgentSession } = await vi.importActual<
+        typeof import("../../embedded-agent-subscribe.js")
+      >("../../embedded-agent-subscribe.js");
+      mocks.subscribe.mockImplementation(subscribeEmbeddedAgentSession);
+      const onAgentEvent = vi.fn();
+      const prepared = prepareCatalogExecutor([], { toolProgressDetail, onAgentEvent });
+      try {
+        await prepared.toolSearchCatalogExecutor({
+          tool: {
+            name: "exec",
+            execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
+          } as never,
+          toolName: "exec",
+          source: "openclaw",
+          toolCallId: "progress-detail-exec",
+          input: { command: "git status" },
+          acceptResultBeforeProjection: async (result) => result,
+        });
+        expect(onAgentEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            stream: "item",
+            data: expect.objectContaining({ phase: "start", kind: "tool", name: "exec", meta }),
+          }),
+        );
+      } finally {
+        prepared.subscription.unsubscribe();
+      }
+    },
+  );
 
   it("retains exact heartbeat preemption on the embedded queue handle", () => {
     const operation = createReplyOperation({
@@ -139,6 +202,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
         "agent:main:main",
         undefined,
+        "main",
       );
     } finally {
       operation.complete();

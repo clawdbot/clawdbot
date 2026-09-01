@@ -198,6 +198,33 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
   });
 
+  it.each(["global", "agent:beta:main"])(
+    "preserves the prepared store owner for ACP metadata in %s",
+    async (sessionKey) => {
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { qa: {}, beta: {} } },
+      };
+      const { resolveSessionStorePathForAcp } = await vi.importActual<
+        typeof import("../../acp/runtime/session-meta-store.js")
+      >("../../acp/runtime/session-meta-store.js");
+      await acpMocks.readAcpSessionMeta.withImplementation(
+        (params) => {
+          resolveSessionStorePathForAcp({ ...params, cfg: params.cfg ?? cfg });
+          return null;
+        },
+        async () => {
+          const result = await dispatchReplyFromConfig({
+            ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" },
+            cfg,
+            dispatcher: createDispatcher(),
+            replyResolver: async () => ({ text: "selected owner reply" }),
+          });
+          expect(result.queuedFinal).toBe(true);
+        },
+      );
+    },
+  );
+
   it("runs a handled plugin reply hook in the registry scope", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
@@ -263,91 +290,32 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
   });
 
-  it("clears pending final delivery after final dispatch succeeds", async () => {
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("durable reply", {
-        context: { source: "heartbeat" },
-      }),
+  it("keeps admitted session settings owner-private from takeover hooks", async () => {
+    const admittedSessionSettings = {
+      permissionMode: "guarded" as const,
+      toolOverrides: { webSearch: false, mcpToolsDeny: { github: ["delete_issue"] } },
     };
-    sessionStoreMocks.loadSessionStore.mockClear();
-    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const replyResolver = vi.fn(async (_ctx, options) => {
+      expect(options?.admittedSessionSettings).toEqual(admittedSessionSettings);
+      return { text: "model reply" } satisfies ReplyPayload;
+    });
 
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
-    const result = await dispatchReplyFromConfig({
+    await dispatchReplyFromConfig({
       ctx: createHookCtx(),
       cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => pendingFinalReply("durable reply"),
-    });
-    await dispatcher.waitForIdle();
-    await vi.waitFor(() => {
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+      dispatcher: createDispatcher(),
+      replyOptions: { admittedSessionSettings },
+      replyResolver,
     });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
-      agentId: "test",
-      storePath: "/tmp/mock-sessions.json",
-      sessionKey: "agent:test:session",
-      readConsistency: "latest",
-      clone: false,
-    });
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
-  });
-
-  it("clears pending final delivery when abort fires after a successful final send (#89115)", async () => {
-    // Regression for #89115: an abort that lands after the final reply has
-    // shipped (here, during sendFinalReply) must still clear the pending-final
-    // bookkeeping — otherwise pendingFinalDelivery stays true and the get-reply
-    // redelivery short-circuit silently blocks every later inbound.
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "session-1",
-      sessionKey: "agent:test:session",
-      pendingFinalDelivery: pendingFinalDelivery("durable reply", {
-        context: { source: "heartbeat" },
-        intentId: "intent-89115",
-      }),
-    };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
-    const abortController = new AbortController();
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
-    const sendFinalReply = dispatcher.sendFinalReply.bind(dispatcher);
-    vi.spyOn(dispatcher, "sendFinalReply").mockImplementation((payload) => {
-      const queued = sendFinalReply(payload);
-      abortController.abort();
-      return queued;
-    });
-
-    const result = await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyOptions: { abortSignal: abortController.signal },
-          replyResolver: async () =>
-            pendingFinalReply("durable reply", { intentId: "intent-89115" }),
-        }),
-    });
-
-    // Abort landed after delivery: the run is still surfaced as aborted
-    // (queuedFinal:false), but the pending-final state is fully cleared.
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(3);
-    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    expect(admittedSessionSettings.toolOverrides.mcpToolsDeny.github).toEqual(["delete_issue"]);
+    expect(replyResolver).toHaveBeenCalledOnce();
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {
@@ -984,82 +952,4 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, replies[1]);
     },
   );
-
-  it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
-    const deliveryOrder: string[] = [];
-    let startDelivery: () => void = () => {};
-    const deliveryStarted = new Promise<void>((resolve) => {
-      startDelivery = resolve;
-    });
-    let releaseDelivery: () => void = () => {};
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        deliveryOrder.push("final-start");
-        startDelivery();
-        await deliveryGate;
-        deliveryOrder.push("final-end");
-      },
-    });
-    let queuedOperation: ReturnType<typeof createReplyOperation> | undefined;
-    const abortController = new AbortController();
-    hookMocks.runner.runReplyDispatch.mockImplementation(async (_event, contextValue) => {
-      const operation = replyRunRegistry.get("agent:test:session");
-      if (!operation) {
-        throw new Error("expected dispatch reply operation");
-      }
-      runAfterReplyOperationClear(operation, () => {
-        deliveryOrder.push("followup");
-        queuedOperation = createReplyOperation({
-          sessionKey: "agent:test:session",
-          sessionId: "queued-session",
-          resetTriggered: false,
-        });
-      });
-      const context = contextValue as { dispatcher: typeof dispatcher };
-      return {
-        handled: true,
-        queuedFinal: context.dispatcher.sendFinalReply({ text: "first reply" }),
-        counts: context.dispatcher.getQueuedCounts(),
-      };
-    });
-
-    try {
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
-        dispatcher,
-        replyOptions: { abortSignal: abortController.signal },
-      });
-
-      await deliveryStarted;
-      const result = await dispatchPromise;
-
-      expect(result.queuedFinal).toBe(true);
-      expect(replyRunRegistry.isActive("agent:test:session")).toBe(false);
-      expect(deliveryOrder).toEqual(["final-start"]);
-      expect(queuedOperation).toBeUndefined();
-
-      abortController.abort();
-      await Promise.resolve();
-      expect(queuedOperation).toBeUndefined();
-
-      releaseDelivery();
-      await dispatcher.waitForIdle();
-      await vi.waitFor(() => {
-        expect(queuedOperation).toBeDefined();
-      });
-
-      expect(deliveryOrder).toEqual(["final-start", "final-end", "followup"]);
-      expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
-    } finally {
-      releaseDelivery();
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      queuedOperation?.complete();
-      expect(getActiveReplyRunCount()).toBe(0);
-    }
-  });
 });

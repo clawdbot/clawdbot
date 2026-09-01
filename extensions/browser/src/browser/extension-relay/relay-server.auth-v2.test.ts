@@ -22,6 +22,7 @@ import {
   parseRelayAuthHello,
   parseStrictJsonObject,
 } from "./auth-v2.js";
+import { RawHttpConnection } from "./relay-http.test-support.js";
 import {
   authenticateExtensionWebSocket,
   startExtensionRelayServer,
@@ -29,113 +30,7 @@ import {
 } from "./relay-server.js";
 
 const KEY = "0123456789abcdef".repeat(4);
-
-type RawResponse = {
-  status: number;
-  headers: Record<string, string>;
-  body: string;
-};
-
-class RawHttpConnection {
-  private buffer = Buffer.alloc(0);
-  private readonly waiters: Array<() => void> = [];
-
-  private constructor(readonly socket: net.Socket) {
-    socket.on("data", (chunk) => {
-      this.buffer = Buffer.concat([
-        this.buffer,
-        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
-      ]);
-      this.waiters.splice(0).forEach((resolve) => resolve());
-    });
-  }
-
-  static async connect(port: number): Promise<RawHttpConnection> {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", reject);
-    });
-    return new RawHttpConnection(socket);
-  }
-
-  async request(
-    method: string,
-    requestPath: string,
-    body = "",
-    headers: Record<string, string> = {},
-  ): Promise<RawResponse> {
-    this.socket.write(
-      [
-        `${method} ${requestPath} HTTP/1.1`,
-        "Host: 127.0.0.1",
-        "Connection: keep-alive",
-        `Content-Length: ${Buffer.byteLength(body)}`,
-        ...Object.entries(headers).map(([key, value]) => `${key}: ${value}`),
-        "",
-        body,
-      ].join("\r\n"),
-    );
-    return await this.readResponse();
-  }
-
-  async upgrade(requestPath: string): Promise<RawResponse> {
-    this.socket.write(
-      [
-        `GET ${requestPath} HTTP/1.1`,
-        "Host: 127.0.0.1",
-        "Connection: Upgrade",
-        "Upgrade: websocket",
-        "Sec-WebSocket-Version: 13",
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-        "",
-        "",
-      ].join("\r\n"),
-    );
-    return await this.readResponse({ headersOnly: true });
-  }
-
-  private async waitForData(): Promise<void> {
-    if (this.socket.destroyed) {
-      throw new Error("socket closed before response completed");
-    }
-    await new Promise<void>((resolve) => {
-      this.waiters.push(resolve);
-    });
-  }
-
-  private async readResponse(options: { headersOnly?: boolean } = {}): Promise<RawResponse> {
-    let headerEnd = this.buffer.indexOf("\r\n\r\n");
-    while (headerEnd < 0) {
-      await this.waitForData();
-      headerEnd = this.buffer.indexOf("\r\n\r\n");
-    }
-    const headerText = this.buffer.subarray(0, headerEnd).toString("utf8");
-    const [statusLine, ...headerLines] = headerText.split("\r\n");
-    const headers = Object.fromEntries(
-      headerLines.map((line) => {
-        const separator = line.indexOf(":");
-        return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
-      }),
-    );
-    const contentLength = options.headersOnly ? 0 : Number(headers["content-length"] ?? 0);
-    const responseLength = headerEnd + 4 + contentLength;
-    while (this.buffer.length < responseLength) {
-      await this.waitForData();
-    }
-    const body = this.buffer.subarray(headerEnd + 4, responseLength).toString("utf8");
-    this.buffer = this.buffer.subarray(responseLength);
-    return {
-      status: Number(/^HTTP\/1\.1 (\d+)/u.exec(statusLine ?? "")?.[1] ?? 0),
-      headers,
-      body,
-    };
-  }
-
-  close(): void {
-    this.socket.destroy();
-  }
-}
+const SOURCE = "127.0.0.1";
 
 async function authenticate(
   connection: RawHttpConnection,
@@ -207,8 +102,10 @@ function rawDataText(data: RawData): string {
 async function openExtensionSocket(
   handle: ExtensionRelayHandle,
   protocols: string | string[],
+  localAddress?: string,
 ): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/extension`, protocols, {
+    localAddress,
     origin: "chrome-extension://relay-auth-v2-test",
   });
   ws.on("error", () => {});
@@ -216,8 +113,11 @@ async function openExtensionSocket(
   return ws;
 }
 
-async function authenticateV2Extension(handle: ExtensionRelayHandle): Promise<WebSocket> {
-  const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL);
+async function authenticateV2Extension(
+  handle: ExtensionRelayHandle,
+  localAddress?: string,
+): Promise<WebSocket> {
+  const ws = await openExtensionSocket(handle, BROWSER_RELAY_EXTENSION_SUBPROTOCOL, localAddress);
   const challengeMessage = once(ws, "message");
   ws.send(
     JSON.stringify({
@@ -267,6 +167,7 @@ function createWebSocketAuthHarness(
   authenticateExtensionWebSocket({
     ws: socket,
     authority,
+    source: SOURCE,
     resource: "/extension",
     prepareAuthenticated,
     removePreAuthGuard: options.removePreAuthGuard,
@@ -372,16 +273,18 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
       const activeInvalidated = vi.fn();
       expect(harness.authority.registerAuthenticatedConnection({}, activeInvalidated)).toBe(true);
       for (let index = 0; index < 127; index += 1) {
-        expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+        expect(harness.authority.registerPendingConnection({}, vi.fn(), `192.0.2.${index}`)).toBe(
+          true,
+        );
       }
-      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(false);
+      expect(harness.authority.registerPendingConnection({}, vi.fn(), SOURCE)).toBe(false);
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(harness.close).toHaveBeenCalledWith(4008, "browser relay auth timeout");
       expect(removePreAuthGuard).not.toHaveBeenCalled();
       harness.socket.emit("close");
       expect(removePreAuthGuard).toHaveBeenCalledOnce();
-      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+      expect(harness.authority.registerPendingConnection({}, vi.fn(), SOURCE)).toBe(true);
       expect(activeInvalidated).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -494,6 +397,20 @@ describe.sequential("extension relay HTTP auth v2", () => {
     await closed;
     await vi.waitFor(() => expect(handle?.bridge.cdpClientCount).toBe(0));
     connection.close();
+  });
+
+  it("closes malformed WebSocket framing before authentication without an unowned error", async () => {
+    handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
+    const issueChallenge = vi.spyOn(getBrowserRelayAuthV2Authority(KEY), "issueChallenge");
+    // Client frames must be masked. This fails inside ws, before the auth parser.
+    const response = await sendRawV2Frames({
+      port: handle.port,
+      subsequentFrames: [Buffer.from([0x81, 0x00])],
+    });
+    expect(response).toContain("101 Switching Protocols");
+    expect(response).not.toContain("auth.challenge");
+    expect(issueChallenge).not.toHaveBeenCalled();
+    expect(handle.bridge.extensionConnected).toBe(false);
   });
 
   it.each([
@@ -738,7 +655,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     }
   });
 
-  it("keeps an active extension while pending admission is full and recovers after release", async () => {
+  it("collapses loopback aliases into one relay authentication source", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
     const active = await openExtensionSocket(handle, [
       "openclaw-extension-relay",
@@ -755,9 +672,9 @@ describe.sequential("extension relay HTTP auth v2", () => {
     );
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
-    const pending = await Promise.all(
-      Array.from({ length: 128 }, () =>
-        openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL),
+    const attacker = await Promise.all(
+      Array.from({ length: 32 }, () =>
+        openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL, "127.0.0.2"),
       ),
     );
     expect(active.readyState).toBe(WebSocket.OPEN);
@@ -766,7 +683,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     const overflow = new WebSocket(
       `ws://127.0.0.1:${handle.port}/extension`,
       BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-      { origin: "chrome-extension://relay-auth-v2-test" },
+      { localAddress: "127.0.0.3", origin: "chrome-extension://relay-auth-v2-test" },
     );
     overflow.on("error", () => {});
     const overflowClosed = once(overflow, "close");
@@ -776,10 +693,10 @@ describe.sequential("extension relay HTTP auth v2", () => {
     expect(active.readyState).toBe(WebSocket.OPEN);
     expect(handle.bridge.extensionConnected).toBe(true);
 
-    const released = once(pending[0]!, "close");
-    pending[0]!.close();
+    const released = once(attacker[0]!, "close");
+    attacker[0]!.close();
     await released;
-    const promoted = await authenticateV2Extension(handle);
+    const promoted = await authenticateV2Extension(handle, "127.0.0.3");
     promoted.send(
       JSON.stringify({
         type: "hello",
@@ -793,7 +710,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
 
     promoted.close();
     active.close();
-    for (const socket of pending.slice(1)) {
+    for (const socket of attacker.slice(1)) {
       socket.close();
     }
   }, 30_000);

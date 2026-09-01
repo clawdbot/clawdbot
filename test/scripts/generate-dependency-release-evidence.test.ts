@@ -1,6 +1,6 @@
 // Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -20,12 +20,13 @@ async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function runCli(...args: string[]) {
+function runCli(args: string[], env = process.env) {
   return spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/generate-dependency-release-evidence.mts", ...args],
     {
       cwd: path.resolve("."),
+      env,
       encoding: "utf8",
     },
   );
@@ -198,7 +199,7 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("prints CLI help without generating evidence", () => {
-    const result = runCli("--help");
+    const result = runCli(["--help"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
@@ -209,14 +210,72 @@ describe("generate-dependency-release-evidence", () => {
 
   it("reports CLI argument errors without a Node stack trace", () => {
     for (const args of [["--wat"], ["wat", "--help"]]) {
-      const result = runCli(...args);
+      const result = runCli(args);
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr.trim()).toBe(`Unsupported argument: ${args[0]}`);
+      expect(result.stderr.trim()).toBe(
+        `Unsupported argument: ${args[0]}\n[dependency-release-evidence] FAILED (exit 1)`,
+      );
       expectNoNodeStack(result.stderr);
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "retains gate artifacts and publishes their directory when the gate fails",
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-failure-test-"));
+      try {
+        const binDir = path.join(dir, "bin");
+        const outputDir = path.join(dir, "evidence");
+        const githubOutput = path.join(dir, "github-output");
+        await mkdir(binDir);
+        await writeFile(
+          path.join(binDir, "pnpm"),
+          [
+            "#!/usr/bin/env node",
+            'const { writeFileSync } = require("node:fs");',
+            "const args = process.argv.slice(2);",
+            'if (args[0] !== "deps:vuln:gate") throw new Error("Unexpected report command");',
+            'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));',
+            'writeFileSync(args[args.indexOf("--markdown") + 1], "# Blocking advisory evidence\\n");',
+            "process.exitCode = 1;",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+
+        const result = runCli(
+          [
+            "--output-dir",
+            outputDir,
+            "--release-ref",
+            "v2026.5.13",
+            "--npm-dist-tag",
+            "latest",
+            "--base-ref",
+            "v2026.5.1",
+            "--github-output",
+            githubOutput,
+            "--github-step-summary",
+            "",
+          ],
+          { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Command failed: pnpm deps:vuln:gate");
+        await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
+        await expect(
+          readFile(path.join(outputDir, "dependency-vulnerability-gate.json"), "utf8"),
+        ).resolves.toBe(JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));
+        await expect(
+          readFile(path.join(outputDir, "dependency-vulnerability-gate.md"), "utf8"),
+        ).resolves.toBe("# Blocking advisory evidence\n");
+      } finally {
+        await rm(dir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("falls back to fetching tags when local previous-release resolution misses", () => {
     const calls: Array<{ command: string; args: string[] }> = [];
@@ -254,74 +313,132 @@ describe("generate-dependency-release-evidence", () => {
     ]);
   });
 
-  it("collects report counts and renders human summaries", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
-    try {
-      await writeJson(dir, "dependency-vulnerability-gate.json", {
-        blockers: [{ id: "GHSA-blocker" }],
-        findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
-      });
-      await writeJson(dir, "transitive-manifest-risk-report.json", {
-        findingCount: 17,
-        workspaceExcludedFindingCount: 3,
-        metadataFailures: [{ packageName: "missing" }],
-      });
-      await writeJson(dir, "dependency-ownership-surface-report.json", {
-        summary: {
-          lockfilePackageCount: 101,
-          buildRiskPackageCount: 8,
-        },
-      });
-      await writeJson(dir, "dependency-changes-report.json", {
-        summary: {
+  it.each([
+    { status: "checked", mappedPackageVersions: 101, checkedRepositories: 2, issues: [] },
+    {
+      status: "partial",
+      mappedPackageVersions: 100,
+      checkedRepositories: 1,
+      issues: [
+        { subject: "unmapped-package@1.0.0", reason: "Unsupported repository URL" },
+        { subject: "example/tool", reason: "GitHub API rate limit exceeded" },
+      ],
+    },
+  ])(
+    "collects report counts and renders $status upstream coverage in both summaries",
+    async (upstream) => {
+      const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
+      try {
+        const coverage = {
+          npm: "checked",
+          upstream: {
+            source: "github-public-repository-advisories",
+            packageVersions: 101,
+            repositories: 2,
+            ...upstream,
+          },
+        };
+        const findings = [
+          { id: "GHSA-blocker", lockfile: "pnpm-lock.yaml", source: "npm-bulk" },
+          {
+            id: "GHSA-blocker",
+            lockfile: ".github/release/vercel-cli/package-lock.json",
+            source: "github-repository",
+            matchedVersions: ["1.0.0", "1.1.0"],
+          },
+          {
+            id: "GHSA-report",
+            lockfile: ".github/release/clawhub-cli/package-lock.json",
+            source: "github-repository",
+            matchedVersions: ["2.0.0"],
+          },
+        ];
+        await writeJson(dir, "dependency-vulnerability-gate.json", {
+          blockers: findings.slice(0, 2),
+          findings,
+          coverage,
+        });
+        await writeJson(dir, "transitive-manifest-risk-report.json", {
+          findingCount: 17,
+          workspaceExcludedFindingCount: 3,
+          metadataFailures: [{ packageName: "missing" }],
+        });
+        await writeJson(dir, "dependency-ownership-surface-report.json", {
+          summary: {
+            lockfilePackageCount: 101,
+            buildRiskPackageCount: 8,
+          },
+        });
+        await writeJson(dir, "dependency-changes-report.json", {
+          summary: {
+            dependencyFileChanges: 4,
+            addedPackages: 5,
+            removedPackages: 6,
+            changedPackages: 7,
+          },
+        });
+
+        const counts = await collectDependencyEvidenceSummaryCounts(dir);
+        expect(counts).toEqual({
+          vulnerabilityBlockers: 2,
+          vulnerabilityFindings: 3,
+          vulnerabilityCoverage: coverage,
+          upstreamOnlyVulnerabilityFindings: 2,
+          transitiveRiskSignals: 17,
+          workspaceExcludedTransitiveSignals: 3,
+          transitiveMetadataFailures: 1,
+          ownershipLockfilePackages: 101,
+          ownershipBuildRiskPackages: 8,
           dependencyFileChanges: 4,
-          addedPackages: 5,
-          removedPackages: 6,
-          changedPackages: 7,
-        },
-      });
+          dependencyAddedPackages: 5,
+          dependencyRemovedPackages: 6,
+          dependencyChangedPackages: 7,
+        });
 
-      const counts = await collectDependencyEvidenceSummaryCounts(dir);
-      expect(counts).toEqual({
-        vulnerabilityBlockers: 1,
-        vulnerabilityFindings: 2,
-        transitiveRiskSignals: 17,
-        workspaceExcludedTransitiveSignals: 3,
-        transitiveMetadataFailures: 1,
-        ownershipLockfilePackages: 101,
-        ownershipBuildRiskPackages: 8,
-        dependencyFileChanges: 4,
-        dependencyAddedPackages: 5,
-        dependencyRemovedPackages: 6,
-        dependencyChangedPackages: 7,
-      });
+        const summary = renderDependencyEvidenceSummary({
+          releaseTag: "v2026.5.13",
+          releaseSha: "abc123",
+          baseRef: "v2026.5.1",
+          counts,
+        });
+        expect(summary).toContain("- Transitive manifest reported risk signals: 17");
+        expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
+        expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
 
-      const summary = renderDependencyEvidenceSummary({
-        releaseTag: "v2026.5.13",
-        releaseSha: "abc123",
-        baseRef: "v2026.5.1",
-        counts,
-      });
-      expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
-      expect(summary).toContain("- Transitive manifest reported risk signals: 17");
-      expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
-      expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
-
-      const stepSummary = renderDependencyEvidenceStepSummary({
-        evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
-        baseRef: "v2026.5.1",
-        counts,
-      });
-      expect(stepSummary).toContain(
-        "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
-      );
-      expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
-
-      await expect(
-        readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),
-      ).resolves.toContain("GHSA-blocker");
-    } finally {
-      await rm(dir, { force: true, recursive: true });
-    }
-  });
+        const stepSummary = renderDependencyEvidenceStepSummary({
+          evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
+          baseRef: "v2026.5.1",
+          counts,
+        });
+        expect(stepSummary).toContain(
+          "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+        );
+        for (const rendered of [summary, stepSummary]) {
+          expect(rendered).toContain("- npm advisory coverage: checked");
+          expect(rendered).toContain(
+            `- Upstream public repository advisory coverage: ${upstream.status}`,
+          );
+          expect(rendered).toContain("- Upstream source: `github-public-repository-advisories`");
+          expect(rendered).toContain(
+            `- Upstream package versions mapped: ${upstream.mappedPackageVersions}/101`,
+          );
+          expect(rendered).toContain(
+            `- Upstream repositories checked: ${upstream.checkedRepositories}/2`,
+          );
+          expect(rendered).toContain("- Advisory vulnerability hard blockers: 2");
+          expect(rendered).toContain("- Advisory vulnerability total findings: 3");
+          expect(rendered).toContain("- Upstream-only vulnerability findings: 2");
+          expect(rendered).toContain(`- Upstream coverage issues: ${upstream.issues.length}`);
+          for (const { subject, reason } of upstream.issues) {
+            expect(rendered).toContain(`  - ${subject}: ${reason}`);
+          }
+          expect(rendered).toContain(
+            "Coverage is limited to these advisory sources; zero findings do not prove that dependencies are unaffected.",
+          );
+        }
+      } finally {
+        await rm(dir, { force: true, recursive: true });
+      }
+    },
+  );
 });

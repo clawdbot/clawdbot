@@ -7,14 +7,9 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentIdStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import {
-  buildPluginConfigSchema,
-  z,
-  type OpenClawPluginConfigSchema,
-  type OpenClawConfig,
-} from "../api.js";
+import { z } from "zod";
+import type { OpenClawConfig } from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
@@ -128,7 +123,7 @@ const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
 const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
 const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
-const MemoryWikiConfigSource = z
+export const MemoryWikiConfigSource = z
   .strictObject({
     vaultMode: z.enum(WIKI_VAULT_MODES).optional(),
     vault: z
@@ -204,26 +199,6 @@ const MemoryWikiConfigSource = z
       });
     }
   });
-
-const memoryWikiConfigSchemaBase = buildPluginConfigSchema(MemoryWikiConfigSource, {
-  safeParse(value: unknown) {
-    if (value === undefined) {
-      return { success: true, data: resolveMemoryWikiConfig(undefined) };
-    }
-    const result = MemoryWikiConfigSource.safeParse(value);
-    if (result.success) {
-      return { success: true, data: resolveMemoryWikiConfig(result.data) };
-    }
-    return {
-      success: false,
-      error: {
-        issues: mapPluginConfigIssues(result.error.issues),
-      },
-    };
-  },
-});
-
-export const memoryWikiConfigSchema: OpenClawPluginConfigSchema = memoryWikiConfigSchemaBase;
 
 function expandHomePath(inputPath: string, homedir: string): string {
   if (inputPath === "~") {

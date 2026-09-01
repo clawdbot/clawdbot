@@ -93,7 +93,8 @@ async function loadFreshAfterToolCallModulesForTest() {
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookMocks.runner,
   }));
-  vi.doMock("../infra/agent-events.js", () => ({
+  vi.doMock("../infra/agent-events.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../infra/agent-events.js")>()),
     emitAgentCommandOutputEvent: vi.fn(),
     emitAgentEvent: vi.fn(),
     emitAgentItemEvent: vi.fn(),

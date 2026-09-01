@@ -6,13 +6,15 @@ import { createAbortError } from "../infra/abort-signal.js";
  */
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { isCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 
 function throwAbortError(): never {
-  throw createAbortError("Aborted");
+  throw registerTrustedToolNoStartError(createAbortError("Aborted"));
 }
 
 /**
@@ -78,6 +80,7 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
+  const ownsCancellationOutcome = isCodeModeControlTool(tool);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -85,11 +88,16 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      return await raceWithAbortSignal(
-        execute(toolCallId, params, combinedSignal, onUpdate),
-        combinedSignal,
-        tool.name === "sessions_yield" ? abortSignal : undefined,
-      );
+      const execution = execute(toolCallId, params, combinedSignal, onUpdate);
+      // Code Mode cancels its worker and bridges itself. Racing that owner loses
+      // completed output and turns an intentional permission change into unknown dispatch.
+      return ownsCancellationOutcome
+        ? await execution
+        : await raceWithAbortSignal(
+            execution,
+            combinedSignal,
+            tool.name === "sessions_yield" ? abortSignal : undefined,
+          );
     },
   };
   copyAgentToolMetadata(tool, wrappedTool);
@@ -124,11 +132,10 @@ export function wrapToolWithAbortSignal(
           if (combinedSignal.aborted) {
             throwAbortError();
           }
-          return raceWithAbortSignal(
-            prepared.execute(onImplementationStart),
-            combinedSignal,
-            yieldRunSignal,
-          );
+          const execution = prepared.execute(onImplementationStart);
+          return ownsCancellationOutcome
+            ? execution
+            : raceWithAbortSignal(execution, combinedSignal, yieldRunSignal);
         },
         dispose: prepared.dispose,
       };

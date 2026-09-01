@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import {
+  compareEvents,
   finalizeEvent,
   generateSecretKey,
   getPublicKey,
@@ -133,7 +134,7 @@ export async function createBuzzRelayFixture() {
           for (const filter of filters) {
             const matching = snapshot
               .filter((event) => matchesStored(filter, event))
-              .toSorted((a, b) => b.created_at - a.created_at);
+              .toSorted(compareEvents);
             for (const event of matching.slice(0, filter.limit ?? matching.length)) {
               if (!sent.has(event.id)) {
                 send(socket, ["EVENT", value, event]);

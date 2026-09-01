@@ -10,7 +10,7 @@ import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
-import { createRuntimeState } from "./runtime/runtime-state.js";
+import { createRuntimeBase } from "./runtime/runtime-base.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntimeFactory,
@@ -192,18 +192,23 @@ export function createLazyPluginRuntime(params: {
   };
 
   const cache = getPluginCache();
-  const state = createRuntimeState();
+  const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, state),
+      resolveCreatePluginRuntime()(params.runtimeOptions, base),
     );
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
-    // Reading prepared metadata must not initialize runtime services.
-    if (!resolvedRuntime && (prop === "state" || prop === "version")) {
-      return prop === "state" ? state : VERSION;
+    // Prepared metadata and host facades must not initialize broad runtime services.
+    if (!resolvedRuntime) {
+      if (prop === "version") {
+        return VERSION;
+      }
+      if (prop === "config" || prop === "state" || prop === "system") {
+        return base[prop];
+      }
     }
     return receiver.length === 0
       ? Reflect.get(resolveRuntime(), prop)
@@ -290,9 +295,6 @@ export function resolvePluginModuleExport(moduleExport: unknown): {
     }
   }
   const resolved = candidates[0];
-  if (typeof resolved === "function") {
-    return { register: resolved as OpenClawPluginDefinition["register"] };
-  }
   if (resolved && typeof resolved === "object") {
     const definition = resolved as OpenClawPluginDefinition;
     return { definition, register: definition.register };

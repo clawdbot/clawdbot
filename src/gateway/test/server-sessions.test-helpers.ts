@@ -359,10 +359,13 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     });
   });
 
-  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) =>
-    await gatewayTestHelpers
-      .prepareGatewayReplyRuntimeForTest({ force: true })
-      .then(() => requireHarness().openClient(opts));
+  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
+    // Case setup can pin config through real IO before the mocked Gateway reads it.
+    // Publish the current fixture roster so admitted agents have dispatch owners.
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    await gatewayTestHelpers.prepareGatewayReplyRuntimeForTest({ force: true });
+    return await requireHarness().openClient(opts);
+  };
 
   async function createSessionStoreDir() {
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
@@ -611,10 +614,12 @@ export function expectActiveRunCleanup(
   requesterSessionKey: string,
   expectedQueueKeys: string[],
   sessionId: string,
+  requesterAgentId: string,
 ) {
   expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
     cfg: expect.any(Object),
     requesterSessionKey,
+    requesterAgentId,
   });
   expectSessionQueueCleanup(expectedQueueKeys);
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
@@ -648,14 +653,22 @@ export async function directSessionReq<TPayload = unknown>(
     sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
-): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+): Promise<{
+  ok: boolean;
+  payload?: TPayload;
+  error?: { code?: string; message?: string; details?: unknown };
+}> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const loadGatewayModelCatalog =
     (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
     (async () => agentDiscoveryMock.models);
   let result:
-    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | {
+        ok: boolean;
+        payload?: TPayload;
+        error?: { code?: string; message?: string; details?: unknown };
+      }
     | undefined;
   const handler = sessionsHandlers[method];
   if (!handler) {

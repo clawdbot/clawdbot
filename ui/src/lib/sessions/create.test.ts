@@ -29,7 +29,7 @@ describe("requestSessionCreate", () => {
     ).resolves.toEqual({
       key: "agent:main:dashboard:new",
       entry: { thinkingLevel: "xhigh", updatedAt: 10 },
-      initialRun: { status: "started", runId: "initial-send-id", messageSeq: 7 },
+      initialRun: { status: "started", runId: "initial-send-id" },
     });
   });
 

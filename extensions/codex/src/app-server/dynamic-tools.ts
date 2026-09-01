@@ -30,7 +30,6 @@ import {
   isMessagingTool,
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
-  projectRuntimeToolInputSchema,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
   runAgentHarnessAfterToolCallHook,
@@ -42,6 +41,10 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  consumeTrustedToolNoStartError,
+  getCoreTtsToolResultMediaUrls,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -49,7 +52,6 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
-import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import {
   asNonArrayRecord,
   asOptionalRecord,
@@ -64,23 +66,28 @@ import {
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
+  createCodexDynamicToolSpecs,
+  projectCodexDynamicTools,
+  type ProjectedCodexDynamicTool as ProjectedTool,
+  type CodexDynamicToolSchemaQuarantine,
+  type CodexToolDescriptor,
+} from "./dynamic-tool-catalog.js";
+import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
   withDynamicToolExecutionState,
   withDynamicToolTranscriptDetails,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
-import {
-  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-  type CodexDynamicToolCallOutputContentItem,
-  type CodexDynamicToolCallParams,
-  type CodexDynamicToolCallResponse,
-  type CodexDynamicToolDiagnosticTerminalReason,
-  type CodexDynamicToolDiagnosticTerminalType,
-  type CodexDynamicToolFunctionSpec,
-  type CodexDynamicToolSpec,
-  type JsonValue,
+import type {
+  CodexDynamicToolCallOutputContentItem,
+  CodexDynamicToolCallParams,
+  CodexDynamicToolCallResponse,
+  CodexDynamicToolDiagnosticTerminalReason,
+  CodexDynamicToolDiagnosticTerminalType,
+  CodexDynamicToolSpec,
 } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import {
   prepareCodexRemoteWorkspaceMessageMedia,
   type CodexRemoteWorkspaceFileReader,
@@ -105,17 +112,7 @@ type CodexDynamicToolHookContext = NonNullable<
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
-type ProjectedCodexDynamicTool = {
-  tool: AnyAgentTool;
-  name: string;
-  description: string;
-  inputSchema: JsonSchemaObject & JsonValue;
-};
-
-type CodexDynamicToolSchemaQuarantine = {
-  tool: string;
-  violations: readonly string[];
-};
+type ProjectedCodexDynamicTool = ProjectedTool<AnyAgentTool>;
 
 const INTERNAL_TOOL_EXECUTION_VALIDATION = Symbol.for("openclaw.internalToolExecutionValidation");
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
@@ -435,6 +432,8 @@ export type CodexDynamicToolBridge = {
     messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
+    toolAutoDeliveryMediaUrls: string[];
+    coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
     acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -455,22 +454,6 @@ function normalizeAcceptedSessionSpawn(result: unknown): {
   return runId && childSessionKey ? { runId, childSessionKey } : null;
 }
 
-/** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
-const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
-const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
-const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
-
-// Keep OpenClaw control-path tools directly callable even when Codex tool_search
-// is unavailable or resolves a connector-only universe. Developer instructions
-// still steer normal Codex subagents to native spawn_agent.
-// sessions_yield is normally routed by its catalogMode "direct-only" before
-// this set is consulted; the name entry stays as the metadata-independent
-// contract that control-path tools remain directly callable.
-const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
-  "agents_list",
-  "sessions_spawn",
-  "sessions_yield",
-]);
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
@@ -508,7 +491,8 @@ function invalidateComputerFrame(contextEpoch: {
  */
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
-  registeredTools?: AnyAgentTool[];
+  registeredTools?: readonly CodexToolDescriptor[];
+  registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   computerContextEpoch?: {
     value: number;
@@ -534,7 +518,15 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const availableTools = availableProjection.tools;
+  const inheritedSpecs = params.registeredSpecs
+    ? structuredClone([...params.registeredSpecs])
+    : undefined;
+  const inheritedNames = inheritedSpecs
+    ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
+    : undefined;
+  const availableTools = availableProjection.tools.filter(
+    (entry) => !inheritedNames || inheritedNames.has(entry.name),
+  );
   const quarantinedAvailableToolNames = new Set(
     availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
@@ -542,7 +534,8 @@ export function createCodexDynamicToolBridge(params: {
     params.registeredTools ? registeredProjection.tools : availableTools
   ).filter((entry) => !quarantinedAvailableToolNames.has(entry.name));
   const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
-  const registeredToolNames = new Set(registeredSpecTools.map((entry) => entry.name));
+  const registeredToolNames =
+    inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
@@ -561,6 +554,8 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTargets: [],
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
+    toolAutoDeliveryMediaUrls: [],
+    coreTtsToolResults: [],
     toolAudioAsVoice: false,
     acceptedSessionSpawns: [],
     quarantinedTools,
@@ -588,23 +583,30 @@ export function createCodexDynamicToolBridge(params: {
     snapshot?: ExecutionSnapshot;
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
-  const directToolNames = new Set([
-    ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
-    ...(params.directToolNames ?? []),
-  ]);
+  const directToolNames = params.directToolNames;
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
-    availableSpecs: createCodexDynamicToolSpecs({
-      entries: availableTools,
-      loading: params.loading ?? "searchable",
-      directToolNames,
-    }),
-    specs: createCodexDynamicToolSpecs({
-      entries: registeredSpecTools,
-      loading: params.loading ?? "searchable",
-      directToolNames,
-    }),
+    availableSpecs: inheritedSpecs
+      ? inheritedSpecs.flatMap<CodexDynamicToolSpec>((spec) => {
+          if (spec.type === "function") {
+            return toolMap.has(spec.name) ? [spec] : [];
+          }
+          const tools = spec.tools.filter((tool) => toolMap.has(tool.name));
+          return tools.length ? [{ ...spec, tools }] : [];
+        })
+      : createCodexDynamicToolSpecs({
+          entries: availableTools,
+          loading: params.loading ?? "searchable",
+          directToolNames,
+        }),
+    specs:
+      inheritedSpecs ??
+      createCodexDynamicToolSpecs({
+        entries: registeredSpecTools,
+        loading: params.loading ?? "searchable",
+        directToolNames,
+      }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     sideEffectOwnerKeyForTool: (toolName) => {
       const tool = toolMap.get(toolName)?.tool;
@@ -871,13 +873,17 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
         const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+        const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
         collectToolTelemetry({
           toolName,
           args: executedArgs,
           result,
           mediaTrustResult: telemetryRawResult,
           telemetry,
+          signal,
           isError: resultIsError,
+          autoDeliveryTtsMediaUrls,
+          coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
@@ -909,6 +915,8 @@ export function createCodexDynamicToolBridge(params: {
           sideEffectEvidence: !replaySafe,
         });
       } catch (error) {
+        const trustedNoStart = consumeTrustedToolNoStartError(error);
+        executionPrevented ||= trustedNoStart;
         // Post-processing can fail after a successful body. Boundary evidence
         // is monotonic, so a second observer must never erase an earlier start.
         captureExecutionBoundary();
@@ -943,13 +951,6 @@ export function createCodexDynamicToolBridge(params: {
           toolCallOrdinal: options?.toolCallOrdinal,
         });
         notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
-        collectToolTelemetry({
-          toolName,
-          args: executedArgs,
-          result: undefined,
-          telemetry,
-          isError: true,
-        });
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
@@ -1093,218 +1094,6 @@ function wrapProjectedCodexDynamicTools(
   return { tools: wrappedTools, quarantinedTools };
 }
 
-function createCodexDynamicToolSpecs(params: {
-  entries: readonly ProjectedCodexDynamicTool[];
-  loading: CodexDynamicToolsLoading;
-  directToolNames: ReadonlySet<string>;
-}): CodexDynamicToolSpec[] {
-  const specs: CodexDynamicToolSpec[] = [];
-  const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
-  // Codex reuses its incremental websocket request only when the complete
-  // searchable surface is unchanged. Direct mode retains its compatibility order.
-  const entries =
-    params.loading === "direct"
-      ? params.entries
-      : params.entries.toSorted((left, right) => left.name.localeCompare(right.name));
-  for (const entry of entries) {
-    const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
-    if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
-      // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
-      // root name even though generic direct-only tools use a model namespace.
-      specs.push(functionSpec);
-      continue;
-    }
-    if (entry.tool.catalogMode === "direct-only") {
-      directOnlyNamespaceTools.push(functionSpec);
-      continue;
-    }
-    if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
-      specs.push(functionSpec);
-      continue;
-    }
-    namespaceTools.push({ ...functionSpec, deferLoading: true });
-  }
-  if (namespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: namespaceTools,
-    });
-  }
-  if (directOnlyNamespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: directOnlyNamespaceTools,
-    });
-  }
-  return specs;
-}
-
-function createCodexDynamicToolFunctionSpec(params: {
-  entry: ProjectedCodexDynamicTool;
-}): CodexDynamicToolFunctionSpec {
-  return {
-    type: "function",
-    name: params.entry.name,
-    description: params.entry.description,
-    inputSchema: params.entry.inputSchema,
-  };
-}
-
-function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
-  tools: ProjectedCodexDynamicTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
-} {
-  const projectedTools: ProjectedCodexDynamicTool[] = [];
-  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  let length: number;
-  try {
-    length = tools.length;
-  } catch {
-    return {
-      tools: [],
-      quarantinedTools: [{ tool: "tool[0]", violations: ["tool[0] is unreadable"] }],
-    };
-  }
-  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
-    let tool: AnyAgentTool;
-    try {
-      tool = tools[toolIndex]!;
-    } catch {
-      quarantinedTools.push({
-        tool: `tool[${toolIndex}]`,
-        violations: [`tool[${toolIndex}] is unreadable`],
-      });
-      continue;
-    }
-    const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
-    if (!descriptor.ok) {
-      quarantinedTools.push(descriptor.diagnostic);
-      continue;
-    }
-    const normalizedParameters = normalizeOpenAIToolSchemas({
-      provider: "openai",
-      modelApi: "openai-chatgpt-responses",
-      // The shared normalizer only reads parameters; do not expose unreadable plugin fields.
-      tools: [{ parameters: descriptor.parameters } as AnyAgentTool],
-    })[0]?.parameters;
-    const projection = projectRuntimeToolInputSchema(
-      normalizedParameters ?? descriptor.parameters,
-      `${descriptor.name}.inputSchema`,
-    );
-    if (projection.violations.length > 0) {
-      quarantinedTools.push({ tool: descriptor.name, violations: projection.violations });
-      continue;
-    }
-    if (!isRecord(projection.schema)) {
-      quarantinedTools.push({
-        tool: descriptor.name,
-        violations: [`${descriptor.name}.inputSchema must be a JSON object schema`],
-      });
-      continue;
-    }
-    projectedTools.push({
-      tool,
-      name: descriptor.name,
-      description: descriptor.description,
-      inputSchema: projection.schema,
-    });
-  }
-  return { tools: projectedTools, quarantinedTools };
-}
-
-type CodexDynamicToolDescriptorRead =
-  | {
-      ok: true;
-      name: string;
-      description: string;
-      parameters: unknown;
-    }
-  | {
-      ok: false;
-      diagnostic: CodexDynamicToolSchemaQuarantine;
-    };
-
-function readCodexDynamicToolDescriptor(
-  tool: AnyAgentTool,
-  toolIndex: number,
-): CodexDynamicToolDescriptorRead {
-  const fallbackName = `tool[${toolIndex}]`;
-  let name: string;
-  try {
-    const rawName = tool.name;
-    if (typeof rawName !== "string" || !rawName) {
-      return {
-        ok: false,
-        diagnostic: {
-          tool: fallbackName,
-          violations: [`${fallbackName}.name must be a non-empty string`],
-        },
-      };
-    }
-    const trimmedName = rawName.trim();
-    let nameViolation: string | undefined;
-    if (!trimmedName) {
-      nameViolation = `${rawName}.name must not be empty`;
-    } else if (trimmedName !== rawName) {
-      nameViolation = `${rawName}.name must not have leading or trailing whitespace`;
-    } else if (!CODEX_DYNAMIC_TOOL_NAME_PATTERN.test(rawName)) {
-      nameViolation = `${rawName}.name must match ^[a-zA-Z0-9_-]+$`;
-    } else if (rawName.length > CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS) {
-      nameViolation = `${rawName}.name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
-    } else if (rawName === "mcp" || rawName.startsWith("mcp__")) {
-      nameViolation = `${rawName}.name is reserved by Codex app-server`;
-    }
-    if (nameViolation) {
-      return {
-        ok: false,
-        diagnostic: {
-          tool: rawName,
-          violations: [nameViolation],
-        },
-      };
-    }
-    name = rawName;
-  } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: fallbackName,
-        violations: [`${fallbackName}.name is unreadable`],
-      },
-    };
-  }
-  let description: string;
-  try {
-    description = typeof tool.description === "string" ? tool.description : "";
-  } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: name,
-        violations: [`${name}.description is unreadable`],
-      },
-    };
-  }
-  let parameters: unknown;
-  try {
-    parameters = tool.parameters;
-  } catch {
-    return {
-      ok: false,
-      diagnostic: {
-        tool: name,
-        violations: [`${name}.inputSchema is unreadable`],
-      },
-    };
-  }
-  return { ok: true, name, description, parameters };
-}
-
 function warnQuarantinedDynamicTools(params: {
   tools: readonly CodexDynamicToolSchemaQuarantine[];
   availableToolCount: number;
@@ -1390,6 +1179,9 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  signal: AbortSignal;
+  autoDeliveryTtsMediaUrls?: readonly string[];
+  coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
@@ -1405,7 +1197,8 @@ function collectToolTelemetry(params: {
       params.telemetry.heartbeatToolResponse = response;
     }
   }
-  if (!params.isError && params.result) {
+  // Only a live invocation may accept new media; committed effects remain evidence.
+  if (params.result && !params.signal.aborted) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
       const mediaUrls = filterToolResultMediaUrls(
@@ -1414,11 +1207,28 @@ function collectToolTelemetry(params: {
         params.mediaTrustResult ?? params.result,
       );
       const seen = new Set(params.telemetry.toolMediaUrls);
+      const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
+      const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
+      let retainsCoreTtsMedia = false;
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
           seen.add(mediaUrl);
           params.telemetry.toolMediaUrls.push(mediaUrl);
         }
+        if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
+          autoDeliveryMediaUrls.add(mediaUrl);
+          retainsCoreTtsMedia = true;
+        } else {
+          autoDeliveryMediaUrls.delete(mediaUrl);
+        }
+      }
+      params.telemetry.toolAutoDeliveryMediaUrls = [...autoDeliveryMediaUrls];
+      if (
+        retainsCoreTtsMedia &&
+        params.coreTtsToolResult &&
+        !params.telemetry.coreTtsToolResults.includes(params.coreTtsToolResult)
+      ) {
+        params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
       }
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;

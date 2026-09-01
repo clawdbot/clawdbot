@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  setPluginToolMeta,
+  type PluginToolMcpMeta,
+} from "../plugins/tool-metadata.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -242,24 +246,34 @@ export function buildBundleMcpToolsFromCatalog(params: {
   createPromptListExecute?: (serverName: string) => AnyAgentTool["execute"];
   createPromptGetExecute?: (serverName: string) => AnyAgentTool["execute"];
   includeSessionDenied?: boolean;
+  includeAppOnlyInventory?: boolean;
 }): AnyAgentTool[] {
   const initialReservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessionDeniedOnly = params.includeSessionDenied === true;
-  // Preserve executable IDs by allocating them before denied-only inventory rows.
-  const tools = sessionDeniedOnly
+  const appOnlyInventory = params.includeAppOnlyInventory === true;
+  // Preserve callable IDs by allocating them before hidden inventory rows.
+  const tools = appOnlyInventory
     ? buildBundleMcpToolsFromCatalog({
         ...params,
         reservedToolNames: initialReservedNames,
-        includeSessionDenied: false,
+        includeAppOnlyInventory: false,
       })
-    : [];
+    : sessionDeniedOnly
+      ? buildBundleMcpToolsFromCatalog({
+          ...params,
+          reservedToolNames: initialReservedNames,
+          includeSessionDenied: false,
+        })
+      : [];
   const reservedNames = normalizeReservedToolNames([
     ...initialReservedNames,
     ...tools.map((tool) => tool.name),
   ]);
-  const catalogTools = sessionDeniedOnly
-    ? (params.catalog.sessionDeniedTools ?? [])
-    : params.catalog.tools;
+  const catalogTools = appOnlyInventory
+    ? params.catalog.tools.filter(isAppOnlyTool)
+    : sessionDeniedOnly
+      ? (params.catalog.sessionDeniedTools ?? [])
+      : params.catalog.tools;
   const sortedCatalogTools = [...catalogTools].toSorted((a, b) => {
     const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
     if (serverOrder !== 0) {
@@ -273,7 +287,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
-    if (isAppOnlyTool(tool)) {
+    const appOnly = isAppOnlyTool(tool);
+    if (appOnly && !appOnlyInventory) {
       continue;
     }
     const originalName = tool.toolName.trim();
@@ -317,6 +332,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(tool.excludedFromOpenClawCatalog || appOnly
+          ? { excludedFromOpenClawCatalog: true }
+          : {}),
         ...(tool.deniedBySession ? { deniedBySession: true } : {}),
         codexApproval: {
           mode: server?.codexApprovalMode ?? "auto",
@@ -587,12 +605,18 @@ export async function materializeBundleMcpToolsForRun(params: {
 
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
+  excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
+  safeServerNamesByServer?: ReadonlyMap<string, string>;
   createRuntime?: (params: {
     sessionId: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
+    excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const createRuntime =
@@ -601,6 +625,11 @@ export async function createBundleMcpToolRuntime(params: {
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.excludeServerNames ? { excludeServerNames: params.excludeServerNames } : {}),
+    ...(params.safeServerNamesByServer
+      ? { safeServerNamesByServer: params.safeServerNamesByServer }
+      : {}),
   });
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,

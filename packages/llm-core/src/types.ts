@@ -129,11 +129,6 @@ export interface StreamOptions {
    */
   timeoutMs?: number;
   /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
-  maxRetries?: number;
-  /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
    * with an error containing the requested delay, allowing higher-level retry logic
@@ -308,6 +303,24 @@ export interface Usage {
     totalOrigin?: "provider-billed";
   };
 }
+
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelCostRates & {
+  /** `[start]` is an open-ended upper tier. */
+  range: [number, number] | [number];
+};
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
 
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
@@ -671,12 +684,7 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
+  cost: RawModelCostConfig;
   contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.

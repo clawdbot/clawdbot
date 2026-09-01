@@ -424,6 +424,16 @@ function createMinimalRun(params?: {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      // Mocked reply routes already have prepared input facts; discovery has its own vision tests.
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text"] },
+        { provider: "openai", id: "gpt-5.5", input: ["text"] },
+        { provider: "openai", id: "gpt-5.6-sol", input: ["text"] },
+        { provider: "google", id: "gemini-2.5-flash", input: ["text"] },
+        { provider: "deepinfra", id: "moonshotai/Kimi-K2.5", input: ["text"] },
+        { provider: "lmstudio", id: "gemma-4-e4b-it", input: ["text"] },
+      ],
       thinkLevel: "low",
       verboseLevel: params?.resolvedVerboseLevel ?? "off",
       elevatedLevel: "off",
@@ -687,6 +697,9 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
       replyOperation: provided,
       bindActiveAuthority: false,
+      runOverrides: {
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text", "image"] }],
+      },
     });
     const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
     followupRun.images = [image];
@@ -700,6 +713,7 @@ describe("runReplyAgent active steering", () => {
     await requireScheduledFollowupRunner()(followupRun);
     expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
       images: [image],
+      modelHasVision: true,
     });
   });
 
@@ -1670,9 +1684,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1707,9 +1721,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   ])(
     "preserves $label through terminal failure with block streaming disabled",
     async ({ callbackResult, sessionCtx }) => {
-      const accounting = await import("./session-run-accounting.js");
+      const accounting = await import("./session-usage.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistRunSessionUsage")
+        .spyOn(accounting, "persistSessionUsageUpdate")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onPartialReply = vi.fn(async () => callbackResult);
       let observedCallbackResult: boolean | void = undefined;
@@ -1847,9 +1861,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   );
 
   it("rethrows after a delivered partial without visible content", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1873,9 +1887,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows heartbeat failures after a delivered partial", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1924,9 +1938,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   it.each(["reasoning", "commentary"] as const)(
     "rethrows after %s-only block streaming",
     async (lane) => {
-      const accounting = await import("./session-run-accounting.js");
+      const accounting = await import("./session-usage.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistRunSessionUsage")
+        .spyOn(accounting, "persistSessionUsageUpdate")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onBlockReply = vi.fn();
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -3995,28 +4009,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(toolPayload.text).toBeUndefined();
   });
 
-  it("retries transient HTTP failures once with timer-driven backoff", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
-    state.runEmbeddedAgentMock.mockImplementation(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("502 Bad Gateway");
-      }
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+  it("does not retry transient HTTP failures in the reply layer", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("502 Bad Gateway"));
 
-    const { run } = createMinimalRun({
-      typingMode: "message",
-    });
-    const runPromise = run();
+    const { run } = createMinimalRun({ typingMode: "message" });
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
 
-    await vi.advanceTimersByTimeAsync(2_499);
-    expect(calls).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runPromise;
-    expect(calls).toBe(2);
-    vi.useRealTimers();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(payloads.map((payload) => payload?.text)).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("provider internal error");
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
@@ -4316,15 +4318,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
       },
     },
     {
-      label: "accepted child spawn",
-      pendingContinuation: false,
-      result: {
-        payloads: [],
-        meta: {},
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
-      },
-    },
-    {
       label: "yielded continuation",
       pendingContinuation: true,
       result: { payloads: [], meta: { yielded: true } },
@@ -4341,6 +4334,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     await expect(run()).resolves.toBeUndefined();
     expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+  });
+
+  it("delivers one bounded status for an accepted child continuation", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],
+      meta: { continuationPending: true },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const onPendingContinuation = vi.fn();
+    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "I’m continuing this work and will send the result when it is ready.",
+      replyToId: "msg",
+    });
+    expect(onPendingContinuation).toHaveBeenCalledOnce();
+    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
+      statusPayload: {
+        text: "I’m continuing this work and will send the result when it is ready.",
+      },
+    });
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {

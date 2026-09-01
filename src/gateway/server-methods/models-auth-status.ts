@@ -559,10 +559,23 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             readOnly: true,
             authScope: resolveAuthRefreshScope(cfg),
             refreshAuth: true,
+            refreshFullCatalog: false,
           })
         : await readPreparedCatalog(context, scope.agentId);
       if (!preparedSnapshot) {
-        throw new Error(`prepared model auth owner is unavailable (${scope.agentId})`);
+        // A lifecycle replacement may temporarily withdraw this owner. Status must not
+        // rediscover credentials or turn missing preparation into a connection failure.
+        const result: ModelAuthStatusResult = {
+          ts: now,
+          providers: [],
+          unavailable: {
+            code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+            message:
+              "Model authentication status is unavailable. Refresh Models after setup finishes; restart the Gateway if it persists.",
+          },
+        };
+        respond(true, result, undefined);
+        return;
       }
       cfg = preparedSnapshot.config;
       const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;

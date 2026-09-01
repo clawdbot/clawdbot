@@ -25,6 +25,7 @@ import {
   spawnText,
 } from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -1011,9 +1012,7 @@ describe("scripts/test-group-report child process guard", () => {
       });
       expect(parsed.output).toContain("sending SIGKILL");
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
+      killPidIfAlive(childPid);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1082,9 +1081,7 @@ describe("scripts/test-group-report child process guard", () => {
       if (runner?.pid && isProcessAlive(runner.pid)) {
         runner.kill("SIGKILL");
       }
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
+      killPidIfAlive(childPid);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1140,8 +1137,8 @@ describe("scripts/test-group-report child process guard", () => {
       try {
         await releaseAndWait();
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }
@@ -1335,8 +1332,8 @@ describe("scripts/test-group-report run plans", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+      path.join("/repo", ".cache", "vitest", "0-a.ts"),
+      path.join("/repo", ".cache", "vitest", "1-b.ts"),
     ]);
     expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
   });

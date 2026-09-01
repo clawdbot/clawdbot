@@ -13,11 +13,13 @@ import {
 import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 import {
   MAX_UPLOAD_BYTES,
+  NodeWorkspaceTransferInvalidError,
   NodeWorkspaceTransferLimitError,
   RequestByteReader,
   streamUploadFile,
 } from "./node-workspace-upload-reader.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
@@ -33,14 +35,16 @@ import {
 } from "./workspace-reconcile.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
-export { isNodeWorkspaceTransferLimitError } from "./node-workspace-upload-reader.js";
+export {
+  isNodeWorkspaceTransferLimitError,
+  nodeWorkspaceTransferInvalidReason,
+} from "./node-workspace-upload-reader.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
 type TransferCredential = {
   ownerEpoch: number;
-  expiresAtMs: number;
   sessionId: string | null;
 };
 
@@ -101,6 +105,8 @@ type TransferContext = {
   temporaryRoot: string;
   currentManifestRef: string;
   snapshots: Map<string, NodeWorkspaceTransferSnapshot>;
+  baseCommit: string | null;
+  pack?: Promise<string>;
   downloads: Map<string, DownloadCapability>;
   upload?: UploadOperation;
   abortController: AbortController;
@@ -114,13 +120,11 @@ type TransferAuthorization = {
   route: NodeWorkspaceTransferHttpRoute;
 };
 
-function contextOwnerValid(
-  context: TransferContext,
-  owner: TransferOwner | undefined,
-  nowMs: number,
-): boolean {
+function contextOwnerValid(context: TransferContext, owner: TransferOwner | undefined): boolean {
   const environment = owner?.environment;
   const credential = owner?.credential;
+  // Deleting the credential fences teardown before its asynchronous tunnel stop.
+  // Its RPC admission expiry does not end the node workspace; each transfer has its own TTL.
   return Boolean(
     !context.abortController.signal.aborted &&
     context.isAuthorized() &&
@@ -132,8 +136,7 @@ function contextOwnerValid(
     environment.attachedSessionIds.length === 1 &&
     environment.attachedSessionIds[0] === context.sessionId &&
     credential.ownerEpoch === context.ownerEpoch &&
-    credential.sessionId === context.sessionId &&
-    credential.expiresAtMs > nowMs,
+    credential.sessionId === context.sessionId,
   );
 }
 
@@ -178,15 +181,9 @@ export function createNodeWorkspaceTransferService(options: {
     return temporaryRootReady;
   };
 
-  const currentOwner = (context: TransferContext): TransferOwner | undefined => {
-    if (contexts.get(context.environmentId) !== context) {
-      return undefined;
-    }
-    const owner = options.getOwner(context.environmentId);
-    return contextOwnerValid(context, owner, now()) ? owner : undefined;
-  };
-
-  const isCurrentContext = (context: TransferContext): boolean => Boolean(currentOwner(context));
+  const isCurrentContext = (context: TransferContext): boolean =>
+    contexts.get(context.environmentId) === context &&
+    contextOwnerValid(context, options.getOwner(context.environmentId));
 
   const closeContext = async (context: TransferContext) => {
     if (!context.abortController.signal.aborted) {
@@ -196,6 +193,8 @@ export function createNodeWorkspaceTransferService(options: {
     if (contexts.get(context.environmentId) === context) {
       contexts.delete(context.environmentId);
     }
+    // Cancellation fences requests before pack processes release their scratch files.
+    await context.pack?.catch(() => undefined);
     await fsp.rm(context.temporaryRoot, { recursive: true, force: true });
   };
 
@@ -214,14 +213,8 @@ export function createNodeWorkspaceTransferService(options: {
     signal?: AbortSignal,
   ): string => {
     signal?.throwIfAborted();
-    const credential = currentOwner(context)?.credential;
-    const nowMs = now();
-    if (!credential || isAuthorized?.() === false) {
+    if (!isCurrentContext(context) || isAuthorized?.() === false) {
       throw new Error("Node workspace transfer owner is no longer current");
-    }
-    const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
-    if (expiresAtMs <= nowMs) {
-      throw new Error("Worker workspace transfer credential is expired");
     }
     const token = mintNodeWorkspaceTransferToken();
     context.downloads.set(token, {
@@ -232,7 +225,7 @@ export function createNodeWorkspaceTransferService(options: {
       sessionId: context.sessionId,
       generation: context.generation,
       manifestRef,
-      expiresAtMs,
+      expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
       ...(isAuthorized ? { isAuthorized } : {}),
       ...(signal ? { signal } : {}),
     });
@@ -282,17 +275,15 @@ export function createNodeWorkspaceTransferService(options: {
     if (route.direction !== "download" || route.environmentId !== context.environmentId) {
       return false;
     }
-    if (route.kind === "manifest" || route.kind === "pack") {
-      return route.manifestRef === capability.manifestRef;
-    }
-    if (route.kind !== "blob") {
-      return false;
-    }
-    return Boolean(
-      context.snapshots
-        .get(capability.manifestRef)
-        ?.manifest.entries.some((entry) => entry.type === "file" && entry.sha256 === route.sha256),
-    );
+    return route.kind === "blob"
+      ? Boolean(
+          context.snapshots
+            .get(capability.manifestRef)
+            ?.manifest.entries.some(
+              (entry) => entry.type === "file" && entry.sha256 === route.sha256,
+            ),
+        )
+      : route.manifestRef === capability.manifestRef;
   };
 
   return {
@@ -351,6 +342,7 @@ export function createNodeWorkspaceTransferService(options: {
           temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
           currentManifestRef: "",
           snapshots: new Map(),
+          baseCommit: null,
           downloads: new Map(),
           abortController,
         };
@@ -373,6 +365,7 @@ export function createNodeWorkspaceTransferService(options: {
             ]),
           });
           context.snapshots.set(snapshot.manifestRef, snapshot);
+          context.baseCommit = snapshot.manifest.baseCommit;
           context.currentManifestRef = snapshot.manifestRef;
           contexts.set(context.environmentId, context);
           return { snapshot, token: mintDownload(context, snapshot.manifestRef) };
@@ -385,17 +378,11 @@ export function createNodeWorkspaceTransferService(options: {
 
     prepareUpload(environmentId: string, baseManifestRef: string): string {
       const context = contexts.get(environmentId);
-      const credential = context ? currentOwner(context)?.credential : undefined;
-      const nowMs = now();
-      if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !credential) {
+      if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !isCurrentContext(context)) {
         throw new Error("Node workspace transfer context is unavailable");
       }
       if (context.upload) {
         throw new Error("Node workspace transfer upload is already active");
-      }
-      const expiresAtMs = Math.min(credential.expiresAtMs, nowMs + TRANSFER_TIMEOUT_MS);
-      if (expiresAtMs <= nowMs) {
-        throw new Error("Worker workspace transfer credential is expired");
       }
       const token = mintNodeWorkspaceTransferToken();
       context.upload = {
@@ -406,7 +393,7 @@ export function createNodeWorkspaceTransferService(options: {
         sessionId: context.sessionId,
         generation: context.generation,
         baseManifestRef,
-        expiresAtMs,
+        expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
       };
       return token;
@@ -517,6 +504,36 @@ export function createNodeWorkspaceTransferService(options: {
       return authorization.context.snapshots.get(authorization.capability.manifestRef);
     },
 
+    async pack(authorization: TransferAuthorization): Promise<string | undefined> {
+      if (authorization.route.kind !== "pack" || !authorizationCurrent(authorization)) {
+        return undefined;
+      }
+      const { context, route } = authorization;
+      const snapshot = context.snapshots.get(route.manifestRef);
+      const { baseCommit } = context;
+      if (!baseCommit || snapshot?.manifest.baseCommit !== baseCommit) {
+        return undefined;
+      }
+      if (!context.pack) {
+        // Origin/seed sync needs only the manifest. Materialize its immutable Git base
+        // on first download; accepted manifests share this context-owned operation.
+        context.pack = prepareWorkerWorkspaceGitPack({
+          root: context.localPath,
+          baseCommit,
+          temporaryRoot: context.temporaryRoot,
+          signal: AbortSignal.any([
+            context.abortController.signal,
+            AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+          ]),
+        }).catch((error: unknown) => {
+          context.pack = undefined;
+          throw error;
+        });
+      }
+      const packPath = await context.pack;
+      return authorizationCurrent(authorization) ? packPath : undefined;
+    },
+
     blob(
       authorization: TransferAuthorization,
     ): { path: string; size: number; sha256: string } | undefined {
@@ -578,13 +595,30 @@ export function createNodeWorkspaceTransferService(options: {
           }
           const raw = (await reader.readExactly(bytes)).toString("utf8");
           const ref = expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-          return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+          try {
+            return { raw, ref, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+          } catch (error) {
+            throw new NodeWorkspaceTransferInvalidError(
+              "manifest",
+              "Workspace transfer manifest is invalid",
+              { cause: error },
+            );
+          }
         };
         const base = await readManifest(operation.baseManifestRef);
         assertCurrent();
         const current = await readManifest();
         assertCurrent();
-        const transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
+        let transferPaths: string[];
+        try {
+          transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest);
+        } catch (error) {
+          throw new NodeWorkspaceTransferInvalidError(
+            "manifest",
+            "Workspace transfer manifests cannot be reconciled",
+            { cause: error },
+          );
+        }
         const transferPathSet = new Set(transferPaths);
         stagingRoot = await fsp.mkdtemp(path.join(authorization.context.temporaryRoot, "upload-"));
         const currentByPath = new Map(current.manifest.entries.map((entry) => [entry.path, entry]));
@@ -593,33 +627,76 @@ export function createNodeWorkspaceTransferService(options: {
           if (!entry) {
             continue;
           }
-          const destination = entryPath(stagingRoot, relative);
-          await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-          assertCurrent();
-          if (entry.type === "symlink") {
-            await fsp.symlink(entry.target, destination);
+          try {
+            const destination = entryPath(stagingRoot, relative);
+            await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
             assertCurrent();
-          } else {
-            const handle = await fsp.open(destination, "wx", entry.mode);
-            try {
-              await streamUploadFile({ reader, handle, entry, assertCurrent });
-            } finally {
-              await handle.close();
+            if (entry.type === "symlink") {
+              await fsp.symlink(entry.target, destination);
+              assertCurrent();
+            } else {
+              const handle = await fsp.open(destination, "wx", entry.mode);
+              try {
+                await streamUploadFile({ reader, handle, entry, assertCurrent });
+              } finally {
+                await handle.close();
+              }
+              assertCurrent();
             }
-            assertCurrent();
+          } catch (error) {
+            if (error instanceof NodeWorkspaceTransferInvalidError) {
+              throw error;
+            }
+            if (params.signal.aborted || !authorizationCurrent(authorization)) {
+              throw error;
+            }
+            throw new NodeWorkspaceTransferInvalidError(
+              "staging",
+              "Workspace transfer payload could not be staged",
+              { cause: error },
+            );
           }
         }
         await reader.assertEnd();
         assertCurrent();
         if (reader.bytesRead !== contentLength) {
-          throw new Error("Workspace transfer upload length is inconsistent");
+          throw new NodeWorkspaceTransferInvalidError(
+            "content_length",
+            "Workspace transfer upload length is inconsistent",
+          );
         }
-        await assertWorkspaceMatchesManifest({
-          root: stagingRoot,
-          manifest: current.manifest,
-          entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
-        });
+        try {
+          await assertWorkspaceMatchesManifest({
+            root: stagingRoot,
+            manifest: current.manifest,
+            entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
+          });
+        } catch (error) {
+          throw new NodeWorkspaceTransferInvalidError(
+            "staging",
+            "Workspace transfer payload did not match its staged result",
+            { cause: error },
+          );
+        }
         assertCurrent();
+        const context = authorization.context;
+        if (!context.snapshots.has(base.ref)) {
+          if (context.baseCommit !== base.manifest.baseCommit) {
+            await context.pack?.catch(() => undefined);
+            assertCurrent();
+            context.pack = undefined;
+            context.baseCommit = base.manifest.baseCommit;
+          }
+          // Reconnect may snapshot newer local files. Retain the authenticated original
+          // base before upload-token revocation; accepted publication needs its exact pack.
+          context.snapshots.set(base.ref, {
+            manifest: base.manifest,
+            manifestRef: base.ref,
+            rawManifest: base.raw,
+            root: context.localPath,
+          });
+          context.currentManifestRef = base.ref;
+        }
         operation.uploaded = {
           base: base.manifest,
           baseManifestRef: operation.baseManifestRef,

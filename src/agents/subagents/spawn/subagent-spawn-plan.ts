@@ -6,6 +6,7 @@
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -62,11 +63,13 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   callerThinkingRaw?: string;
   fastMode?: FastMode;
 }) {
-  const resolvedModel = resolveSubagentSpawnModelSelection({
+  const rawResolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: params.targetAgentId,
     modelOverride: params.modelOverride,
   });
+  const { model: resolvedModel, profile: authProfileId } =
+    splitTrailingAuthProfile(rawResolvedModel);
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
@@ -126,6 +129,12 @@ export function resolveSubagentModelAndThinkingPlan(params: {
                   modelOverrideFallbackOriginModel: modelOrigin.model,
                 }
               : {}),
+          }
+        : {}),
+      ...(authProfileId
+        ? {
+            authProfileOverride: authProfileId,
+            authProfileOverrideSource: "user" as const,
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,

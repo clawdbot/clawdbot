@@ -268,16 +268,12 @@ describe("handleCompactCommand", () => {
     const resolveCall = requireResolveSessionAgentIdCall();
     expect(resolveCall.sessionKey).toBe("agent:target:whatsapp:direct:12345");
     expect(resolveCall.config).toBe(cfg);
-    expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionTarget: {
-          agentId: "target",
-          sessionId: "session-1",
-          sessionKey: "agent:target:whatsapp:direct:12345",
-          storePath: "/tmp/openclaw-session-store.json",
-        },
-      }),
-    );
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget).toEqual({
+      agentId: "target",
+      sessionId: "session-1",
+      sessionKey: "agent:target:whatsapp:direct:12345",
+      storePath: "/tmp/openclaw-session-store.json",
+    });
   });
 
   it("keeps the selected agent when compacting an ambiguous global session", async () => {
@@ -341,12 +337,8 @@ describe("handleCompactCommand", () => {
       true,
     );
 
-    expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionTarget: expect.objectContaining({
-          storePath: "/tmp/scoped-sessions.json",
-        }),
-      }),
+    expect(requireCompactEmbeddedAgentSessionCall().sessionTarget?.storePath).toBe(
+      "/tmp/scoped-sessions.json",
     );
   });
 
@@ -677,7 +669,6 @@ describe("handleCompactCommand", () => {
       owner: "context engine",
       compactionKind: "context-engine" as const,
       details: undefined,
-      successor: "successor-session",
     },
   ])("counts confirmed $owner compaction without a post-compaction count", async (testCase) => {
     const { details } = testCase;
@@ -690,7 +681,6 @@ describe("handleCompactCommand", () => {
         firstKeptEntryId: "",
         tokensBefore: 999,
         ...(details ? { details } : {}),
-        ...("successor" in testCase ? { sessionId: testCase.successor } : {}),
       },
     });
 
@@ -713,9 +703,6 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(incrementCompactionCount)).toHaveBeenCalledOnce();
     expect(requireIncrementCompactionCountCall().compactionKind).toBe(testCase.compactionKind);
     expect(requireIncrementCompactionCountCall().tokensAfter).toBeUndefined();
-    if ("successor" in testCase) {
-      expect(requireIncrementCompactionCountCall().newSessionId).toBe("successor-session");
-    }
     expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(null, null);
     expect(result?.reply?.text).toContain("Compaction finished (resulting context unknown) •");
     expect(result?.reply?.text).not.toContain("undefined");

@@ -53,6 +53,98 @@
   },
   "redirects": [
     {
+      "source": "/cli/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/commitments",
+      "destination": "/en/automation#retired-inferred-commitments"
+    },
+    {
+      "source": "/concepts/channel-docking",
+      "destination": "/en/concepts/session#retired-channel-docking"
+    },
+    {
+      "source": "/install/clawdock",
+      "destination": "/en/install/docker#clawdock-migration"
+    },
+    {
+      "source": "/plan/swarms",
+      "destination": "/en/tools/swarm"
+    },
+    {
+      "source": "/plugins/reference/linux-canvas",
+      "destination": "/en/platforms/linux#retired-linux-canvas"
+    },
+    {
+      "source": "/plugins/reference/open-prose",
+      "destination": "/en/prose"
+    },
+    {
+      "source": "/plugins/reference/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
+    },
+    {
+      "source": "/providers/qwen-oauth",
+      "destination": "/en/providers/qwen#retired-qwen-portal-authentication"
+    },
+    {
+      "source": "/refactor/canvas",
+      "destination": "/en/platforms/mac/canvas"
+    },
+    {
+      "source": "/reference/templates/TOOLS.dev",
+      "destination": "/en/reference/templates/AGENTS.dev#tools"
+    },
+    {
+      "source": "/web/workspaces",
+      "destination": "/en/web/dashboards#retired-workspaces"
+    },
+    {
+      "source": "/concepts/message-lifecycle-refactor",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plan/cloud-workers",
+      "destination": "/gateway/cloud-workers"
+    },
+    {
+      "source": "/plan/computer-use",
+      "destination": "/nodes/computer-use"
+    },
+    {
+      "source": "/plan/memory-provenance",
+      "destination": "/concepts/memory-provenance"
+    },
+    {
+      "source": "/plan/runners",
+      "destination": "/gateway/cloud-sessions"
+    },
+    {
+      "source": "/plan/ui-channels",
+      "destination": "/plugins/message-presentation"
+    },
+    {
+      "source": "/plan/worker-hibernation",
+      "destination": "/gateway/cloud-workers#warm-images"
+    },
+    {
+      "source": "/refactor/acp",
+      "destination": "/tools/acp-agents"
+    },
+    {
+      "source": "/refactor/database-first",
+      "destination": "/reference/database-schemas"
+    },
+    {
+      "source": "/refactor/operator-approvals",
+      "destination": "/tools/exec-approvals"
+    },
+    {
+      "source": "/start/onboarding-redesign",
+      "destination": "/cli/onboard"
+    },
+    {
       "source": "/gateway/security/shrinkwrap",
       "destination": "/gateway/security/dependency-locking"
     },
@@ -498,7 +590,7 @@
     },
     {
       "source": "/cron-vs-heartbeat",
-      "destination": "/automation"
+      "destination": "/automation#automations-vs-heartbeat"
     },
     {
       "source": "/dashboard",
@@ -554,7 +646,7 @@
     },
     {
       "source": "/gmail-pubsub",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#gmail-pubsub-integration"
     },
     {
       "source": "/grammy",
@@ -766,7 +858,7 @@
     },
     {
       "source": "/remote-gateway-readme",
-      "destination": "/gateway/remote-gateway-readme"
+      "destination": "/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent"
     },
     {
       "source": "/rpc",
@@ -910,7 +1002,7 @@
     },
     {
       "source": "/webhook",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#webhooks"
     },
     {
       "source": "/whatsapp",
@@ -1026,19 +1118,55 @@
     },
     {
       "source": "/automation/troubleshooting",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#troubleshooting"
     },
     {
       "source": "/automation/cron-vs-heartbeat",
-      "destination": "/automation"
+      "destination": "/automation#automations-vs-heartbeat"
     },
     {
       "source": "/automation/webhook",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#webhooks"
     },
     {
       "source": "/automation/gmail-pubsub",
-      "destination": "/automation/cron-jobs"
+      "destination": "/automation/cron-jobs#gmail-pubsub-integration"
+    },
+    {
+      "source": "/cli/flows",
+      "destination": "/cli/tasks#flow"
+    },
+    {
+      "source": "/concepts/memory-qmd",
+      "destination": "/concepts/memory-builtin#migrating-from-qmd"
+    },
+    {
+      "source": "/gateway/network-model",
+      "destination": "/network#core-model"
+    },
+    {
+      "source": "/gateway/remote-gateway-readme",
+      "destination": "/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent"
+    },
+    {
+      "source": "/platforms/mac/child-process",
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/plugins/sdk-channel-message",
+      "destination": "/plugins/sdk-channel-outbound"
+    },
+    {
+      "source": "/plugins/sdk-channel-turn",
+      "destination": "/plugins/sdk-channel-inbound#migration"
+    },
+    {
+      "source": "/debug/node-issue",
+      "destination": "/help/debugging#node-and-tsx-startup-errors"
+    },
+    {
+      "source": "/gateway/bridge-protocol",
+      "destination": "/gateway/protocol"
     }
   ],
   "navigation": {
@@ -1112,7 +1240,6 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1259,7 +1386,6 @@
                   "concepts/session",
                   "concepts/session-attachment",
                   "concepts/session-search",
-                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-state",
                   "concepts/session-tool",
@@ -1295,7 +1421,6 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
-                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
@@ -1727,7 +1852,6 @@
                       "gateway/protocol",
                       "gateway/clients",
                       "gateway/embedding",
-                      "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
@@ -1752,7 +1876,6 @@
                 "group": "Remote access",
                 "pages": [
                   "gateway/remote",
-                  "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
                   "gateway/tailscale",
                   "gateway/cloudflare-access"
@@ -1877,7 +2000,6 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
-                      "cli/flows",
                       "cli/connect",
                       "cli/node",
                       "cli/nodes",
@@ -2038,6 +2160,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.8.1",
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]
@@ -2098,8 +2221,7 @@
                 "group": "Diagnostics",
                 "pages": [
                   "help/environment",
-                  "diagnostics/flags",
-                  "debug/node-issue"
+                  "diagnostics/flags"
                 ]
               },
               {

@@ -1,7 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
 
 type WorkingProgress = {
   key: string;
@@ -248,159 +251,69 @@ export function clearWorkingProgress(sessionKey: string): void {
 
 export function resetWorkingProgress(): void {
   workingProgressBySession.clear();
-  turnRecapWatchBySession.clear();
   anonymousWorkingProgressId = 0;
 }
 
 export type TurnRecap = { runtimeMs: number; outputTokens: number | null };
 
-/** `baselineEndedAt` is the session row's endedAt when the working indicator
- * appeared — i.e. the PREVIOUS run's terminal stamp (or null once the run
- * start patch cleared it). Only a row whose endedAt moved past the baseline
- * belongs to the run this pane just watched; timestamps never correlate
- * reliably because consecutive turns can be seconds apart. `settled` freezes
- * the first resolved recap so later terminal rows from runs this pane never
- * watched (background/cron/other devices) cannot rewrite the displayed row. */
-type TurnRecapWatch = {
-  watching: boolean;
-  /** False while no session row was observed during the watch: with no
-   * baseline, a later row's stamp cannot be told apart from the previous
-   * run's, so such a watch is consumed unresolved at settle. */
-  baselineKnown: boolean;
-  baselineEndedAt: number | null;
-  /** The previous run's persisted token count. The terminal stamp and the
-   * usage persist are separate gateway writes, so a fresh-endedAt row can
-   * still carry the PREVIOUS turn's outputTokens; an unchanged value at
-   * resolve is treated as that lag, not this turn's count. */
-  baselineOutputTokens: number | null;
-  /** Highest live usage-stream counter observed for the watched run. Fills
-   * in when the row's outputTokens hasn't been rewritten yet (see above);
-   * attributed by chatRunId upstream, so it cannot be another run's. */
-  liveOutputTokens: number | null;
-  /** A terminal stamp changed while the claw was still up: some run's
-   * terminal (this one's early, or an interleaved older patch) already
-   * passed, so settle cannot attribute later stamps and must consume the
-   * watch. Without a run identity on session rows, every anomalous
-   * interleaving fails quiet instead of risking a wrong recap. */
-  absorbedTerminal: boolean;
-  /** First idle render after the indicator cleared; the watch expires a
-   * short window later so a canceled queued send (indicator shown, run
-   * never started) cannot hand its watch to a much-later background/cron
-   * completion. */
-  settleStartedAt: number | null;
-  settled: TurnRecap | null;
+// The pane owns one watched run. Session-wide usage is a different fact and
+// may still describe the previous response when the terminal row arrives.
+export type TurnRecapWatch = {
+  sessionKey: string;
+  agentId: string | null;
+  gatewayClient: GatewayBrowserClient | null;
+  runId: string;
+  recap: TurnRecap | null;
 };
 
-/** The watched run's terminal patch lands within moments of the indicator
- * clearing; anything arriving after this window is another run's. Accepted
- * residual: session rows carry no run identity, so an unrelated same-session
- * completion INSIDE this window (e.g. after a canceled queued send) can be
- * shown as the watched turn's recap. Closing that needs a terminal-row run
- * id from the gateway; until then the row is cosmetic and self-corrects on
- * the next turn. */
-const TURN_RECAP_SETTLE_WINDOW_MS = 30_000;
-
-const turnRecapWatchBySession = new Map<string, TurnRecapWatch>();
-
-type TurnRecapSessionRow = {
-  status?: string;
-  endedAt?: number;
-  runtimeMs?: number;
-  outputTokens?: number;
-};
-
-function rowOutputTokens(row: TurnRecapSessionRow | undefined): number | null {
-  return typeof row?.outputTokens === "number" ? row.outputTokens : null;
-}
-
-/** Post-turn recap for the bottom-of-thread status row. While the working
- * indicator is visible the session is "watched" (and any older recap hides);
- * once it settles, the first session row carrying a fresh terminal stamp
- * resolves the recap, which then sticks until the next run. Failed runs stay
- * quiet — the error surfaces own those. */
 export function resolveTurnRecap(
-  sessionKey: string,
-  indicatorVisible: boolean,
-  row: TurnRecapSessionRow | undefined,
-  liveOutputTokens: number | null = null,
-): TurnRecap | null {
-  const watch = turnRecapWatchBySession.get(sessionKey);
-  const rowEndedAt = typeof row?.endedAt === "number" ? row.endedAt : null;
-  if (watch && liveOutputTokens !== null && liveOutputTokens > (watch.liveOutputTokens ?? -1)) {
-    // Monotonic max: the usage map entry is dropped at lifecycle end, so the
-    // last counter seen while watching/settling is the run's final total.
-    watch.liveOutputTokens = liveOutputTokens;
+  host: { turnRecapWatch: TurnRecapWatch | null },
+  params: {
+    sessionKey: string;
+    agentId?: string | null;
+    gatewayClient?: GatewayBrowserClient | null;
+    indicator?: { runId?: string };
+    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
+    usageByRun?: ReadonlyMap<string, RunOutputUsage>;
+  },
+): (TurnRecap & { runId: string }) | null {
+  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
+  let watch = host.turnRecapWatch;
+  if (
+    watch?.sessionKey !== sessionKey ||
+    watch.agentId !== agentId ||
+    watch.gatewayClient !== gatewayClient
+  ) {
+    watch = null;
   }
-  if (indicatorVisible) {
-    if (!watch || !watch.watching) {
-      turnRecapWatchBySession.set(sessionKey, {
-        watching: true,
-        baselineKnown: row !== undefined,
-        baselineEndedAt: rowEndedAt,
-        baselineOutputTokens: rowOutputTokens(row),
-        liveOutputTokens,
-        absorbedTerminal: false,
-        settleStartedAt: null,
-        settled: null,
-      });
-    } else if (!watch.baselineKnown) {
-      if (row !== undefined) {
-        watch.baselineKnown = true;
-        watch.baselineEndedAt = rowEndedAt;
-        watch.baselineOutputTokens = rowOutputTokens(row);
-      }
-    } else if (rowEndedAt !== null && rowEndedAt !== watch.baselineEndedAt) {
-      watch.baselineEndedAt = rowEndedAt;
-      watch.absorbedTerminal = true;
+  if (indicator) {
+    const runId = indicator.runId;
+    if (!runId) {
+      host.turnRecapWatch = null;
+      return null;
     }
-    return null;
+    if (watch?.runId !== runId) {
+      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
+    }
   }
+  host.turnRecapWatch = watch;
   if (!watch) {
     return null;
   }
-  watch.watching = false;
-  if (watch.settled) {
-    return watch.settled;
+  const outputTokens =
+    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
+  if (row?.lastRunId === watch.runId) {
+    const runtimeMs = row.runtimeMs;
+    if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+      watch.recap = { runtimeMs, outputTokens };
+    } else if (row.status && row.status !== "done") {
+      watch.recap = null;
+    }
   }
-  if (watch.absorbedTerminal || !watch.baselineKnown) {
-    // See TurnRecapWatch: attribution is ambiguous, so this turn quietly
-    // gets no recap rather than freezing another run's numbers.
-    turnRecapWatchBySession.delete(sessionKey);
-    return null;
+  // Usage can arrive after terminal presentation. Keep accepting facts for
+  // this exact run without borrowing another run's session-row counters.
+  if (watch.recap && watch.recap.outputTokens !== outputTokens) {
+    watch.recap = { ...watch.recap, outputTokens };
   }
-  if (watch.settleStartedAt === null) {
-    watch.settleStartedAt = Date.now();
-  } else if (Date.now() - watch.settleStartedAt > TURN_RECAP_SETTLE_WINDOW_MS) {
-    turnRecapWatchBySession.delete(sessionKey);
-    return null;
-  }
-  const isStale =
-    rowEndedAt === null || (watch.baselineEndedAt !== null && rowEndedAt <= watch.baselineEndedAt);
-  if (isStale) {
-    // No terminal patch for the watched run yet; keep waiting (bounded by
-    // the settle window above). Stamps never regress, so <= is stale.
-    return null;
-  }
-  // A fresh terminal always concludes the watch: recap on a clean "done",
-  // quiet consume otherwise — waiting past it would let unrelated later
-  // completions attach to this turn.
-  turnRecapWatchBySession.delete(sessionKey);
-  const runtimeMs = row?.runtimeMs;
-  if (row?.status !== "done" || typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs)) {
-    return null;
-  }
-  // The terminal stamp and the usage persist are separate gateway writes, so
-  // this fresh-endedAt row can still carry the previous turn's outputTokens.
-  // An unchanged-from-baseline value is that lag: fall back to the watched
-  // run's live counter (or show none) rather than the stale number.
-  const rowTokens = rowOutputTokens(row);
-  const settled: TurnRecap = {
-    runtimeMs,
-    outputTokens:
-      rowTokens !== null && rowTokens !== watch.baselineOutputTokens
-        ? rowTokens
-        : watch.liveOutputTokens,
-  };
-  turnRecapWatchBySession.set(sessionKey, { ...watch, settled });
-  return settled;
+  return indicator || !watch.recap ? null : { ...watch.recap, runId: watch.runId };
 }

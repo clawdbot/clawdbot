@@ -10,7 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
-  initializeManagedWorktreeTestRepository,
+  useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
 
@@ -18,6 +18,7 @@ const execFileAsync = promisify(execFile);
 const GiB = 1024 ** 3;
 
 describe("ManagedWorktreeService capacity", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -46,7 +47,7 @@ describe("ManagedWorktreeService capacity", () => {
     root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-capacity-")),
     );
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     service = new ManagedWorktreeService({ env });
@@ -127,7 +128,7 @@ describe("ManagedWorktreeService capacity", () => {
 
   it("serializes distinct repositories competing for the thirtieth checkout", async () => {
     await fill(29);
-    const otherRepo = await initializeManagedWorktreeTestRepository(path.join(root, "other"));
+    const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({ env });
     const outcomes = await Promise.allSettled([
       service.create({ repoRoot: repo, name: "last-one", baseRef: "HEAD" }),

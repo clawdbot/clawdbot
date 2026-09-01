@@ -241,7 +241,7 @@ describe("worker environment service provision replay", () => {
           setupCode: "setup-code",
           setupId: enrolled.nodeSetupId!,
           openclawVersion: "2026.8.19",
-          packageSpecs: ["openclaw@2026.8.19"],
+          nodeBootstrap: { ...support.NODE_BOOTSTRAP, openclawVersion: "2026.8.19" },
           displayName: "Cloud worker replay",
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };
@@ -288,6 +288,7 @@ describe("worker environment service provision replay", () => {
       runActivationBarrier: activationBarrier,
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       resolveWorkspacePath: async () => "/gateway/workspace",

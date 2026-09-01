@@ -9,6 +9,24 @@ checkout_prep_branch() {
   git checkout "$prep_branch"
 }
 
+resolve_pr_author_access_at_prepare() {
+  local author="$1" repo_nwo response permission
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || {
+    printf 'unknown\n'
+    return
+  }
+  if response=$(gh api "repos/$repo_nwo/collaborators/$author/permission" 2>/dev/null) &&
+    permission=$(printf '%s\n' "$response" | jq -er '.permission | select(type == "string")' 2>/dev/null); then
+    case "$permission" in
+      admin | write) printf 'maintainer\n' ;;
+      read | none) printf 'external\n' ;;
+      *) printf 'unknown\n' ;;
+    esac
+  else
+    printf 'unknown\n'
+  fi
+}
+
 refresh_prep_branch_for_reviewed_head() {
   local pr="$1"
   require_artifact .local/pr-meta.env
@@ -20,6 +38,7 @@ refresh_prep_branch_for_reviewed_head() {
   local prepared_head_ref="${PR_HEAD:-}"
   local recorded_source_head="${PR_HEAD_SHA_BEFORE:-}"
   local prep_branch="${PREP_BRANCH:-pr-$pr-prep}"
+  local author_access_at_prep="${PR_AUTHOR_ACCESS_AT_PREP:-unknown}"
 
   # shellcheck disable=SC1091
   source .local/pr-meta.env
@@ -66,6 +85,7 @@ refresh_prep_branch_for_reviewed_head() {
     PR_HEAD "$reviewed_head_ref" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "$prep_branch" \
+    PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
@@ -149,6 +169,8 @@ prepare_init() {
 
   local json
   json=$(pr_meta_json "$pr")
+  local author_access_at_prep
+  author_access_at_prep=$(resolve_pr_author_access_at_prepare "${PR_AUTHOR:-}")
 
   local head
   head=$(printf '%s\n' "$json" | jq -r .headRefName)
@@ -179,6 +201,7 @@ prepare_init() {
     PR_HEAD "$reviewed_head" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
+    PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
@@ -320,6 +343,8 @@ EOF_PREP
     PREP_HEAD_SHA "$prep_head_sha" \
     LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PREP_MAINLINE_BASE_SHA "$mainline_base_sha" \
+    PREP_REPLACED_HOSTED_ANCESTRY "$PUSH_REPLACED_HOSTED_ANCESTRY" \
+    PREP_AUTHOR_ACCESS "${PR_AUTHOR_ACCESS_AT_PREP:-unknown}" \
     COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 
@@ -400,6 +425,8 @@ EOF_PREP
     PREP_HEAD_SHA "$prep_head_sha" \
     LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PREP_MAINLINE_BASE_SHA "$mainline_base_sha" \
+    PREP_REPLACED_HOSTED_ANCESTRY "$PUSH_REPLACED_HOSTED_ANCESTRY" \
+    PREP_AUTHOR_ACCESS "${PR_AUTHOR_ACCESS_AT_PREP:-unknown}" \
     COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 

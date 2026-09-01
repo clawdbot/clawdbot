@@ -3,11 +3,10 @@
  * keeps per-agent auth snapshots process-current so model listing can avoid
  * repeated env/profile/plugin discovery on hot paths.
  */
-import { Worker } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { toErrorObject } from "../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -50,7 +49,7 @@ import {
 import { normalizeProviderId } from "./model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
-type ProviderAuthWarmWorkerResult =
+export type ProviderAuthWarmWorkerResult =
   | {
       status: "ok";
       snapshot: ProviderAuthWarmSnapshot;
@@ -70,15 +69,20 @@ type ProviderAuthWarmRuntimeAuthLookup = {
   lookup: RuntimeProviderAuthLookup;
 };
 
-type ProviderAuthWarmWorkerRunner = (params: {
+export type ProviderAuthWarmWorkerInput = {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
   runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
   omitFalseProviderAuth?: boolean;
-  timeoutMs: number;
-  isCancelled: () => boolean;
-  workerUrl?: URL;
-}) => Promise<ProviderAuthWarmSnapshot>;
+};
+
+type ProviderAuthWarmWorkerRunner = (
+  params: ProviderAuthWarmWorkerInput & {
+    timeoutMs: number;
+    isCancelled: () => boolean;
+    workerUrl?: URL;
+  },
+) => Promise<ProviderAuthWarmSnapshot>;
 
 const PROVIDER_AUTH_WARM_WORKER_TIMEOUT_MS = 120_000;
 const PROVIDER_AUTH_WARM_CANCEL_POLL_MS = 25;
@@ -585,15 +589,7 @@ function collectProviderAuthWarmRuntimeAuthLookups(cfg: OpenClawConfig): {
   return { entries, omitFalseProviderAuth };
 }
 
-function runProviderAuthWarmWorker(params: {
-  cfg: OpenClawConfig;
-  runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
-  runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
-  omitFalseProviderAuth?: boolean;
-  timeoutMs: number;
-  isCancelled: () => boolean;
-  workerUrl?: URL;
-}): Promise<ProviderAuthWarmSnapshot> {
+const runProviderAuthWarmWorker: ProviderAuthWarmWorkerRunner = async (params) => {
   const workerUrl =
     params.workerUrl ??
     resolveRuntimeWorkerUrl({
@@ -601,101 +597,60 @@ function runProviderAuthWarmWorker(params: {
       sourceWorkerName: "model-provider-auth.worker",
       distWorkerPath: "agents/model-provider-auth.worker.js",
     });
-  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
-  const worker = new Worker(workerUrl, {
-    workerData: {
-      cfg: params.cfg,
-      ...(params.runtimeAuthStores?.length ? { runtimeAuthStores: params.runtimeAuthStores } : {}),
-      ...(params.runtimeAuthLookups?.length
-        ? { runtimeAuthLookups: params.runtimeAuthLookups }
-        : {}),
-      ...(params.omitFalseProviderAuth ? { omitFalseProviderAuth: true } : {}),
-    },
-    execArgv: sourceWorkerExecArgv,
+  // Auth preparation owns process-local catalog caches, so each warm generation gets its own pool.
+  const pool = new WorkerTaskPool<ProviderAuthWarmWorkerInput, ProviderAuthWarmWorkerResult>({
+    workerUrl,
+    maxWorkers: 1,
   });
-  worker.unref?.();
-  const handle = {
-    worker,
-    cancelled: false,
-  };
+  const handle = new AbortController();
   setCurrentProviderAuthWarmWorker(handle);
-  return new Promise<ProviderAuthWarmSnapshot>((resolve, reject) => {
-    let settled = false;
-    const finish = (complete: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearCurrentProviderAuthWarmWorker(handle);
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (cancelTimer) {
-        clearInterval(cancelTimer);
-      }
-      complete();
-    };
-    const cancelWorker = () => {
-      handle.cancelled = true;
-      void worker.terminate();
-      finish(() => resolve({ agents: [] }));
-    };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-      handle.cancelled = true;
-      void worker.terminate();
-      finish(() => reject(new Error("provider auth warm worker timed out")));
-    }, params.timeoutMs);
-    timer.unref?.();
-    const cancelTimer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
-      if (params.isCancelled()) {
-        cancelWorker();
-      }
-    }, PROVIDER_AUTH_WARM_CANCEL_POLL_MS);
-    cancelTimer.unref?.();
-    worker.once("message", (message: unknown) => {
-      void worker.terminate();
-      finish(() => {
-        if (handle.cancelled) {
-          resolve({ agents: [] });
-          return;
-        }
-        if (!isProviderAuthWarmWorkerResult(message)) {
-          reject(new Error("invalid provider auth warm worker response"));
-          return;
-        }
-        if (message.status === "failed") {
-          reject(new Error(message.error));
-          return;
-        }
-        resolve(message.snapshot);
-      });
-    });
-    worker.once("error", (error) => {
-      finish(() => {
-        if (handle.cancelled) {
-          resolve({ agents: [] });
-          return;
-        }
-        reject(toErrorObject(error, "Non-Error rejection"));
-      });
-    });
-    worker.once("exit", (code) => {
-      if (settled || code === 0) {
-        return;
-      }
-      finish(() => {
-        if (handle.cancelled) {
-          resolve({ agents: [] });
-          return;
-        }
-        reject(new Error(`provider auth warm worker exited with code ${code}`));
-      });
-    });
+  const cancelTimer = setInterval(() => {
     if (params.isCancelled()) {
-      cancelWorker();
+      handle.abort();
     }
-  });
-}
+  }, PROVIDER_AUTH_WARM_CANCEL_POLL_MS);
+  cancelTimer.unref();
+  try {
+    if (params.isCancelled()) {
+      handle.abort();
+    }
+    const message = await pool.run(
+      {
+        cfg: params.cfg,
+        ...(params.runtimeAuthStores?.length
+          ? { runtimeAuthStores: params.runtimeAuthStores }
+          : {}),
+        ...(params.runtimeAuthLookups?.length
+          ? { runtimeAuthLookups: params.runtimeAuthLookups }
+          : {}),
+        ...(params.omitFalseProviderAuth ? { omitFalseProviderAuth: true } : {}),
+      },
+      { timeoutMs: params.timeoutMs, signal: handle.signal },
+    );
+    if (handle.signal.aborted || params.isCancelled()) {
+      return { agents: [] };
+    }
+    if (!isProviderAuthWarmWorkerResult(message)) {
+      throw new Error("invalid provider auth warm worker response");
+    }
+    if (message.status === "failed") {
+      throw new Error(message.error);
+    }
+    return message.snapshot;
+  } catch (error) {
+    if (handle.signal.aborted) {
+      return { agents: [] };
+    }
+    if (error instanceof WorkerTaskError && error.code === "timeout") {
+      throw new Error("provider auth warm worker timed out", { cause: error });
+    }
+    throw error;
+  } finally {
+    clearInterval(cancelTimer);
+    clearCurrentProviderAuthWarmWorker(handle);
+    await pool.close();
+  }
+};
 
 /** Warms process-current provider auth state in a worker thread. */
 export async function warmCurrentProviderAuthStateOffMainThread(

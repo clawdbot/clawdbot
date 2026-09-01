@@ -1,54 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  ERROR_ICON_PREFIX_RE,
-  ERROR_ICON_TOKEN,
-  ERROR_TEXT_PREFIX_RE,
-  formatWebUiIconErrorText,
-  normalizeErrorComparisonText,
-} from "./error-presentation.ts";
+import { formatWebUiIconErrorText, normalizeErrorComparisonText } from "./error-presentation.ts";
 
 describe("error-presentation", () => {
-  describe("ERROR_ICON_PREFIX_RE", () => {
-    it("matches a single glyph prefix", () => {
-      expect("⚠️ hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-    });
-
-    it("matches multi-glyph repeated icon prefixes", () => {
-      expect("⚠️⚠️ hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("⚠️ ⚠️ hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("⚠️  ⚠️  hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("⚠️⚠️⚠️ hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-    });
-
-    it("matches variation-selector prefixes", () => {
-      expect("⚠️\uFE0F hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("⚠️\uFE0F ⚠️ hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("\u26A0 hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("\u26A0\uFE0F hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-      expect("\u26A0\uFE0F\uFE0F hello".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello");
-    });
-
-    it("preserves body emoji", () => {
-      expect("⚠️ hello ⚠️ world".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello ⚠️ world");
-      expect("⚠️ hello \u26A0 world".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello \u26A0 world");
-      expect("hello ⚠️ world".replace(ERROR_ICON_PREFIX_RE, "")).toBe("hello ⚠️ world");
-    });
-  });
-
-  describe("ERROR_TEXT_PREFIX_RE", () => {
-    it("matches a single Error: prefix case-insensitively", () => {
-      expect("Error: foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-      expect("error: foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-      expect("ERROR: foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-    });
-
-    it("matches repeated Error: prefixes", () => {
-      expect("Error: Error: foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-      expect("Error: error: Error: foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-      expect("Error:  Error:   foo".replace(ERROR_TEXT_PREFIX_RE, "")).toBe("foo");
-    });
-  });
-
   describe("normalizeErrorComparisonText", () => {
     it("strips multi-glyph icon prefixes", () => {
       expect(normalizeErrorComparisonText("⚠️ hello")).toBe("hello");
@@ -104,25 +57,26 @@ describe("error-presentation", () => {
   });
 
   describe("formatWebUiIconErrorText", () => {
-    it("prefixes plain text with the icon token", () => {
-      expect(formatWebUiIconErrorText("hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
+    it("preserves plain text", () => {
+      expect(formatWebUiIconErrorText("hello")).toBe("hello");
     });
 
-    it("normalizes already-prefixed text to a single token", () => {
-      expect(formatWebUiIconErrorText("⚠️ hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
-      expect(formatWebUiIconErrorText("⚠️⚠️ hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
-      expect(formatWebUiIconErrorText("⚠️\uFE0F hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
-      expect(formatWebUiIconErrorText("⚠️ ⚠️ hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
+    it("removes leading presentation glyphs only", () => {
+      expect(formatWebUiIconErrorText("⚠️ hello")).toBe(" hello");
+      expect(formatWebUiIconErrorText("⚠️⚠️ hello")).toBe(" hello");
+      expect(formatWebUiIconErrorText("⚠️\uFE0F hello")).toBe(" hello");
+      expect(formatWebUiIconErrorText("⚠️ ⚠️ hello")).toBe("  hello");
+      expect(formatWebUiIconErrorText("⛔ 🛠️ Failure")).toBe("  Failure");
     });
 
-    it("normalizes Error: prefixed text to icon prefix", () => {
-      expect(formatWebUiIconErrorText("Error: hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
-      expect(formatWebUiIconErrorText("Error: Error: hello")).toBe(`${ERROR_ICON_TOKEN} hello`);
+    it("preserves leading Error text prefixes", () => {
+      expect(formatWebUiIconErrorText("Error: hello")).toBe("Error: hello");
+      expect(formatWebUiIconErrorText("Error: Error: hello")).toBe("Error: Error: hello");
     });
 
     it("preserves body emoji", () => {
-      expect(formatWebUiIconErrorText("hello ⚠️ world")).toBe(`${ERROR_ICON_TOKEN} hello ⚠️ world`);
-      expect(formatWebUiIconErrorText("⚠️ hello ⚠️ world")).toBe(`${ERROR_ICON_TOKEN} hello ⚠️ world`);
+      expect(formatWebUiIconErrorText("hello ⚠️ world")).toBe("hello ⚠️ world");
+      expect(formatWebUiIconErrorText("⚠️ hello ⚠️ world")).toBe(" hello ⚠️ world");
     });
   });
 });

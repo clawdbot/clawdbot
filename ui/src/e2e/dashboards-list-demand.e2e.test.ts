@@ -1,9 +1,9 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 // Control UI E2E proves dashboard tabs do not multiply server-owned session-list demand.
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
@@ -61,8 +61,7 @@ async function requestCounts(gateways: MockGatewayControls[]) {
 
 suite.define(() => {
   it("shows failed dashboard refreshes beside retained rows and retries the same query", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/dashboard-refresh-errors");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("dashboard-refresh-errors");
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1440 } });
     const page = await context.newPage();
     try {

@@ -69,6 +69,8 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+For a [managed GitHub identity](/gateway/config-tools#toolsgithub), `gateway_exec` uses OpenClaw's private local process-launch credential binding. Native Codex shell instead receives only the non-secret `GH_CONFIG_DIR` and token-clearing overlay; a missing or tokenless profile can still let GitHub CLI fall back to the OS keyring. Status and Gateway-owned publication guarantees do not cover that native shell path. Use `gateway_exec` when launch-bound managed GitHub credentials are required.
+
 ## Recovery after a hard Gateway stop
 
 On POSIX systems, OpenClaw checks for registered orphaned Codex app-server
@@ -92,14 +94,24 @@ or discover descendants that independently reparented before inspection.
 
 Linux reads process identities directly from `/proc`, including the boot ID
 and process start ticks, so Alpine/BusyBox installations do not need `procps`.
-macOS uses its native `ps` with a fixed locale and timezone.
+During Linux startup, an empty command line waits within the existing inspection
+deadline while the same live process identity remains valid. Registration still
+requires a usable command fingerprint; unreadable or changed identities fail.
+macOS uses its native `ps` with a fixed locale and timezone. Registration checks
+inspect only the observer and the relevant parent and child processes; an
+unrelated unreadable process does not block those checks. Destructive cleanup
+still requires full process-tree inspection and fresh identity checks before
+signaling.
 
-If process inspection or bounded cleanup cannot confirm that the registered
-orphan is gone, the new stdio connection fails instead of spawning another
-child. Follow the reported action: check `/proc` access on Linux or `ps` on
-macOS, or verify and stop
-the reported orphan process, then retry. If the cleanup budget expires, retry
-to finish the remaining registrations.
+If a required process cannot be inspected or bounded cleanup cannot confirm that
+the registered orphan is gone, the new stdio connection fails instead of spawning
+another child. Follow the reported reason: a deadline failure calls for checking
+host load and Gateway logs, while an access-denied failure calls for checking
+`/proc` access on Linux or `ps` permissions on macOS. Other inspection failures
+require checking that the process-inspection facility is available and returning
+usable data. Do not broaden permissions to address a timeout. If cleanup cannot
+stop a verified orphan, inspect and stop that process before retrying. If the
+cleanup budget expires, retry to finish the remaining registrations.
 
 This recovery requires a spawn-time registration. It does not discover
 unregistered children left by an older OpenClaw version or scan command names
@@ -134,14 +146,15 @@ approvals.
 For a stored or idle session on the Gateway computer, **Continue as branch**
 creates a normal, model-locked Chat and mirrors bounded user and assistant
 history through the source's last terminal persisted turn. The first normal
-Chat turn installs the real approval handlers and uses a temporary native fork
+Chat turn installs the real approval handlers and uses an ephemeral native fork
 to pin the snapshot without a model or provider override. Codex App Server uses
 its current native configuration and returns the selected pair; it emits its
 normal warning if that model differs from the source's last recorded model.
-On the same supervision connection, OpenClaw starts the canonical
+OpenClaw confirms the fork's subscription is released before starting the canonical
 `appServer`-source Codex harness thread under its cwd and runtime policy with
-exactly the returned model and provider for that initial start, injects the
-bounded visible history, and archives the temporary fork. The source is never
+exactly the returned model and provider for that initial start. It then injects the
+bounded visible history and commits the binding on the same supervision connection.
+The probe is never persisted or archived. The source is never
 resumed. The canonical thread has the full OpenClaw harness tool surface;
 reasoning, tool calls, and tool results from the source are not cloned into it.
 The private connection scope survives pending and committed binding states, so
@@ -448,6 +461,14 @@ and can retry on a fresh client. Client closure, request cancellation, or a
 failed compaction turn returns a failed operation. Automatic context-pressure
 compaction is Codex's job; OpenClaw only starts native compaction for manually
 requested triggers.
+
+When OpenClaw projects an existing session's continuity into a fresh Codex
+thread, it includes saved compaction and branch summaries, even when no
+earlier user messages remain. Context-engine projections preserve those
+summary entries too. Summaries stay quoted as prior context, separate from
+the current request, and remain subject to the projection's size limits;
+oversized summaries or older context can be truncated. This handoff does not
+change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result

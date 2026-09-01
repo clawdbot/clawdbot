@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { persistSessionTranscriptTurn, readTranscriptStatsSync } from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
+  readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptVisibleMessageDeltaCore,
@@ -55,6 +56,15 @@ const readers: Array<
         maxBytes: 1024,
         maxMessages: 10,
         offset: 0,
+      }),
+  ],
+  [
+    "recent usage tail",
+    (scope) =>
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1024,
+        maxLines: 10,
+        maxMessages: 10,
       }),
   ],
   [
@@ -193,5 +203,40 @@ it.each(["incoming", "stored"])(
     } finally {
       db.close();
     }
+  },
+);
+
+it.each([false, true])(
+  "keeps a contiguous usage tail with newest oversized=%s",
+  async (oversized) => {
+    await withOpenClawTestState({ label: "usage-tail-budget" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        env: state.env,
+        sessionId: "usage-tail",
+        sessionKey: "agent:main:usage-tail",
+      };
+      await persistSessionTranscriptTurn(scope, {
+        messages: ["old", "large", "new"].map((eventId, index, ids) => ({
+          eventId,
+          parentId: ids[index - 1] ?? null,
+          message: {
+            role: "assistant",
+            content:
+              eventId === "large" || (oversized && eventId === "new") ? "🦞".repeat(1024) : eventId,
+          },
+        })),
+        touchSessionEntry: false,
+      });
+      const page = readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1024,
+        maxLines: 10,
+        maxMessages: 10,
+      });
+      expect(page.totalMessages).toBe(3);
+      expect(page.events).toEqual([
+        expect.objectContaining({ event: expect.objectContaining({ id: "new" }) }),
+      ]);
+    });
   },
 );

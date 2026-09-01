@@ -16,6 +16,7 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionParticipant } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -50,6 +51,7 @@ export type GatewaySessionsDefaults = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
+  modelSelectionTarget?: StickyModelSelectionTarget;
 };
 
 type SubagentRunState = "active" | "interrupted" | "historical";
@@ -81,6 +83,7 @@ export type GatewaySessionRow = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  permissionModePending?: boolean;
   sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];

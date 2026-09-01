@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import {
   createManagedPluginArtifactConsentHandler,
-  resolvePluginArtifactDeclaredSurface,
   resolvePluginCapabilityConsent,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
@@ -17,6 +17,7 @@ import {
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -85,8 +86,12 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache, inspectManagedPlugin, setManagedPluginEnabled } =
-  await import("./management-service.js");
+const {
+  clearManagedPluginOfficialCatalogCache,
+  inspectManagedPlugin,
+  listManagedPlugins,
+  setManagedPluginEnabled,
+} = await import("./management-service.js");
 
 const trackedArtifactDirs: string[] = [];
 
@@ -168,6 +173,165 @@ describe("managed plugin capability consent", () => {
       resolvePluginCapabilityConsent({ config: {}, env: {}, pluginId: "workboard" }),
     ).resolves.toBeUndefined();
     expect(mocks.writeRecords).not.toHaveBeenCalled();
+  });
+
+  function officialArtifact() {
+    const rootDir = makeTrackedTempDir("official-capability-consent", trackedArtifactDirs);
+    createColdPluginFixture({
+      rootDir,
+      pluginId: "diffs",
+      packageName: "@openclaw/diffs",
+      manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+    });
+    return rootDir;
+  }
+
+  const officialSources: PluginInstallRecord[] = [
+    {
+      source: "npm",
+      spec: "@openclaw/diffs@1.0.0",
+      resolvedName: "@openclaw/diffs",
+      resolvedSpec: "@openclaw/diffs@1.0.0",
+      integrity: "sha512-official-artifact",
+    },
+    {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/diffs@1.0.0",
+      clawhubPackage: "@openclaw/diffs",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubChannel: "official",
+      integrity: "sha256-official-artifact",
+    },
+  ];
+
+  it.each(officialSources)(
+    "installs verified official $source artifacts without recording operator acceptance",
+    async (sourceRecord) => {
+      const rootDir = officialArtifact();
+      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>();
+      const handler = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: sourceRecord.source,
+        spec: sourceRecord.spec,
+        onCapabilityConsent,
+      });
+      await expect(
+        handler.onBeforePluginArtifactCommit({
+          pluginId: "diffs",
+          stagedArtifactDir: rootDir,
+          mode: "install",
+          sourceRecord,
+        }),
+      ).resolves.toBeUndefined();
+      expect(onCapabilityConsent).not.toHaveBeenCalled();
+      expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toEqual(sourceRecord);
+    },
+  );
+
+  it.each([
+    { name: "unverified catalog name", sourceRecord: undefined },
+    {
+      name: "local npm archive",
+      sourceRecord: { ...officialSources[0]!, artifactKind: "npm-pack" as const },
+    },
+    {
+      name: "conflicting registry identity",
+      sourceRecord: { ...officialSources[0]!, resolvedName: "@vendor/diffs" },
+    },
+    {
+      name: "custom ClawHub server",
+      sourceRecord: { ...officialSources[1]!, clawhubUrl: "https://plugins.example" },
+    },
+    {
+      name: "community ClawHub release",
+      sourceRecord: { ...officialSources[1]!, clawhubChannel: "community" as const },
+    },
+  ])("requires review for $name", async ({ sourceRecord }) => {
+    const handler = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: sourceRecord?.source ?? "npm",
+      spec: sourceRecord?.spec ?? "@openclaw/diffs",
+    });
+    await expect(
+      handler.onBeforePluginArtifactCommit({
+        pluginId: "diffs",
+        stagedArtifactDir: officialArtifact(),
+        mode: "install",
+        sourceRecord,
+      }),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
+  });
+
+  it("rechecks first-party package identity after the commit guard yields", async () => {
+    const rootDir = officialArtifact();
+    const handler = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "npm",
+      beforePersistentEffect: async () => {
+        const packagePath = path.join(rootDir, "package.json");
+        const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+        fs.writeFileSync(packagePath, JSON.stringify({ ...manifest, name: "@vendor/diffs" }));
+      },
+    });
+    await expect(
+      handler.onBeforePluginArtifactCommit({
+        pluginId: "diffs",
+        stagedArtifactDir: rootDir,
+        mode: "install",
+        sourceRecord: officialSources[0],
+      }),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
+  });
+
+  it("does not carry a first-party exemption into an unverified fallback stage", async () => {
+    const rootDir = officialArtifact();
+    const handler = createManagedPluginArtifactConsentHandler({ config: {}, source: "npm" });
+    const artifact = { pluginId: "diffs", stagedArtifactDir: rootDir, mode: "install" as const };
+    await handler.onBeforePluginArtifactCommit({ ...artifact, sourceRecord: officialSources[0] });
+    await expect(handler.onBeforePluginArtifactCommit(artifact)).rejects.toMatchObject({
+      capabilityConsent: { pluginId: "diffs" },
+    });
+    expect(() => handler.applyAcceptedSurface("diffs", officialSources[0]!)).toThrow(
+      "did not expose its verified artifact",
+    );
+  });
+
+  it("enables and reports a verified official install without legacy acceptance", async () => {
+    const rootDir = officialArtifact();
+    const record = { ...officialSources[0]!, installPath: rootDir };
+    const config = {
+      plugins: { load: { paths: [rootDir] }, entries: { diffs: { enabled: true } } },
+    };
+    const env = {
+      HOME: rootDir,
+      OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+    };
+    const { index, manifestRegistry } = loadInstalledPluginIndexWithDiscovery({
+      config,
+      env,
+      installRecords: { diffs: record },
+    });
+    const byPluginId = new Map(manifestRegistry.plugins.map((manifest) => [manifest.id, manifest]));
+    const metadata = {
+      index,
+      byPluginId,
+      plugins: manifestRegistry.plugins,
+      diagnostics: manifestRegistry.diagnostics,
+      normalizePluginId: (pluginId: string) => pluginId,
+    };
+    mocks.records = { diffs: record };
+    mocks.metadata.mockReturnValue(metadata);
+    await expect(
+      resolvePluginCapabilityConsent({ config, env, pluginId: "diffs" }),
+    ).resolves.toBeUndefined();
+    expect(mocks.writeRecords).not.toHaveBeenCalled();
+    expect(collectPluginCapabilityConsentDiagnostics({ index, manifests: byPluginId })).toEqual([]);
+    const catalog = await listManagedPlugins({ config, env });
+    expect(catalog.diagnostics).not.toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("requires capability consent") }),
+    );
   });
 
   it("rejects enabling an unaccepted plugin with only its reviewed-surface challenge", async () => {

@@ -19,10 +19,10 @@ const pairingDeliveryMocks = vi.hoisted(() => ({
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
-  // Mention-kind construction is pure and part of the behavior under test, so it
-  // comes from the real module rather than a stub.
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => ({
+  // Keep mention facts real without loading the inbound execution lifecycle.
+  implicitMentionKindWhen: (await import("openclaw/plugin-sdk/channel-mention-gating"))
+    .implicitMentionKindWhen,
   buildMentionRegexes: () => [],
   isChannelPartialDeliveryError: (error: unknown) =>
     Boolean(
@@ -189,7 +189,10 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
-vi.mock("./bot-message-context.js", () => ({
+vi.mock("./bot-message-context.js", async (importOriginal) => ({
+  // Reading a LINE text body is pure and is part of the behavior these tests
+  // exercise, so it comes from the real module rather than a stub.
+  ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
   getLineSourceInfo: (source: {
@@ -261,6 +264,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
@@ -272,7 +276,10 @@ function createLineWebhookTestContext(params: {
   return {
     cfg: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
-      channels: { line: lineConfig },
+      channels: {
+        line: lineConfig,
+        defaults: { implicitMentions: params.implicitMentions },
+      },
     },
     account: {
       accountId: "default",
@@ -882,7 +889,16 @@ describe("handleLineWebhookEvents", () => {
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
-          message: { id: "m-hist-1", type: "text", text: "first", quoteToken: "q-hist-1" },
+          message: {
+            id: "m-hist-1",
+            type: "text",
+            text: "() (hello)",
+            quoteToken: "q-hist-1",
+            emojis: [
+              { index: 0, length: 2, productId: "emoji-set", emojiId: "1" },
+              { index: 3, length: 7, productId: "emoji-set", emojiId: "2" },
+            ],
+          },
           timestamp: 1700000000000,
           source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
           webhookEventId: "evt-hist-1",
@@ -899,7 +915,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(groupHistories.get("group-hist-1")).toEqual([
-      expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+      expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
       expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
     ]);
 
@@ -924,7 +940,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         inboundHistory: [
-          expect.objectContaining({ sender: "Sora (user-one)", body: "first" }),
+          expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
           expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
         ],
       }),
@@ -1218,20 +1234,38 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
-  it("processes a group message that quotes the bot's own message when requireMention is set", async () => {
+  it.each([
+    { name: "default quote policy", quotedBot: undefined, mentioned: false, dispatched: true },
+    { name: "enabled quote policy", quotedBot: true, mentioned: false, dispatched: true },
+    { name: "disabled quote policy", quotedBot: false, mentioned: false, dispatched: false },
+    {
+      name: "explicit mention with quotes disabled",
+      quotedBot: false,
+      mentioned: true,
+      dispatched: true,
+    },
+  ])("respects $name for a quote of the bot", async ({ quotedBot, mentioned, dispatched }) => {
     const processMessage = vi.fn();
-    // The id LINE returns for a push is the id a later quote points at.
-    recordLineSentMessages("default", ["m-bot-sent-1"]);
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    recordLineSentMessages("default", ["m-bot-quote-policy"]);
+    const text = mentioned ? "@Bot explain this" : "does quoting you count as addressing you";
     const event = createTestMessageEvent({
       message: {
-        id: "m-quote-1",
+        id: "m-quote-policy",
         type: "text",
-        text: "does quoting you count as addressing you",
-        quotedMessageId: "m-bot-sent-1",
-        quoteToken: "q-quote-1",
+        text,
+        quotedMessageId: "m-bot-quote-policy",
+        quoteToken: "q-quote-policy",
+        ...(mentioned
+          ? {
+              mention: {
+                mentionees: [{ index: 0, length: 4, type: "user" as const, isSelf: true }],
+              },
+            }
+          : {}),
       },
       source: { type: "group", groupId: "group-quote", userId: "user-quote" },
-      webhookEventId: "evt-quote-1",
+      webhookEventId: "evt-quote-policy",
     });
 
     await handleLineWebhookEvents(
@@ -1240,10 +1274,16 @@ describe("handleLineWebhookEvents", () => {
         processMessage,
         groupPolicy: "open",
         requireMention: true,
+        implicitMentions: { quotedBot },
+        groupHistories,
       }),
     );
 
-    expect(processMessage).toHaveBeenCalled();
+    expect.soft(processMessage).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+    expect.soft(buildLineMessageContextMock).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+    expect(groupHistories.get("group-quote") ?? []).toEqual(
+      dispatched ? [] : [expect.objectContaining({ sender: "user-quote", body: text })],
+    );
   });
 
   it("skips a group message quoting a message the bot did not send", async () => {

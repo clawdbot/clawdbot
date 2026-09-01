@@ -191,6 +191,7 @@ register a small wrapper backend plugin.
 - `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`, and `input: "stdin"`. The owning Anthropic plugin keeps one official Agent SDK query and Claude Code subprocess warm for compatible consecutive agent turns. If the gateway restarts or the idle process exits, OpenClaw resumes from the stored Claude session id. Stored session ids are verified against a readable project transcript before resume; a missing transcript clears the binding (logged as `reason=transcript-missing`) instead of silently starting a fresh session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. Automatic reset is disabled by default; `/reset` and explicit daily or idle `session.reset` policies still cut them.
 - Fresh CLI sessions normally reseed from OpenClaw's latest compaction summary, the messages retained by that compaction, and subsequent turns on the active branch. OpenClaw reads this history from the canonical session SQLite database; it does not require an OpenClaw JSONL transcript file. To recover short sessions invalidated before compaction, a backend can opt in with `reseedFromRawTranscriptWhenUncompacted: true`. Raw transcript reseed stays bounded and limited to safe invalidations, such as a missing CLI transcript, an orphaned tool-use tail, message-policy/system-prompt/cwd/MCP changes, or a session-expired retry; auth profile or credential-epoch changes never reseed raw transcript history.
+- Helper runs with a caller-owned in-memory transcript use that history for hooks and fresh-session reseeding, including meaningful history before compaction. Empty memory stays empty even when the run carries another session's storage identity. Context-engine maintenance rewrites that same memory before the helper returns, even when the engine requests background maintenance. Durable transcripts retain their background maintenance path. An explicitly owned native CLI binding can still resume; resumed turns send the current prompt without injecting the memory history again.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes, including a changed auth profile id, static API key, static token, or OAuth account identity when the CLI exposes one; OAuth access/refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
 
@@ -342,6 +343,25 @@ When bundle MCP is enabled, OpenClaw:
 - binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers;
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
+
+`tools.allow` and `tools.deny` also constrain configured native MCP servers.
+OpenClaw lists each server through its session-scoped runtime, assigns the same
+provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
+and applies the complete layered policy before process spawn or Codex
+`thread/start`/`thread/resume`. It then projects exact raw names into each
+backend's enforcement contract: Claude receives server omission plus bare
+`--disallowedTools` entries, Codex receives `enabled_tools` and
+`disabled_tools`, and Gemini receives `includeTools` and `excludeTools`.
+Configured server filters and session overrides remain additional
+restrictions. These backend fields are generated implementation details; keep
+operator policy in OpenClaw configuration.
+
+For example, `agents.entries.research.tools.allow: ["docs__read_docs"]`
+exposes only that tool from the safe `docs` namespace, while
+`deny: ["docs__delete_*"]` removes matching siblings. An empty intersection
+omits the affected MCP server. A server whose restrictive catalog cannot be
+established is also omitted and reported instead of being passed through
+unfiltered.
 
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's

@@ -290,20 +290,16 @@ inside every shard.
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
     scenarios.
-  - Uses the same Telegram env credentials or Convex credential source as
-    `pnpm openclaw qa telegram`. For CI/release automation, set
-    `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
-    `OPENCLAW_QA_CONVEX_SITE_URL` and a role secret. If
-    `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in
-    CI, the Docker wrapper selects Convex automatically.
-  - The wrapper validates Telegram or Convex credential env on the host
-    before Docker build/install work. Set
+  - Uses the same Convex-leased Test Server userbot credentials as
+    `pnpm openclaw qa telegram`. Set `OPENCLAW_QA_CONVEX_SITE_URL` and the
+    secret for the selected role. The Docker wrapper selects Convex by default.
+  - The wrapper validates Convex credential env on the host before Docker
+    build/install work. Set
     `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1` only when
     deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the
-    shared `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. When Convex
-    credentials are selected and no role is set, the wrapper uses `ci` in CI
-    and `maintainer` outside CI.
+    shared `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. With no role, the
+    wrapper uses `ci` in CI and `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases. Set its
@@ -432,15 +428,11 @@ gh workflow run package-acceptance.yml --ref main \
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
     [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
-  - Runs the Telegram live QA lane against a real private group using the
-    driver and SUT bot tokens from env.
-  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
-    `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
-    `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric
-    Telegram chat id.
-  - Supports `--credential-source convex` for shared pooled credentials.
-    Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
-    to opt into pooled leases.
+  - Runs the Telegram live QA lane on Telegram's Test Server with one
+    Convex-leased SUT bot and one independent TDLib user session.
+  - Uses `--credential-source convex` by default and rejects `env`. Provide
+    `OPENCLAW_QA_CONVEX_SITE_URL` and the secret for the selected
+    `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
     `mock-openai` defaults also cover deterministic reply-chain and
@@ -448,11 +440,8 @@ gh workflow run package-acceptance.yml --ref main \
     for optional probes such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
-  - Requires two distinct bots in the same private group, with the SUT bot
-    exposing a Telegram username.
-  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode
-    in `@BotFather` for both bots and ensure the driver bot can observe
-    group bot traffic.
+  - The leased user drives and observes the shared Test Server group. No
+    production Telegram account or bot-to-bot observer is used.
   - Writes a Telegram QA report, summary, and `qa-evidence.json` under
     `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send
     request to observed SUT reply.
@@ -467,8 +456,9 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
-and WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. Telegram always uses this source. The section
+name predates Buzz, Discord, Slack, and WhatsApp support; the lease contract is
+shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
@@ -883,12 +873,12 @@ without mutating the host auth store:
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
 - Release typed onboarding smoke: `pnpm test:docker:release-typed-onboarding` installs the packed tarball, drives `openclaw onboard` through a real TTY, configures OpenAI as an env-ref provider, verifies no raw key persistence, and runs a mocked agent turn.
 - Release media/memory smoke: `pnpm test:docker:release-media-memory` installs the packed tarball, verifies image understanding from a PNG attachment, OpenAI-compatible image generation output, memory search recall, and recall survival across Gateway restart.
-- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published baseline older than the candidate tarball by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. If no older published baseline exists, it reuses the candidate version. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
+- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published stable baseline older than the candidate tarball by default, onboards and installs a CLI plugin on the published package, then replaces the package and runs the documented Doctor migration step. It verifies the existing plugin still works and configures candidate-compatible mock provider/ClickClack settings for the agent/channel journey. If no older stable baseline exists, it reuses the candidate version only when that version is published and stable; otherwise it fails and requires an explicit baseline. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
 - Release plugin marketplace smoke: `pnpm test:docker:release-plugin-marketplace` installs from a local fixture marketplace, updates the installed plugin, uninstalls it, and verifies the plugin CLI disappears with install metadata pruned.
 - Skill install smoke: `pnpm test:docker:skill-install` installs the packed OpenClaw tarball globally in Docker, disables uploaded archive installs in config, resolves the current live ClawHub skill slug from search, installs it with `openclaw skills install`, and verifies the installed skill plus `.clawhub` origin/lock metadata.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
-- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation expands the release-soak package gate to `last-stable-4 2026.4.23 2026.5.2 2026.4.15` plus `reported-issues`.
+- Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation runs all `reported-issues` scenarios against the latest stable baseline, resolved once to an exact package before fanout. Historical matrices remain explicit manual overrides.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
 - Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.

@@ -16,7 +16,7 @@ OpenClaw sets fs-safe's optional native helper to **off** by default:
 - the guarded JavaScript paths support OpenClaw's normal filesystem operations;
 - disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
-The OpenClaw package includes fs-safe's prebuilt native helpers for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. No separate platform package, download, or compiler is needed. Loading these helpers remains optional.
+The OpenClaw package includes fs-safe's prebuilt native helpers for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. Runtime entries and the packaged sealed worker share one native asset tree. No separate platform package, download, or compiler is needed. Loading these helpers remains optional.
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 

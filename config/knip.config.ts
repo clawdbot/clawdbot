@@ -13,6 +13,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // CI imports this selector from its trusted harness inside an inline Node script.
+  ".github/actions/git-owner/test-prerequisites.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -73,6 +75,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -81,6 +85,8 @@ const repositoryScriptEntries = [
   "scripts/ios-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
+  // CI loads the native Vitest reporter through its CLI path.
+  "scripts/lib/vitest-resource-reporter.mts!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
@@ -94,6 +100,8 @@ const repositoryScriptEntries = [
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
+  // merge.sh invokes this native review-authority parser by path.
+  "scripts/pr-lib/clawsweeper-review-gate.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -155,6 +163,8 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // The local exec bootstrap launches credential resolution by computed subprocess URL.
+  "src/agents/github-exec-launcher.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
@@ -468,10 +478,8 @@ const config = {
         "highlight.js",
         "playwright-core",
         "partial-json",
-        // Optional runtime imports: the native Canvas bundle falls back without Markdown,
-        // and the meme-maker skill emits SVG when sharp is not installed.
+        // The native Canvas bundle falls back without optional Markdown support.
         "@a2ui/markdown-it",
-        "sharp",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootToolingAndWorkspaceDependencies,
@@ -708,6 +716,7 @@ const config = {
       "browser-profiles.ts!",
       // Built by tsdown as the native messaging executable; Chrome launches it by path.
       "native-host-entry.ts!",
+      "relay-daemon-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
       "chrome-extension/options.js!",

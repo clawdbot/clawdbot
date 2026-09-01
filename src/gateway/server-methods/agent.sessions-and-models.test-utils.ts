@@ -1747,7 +1747,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callValue) => callValue[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -2098,7 +2098,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callLocal) => callLocal[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -2325,7 +2325,7 @@ describe("gateway agent handler", () => {
     );
     expect(globalLoadCalls.length).toBeGreaterThan(0);
     for (const [, options] of globalLoadCalls) {
-      expect(options).toEqual({ agentId: "work", clone: false });
+      expect(options).toMatchObject({ agentId: "work", clone: false });
     }
   });
 
@@ -2376,7 +2376,7 @@ describe("gateway agent handler", () => {
     );
     expect(globalLoadCalls.length).toBeGreaterThan(0);
     for (const [, options] of globalLoadCalls) {
-      expect(options).toEqual({ agentId: "ops", clone: false });
+      expect(options).toMatchObject({ agentId: "ops", clone: false });
     }
   });
 

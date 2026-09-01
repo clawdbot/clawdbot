@@ -494,7 +494,9 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
-  const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
+  const paneKey =
+    session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
+  const active = paneKey === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;

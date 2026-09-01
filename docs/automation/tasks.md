@@ -177,6 +177,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
 session. Session-queued notifications do not include this link.
@@ -284,6 +288,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">
@@ -299,7 +304,7 @@ openclaw tasks notify <lookup> state_changes
     - ACP tasks require a live in-process turn in the Gateway; subagent tasks check their backing child session.
     - Subagent tasks whose child session has a restart-recovery tombstone are marked lost instead of being treated as recoverable backing sessions.
     - Automation tasks check whether the automations runtime still owns the job, then recover terminal status from persisted run logs/job state before falling back to `lost`. Only the Gateway process is authoritative for the in-memory active-job set; offline CLI audit uses durable history but does not mark an automation task lost solely because that local set is empty.
-    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows.
+    - CLI tasks with run identity check the owning live run context, not just child-session or chat-session rows. Only Gateway maintenance owns that liveness check; standalone CLI audit and maintenance retain active CLI tasks because their local run registry cannot prove that the Gateway run has ended.
 
     Completion cleanup is also runtime-aware:
 

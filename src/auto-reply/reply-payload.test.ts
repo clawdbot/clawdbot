@@ -2,9 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   isCommandReplyForDelivery,
+  isReplyPayloadSessionWriterDeliveryAuthorized,
   isReplyPayloadTerminalContent,
   markCommandReplyForDelivery,
   readPairingQrReplyChannelData,
+  setReplyPayloadMetadata,
 } from "./reply-payload.js";
 
 describe("command reply delivery", () => {
@@ -66,5 +68,52 @@ describe("reply payload terminal content", () => {
     ],
   ] as const)("classifies %s payloads", (_name, payload, expected) => {
     expect(isReplyPayloadTerminalContent(payload)).toBe(expected);
+  });
+});
+
+describe("session writer delivery authority", () => {
+  const currentEntry = {
+    activeWriterRunId: "run-active",
+    lifecycleRevision: "revision-active",
+    sessionId: "session-active",
+  };
+
+  it("leaves payloads without a writer claim authorized", () => {
+    expect(isReplyPayloadSessionWriterDeliveryAuthorized({ text: "reply" }, undefined)).toBe(true);
+  });
+
+  it("accepts only the session row that still owns the payload", () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "reply" },
+      {
+        sessionWriterDeliveryAuthority: {
+          expectedLifecycleRevision: "revision-active",
+          expectedSessionId: "session-active",
+          expectedWriterRunId: "run-active",
+          sessionKey: "agent:main:active",
+        },
+      },
+    );
+
+    expect(isReplyPayloadSessionWriterDeliveryAuthorized(payload, currentEntry)).toBe(true);
+    expect(
+      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
+        ...currentEntry,
+        activeWriterRunId: "run-replacement",
+      }),
+    ).toBe(false);
+    expect(
+      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
+        ...currentEntry,
+        lifecycleRevision: "revision-replacement",
+      }),
+    ).toBe(false);
+    expect(
+      isReplyPayloadSessionWriterDeliveryAuthorized(payload, {
+        ...currentEntry,
+        sessionId: "session-replacement",
+      }),
+    ).toBe(false);
+    expect(isReplyPayloadSessionWriterDeliveryAuthorized(payload, undefined)).toBe(false);
   });
 });

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import type {
   GatewayServiceCommandConfig,
@@ -12,6 +12,7 @@ import type {
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
+  mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -55,12 +56,6 @@ const serviceMock = vi.hoisted(() => ({
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
-vi.mock("../../config/paths.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
-  return { ...actual, isDefaultInstallIdentity: () => true };
-});
-
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));
@@ -103,6 +98,7 @@ async function createInstalledServiceCommand() {
 
 describe("runDaemonInstall integration", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let accountHome: string;
   let tempHome: string;
   let configPath: string;
 
@@ -120,20 +116,27 @@ describe("runDaemonInstall integration", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
-    tempHome = await makeTempWorkspace("openclaw-daemon-install-int-");
+    accountHome = await makeTempWorkspace("openclaw-daemon-install-int-");
+    tempHome = path.join(accountHome, ".openclaw");
+    await fs.mkdir(tempHome);
     configPath = path.join(tempHome, "openclaw.json");
-    process.env.HOME = tempHome;
+    process.env.HOME = accountHome;
     process.env.OPENCLAW_STATE_DIR = tempHome;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
   });
 
   afterAll(async () => {
     envSnapshot.restore();
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(accountHome, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockSystemAccountHome();
     resetRuntimeCapture();
     clearRuntimeConfigSnapshot();
     // Keep these defined-but-empty so dotenv won't repopulate from local .env.
@@ -303,13 +306,13 @@ describe("runDaemonInstall integration", () => {
 
   it("checks the planned generated environment after a drop-in redirects effective state", async () => {
     const fixture = await fs.realpath(await fs.mkdtemp(path.join(tempHome, "planned-owner-")));
-    const plannedState = path.join(fixture, "planned");
+    const plannedState = path.join(fixture, ".openclaw");
     const effectiveState = path.join(fixture, "effective");
     const unit = path.join(fixture, ".config/systemd/user/openclaw-gateway.service");
     const dropIn = `${unit}.d/override.conf`;
     const plannedFile = path.join(plannedState, "gateway.systemd.env");
     const effectiveFile = path.join(effectiveState, "gateway.systemd.env");
-    const invocation = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
+    const invocation = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     await fs.mkdir(path.dirname(dropIn), { recursive: true });
     await fs.mkdir(plannedState);
     await fs.mkdir(effectiveState);
@@ -329,6 +332,7 @@ describe("runDaemonInstall integration", () => {
     );
     process.env.HOME = fixture;
     process.env.OPENCLAW_STATE_DIR = plannedState;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(plannedState, "openclaw.json");
     clearConfigCache();
     const lstat = fs.lstat.bind(fs);
     const owner = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -572,8 +576,12 @@ describe("runDaemonInstall integration", () => {
     { name: "uninspectable definition", kind: "unknown", force: true },
     { name: "rejected definition inspection", kind: "rejected", force: false },
   ])("leaves absent config and state untouched for $name", async ({ kind, force }) => {
-    const stateDir = await fs.mkdtemp(path.join(tempHome, "sealed-install-"));
+    const isolatedHome = await fs.mkdtemp(path.join(tempHome, "sealed-install-"));
+    const stateDir = path.join(isolatedHome, ".openclaw");
+    await fs.mkdir(stateDir);
     const missingConfigPath = path.join(stateDir, "openclaw.json");
+    const originalHome = process.env.HOME;
+    process.env.HOME = isolatedHome;
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const secret = "direct-install-capability-secret-canary";
@@ -602,10 +610,11 @@ describe("runDaemonInstall integration", () => {
       );
       expect(runtimeLogs.join("\n")).not.toContain(secret);
     } finally {
+      process.env.HOME = originalHome;
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
       process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
       clearConfigCache();
-      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(isolatedHome, { recursive: true, force: true });
     }
   });
 

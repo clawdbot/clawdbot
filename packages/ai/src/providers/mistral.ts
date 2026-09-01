@@ -168,6 +168,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         serverURL: model.baseUrl,
         // Keep bounded fetch and response hooks on every streaming attempt.
         httpClient,
+        retryConfig: { strategy: "none" },
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();

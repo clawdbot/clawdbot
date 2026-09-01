@@ -1480,18 +1480,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (
-      recordsInFlightProgress &&
-      !isAborted &&
-      ((isToolEvent && !suppressHeartbeatToolEvents) ||
-        isItemEvent ||
-        evt.stream === "run_status" ||
-        evt.stream === "notice" ||
-        typeof evt.data?.reviewId === "string" ||
-        evt.data?.phase === "started" ||
-        evt.data?.phase === "completed" ||
-        evt.data?.phase === "warning")
-    ) {
+    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.

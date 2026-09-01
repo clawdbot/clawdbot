@@ -99,8 +99,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.150.1`. The plugin ships and manages
-  `@openai/codex` `0.150.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.151.0`. The plugin ships and manages
+  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -870,7 +870,11 @@ through OpenClaw.
 
 By default, the plugin starts OpenClaw's managed Codex binary locally with
 stdio transport. Set `appServer.command` only to intentionally run a
-different executable. Codex classifies WebSocket transport as experimental
+different executable. Verified setup accepts a native Codex executable or the
+official `@openai/codex` npm entrypoint, including its installed symlink or
+Windows npm launcher. Arbitrary wrapper scripts cannot be verified because
+their native target is unknown; select the native executable or official npm
+launcher instead. Codex classifies WebSocket transport as experimental
 and unsupported; use it only for non-production testing against an app-server
 already running elsewhere:
 

@@ -3,14 +3,14 @@ import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  collectVectorProviderFindings,
+  type ProviderFailure,
+} from "./doctor-vector-index-provider.js";
+import {
   LLAMA_CPP_PROVIDER_INSTALL_COMMAND,
   LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
   MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
 } from "./memory/local-embedding-provider.js";
-import {
-  collectVectorProviderFindings,
-  type ProviderFailure,
-} from "./migration/doctor-vector-index-provider-diagnostic.js";
 
 export const MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID =
   "memory-core/managed-local-embedding-setup";
@@ -38,10 +38,15 @@ type MemoryCoreDoctorRegistrationState = Pick<
   "inspectEmbeddingProviderSetup" | "memoryCoreActive"
 >;
 
+type MemoryCoreDoctorCheck = HealthCheck & {
+  readonly defaultEnabled: false;
+  readonly updateReadiness: "post-plugin";
+};
+
 const registrationsByHost = new WeakMap<
   MemoryCoreDoctorRegistrationHost["registerHealthCheck"],
   {
-    readonly check: HealthCheck & { readonly defaultEnabled: false };
+    readonly check: MemoryCoreDoctorCheck;
     readonly state: MemoryCoreDoctorRegistrationState;
   }
 >();
@@ -64,12 +69,13 @@ function resolveSelectedMemoryProvider(
 
 function createManagedLocalEmbeddingSetupCheck(
   state: MemoryCoreDoctorRegistrationState,
-): HealthCheck & { readonly defaultEnabled: false } {
+): MemoryCoreDoctorCheck {
   return {
     id: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
     kind: "plugin",
     source: "memory-core",
     defaultEnabled: false,
+    updateReadiness: "post-plugin",
     description: "Checks existing semantic indexes for required managed local embedding setup.",
     async detect(ctx) {
       if (!state.memoryCoreActive) {
@@ -109,10 +115,6 @@ function createManagedLocalEmbeddingSetupCheck(
               };
             }
             return failure;
-          },
-          {
-            indexInspectionMode: "readiness",
-            inspectConfiguredMemorySecretRefs: true,
           },
         );
       } catch (error) {
