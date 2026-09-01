@@ -822,14 +822,6 @@ function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targe
   ]);
 }
 
-function expectTargetAlreadyExistsNotice(result: StateDirMigrationResult, targetDir: string) {
-  expect(result.migrated).toBe(false);
-  expect(result.warnings).toStrictEqual([]);
-  expect(result.notices).toEqual([
-    `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-  ]);
-}
-
 function expectUnmigratedWithoutWarnings(result: StateDirMigrationResult) {
   expect(result.migrated).toBe(false);
   expect(result.warnings).toStrictEqual([]);
@@ -4353,10 +4345,6 @@ describe("doctor legacy state migrations", () => {
   });
 
   it("warns when target exists and legacy state is not a safe mirror", async () => {
-    const emptyRoot = makeDoctorStateDir();
-    const empty = ensureLegacyAndTargetStateDirs(emptyRoot);
-    expectTargetAlreadyExistsWarning(await runFreshStateDirMigration(emptyRoot), empty.targetDir);
-
     const fileRoot = makeDoctorStateDir();
     const file = ensureLegacyAndTargetStateDirs(fileRoot);
     fs.writeFileSync(path.join(file.legacyDir, "sessions.json"), "{}", "utf-8");
@@ -4391,28 +4379,6 @@ describe("doctor legacy state migrations", () => {
     expectTargetAlreadyExistsWarning(
       await runFreshStateDirMigration(secondHopRoot),
       secondHop.targetDir,
-    );
-  });
-
-  it("reports a notice instead of a warning when the existing target is an initialized state root (#112395)", async () => {
-    // Config file marks the target as the state root the gateway already runs on;
-    // the skipped legacy dir is inert residue and must not block startup readiness.
-    const configRoot = makeDoctorStateDir();
-    const config = ensureLegacyAndTargetStateDirs(configRoot);
-    fs.writeFileSync(path.join(config.legacyDir, "sessions.json"), "{}", "utf-8");
-    fs.writeFileSync(path.join(config.targetDir, "openclaw.json"), "{}", "utf-8");
-    expectTargetAlreadyExistsNotice(await runFreshStateDirMigration(configRoot), config.targetDir);
-
-    // Auto-created runtime dirs (state/agents/credentials) are NOT initialization
-    // markers: DB bootstrap creates them before startup migrations run, so they must
-    // not flip an otherwise-unowned target to non-blocking.
-    const autoCreatedRoot = makeDoctorStateDir();
-    const autoCreated = ensureLegacyAndTargetStateDirs(autoCreatedRoot);
-    fs.mkdirSync(path.join(autoCreated.targetDir, "state"), { recursive: true });
-    fs.mkdirSync(path.join(autoCreated.targetDir, "agents"), { recursive: true });
-    expectTargetAlreadyExistsWarning(
-      await runFreshStateDirMigration(autoCreatedRoot),
-      autoCreated.targetDir,
     );
   });
 });
