@@ -120,7 +120,7 @@ describe("cron grouping metadata", () => {
     applyJobPatch(job, { group: "Personal", tags: ["home", "errands"] });
     expect(job).toMatchObject({ group: "Personal", tags: ["home", "errands"] });
 
-    applyJobPatch(job, { group: null, tags: null });
+    applyJobPatch(job, { group: null, tags: null } as CronJobPatch);
     expect(job.group).toBeUndefined();
     expect(job.tags).toBeUndefined();
     expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000 });
