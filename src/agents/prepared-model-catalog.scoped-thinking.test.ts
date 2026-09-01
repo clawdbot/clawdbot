@@ -1,5 +1,4 @@
-// Boundary proof for the turn-path thinking fallback: manifest first, then a provider-scoped
-// static catalog, then scoped live discovery only for runtime-only models (e.g. Ollama).
+// Turn-path thinking reuses published facts before manifest/scoped discovery fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
@@ -90,6 +89,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     });
 
     expect(catalog[0]?.compat?.supportedReasoningEfforts).toContain("ultra");
+    expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
   });
@@ -143,5 +143,56 @@ describe("loadProviderScopedThinkingCatalog", () => {
     expect(scopedLiveMock).toHaveBeenCalledTimes(1);
     expect(scopedLiveMock).toHaveBeenCalledWith(expect.anything(), ["ollama"]);
     expect(scopedStaticMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "prepared vision",
+      input: ["text", "image"],
+      expected: ["text", "image"],
+      source: "published",
+    },
+    { name: "prepared text-only", input: ["text"], expected: ["text"], source: "published" },
+    { name: "reasoning-only published row", expected: ["text", "image"], source: "manifest" },
+    {
+      name: "different prepared and manifest route",
+      input: ["text", "image"],
+      expected: ["text"],
+      source: "scoped",
+      customRoute: true,
+    },
+  ])("resolves input independently of reasoning: $name", async (testCase) => {
+    const base = {
+      provider: "acme",
+      id: "selected",
+      name: "Selected",
+      reasoning: true,
+      api: "openai-responses" as const,
+      baseUrl: "https://provider.invalid/v1",
+    };
+    const requiredInputRoute = {
+      api: base.api,
+      baseUrl: testCase.customRoute ? "https://custom.invalid/v1" : base.baseUrl,
+    };
+    publishedSnapshotMock.mockImplementation((input: unknown) => ({
+      config: (input as { config: unknown }).config,
+      modelCatalog: { entries: [{ ...base, input: testCase.input }], routeVariants: [] },
+    }));
+    manifestCatalogMock.mockReturnValue([{ ...base, input: ["text", "image"] }]);
+    scopedStaticMock.mockResolvedValue({
+      entries: [{ ...base, ...requiredInputRoute, input: ["text"] }],
+      routeVariants: [],
+    });
+    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+    const catalog = await loadProviderScopedThinkingCatalog({
+      config: {},
+      provider: "acme",
+      model: "selected",
+      requiredInputRoute,
+    });
+    expect(catalog.find((entry) => entry.id === "selected")?.input).toEqual(testCase.expected);
+    expect(manifestCatalogMock).toHaveBeenCalledTimes(testCase.source === "published" ? 0 : 1);
+    expect(scopedStaticMock).toHaveBeenCalledTimes(testCase.source === "scoped" ? 1 : 0);
+    expect(scopedLiveMock).not.toHaveBeenCalled();
   });
 });

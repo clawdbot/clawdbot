@@ -3,6 +3,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
@@ -53,6 +55,7 @@ async function createTimelinePath(): Promise<string> {
 }
 
 async function readTimeline(pathname: string): Promise<Record<string, unknown>[]> {
+  flushDiagnosticsTimeline();
   const content = await readFile(pathname, "utf8");
   return content
     .trim()
@@ -72,6 +75,7 @@ describe("plugins marketplace entries", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
     vi.unstubAllEnvs();
   });
 
@@ -374,17 +378,22 @@ describe("plugins marketplace list", () => {
     expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
   });
 
-  it("preserves remote source failure diagnostics without polluting JSON stdout", async () => {
-    mockMarketplaceListResult({ ok: false, error: "mock git remote unavailable" });
+  it("hands quiet remote source failures to the canonical JSON error renderer", async () => {
+    const message = "mock git remote unavailable";
+    mockMarketplaceListResult({ ok: false, error: message });
     const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
 
-    await expect(runPluginMarketplaceListCommand(source, { json: true })).rejects.toThrow("exit 1");
-
-    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledExactlyOnceWith(
-      "mock git remote unavailable",
+    const failure = await runPluginMarketplaceListCommand(source, { json: true }).catch(
+      (error: unknown) => error,
     );
-    expect(mocks.defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+
+    expect(failure).toBeInstanceOf(ExpectedCliError);
+    expect(formatCliJsonFailure(failure)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });

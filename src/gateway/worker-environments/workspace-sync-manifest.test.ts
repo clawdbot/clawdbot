@@ -34,6 +34,60 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
 }
 
 describe("remote workspace manifest script", () => {
+  it("preserves authenticated executable modes when Windows cannot represent them", async () => {
+    const root = tempDirs.make("openclaw-windows-manifest-modes-");
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
+    const file = path.join(workspace, "script.sh");
+    const original = Buffer.from("#!/bin/sh\necho before\n");
+    await fs.writeFile(file, original, { mode: 0o644 });
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        {
+          path: "script.sh",
+          type: "file",
+          mode: 0o755,
+          size: original.byteLength,
+          sha256: createHash("sha256").update(original).digest("hex"),
+        },
+      ],
+    });
+    const digest = createHash("sha256").update(rawManifest).digest("hex");
+    const windowsScript = `Object.defineProperty(process, "platform", { value: "win32" });\n${REMOTE_WORKSPACE_MANIFEST_JS}`;
+    const env = { ...process.env, HOME: home };
+
+    const published = await runCommandWithTimeout(
+      [process.execPath, "-e", windowsScript, workspace, "", "publish", digest],
+      { timeoutMs: 10_000, baseEnv: env, input: rawManifest },
+    );
+    expect(published).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
+
+    const capture = async () =>
+      await runCommandWithTimeout(
+        [process.execPath, "-e", windowsScript, workspace, "", "all", digest],
+        { timeoutMs: 10_000, baseEnv: env },
+      );
+    expect(await capture()).toMatchObject({ code: 0, stdout: `sha256:${digest}\n` });
+
+    await fs.writeFile(file, "#!/bin/sh\necho changed\n");
+    await fs.writeFile(path.join(workspace, "new.txt"), "new\n", { mode: 0o644 });
+    const changed = await capture();
+    expect(changed.code, changed.stderr).toBe(0);
+    const changedDigest = changed.stdout.trim().slice("sha256:".length);
+    const changedRaw = await fs.readFile(
+      path.join(home, ".openclaw-worker", "manifests", `${changedDigest}.json`),
+      "utf8",
+    );
+    const manifest = parseWorkerWorkspaceManifest(changedRaw, changed.stdout.trim());
+    expect(manifest.entries).toEqual([
+      expect.objectContaining({ path: "new.txt", mode: 0o644 }),
+      expect.objectContaining({ path: "script.sh", mode: 0o755 }),
+    ]);
+  });
+
   it("atomically applies and rolls back accepted workspace paths", async () => {
     const root = tempDirs.make("openclaw-accepted-paths-test-");
     const home = path.join(root, "home");
@@ -605,8 +659,13 @@ process.kill = function(pid, signal) {
     const root = tempDirs.make("openclaw-manifest-derived-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
-    const files = [
+    const retainedFiles = [
       "keep.ts",
+      "openclaw-inbound-project/report.txt",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789ab-/report.txt",
+    ];
+    const files = [
+      ...retainedFiles,
       "__pycache__/fizzbuzz.cpython-314.pyc",
       "generated.pyc",
       "generated.pyo",
@@ -617,6 +676,8 @@ process.kill = function(pid, signal) {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
+      "openclaw-inbound-12345678-1234-4234-8234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-4234-8234-123456789abc/photo.png",
     ];
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
     await Promise.all(
@@ -636,8 +697,10 @@ process.kill = function(pid, signal) {
       await fs.readFile(path.join(home, ".openclaw-worker", "manifests", `${digest}.json`), "utf8"),
     ) as { entries: Array<{ path: string }> };
     const manifestPaths = manifest.entries.map((entry) => entry.path);
-    expect(manifestPaths).toContain("keep.ts");
-    for (const excluded of files.slice(1)) {
+    for (const retained of retainedFiles) {
+      expect(manifestPaths).toContain(retained);
+    }
+    for (const excluded of files.slice(retainedFiles.length)) {
       expect(manifestPaths).not.toContain(excluded);
     }
   });

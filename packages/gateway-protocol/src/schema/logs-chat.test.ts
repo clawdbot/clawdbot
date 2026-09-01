@@ -58,6 +58,14 @@ describe("ChatHistoryCursorResultSchema", () => {
       sessionInfo,
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(
+      Value.Check(ChatHistoryCursorResultSchema, {
+        ...delta,
+        inFlightRun: { runId: "run-live", text: "still working" },
+        inputReceipts: [{ runId: "retained-run", state: "pending" }],
+        inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
+      }),
+    ).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);
@@ -96,5 +104,15 @@ describe("ChatSendParamsSchema", () => {
       }),
     ).toBe(true);
     expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
+  });
+
+  it("accepts session settings expectations", () => {
+    expect(
+      Value.Check(ChatSendParamsSchema, {
+        ...send,
+        expectedPermissionMode: "guarded",
+        expectedToolOverrides: { webSearch: false },
+      }),
+    ).toBe(true);
   });
 });

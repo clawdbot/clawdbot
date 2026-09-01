@@ -5,8 +5,12 @@ import {
   errorShape,
   formatValidationErrors,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ErrorShape, ValidationError } from "../../../packages/gateway-protocol/src/index.js";
-import type { RespondFn } from "./types.js";
+import type {
+  ErrorShape,
+  GatewayCoreRequestParams,
+  ValidationError,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 /** Type guard function shape produced by gateway-protocol validators. */
 export type Validator<T> = ((params: unknown) => params is T) & {
@@ -41,4 +45,22 @@ export function assertValidParams<T>(
   }
   respond(false, undefined, error);
   return false;
+}
+
+/** Bind a core method to its schema before exposing it through the open plugin registry. */
+export function defineValidatedGatewayMethod<Method extends keyof GatewayCoreRequestParams>(
+  method: Method,
+  validate: Validator<NoInfer<GatewayCoreRequestParams[Method]>>,
+  handler: (
+    options: Omit<GatewayRequestHandlerOptions, "params"> & {
+      params: GatewayCoreRequestParams[Method];
+    },
+  ) => ReturnType<GatewayRequestHandler>,
+): GatewayRequestHandler {
+  return (options) => {
+    if (!assertValidParams(options.params, validate, method, options.respond)) {
+      return;
+    }
+    return handler({ ...options, params: options.params });
+  };
 }

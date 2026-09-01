@@ -232,6 +232,8 @@ export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
   /empty response after write recovery qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE =
+  /empty response after write exhaustion qa check/i;
 export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
@@ -246,6 +248,8 @@ export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 afte
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
+export const QA_THREAD_REPLY_RECEIPT_PROMPT_RE =
+  /qa thread reply receipt check[\s\S]*channel id: `([^`]+)`[\s\S]*thread id: `([^`]+)`/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
@@ -354,6 +358,8 @@ export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
 export const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
+export const QA_KILL_RESTART_PROMPT_RE = /\bKILL-RESTART-PROMPT\b/u;
+export const QA_KILL_RESTART_RECOVERED_MARKER = "KILL-RESTART-RECOVERED-OK";
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -371,6 +377,7 @@ export type MockScenarioState = {
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
+  repeatedRequestRecoveryAttempts: number;
   toolLoopReadAttempts: number;
 };
 

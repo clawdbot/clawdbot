@@ -33,11 +33,14 @@ type InstalledSystemdGatewayScope = {
   unitPath: string;
 };
 
-export async function assertNoSystemGatewayOwnership(env: GatewayServiceEnv): Promise<void> {
+export async function assertNoSystemGatewayOwnership(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
   if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return;
   }
-  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`);
+  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`, timeoutMs);
 }
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
@@ -192,7 +195,8 @@ export async function isSystemUnitActiveAndEnabled(
   env: GatewayServiceEnv,
   unitName: string,
 ): Promise<boolean> {
-  if (!(await isSystemdUnitActive(env, unitName, "system"))) {
+  const active = await isSystemdUnitActive(env, unitName, "system");
+  if (!active.ok || !active.value) {
     return false;
   }
   const res = await execSystemctl(["is-enabled", unitName], env);

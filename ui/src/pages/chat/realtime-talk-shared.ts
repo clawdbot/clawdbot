@@ -11,15 +11,35 @@ import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 // Control UI chat module implements realtime talk shared behavior.
 import { formatUiError } from "../../lib/format-error.ts";
+import type { RealtimeTalkInputController } from "./realtime-talk-input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
+
+export type RealtimeTalkTranscript = {
+  role: "user" | "assistant";
+  text: string;
+  final: boolean;
+  itemId?: string;
+  order?: number;
+};
+
+export type RealtimeTalkTranscriptItem =
+  | {
+      type: "created";
+      itemId: string;
+      previousItemId?: string | null;
+      role: "user" | "assistant" | null;
+    }
+  | { type: "settled"; itemId: string };
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
-  onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
+  onTranscript?: (entry: RealtimeTalkTranscript) => void;
+  onTranscriptOrder?: (items: ReadonlyArray<{ itemId: string; order: number }>) => void;
+  onTranscriptItem?: (item: RealtimeTalkTranscriptItem) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
   onVideoError?: (error: unknown) => void;
@@ -122,7 +142,7 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  inputDeviceId?: string;
+  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;

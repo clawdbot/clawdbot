@@ -175,6 +175,7 @@ export function prepareChatSendSession(params: {
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
   const restartSafeRequest = createRestartSafeChatRequest({
+    goalRequestFingerprint: request.goalOperation?.requestFingerprint,
     cfg,
     eligible:
       isBrowserOperatorUiClient(request.clientInfo) &&

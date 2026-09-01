@@ -97,6 +97,19 @@ export async function routeCodexAppServerElicitationRequest(params: {
   if (requestTurnId !== null && requestTurnId !== undefined && requestTurnId !== params.turnId) {
     return { kind: "not-mine" };
   }
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : undefined;
+  const approvalShaped =
+    meta?.[MCP_TOOL_APPROVAL_KIND_KEY] === MCP_TOOL_APPROVAL_KIND ||
+    (params.computerUseMcpServerName !== undefined &&
+      readNonBlankStringField(requestParams, "serverName") === params.computerUseMcpServerName);
+  // Plugin ownership identifies which approval policy applies; it does not turn
+  // ordinary MCP forms or OAuth URLs into destructive-action approvals.
+  if (!approvalShaped) {
+    return { kind: "not-mine" };
+  }
+  if (params.signal?.aborted) {
+    return handled(createCodexElicitationResponse("cancel"));
+  }
   const pluginResolution = resolvePluginElicitation({
     requestParams,
     pluginAppPolicyContext: params.pluginAppPolicyContext,
@@ -128,14 +141,7 @@ export async function routeCodexAppServerElicitationRequest(params: {
     readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
     readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
-    const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : undefined;
-    const approvalShaped =
-      meta?.[MCP_TOOL_APPROVAL_KIND_KEY] === MCP_TOOL_APPROVAL_KIND ||
-      (params.computerUseMcpServerName !== undefined &&
-        readNonBlankStringField(requestParams, "serverName") === params.computerUseMcpServerName);
-    return approvalShaped
-      ? handled(createCodexElicitationResponse("decline"))
-      : { kind: "not-mine" };
+    return handled(createCodexElicitationResponse("decline"));
   }
 
   const outcome = await requestPluginApprovalOutcome({
@@ -671,6 +677,7 @@ async function requestPluginApprovalOutcome(params: {
   try {
     const requestResult = await requestPluginApproval({
       hostCapabilities: params.paramsForRun.hostCapabilities,
+      signal: params.signal,
       title: params.title,
       description: params.description,
       severity: "warning",

@@ -27,7 +27,7 @@ import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./stor
 import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
-/** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
+/** Default per-file media-store byte cap used by store and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 

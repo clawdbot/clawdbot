@@ -12,6 +12,7 @@ import "../components/app-sidebar.ts";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 
 type ShellRenderState = {
   runtime: ApplicationRuntime;
@@ -46,7 +47,14 @@ describe("OpenClaw shell dock suppression", () => {
           hello: {
             auth: { role: "operator", scopes: ["operator.admin"] },
             features: {
-              methods: ["terminal.open", "browser.request", "openclaw.chat", "desktop.observe"],
+              methods: [
+                "terminal.open",
+                "browser.request",
+                "openclaw.chat",
+                "desktop.observe",
+                "chat.history",
+                "chat.send",
+              ],
             },
           },
           lastError: null,
@@ -112,7 +120,7 @@ describe("OpenClaw shell dock suppression", () => {
         },
         runUpdate: vi.fn(),
       },
-      theme: { mode: "dark" },
+      theme: { mode: "dark", settings: loadSettings() },
       preload: vi.fn(),
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;
@@ -131,6 +139,10 @@ describe("OpenClaw shell dock suppression", () => {
     shell.routeState = { routeId: "appearance" };
     renderLit(shell.render(), container);
     expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("appearance");
+    expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
           agentId: string | null;
@@ -146,24 +158,28 @@ describe("OpenClaw shell dock suppression", () => {
     ).toBe(true);
     expect(
       (
-        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
-          suppressed: boolean;
+        container.querySelector("openclaw-assistant-panel") as HTMLElement & {
+          custodianSuppressed: boolean;
         }
-      ).suppressed,
+      ).custodianSuppressed,
     ).toBe(false);
 
     shell.routeState = { routeId: "custodian" };
     renderLit(shell.render(), container);
     expect(
       (
-        container.querySelector("openclaw-custodian-panel") as HTMLElement & {
-          suppressed: boolean;
+        container.querySelector("openclaw-assistant-panel") as HTMLElement & {
+          custodianSuppressed: boolean;
         }
-      ).suppressed,
+      ).custodianSuppressed,
     ).toBe(true);
 
     shell.routeState = { routeId: "chat" };
     renderLit(shell.render(), container);
+    expect(
+      container.querySelector<HTMLElement & { pageRouteId: RouteId }>("openclaw-assistant-panel")
+        ?.pageRouteId,
+    ).toBe("chat");
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
@@ -227,8 +243,29 @@ describe("OpenClaw shell dock suppression", () => {
     context.navigation.snapshot.navCollapsed = true;
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    context.gateway.snapshot.hello!.auth = {
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+    };
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    context.gateway.snapshot.phase = "offline";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
+    context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    context.gateway.snapshot.phase = "connected";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).not.toBeNull();
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    context.gateway.snapshot.phase = "offline";
+    renderLit(shell.render(), container);
+    expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
   });
 });

@@ -6,7 +6,6 @@ import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -17,7 +16,11 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { showToast } from "../lib/toast.ts";
+import {
+  canCopySessionMarkdown,
+  canSplitSessionView,
+  runSessionNavigationAction,
+} from "../lib/sessions/session-menu-navigation.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -30,7 +33,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 import {
-  isUpdateAttentionDismissed,
+  isSidebarAttentionDismissed,
   isUpdateAttentionForced,
   loadDismissals,
   resolveUpdateAttentionDismissal,
@@ -143,7 +146,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     !overlaySnapshot?.updateReconciliationPending &&
     overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
-    isUpdateAttentionDismissed(
+    isSidebarAttentionDismissed(
       loadDismissals(context.gateway.connection.gatewayUrl),
       updateAttentionDismissal,
     ),
@@ -178,7 +181,13 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     return nothing;
   }
   const context = host.sessionDataContext;
-  const { session } = menu;
+  const currentSession = host.findSidebarSessionByKey(menu.session.key);
+  // Appearance editing keeps this menu open. Refresh its row without adopting
+  // a replacement session that happens to reuse the captured key.
+  const session =
+    currentSession && currentSession.sessionId === menu.session.sessionId
+      ? currentSession
+      : menu.session;
   const mainKey = resolveUiConfiguredMainKey({
     agentsList: host.sessionDataContext?.agents.state.agentsList,
     hello: host.sessionDataContext?.gateway.snapshot.hello,
@@ -242,6 +251,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
           icon: batchRows ? null : (session.icon ?? null),
+          color: batchRows ? null : (session.color ?? null),
           categoryClearReturnsToGroups:
             sharedCategory !== null &&
             rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
@@ -253,6 +263,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
         .actionDisabledReasons=${actionDisabledReasons}
+        .navigationAllowed=${Boolean(context)}
+        .copyMarkdownAllowed=${canCopySessionMarkdown(context?.gateway.snapshot)}
+        .splitAllowed=${canSplitSessionView()}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
         .archiveAllowed=${archiveAllowed}
@@ -282,9 +295,23 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               openEditor(action.editor, action.path);
               break;
             case "copy-session-id":
-              void copyToClipboard(session.sessionId ?? "").then((copied) => {
-                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
-              });
+            case "copy-session-link":
+            case "copy-markdown":
+            case "open-new-tab":
+            case "open-new-window":
+            case "split-right":
+            case "split-below":
+              if (context) {
+                const selectedAgentId = host.getSessionNavigationState().selectedAgentId;
+                void runSessionNavigationAction(action.kind, {
+                  context,
+                  session,
+                  agentId: selectedAgentId,
+                  isCurrent: () =>
+                    host.sessionDataContext === context &&
+                    host.getSessionNavigationState().selectedAgentId === selectedAgentId,
+                });
+              }
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
@@ -295,8 +322,14 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             case "rename":
               void host.sessionOrganizer.renameSession(session);
               break;
+            case "set-color":
+              void host.sessionOrganizer.patchSession(session, { color: action.color });
+              break;
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });
+              break;
+            case "reset-appearance":
+              void host.sessionOrganizer.patchSession(session, { icon: null, color: null });
               break;
             case "assign-owner":
               void host.sessionOrganizer.assignSessionOwner(session, action.owner);
@@ -327,6 +360,8 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
             case "delete":
               void host.sessionOrganizer.deleteSession(session);
               break;
+            default:
+              action satisfies never;
           }
         }}
       ></openclaw-session-menu>
@@ -417,6 +452,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     showPreview: host.sessionsShowPreview,
     showSystem: host.sessionsShowSystem,
+    hideEmptyGroups: host.sessionsHideEmptyGroups,
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
@@ -434,11 +470,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.setSessionOwnerFilter(ownerId, involvingMe);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
@@ -451,6 +483,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     },
     onShowSystemChange: (show) => {
       host.sessionOrganizer.setSessionsShowSystem(show);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onHideEmptyGroupsChange: (hide) => {
+      host.sessionOrganizer.setSessionsHideEmptyGroups(hide);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {
@@ -485,11 +521,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
       controller.closeCatalogViewMenu();
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
-      host.sessionOwnerFilterId = ownerId;
-      host.sessionInvolvingMeFilterActive = involvingMe;
-      void (involvingMe
-        ? host.sessionDataContext?.sessions.setInvolvingMeFilter(true)
-        : host.sessionDataContext?.sessions.setOwnerFilter(ownerId));
+      host.setSessionOwnerFilter(ownerId, involvingMe);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

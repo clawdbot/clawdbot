@@ -122,17 +122,33 @@ function extractRawText(message: unknown): string | null {
 }
 
 export function readTranscriptMediaEntries(message: unknown): Array<{
+  factIndex: number;
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 }> {
   if (!message || typeof message !== "object") {
     return [];
   }
-  return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
+  return (readPersistedMediaFacts(message) ?? []).flatMap((fact, factIndex) => {
     const path = fact.path ?? fact.url;
     return path
-      ? [{ path, mediaType: fact.contentType ?? fact.kind, fileName: fact.fileName }]
+      ? [
+          {
+            factIndex,
+            path,
+            mediaType: fact.contentType ?? fact.kind,
+            fileName: fact.fileName,
+            ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
+            ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
+            ...(fact.width !== undefined ? { width: fact.width } : {}),
+            ...(fact.height !== undefined ? { height: fact.height } : {}),
+          },
+        ]
       : [];
   });
 }

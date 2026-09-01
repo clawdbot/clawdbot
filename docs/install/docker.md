@@ -3,6 +3,7 @@ summary: "Optional Docker-based setup and onboarding for OpenClaw"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
+  - You are migrating from ClawDock shell helpers
 title: "Docker"
 ---
 
@@ -82,6 +83,8 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ```bash
     docker compose run --rm openclaw-cli dashboard --no-open
     ```
+
+    With a custom `OPENCLAW_GATEWAY_PORT`, replace port `18789` in the printed URL with your host port before opening it in the browser; keep the rest of the URL intact. Dashboard commands inside either container use the internal listener port.
 
   </Step>
 
@@ -194,6 +197,7 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | Variable                                        | Purpose                                                                                                           |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_IMAGE`                                | Use a remote image instead of building locally                                                                    |
+| `OPENCLAW_GATEWAY_PORT`                         | Host-published gateway port (default `18789`); both containers keep port `18789` internally                       |
 | `OPENCLAW_IMAGE_APT_PACKAGES`                   | Install extra apt packages during build (space-separated). Legacy alias: `OPENCLAW_DOCKER_APT_PACKAGES`           |
 | `OPENCLAW_IMAGE_PIP_PACKAGES`                   | Install extra Python packages during build (space-separated)                                                      |
 | `OPENCLAW_EXTENSIONS`                           | Compile/package supported selected plugins and install their runtime dependencies (comma- or space-separated ids) |
@@ -216,6 +220,8 @@ Optional variables accepted by `scripts/docker/setup.sh` (and, for the gateway c
 | `OTEL_SERVICE_NAME`                             | Service name used for OpenTelemetry resources                                                                     |
 | `OTEL_SEMCONV_STABILITY_OPT_IN`                 | Opt in to latest experimental GenAI semantic attributes                                                           |
 | `OPENCLAW_OTEL_PRELOADED`                       | Skip starting a second OpenTelemetry SDK when one is preloaded                                                    |
+
+After changing `.env` or Compose environment settings, run `docker compose up -d openclaw-gateway` to recreate the gateway with the new values. `docker compose restart` does not apply environment changes.
 
 The official image ships no Homebrew. During onboarding, OpenClaw hides brew-only skill dependency installers in a Linux container without `brew`; provide those dependencies through a custom image or install manually. Use `OPENCLAW_IMAGE_APT_PACKAGES` for Debian-packaged dependencies and `OPENCLAW_IMAGE_PIP_PACKAGES` for Python dependencies (runs `python3 -m pip install --break-system-packages` at build time, so pin versions and use only indexes you trust).
 
@@ -440,7 +446,7 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPE
 That mounted config directory holds:
 
 - `openclaw.json` for behavior config
-- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `state/openclaw.sqlite` for shared provider auth and `agents/<agentId>/agent/openclaw-agent.sqlite` for agent-local OAuth/API-key profiles
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 The auth-profile secret directory stores the local encryption key for OAuth-backed auth profile token material. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
@@ -451,16 +457,55 @@ For full VM persistence details, see [Docker VM Runtime - What persists where](/
 
 **Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
 
-### Shell helpers (optional)
+### ClawDock migration
 
-For shorter day-to-day commands, install [ClawDock](/install/clawdock):
+ClawDock has been removed. Use Docker Compose directly for day-to-day operations.
+Existing copies downloaded with `curl` are not automatically uninstalled. Remove
+the `source ~/.clawdock/clawdock-helpers.sh` line from your shell startup file
+(`~/.zshrc` or `~/.bashrc`), then start a new shell. If you sourced a checkout copy
+from `scripts/clawdock/` or the older `scripts/shell-helpers/` path, remove that
+source line instead. Keep your OpenClaw state, credentials, workspace, project
+`.env`, and volumes.
+
+Run commands from the directory containing your `docker-compose.yml`. **Keep the
+same Compose file set and order on every command** so mounts and settings remain
+intact. With default file discovery, Compose loads `docker-compose.override.yml`
+automatically when present. Extra and sandbox files need explicit `-f` options;
+when using `-f`, include the standard override too if you use one. For example,
+if your deployment uses all four files:
 
 ```bash
-mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/clawdock/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
-echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+  -f docker-compose.extra.yml -f docker-compose.sandbox.yml ps
 ```
 
-If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path, rerun the command above so your local helper tracks the current location. Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. (run `clawdock-help` for the full list).
+Use only the files your deployment already uses. The commands below show the
+default file set; insert your existing `-f` options after `docker compose` when
+needed. See [Manual flow](/install/docker#manual-flow) for setup and extra mounts.
+
+| Task             | Command                                                            |
+| ---------------- | ------------------------------------------------------------------ |
+| Start            | `docker compose up -d openclaw-gateway`                            |
+| Stop the stack   | `docker compose down`                                              |
+| Restart          | `docker compose restart openclaw-gateway`                          |
+| Container status | `docker compose ps`                                                |
+| Follow logs      | `docker compose logs -f openclaw-gateway`                          |
+| Gateway shell    | `docker compose exec openclaw-gateway bash`                        |
+| CLI              | `docker compose run --rm openclaw-cli <command>`                   |
+| Dashboard URL    | `docker compose run --rm openclaw-cli dashboard --no-open`         |
+| List devices     | `docker compose run --rm openclaw-cli devices list`                |
+| Approve a device | `docker compose run --rm openclaw-cli devices approve <requestId>` |
+| Inspect config   | `docker compose run --rm openclaw-cli config get <path>`           |
+
+Start the gateway before using the shell or CLI commands. For a custom host port,
+adjust the printed dashboard URL as described in [Containerized gateway](/install/docker#containerized-gateway).
+Use [Health checks](/install/docker#health-checks) to verify the gateway and
+[Update OpenClaw](/install/docker-vm-runtime#update-openclaw) for image updates.
+
+Token setup belongs to the [Docker setup flow](/install/docker#containerized-gateway).
+If you need the Control UI token, read `OPENCLAW_GATEWAY_TOKEN` privately from the
+project `.env`. [`config get <path>`](/cli/config) redacts sensitive values; it
+does not reveal the full token.
 
 <AccordionGroup>
   <Accordion title="Enable agent sandbox for Docker gateway">
@@ -526,10 +571,16 @@ If you installed from the older `scripts/shell-helpers/clawdock-helpers.sh` path
   <Accordion title="Faster rebuilds">
     Use the repo-root `Dockerfile` instead of replacing it with a shortened
     single-stage example. Its `workspace-deps` stage extracts the package
-    manifests required by `pnpm-workspace.yaml`, then the build stage copies
-    those manifests before `pnpm install --frozen-lockfile`. This keeps the
-    dependency layer cacheable without omitting `packages/*`, selected
+    manifests required by `pnpm-workspace.yaml`. Build and production dependency
+    stages share those inputs and run separate frozen-lockfile installs. This
+    keeps both dependency layers cacheable without omitting `packages/*`, selected
     `extensions/*`, or other required workspace metadata.
+
+    Runtime assembly replaces the build dependency trees with the fresh production
+    install while retaining compiled workspace packages and native addon outputs.
+    It does not run `pnpm prune` on dependencies inherited from an image layer;
+    pnpm 12 can fail that operation with `EXDEV` on OverlayFS. The `build` target
+    retains development dependencies for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
@@ -583,7 +634,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable
@@ -656,6 +707,5 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 
 - [Install Overview](/install) — all installation methods
 - [Podman](/install/podman) — Podman alternative to Docker
-- [ClawDock](/install/clawdock) — Docker Compose community setup
 - [Updating](/install/updating) — keeping OpenClaw up to date
 - [Configuration](/gateway/configuration) — gateway configuration after install

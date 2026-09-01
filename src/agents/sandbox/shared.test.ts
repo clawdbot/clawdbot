@@ -94,4 +94,82 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
 
     expect(layout.scopeKey).toMatch(/^agent:research:workspace:[a-f0-9]{32}$/);
   });
+
+  it.each(["agent", "session", "shared"] as const)(
+    "isolates different required-sandbox principals with %s scope",
+    (scope) => {
+      const layoutForPrincipal = (sandboxPrincipalId: string) => {
+        const layout = resolveSandboxWorkspaceLayoutPaths({
+          cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
+          rawSessionKey: `agent:shared:${sandboxPrincipalId}`,
+          agentId: "shared",
+          isolationSubject: { kind: "profile", profileId: sandboxPrincipalId },
+          workspaceDir: workspaceA,
+        });
+        return {
+          ...layout,
+          containerName: buildSandboxContainerName(
+            "openclaw-sbx-",
+            slugifySessionKey(layout.scopeKey),
+          ),
+        };
+      };
+
+      const guestA = layoutForPrincipal("guest-a");
+      const guestB = layoutForPrincipal("guest-b");
+
+      expect(guestA.scopeKey).not.toBe(guestB.scopeKey);
+      expect(guestA.containerName).not.toBe(guestB.containerName);
+      expect(guestA.workspaceDir).not.toBe(guestB.workspaceDir);
+      expect(guestA.workspaceDir).not.toBe(guestA.agentWorkspaceDir);
+      expect(guestB.workspaceDir).not.toBe(guestB.agentWorkspaceDir);
+    },
+  );
+
+  it.each(["agent", "session", "shared"] as const)(
+    "reuses one sandbox for the same required-sandbox principal with %s scope",
+    (scope) => {
+      const layoutForSession = (rawSessionKey: string) => {
+        const layout = resolveSandboxWorkspaceLayoutPaths({
+          cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
+          rawSessionKey,
+          agentId: "shared",
+          isolationSubject: { kind: "profile", profileId: "guest-a" },
+          workspaceDir: workspaceA,
+        });
+        return {
+          ...layout,
+          containerName: buildSandboxContainerName(
+            "openclaw-sbx-",
+            slugifySessionKey(layout.scopeKey),
+          ),
+        };
+      };
+
+      const firstSession = layoutForSession("agent:shared:first-session");
+      const secondSession = layoutForSession("agent:shared:second-session");
+
+      expect(firstSession.scopeKey).toBe(secondSession.scopeKey);
+      expect(firstSession.containerName).toBe(secondSession.containerName);
+      expect(firstSession.workspaceDir).toBe(secondSession.workspaceDir);
+    },
+  );
+
+  it("preserves the shared writable agent workspace without a required-sandbox principal", () => {
+    const layoutForSession = (rawSessionKey: string) =>
+      resolveSandboxWorkspaceLayoutPaths({
+        cfg: { scope: "agent", workspaceAccess: "rw", workspaceRoot: "/tmp/openclaw-sandboxes" },
+        rawSessionKey,
+        agentId: "shared",
+        workspaceDir: workspaceA,
+      });
+
+    const firstSession = layoutForSession("agent:shared:first-session");
+    const secondSession = layoutForSession("agent:shared:second-session");
+
+    expect(firstSession.scopeKey).toBe(secondSession.scopeKey);
+    expect(firstSession.workspaceDir).toBe(workspaceA);
+    expect(secondSession.workspaceDir).toBe(workspaceA);
+    expect(firstSession.workspaceSource).toBe("agent");
+  });
 });

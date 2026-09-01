@@ -46,6 +46,7 @@ export type ShardGroupPlan = { kind: "group"; name: string; plan: ShardGroupConf
 export type ShardPlan = ShardTargetPlan | ShardGroupPlan;
 type RunShardOptions = {
   concurrency?: number;
+  continueOnFailure?: boolean;
   env?: NodeJS.ProcessEnv;
   fsModuleCacheMaxBytes?: number;
   nodeCompileCacheMaxBytes?: number;
@@ -61,9 +62,14 @@ function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);
 }
 
-function parseJsonEnv(env: NodeJS.ProcessEnv, name: string, fallback: unknown = null): unknown {
+function parseJsonEnv(
+  env: Record<string, unknown>,
+  name: string,
+  fallback: unknown = null,
+): unknown {
   try {
-    return JSON.parse(env[name] ?? "null") ?? fallback;
+    const value = env[name];
+    return typeof value === "string" ? (JSON.parse(value) ?? fallback) : fallback;
   } catch {
     return fallback;
   }
@@ -305,8 +311,6 @@ function runChild(args: string[], childEnv: NodeJS.ProcessEnv, label: string) {
 
 export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions = {}) {
   const baseEnv = options.env ?? process.env;
-  const parsedVitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
-  const vitestExtraArgs = isStringArray(parsedVitestExtraArgs) ? parsedVitestExtraArgs : [];
   const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
@@ -322,7 +326,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   let nextIndex = 0;
   let exitCode = 0;
   const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
-    while (nextIndex < plans.length && exitCode === 0) {
+    while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
       const index = nextIndex;
       nextIndex += 1;
       const entry = plans[index];
@@ -333,20 +337,28 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
         console.error(`Missing node test shard configs for ${entry.name}`);
         exitCode = exitCode || 1;
-        return;
+        if (!options.continueOnFailure) {
+          return;
+        }
+        continue;
       }
+      const vitestExtraArgs = [
+        baseEnv,
+        entry.kind === "group" ? entry.plan.env : undefined,
+      ].flatMap((env) => {
+        const value = parseJsonEnv(env ?? {}, VITEST_EXTRA_ARGS_ENV_KEY, []);
+        return isStringArray(value) ? value : [];
+      });
       const args =
-        Array.isArray(vitestExtraArgs) && vitestExtraArgs.length > 0
-          ? [...targetArgs, "--", ...vitestExtraArgs]
-          : targetArgs;
+        vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
       const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
         serial: concurrency === 1,
         cacheSlot,
       });
       const code = await runner(args, childEnv, entry.name);
       if (code !== 0) {
-        // Stop scheduling new plans after a failure; the in-flight sibling
-        // finishes so its buffered output still lands in the job log.
+        // Ordinary CI stops scheduling after failure; cache warmers explicitly
+        // continue so later groups still seed their independent transforms.
         exitCode = exitCode || code;
       }
     }
@@ -386,5 +398,8 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
   // the planner; overlapping them with a sibling Vitest run causes flakes.
   const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
-  process.exitCode = await runShardPlans(plans, { concurrency: planConcurrency });
+  process.exitCode = await runShardPlans(plans, {
+    concurrency: planConcurrency,
+    continueOnFailure: process.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
+  });
 }

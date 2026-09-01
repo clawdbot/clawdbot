@@ -474,16 +474,13 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
       }
       total += value.byteLength;
       if (total > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
-        try {
-          await reader.cancel("Google auth response exceeded buffer limit");
-        } catch {
-          // Ignore cancellation errors; the caller still releases the dispatcher.
-        }
         throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
       }
       chunks.push(value);
     }
   } finally {
+    // A capture tee can retain cancellation until the caller releases its request.
+    void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 

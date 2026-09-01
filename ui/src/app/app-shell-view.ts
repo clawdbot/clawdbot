@@ -8,7 +8,7 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import { renderNewSessionLink } from "../components/new-session-link.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
@@ -26,7 +26,7 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
+import { renderCommandPaletteLoading } from "./app-shell-command-palette-loading.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -36,31 +36,34 @@ import {
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
+  MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
+  SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
-import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
+import {
+  floatingSidebarAttentionVisible,
+  navigationSurfaceIsHidden,
+  renderFloatingUpdateCard,
+} from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
+import {
+  isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
+  isHomePanelAvailable,
+} from "./panel-availability.ts";
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
-  loadSettings,
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
+import { renderCollapsedAssistantToggles } from "./shell-assistant-toggles.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const SCOPE_UPGRADE_SURFACE_ELEMENT = {
-  tagName: "openclaw-device-scope-upgrade-banner",
-  label: t("connection.scopeUpgrade.status"),
-  loadModule: () =>
-    import("./device-scope-upgrade.runtime.ts").catch(
-      () => import("./device-scope-upgrade-retry.runtime.ts"),
-    ),
-} satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -126,63 +129,35 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
   if (renderer) {
     return renderer(props);
   }
-  if (host.devicePairSetupLoadFailed) {
-    return renderDevicePairSetupLoadFailure(host, props);
+  const failed = host.devicePairSetupLoadFailed;
+  if (!failed) {
+    host.loadDevicePairSetupRenderer();
   }
-  host.loadDevicePairSetupRenderer();
-  return renderDevicePairSetupLoading(props);
-}
-
-function renderDevicePairSetupLoading(props: DevicePairSetupProps) {
+  // Loading and failure share the eager modal; a failed chunk remains dismissible and retryable.
   const title = t("devices.pairing.title");
-  const message = t("common.loading");
+  const message = t(failed ? "devices.pairing.loadFailed" : "common.loading");
   return html`<openclaw-modal-dialog
     label=${title}
     description=${message}
     @modal-cancel=${props.onClose}
   >
-    <section class="device-pair-setup" aria-busy="true">
+    <section class="device-pair-setup" aria-busy=${failed ? nothing : "true"}>
       <header class="device-pair-setup__header">
         <div>
           <h2>${title}</h2>
-          <p role="status">${message}</p>
+          <p role=${failed ? nothing : "status"}>${message}</p>
         </div>
       </header>
       <footer class="device-pair-setup__footer">
-        <button class="btn btn--ghost" type="button" @click=${props.onClose}>
-          ${t("common.close")}
-        </button>
-      </footer>
-    </section>
-  </openclaw-modal-dialog>`;
-}
-
-// The pairing chunk failed to load while its overlay is open. Reuse the eager
-// modal chrome so the operator still gets a dialog, a reason, and a retry
-// instead of a silently empty surface.
-function renderDevicePairSetupLoadFailure(host: ShellViewHost, props: DevicePairSetupProps) {
-  const title = t("devices.pairing.title");
-  const message = t("devices.pairing.loadFailed");
-  return html`<openclaw-modal-dialog
-    label=${title}
-    description=${message}
-    @modal-cancel=${props.onClose}
-  >
-    <section class="device-pair-setup">
-      <header class="device-pair-setup__header">
-        <div>
-          <h2>${title}</h2>
-          <p>${message}</p>
-        </div>
-      </header>
-      <footer class="device-pair-setup__footer">
-        <button
-          class="btn btn--primary"
-          type="button"
-          @click=${() => host.retryDevicePairSetupRenderer()}
-        >
-          ${t("common.retry")}
-        </button>
+        ${failed
+          ? html`<button
+              class="btn btn--primary"
+              type="button"
+              @click=${() => host.retryDevicePairSetupRenderer()}
+            >
+              ${t("common.retry")}
+            </button>`
+          : nothing}
         <button class="btn btn--ghost" type="button" @click=${props.onClose}>
           ${t("common.close")}
         </button>
@@ -210,24 +185,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const canHoldUpdate =
     canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
-  const outboxStoreRuntime = host.outboxStoreRuntime;
-  const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
-  const storedDraftScopeKeys = outboxStoreRuntime?.listStoredDraftScopes(outboxScopeHost) ?? null;
-  const outboxAttentionCountForSession = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        const scopeKey = outboxStoreRuntime.storedChatOutboxScopeKey(scope);
-        return storedOutboxes?.attentionCountsByScope.get(scopeKey) ?? 0;
-      }
-    : () => 0;
-  const hasSessionDraft = outboxStoreRuntime
-    ? (sessionKey: string) => {
-        const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
-        return (
-          storedDraftScopeKeys?.has(outboxStoreRuntime.storedChatOutboxScopeKey(scope)) === true
-        );
-      }
-    : EMPTY_SESSION_HAS_DRAFT;
+  const storedOutboxes = host.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost);
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   // The install keeps running after `update.run` answers, so the reconciliation
@@ -237,9 +195,11 @@ export function renderApplicationShell(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+  const homePanelAvailable = isHomePanelAvailable(context.gateway);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
+  const lazyElementState = host.lazyCustomElements.visibleState;
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
@@ -270,30 +230,15 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost();
+  // Native chrome is absent in browsers; the shell owns visible retry if its chunk fails.
+  if (nativeWebChrome && !onboarding) {
+    host.lazyCustomElements.preload(MACOS_TITLEBAR_ELEMENT, { reportError: true });
+  }
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
     routeId: activeRoute,
     onboarding,
   });
-  const showScopeUpgradeStatus =
-    gatewayConnected &&
-    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
-    !operatorAccess.canAdmin;
-  if (showScopeUpgradeStatus) {
-    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
-  }
-  const scopeUpgradeSurface = showScopeUpgradeStatus
-    ? html`<openclaw-device-scope-upgrade-banner
-        .props=${{
-          snapshot: gatewaySnapshot,
-          mobile: mobileNavLayout,
-          // Device-less clients may not reach a session pane, so the shell
-          // retains the manual-repair entry until the header can own it.
-          showTrigger:
-            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
-        }}
-      ></openclaw-device-scope-upgrade-banner>`
-    : null;
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
@@ -308,6 +253,17 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
+  if (
+    floatingSidebarAttentionVisible({
+      navigationSurfaceHidden,
+      mobileNavLayout,
+      onboarding,
+      settingsTakeover,
+      compact: mergedChatChrome,
+    })
+  ) {
+    host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
+  }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
@@ -334,12 +290,10 @@ export function renderApplicationShell(host: ShellViewHost) {
       host.openNewSession(agentId, target);
     }
   };
-  // One storage read per render; theme.refresh() re-renders on pref changes.
-  const uiSettings = loadSettings();
+  const uiSettings = context.theme.settings;
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
-  const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
     Object.assign(host.navigationSidebar, {
       basePath: context.basePath,
@@ -351,8 +305,11 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
-      outboxAttentionCountForSession,
-      hasSessionDraft,
+      restartPending: gatewaySnapshot.restartPending === true,
+      queuedOutboxCount: storedOutboxes?.total ?? 0,
+      lastError: gatewaySnapshot.lastError,
+      outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
+      hasSessionDraft: storedOutboxes?.hasSessionDraft ?? EMPTY_SESSION_HAS_DRAFT,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
@@ -389,6 +346,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         activeSearch: host.routeState.location?.search ?? "",
         activeHash: host.routeState.location?.hash ?? "",
         offline: gatewaySnapshot.offlineStable,
+        restartPending: gatewaySnapshot.restartPending,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
         gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
@@ -445,10 +403,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   return html`
-    ${renderLazyElementModal(host.lazyCustomElements)}
+    ${lazyElementState?.status === "loading" &&
+    lazyElementState.element === host.commandPaletteElement
+      ? renderCommandPaletteLoading(() => host.lazyCustomElements.close())
+      : renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
-          .onNavigate=${(routeId: RouteId) => host.navigate(routeId)}
+          .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+            host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
           .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
         ></openclaw-command-palette>`
@@ -472,10 +434,13 @@ export function renderApplicationShell(host: ShellViewHost) {
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
-      <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
+      <a class="shell-skip-link" href="#control-ui-main" ?inert=${navDrawerOpen}>
+        ${t("common.skipToMainContent")}
+      </a>
       ${nativeWebChrome && !onboarding
         ? html`
             <openclaw-macos-titlebar-controls
+              ?inert=${navDrawerOpen}
               .navCollapsed=${host.nativeNavCollapsed()}
               .historyOnly=${settingsTakeover}
               .canGoBack=${host.nativeHistoryState.canGoBack}
@@ -490,12 +455,10 @@ export function renderApplicationShell(host: ShellViewHost) {
           `
         : nothing}
       <openclaw-app-topbar
+        ?inert=${navDrawerOpen}
         .resourceBasePath=${context.resourceBasePath}
         .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
-        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
-          ? scopeUpgradeSurface
-          : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -519,21 +482,14 @@ export function renderApplicationShell(host: ShellViewHost) {
                 </button>
               </openclaw-tooltip>
               ${navCollapsed
-                ? html`<openclaw-tooltip
-                    .content=${newSessionAccess.allowed
-                      ? t("chat.runControls.newSession")
-                      : newSessionAccess.reason}
-                  >
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-                      aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${() => openNewSession(selectedAgentId)}
-                    >
-                      ${icons.plus}
-                    </button>
-                  </openclaw-tooltip>`
+                ? renderNewSessionLink({
+                    basePath: context.basePath,
+                    agentId: selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+                    onOpen: openNewSession,
+                  })
                 : nothing}
               <openclaw-tooltip
                 .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
@@ -547,36 +503,33 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed && custodianPanelAvailable
-                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
-                      aria-label=${t("nav.askOpenClaw")}
-                      @click=${() =>
-                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-                    >
-                      ${icons.lobster}
-                    </button>
-                  </openclaw-tooltip>`
+              ${navCollapsed
+                ? renderCollapsedAssistantToggles({
+                    homeAvailable: homePanelAvailable,
+                    custodianAvailable: custodianPanelAvailable,
+                  })
                 : nothing}
             </div>
           `
         : nothing}
-      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
-      <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
-        ${mobileNavLayout
-          ? html`<openclaw-modal-dialog
-              class="drawer nav-drawer"
-              .open=${navDrawerOpen}
-              .label=${t("palette.categories.navigation")}
-              @modal-cancel=${() => host.closeNavDrawer({ restoreFocus: true })}
-            >
-              <div class="shell-nav-modal__content" tabindex="-1" autofocus>
-                ${navigationContent}
-              </div>
-            </openclaw-modal-dialog>`
-          : navigationContent}
+      <button
+        type="button"
+        class="shell-nav-backdrop"
+        tabindex="-1"
+        aria-hidden="true"
+        ?inert=${!navDrawerOpen}
+        @click=${() => host.closeNavDrawer({ restoreFocus: true })}
+      ></button>
+      <div
+        class="shell-nav ${mobileNavLayout ? "nav-drawer" : ""}"
+        role=${mobileNavLayout ? "dialog" : nothing}
+        aria-modal=${mobileNavLayout && navDrawerOpen ? "true" : nothing}
+        aria-label=${mobileNavLayout ? t("palette.categories.navigation") : nothing}
+        aria-hidden=${mobileNavLayout && navigationSurfaceHidden ? "true" : nothing}
+        tabindex=${mobileNavLayout ? -1 : nothing}
+        ?inert=${navigationSurfaceHidden}
+      >
+        ${navigationContent}
       </div>
       ${!navCollapsed && !onboarding && !settingsTakeover
         ? html`
@@ -595,15 +548,31 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <main
         id="control-ui-main"
-        class="content ${chatLikeRoute ? "content--chat" : ""} ${custodianRoute
+        class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "custodian"
           ? "content--custodian"
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
+        ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
+        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          ? html`<div class="connection-action-block" role="status" aria-live="polite">
+              <span class="connection-action-block__icon" aria-hidden="true"
+                >${icons.globeOff}</span
+              >
+              <span class="connection-action-block__text">
+                ${t(
+                  settingsTakeover
+                    ? "connection.settingsChangesUnavailable"
+                    : "connection.actionsUnavailable",
+                )}
+              </span>
+            </div>`
+          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
+          settingsTakeover,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
@@ -621,11 +590,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
-        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
-          ? html`<div class="connection-action-block" role="status" aria-live="polite">
-              ${t("connection.actionsUnavailable")}
-            </div>`
-          : nothing}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked}
           aria-disabled=${pageActionsBlocked ? "true" : nothing}
@@ -636,6 +600,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel
+        ?inert=${navDrawerOpen}
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
@@ -648,6 +613,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? nothing
         : html`
             <openclaw-browser-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
@@ -660,6 +626,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               })}
             ></openclaw-browser-panel>
             <openclaw-desktop-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
@@ -667,11 +634,16 @@ export function renderApplicationShell(host: ShellViewHost) {
               .basePath=${context.basePath}
             ></openclaw-desktop-panel>
           `}
-      <openclaw-custodian-panel
-        .available=${custodianPanelAvailable}
-        .suppressed=${activeRoute === "custodian"}
+      <openclaw-assistant-panel
+        ?inert=${navDrawerOpen}
+        .custodianAvailable=${custodianPanelAvailable}
+        .homeAvailable=${homePanelAvailable}
+        .custodianSuppressed=${activeRoute === "custodian"}
+        .pageSessionKey=${host.activeSessionKey}
+        .pageAgentId=${selectedAgentId}
+        .pageRouteId=${activeRoute}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
-      ></openclaw-custodian-panel>
+      ></openclaw-assistant-panel>
       ${isOptionalElementDefined(host.execApprovalElement)
         ? html`<openclaw-exec-approval
             .props=${{

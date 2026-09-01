@@ -6,9 +6,10 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createIrcIngressMonitor } from "./irc-ingress.js";
+import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 import { monitorIrcProvider } from "./monitor.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -86,70 +87,28 @@ async function waitForIrcAsyncCondition(
 
 async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
   const lines: string[] = [];
-  const sockets = new Set<net.Socket>();
   let connectionCount = 0;
-
-  const server = net.createServer((socket) => {
+  const server = await startIrcTestServer((socket) => {
     const connectionNumber = ++connectionCount;
-    sockets.add(socket);
-    socket.setEncoding("utf8");
-    let buffer = "";
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        lines.push(line);
-        if (line.startsWith("USER ")) {
-          if (connectionNumber === 2) {
-            socket.destroy();
-          } else {
-            socket.write(":server 001 bot :welcome\r\n");
-          }
-          if (connectionNumber === 1) {
-            setTimeout(() => socket.destroy(), 10);
-          }
+    onIrcTestLine(socket, (line) => {
+      lines.push(line);
+      if (line.startsWith("USER ")) {
+        if (connectionNumber === 2) {
+          socket.destroy();
+        } else {
+          socket.write(":server 001 bot :welcome\r\n");
+        }
+        if (connectionNumber === 1) {
+          setTimeout(() => socket.destroy(), 10);
         }
       }
     });
-    socket.on("close", () => {
-      sockets.delete(socket);
-    });
   });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
-
   return {
-    port: address.port,
+    ...server,
     lines,
     get connectionCount() {
       return connectionCount;
-    },
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
     },
   };
 }
@@ -160,126 +119,51 @@ async function startInboundIrcServer(
   colonlessBody = false,
   senderNick = "alice",
 ): Promise<InboundIrcServer> {
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.setEncoding("utf8");
-    let buffer = "";
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        if (line.startsWith("USER ")) {
-          socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
-          if (target) {
-            setTimeout(() => {
-              const bodySeparator = colonlessBody ? " " : " :";
-              socket.write(
-                `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
-              );
-            }, 20);
-          }
+  return await startIrcTestServer((socket) => {
+    onIrcTestLine(socket, (line) => {
+      if (line.startsWith("USER ")) {
+        socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
+        if (target) {
+          setTimeout(() => {
+            const bodySeparator = colonlessBody ? " " : " :";
+            socket.write(
+              `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
+            );
+          }, 20);
         }
       }
     });
-    socket.on("close", () => sockets.delete(socket));
   });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
-  return {
-    port: address.port,
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
-  };
 }
 
 async function startReconnectingReplyIrcServer(): Promise<ReconnectingReplyIrcServer> {
+  // Retain closed sockets in order so reconnect assertions keep their original connection index.
   const sockets: net.Socket[] = [];
   const linesByConnection: string[][] = [];
-  const server = net.createServer((socket) => {
+  const server = await startIrcTestServer((socket) => {
     const connectionIndex = sockets.length;
     sockets.push(socket);
     linesByConnection[connectionIndex] = [];
-    socket.setEncoding("utf8");
-    let buffer = "";
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      let idx = buffer.indexOf("\n");
-      while (idx !== -1) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        idx = buffer.indexOf("\n");
-        linesByConnection[connectionIndex]?.push(line);
-        if (line.startsWith("USER ")) {
-          const nick = connectionIndex === 0 ? "receipt-bot" : "reconnected-bot";
-          socket.write(`:server 001 ${nick} :welcome\r\n`);
-          if (connectionIndex === 0) {
-            setTimeout(() => {
-              socket.write(":alice!ident@example.org PRIVMSG receipt-bot :hello\r\n");
-            }, 20);
-          }
+    onIrcTestLine(socket, (line) => {
+      linesByConnection[connectionIndex]?.push(line);
+      if (line.startsWith("USER ")) {
+        const nick = connectionIndex === 0 ? "receipt-bot" : "reconnected-bot";
+        socket.write(`:server 001 ${nick} :welcome\r\n`);
+        if (connectionIndex === 0) {
+          setTimeout(() => {
+            socket.write(":alice!ident@example.org PRIVMSG receipt-bot :hello\r\n");
+          }, 20);
         }
       }
     });
   });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
   return {
-    port: address.port,
+    ...server,
     linesByConnection,
     get connectionCount() {
       return sockets.length;
     },
     disconnectFirst: () => sockets[0]?.destroy(),
-    close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
   };
 }
 

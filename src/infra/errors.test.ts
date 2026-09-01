@@ -10,6 +10,7 @@ import {
   hasErrnoCode,
   isErrno,
   isMissingPathError,
+  readErrorCause,
   readErrorName,
 } from "./errors.js";
 
@@ -35,6 +36,34 @@ describe("error helpers", () => {
     { value: null, expected: "" },
   ])("reads error names from %j", ({ value, expected }) => {
     expect(readErrorName(value)).toBe(expected);
+  });
+
+  it.each([
+    ["missing cause", {}, undefined],
+    ["undefined cause", { cause: undefined }, undefined],
+    ["null cause", { cause: null }, null],
+    ["arbitrary cause", { cause: "boom" }, "boom"],
+    ["null input", null, undefined],
+    ["primitive input", "boom", undefined],
+    ["function input", Object.assign(() => {}, { cause: "boom" }), undefined],
+  ])("reads %s directly", (_name, value, expected) => {
+    expect(readErrorCause(value)).toBe(expected);
+  });
+
+  it("preserves self-referential causes", () => {
+    const error: { cause?: unknown } = {};
+    error.cause = error;
+    expect(readErrorCause(error)).toBe(error);
+  });
+
+  it("propagates cause accessor failures", () => {
+    const failure = new Error("cause access failed");
+    const error = {
+      get cause(): never {
+        throw failure;
+      },
+    };
+    expect(() => readErrorCause(error)).toThrow(failure);
   });
 
   it("walks nested error graphs once in breadth-first order", () => {

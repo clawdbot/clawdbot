@@ -9,6 +9,20 @@ export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
 export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
 
+// Credit ships on for verified GitHub identities: an absent row is the default, not a
+// refusal, so clearing the row on an account change restores the default instead of
+// revoking credit. The preference API persists arbitrary JSON, so anything other than a
+// missing row or literal `true` fails closed rather than publishing a person's trailer.
+export function isGitCoauthorCreditEnabled(value: unknown): boolean {
+  return value === undefined || value === true;
+}
+
+export {
+  normalizeUiAppearancePreference,
+  UI_APPEARANCE_PREFERENCE_KEYS,
+  type UiAppearancePreferenceKey,
+} from "./ui-appearance-preferences.js";
+
 const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
 const UserProfileRoleSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
@@ -92,6 +106,13 @@ export const UsersPrefsSetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok") }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
+export const UsersPrefsChangedEventSchema = closedObject({
+  profileId: UserProfileIdSchema,
+  keys: Type.Array(UserPreferenceKeySchema, {
+    maxItems: USER_PREFS_ENTRY_LIMIT,
+    uniqueItems: true,
+  }),
+});
 
 export type UserProfile = Static<typeof UserProfileSchema>;
 export type UserProfileGitHubIdentity = Static<typeof UserProfileGitHubIdentitySchema>;
@@ -111,3 +132,4 @@ export type UsersPrefsGetParams = Static<typeof UsersPrefsGetParamsSchema>;
 export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
 export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;
 export type UsersPrefsSetResult = Static<typeof UsersPrefsSetResultSchema>;
+export type UsersPrefsChangedEvent = Static<typeof UsersPrefsChangedEventSchema>;

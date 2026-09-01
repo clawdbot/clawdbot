@@ -2,6 +2,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
@@ -160,6 +161,27 @@ export function renderChannelActionRow(actions: unknown) {
       <div class="settings-row__control">${actions}</div>
     </div>
   `;
+}
+
+export function renderChannelRefreshAction(params: {
+  updatedAt?: number | null;
+  disabled: boolean;
+  onRefresh: () => void;
+}) {
+  const updatedLabel = params.updatedAt
+    ? t("channels.hub.updatedAgo", { ago: formatRelativeTimestamp(params.updatedAt) })
+    : t("common.na");
+  return html`<openclaw-tooltip .content=${updatedLabel}>
+    <button
+      type="button"
+      class="btn btn--xs btn--icon"
+      aria-label=${t("common.refresh")}
+      ?disabled=${params.disabled}
+      @click=${params.onRefresh}
+    >
+      ${icons.refresh}
+    </button>
+  </openclaw-tooltip>`;
 }
 
 /** One account inside a multi-account channel group. */

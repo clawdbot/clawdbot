@@ -12,6 +12,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -164,9 +165,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
   ): Promise<{ visibleReplySent: false } | void> => {
-    if (payload.isReasoning === true) {
-      return { visibleReplySent: false };
-    }
     if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
       if (progress.useNativeProgressStreaming) {
         await progress.deliverNativeFinal(payload, info.kind);
@@ -236,7 +234,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
-        : normalizeSlackOutboundText((replySourceText ?? "").trim());
+        : normalizeSlackOutboundText((replySourceText ?? "").trim(), {
+            tableMode: resolveMarkdownTableMode({
+              cfg,
+              channel: "slack",
+              accountId: account.accountId,
+            }),
+          });
     const previewFinalTextFitsEdit =
       countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =
@@ -390,6 +394,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       accountId: route.accountId,
       route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload: prepared.ctxPayload,
+      dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
       dispatcherOptions: {
         ...replyPipeline,
         // A channel transform marks intentional silence before core can synthesize an empty-reply error.
@@ -474,9 +479,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          if (payload.phase === "start") {
-            progress.progressWorkCounter.noteToolCall(payload.name);
-          }
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
@@ -541,7 +543,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } catch (err) {
     dispatchError = err;
   } finally {
-    progress.progressDraft.cancel();
+    await progress.cancel();
     if (!progress.useDraftProgressCard) {
       await draftStream?.discardPending();
     }

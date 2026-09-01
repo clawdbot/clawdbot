@@ -22,6 +22,7 @@ import {
   unregisterGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
+import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
   isGoogleChatNativeApprovalClientEnabled,
   shouldHandleGoogleChatNativeApprovalRequest,
@@ -86,10 +87,6 @@ function resolveHandlerAccount(
     return null;
   }
   return account;
-}
-
-function escapeGoogleChatText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function truncateText(text: string, maxChars = MAX_TEXT_PARAGRAPH_CHARS): string {

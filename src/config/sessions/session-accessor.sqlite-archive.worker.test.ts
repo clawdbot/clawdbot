@@ -30,6 +30,10 @@ import {
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
 
 type TestTranscriptEvent = {
   id: string;
@@ -45,7 +49,13 @@ describe("SQLite transcript archive worker", () => {
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // A deferred projection reconcile worker may still hold the agent DB open;
+    // Windows cannot unlink open files, so settle it before removing tempDir.
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath).path,
+    });
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -96,6 +106,86 @@ describe("SQLite transcript archive worker", () => {
     expect(archiveLines.map((line) => (JSON.parse(line) as { id: string }).id)).toEqual(
       events.map((event) => event.id),
     );
+  });
+
+  it("processes maintenance across the archive byte limit", async () => {
+    const largeContent = "x".repeat(33 * 1024 * 1024);
+    const archivedSessions = [0, 1].map((index) => ({
+      event: createTranscriptEvent(`worker-byte-session-${index}`, `${index}:${largeContent}`),
+      sessionId: `worker-byte-session-${index}`,
+      sessionKey: `agent:main:worker-byte-${index}`,
+    }));
+    for (const [index, session] of archivedSessions.entries()) {
+      await replaceSessionEntry(
+        { sessionKey: session.sessionKey, storePath },
+        { sessionId: session.sessionId, updatedAt: Date.now() + index },
+      );
+      await replaceTranscriptEvents(
+        { sessionKey: session.sessionKey, sessionId: session.sessionId, storePath },
+        [session.event],
+      );
+    }
+    const retainedSession = {
+      sessionId: "worker-byte-session-retained",
+      sessionKey: "agent:main:worker-byte-retained",
+    };
+    await replaceSessionEntry(
+      { sessionKey: retainedSession.sessionKey, storePath },
+      { sessionId: retainedSession.sessionId, updatedAt: Date.now() + archivedSessions.length },
+    );
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      maintenanceOverride: {
+        maxEntries: 1,
+        mode: "enforce",
+        pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+
+    expect(result).toMatchObject({
+      afterCount: 1,
+      beforeCount: archivedSessions.length + 1,
+      capped: archivedSessions.length,
+      modelRunPruned: 0,
+      pruned: 0,
+    });
+    expect(result.archivedTranscriptDirectories).toEqual([path.dirname(storePath)]);
+    expect(loadSessionEntry({ sessionKey: retainedSession.sessionKey, storePath })).toBeDefined();
+    const archiveRows = openLifecycleTestDatabase(storePath)
+      .db.prepare(
+        `SELECT archive_name, archive_sha256, published_at, session_id
+           FROM session_transcript_archives
+          ORDER BY session_id`,
+      )
+      .all() as Array<{
+      archive_name: string;
+      archive_sha256: string;
+      published_at: number | null;
+      session_id: string;
+    }>;
+    expect(archiveRows).toHaveLength(archivedSessions.length);
+    for (const session of archivedSessions) {
+      expect(loadSessionEntry({ sessionKey: session.sessionKey, storePath })).toBeUndefined();
+      await expect(
+        loadTranscriptEvents({
+          sessionKey: session.sessionKey,
+          sessionId: session.sessionId,
+          storePath,
+        }),
+      ).resolves.toEqual([]);
+      const archive = archiveRows.find((row) => row.session_id === session.sessionId);
+      expect(archive).toMatchObject({
+        archive_sha256: expect.any(String),
+        published_at: expect.any(Number),
+      });
+      const archivePath = path.join(path.dirname(storePath), archive?.archive_name ?? "");
+      expect(sha256(fs.readFileSync(archivePath))).toBe(archive?.archive_sha256);
+      const archivedContent = readSessionArchiveContentSync(archivePath);
+      const expectedContent = `${JSON.stringify(session.event)}\n`;
+      expect(Buffer.byteLength(archivedContent)).toBe(Buffer.byteLength(expectedContent));
+      expect(sha256(archivedContent)).toBe(sha256(expectedContent));
+    }
   });
 
   it("commits a canonical archive before publishing its derived file", async () => {
@@ -426,6 +516,7 @@ describe("SQLite transcript archive worker", () => {
         db.selectFrom("session_windows").select("session_id").where("session_id", "=", sessionId),
       ).rows.length,
     });
+    await waitForSessionTranscriptProjection(scope);
     const before = readLifecycleCounts();
 
     await expect(
@@ -682,7 +773,7 @@ function readArchiveLines(archivePath: string | undefined): string[] {
     .split("\n");
 }
 
-function sha256(content: string): string {
+function sha256(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
 }
 

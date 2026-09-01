@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -27,6 +28,7 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeAskUserToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
+  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
@@ -68,6 +70,7 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -88,6 +91,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const resolvedConfig = options?.config;
+  const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
   const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
@@ -121,7 +125,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
-      ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+      ? {
+          root: options.sandboxRoot,
+          bridge: options.sandboxFsBridge,
+          stagedMediaPaths: options.stagedMediaPaths,
+        }
       : undefined;
   const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
     config: availabilityConfig ?? resolvedConfig,
@@ -252,6 +260,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         hasRepliedRef: options?.hasRepliedRef,
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
+        sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+        sandboxFsBridge: options?.sandboxFsBridge,
+        sandboxWorkspaceMediaReadAllowed: options?.sandboxWorkspaceMediaReadAllowed,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         sourceReplyOnly: options?.sourceReplyOnly,
@@ -302,7 +313,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
-    config: resolvedConfig,
+    config: sessionConfig,
     callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
     sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
   };
@@ -325,10 +336,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       : [
           nodesTool,
           createMobileUiTool({ idempotencyScope: options?.runId }),
-          ...(options?.modelHasVision === false
+          ...(options?.modelHasVision === false || options?.computerTransport === null
             ? []
             : [
                 createComputerTool({
+                  transport: options?.computerTransport,
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
                   // Run ids expire before later assistant runs can reuse a provider call id.
@@ -361,7 +373,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionId: options?.sessionId,
             requesterAgentIdOverride: sessionAgentId,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            config: sessionConfig,
           }),
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -374,7 +386,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
                   agentId: sessionAgentId,
                   agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
                   sessionId: options?.sessionId,
+                  config: resolvedConfig,
+                  execSession: options?.execSession,
+                  execOverrides: options?.execOverrides,
                   runId: options?.runId,
+                  approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds,
                 }),
                 createPortalTool(),
               ]),
@@ -472,6 +488,20 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           }),
         ]
       : []),
+    ...(shouldIncludeSecretsToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createSecretsTool({
+            config: resolvedConfig,
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+          }),
+        ]
+      : []),
     createSessionsListTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
@@ -511,7 +541,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            config: sessionConfig,
           }),
         ]),
     ...(!embedded || options?.allowGatewaySubagentBinding === true
@@ -538,6 +568,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             requesterRunId: options?.runId,
             swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
+            sessionPermissionPolicy: options?.sessionPermissionPolicy,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
@@ -557,13 +588,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
-      config: resolvedConfig,
+      config: sessionConfig,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: sessionAgentId,
       runSessionKey: options?.runSessionKey,
-      config: resolvedConfig,
+      config: sessionConfig,
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
@@ -593,6 +624,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
 
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
+  for (const tool of allTools) {
+    bindAssembledAgentToolActionDescriptor(tool);
+  }
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(

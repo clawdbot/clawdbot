@@ -1,5 +1,6 @@
 // Doctor config analysis tests cover schema analysis, model fallback values, and issue generation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -280,6 +281,25 @@ describe("doctor config analysis helpers", () => {
 });
 
 describe("collectImplicitFallbackClobberWarnings", () => {
+  it.each(["openai/gpt-5.3", { primary: "openai/gpt-5.3" }])(
+    "warns when canonical agent model %j suppresses default fallbacks",
+    (model) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] } },
+          entries: { ops: { model } },
+        },
+      };
+
+      expect(resolveConfiguredModelFallbacks({ cfg, agentId: "ops" })).toEqual([]);
+      const warnings = collectImplicitFallbackClobberWarnings(cfg);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("agents.entries.ops.model");
+      expect(warnings[0]).toContain("leaving the agent with no fallbacks");
+      expect(warnings[0]).toContain('add "fallbacks": [...]');
+    },
+  );
+
   function buildConfig(overrides: { defaults?: unknown; list?: unknown[] }): OpenClawConfig {
     return {
       agents: {
@@ -354,7 +374,7 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
     expect(warnings).toStrictEqual([
       [
-        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4, openai/gpt-5.3), leaving the agent with no fallbacks.',
+        '- agents.entries.ops.model is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4, openai/gpt-5.3), leaving the agent with no fallbacks.',
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
@@ -390,7 +410,7 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
     expect(warnings).toStrictEqual([
       [
-        '- agents.list[0].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '- agents.entries.researcher.model is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);
@@ -458,11 +478,11 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
     expect(warnings).toStrictEqual([
       [
-        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '- agents.entries.ops.model is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
       [
-        '- agents.list[1].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '- agents.entries.researcher.model is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
         '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
       ].join("\n"),
     ]);

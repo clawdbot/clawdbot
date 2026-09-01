@@ -1,11 +1,10 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectHoverMarqueeAfterActionsAppear } from "./session-management.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Codex native session catalog",
@@ -16,12 +15,12 @@ const suite = createControlUiE2eSuite({
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "native-session-discovery",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
+  }
+});
 
 async function expandCodingSection(page: Page, required = false) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
@@ -232,7 +231,6 @@ suite.define(() => {
       expect(groupGap).toBeGreaterThan(0);
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await sessionGroups.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
@@ -291,7 +289,6 @@ suite.define(() => {
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -358,13 +355,18 @@ suite.define(() => {
                   sessions: [
                     {
                       threadId: "thread-local",
-                      name: "Title fits until menu appears",
+                      name: "Local planning session",
                       cwd: "/Users/dev/openclaw",
                       status: "idle",
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-ada",
+                        identity: { type: "profile", id: "profile-ada" },
+                        label: "Ada",
+                      },
                     },
                     {
                       threadId: "thread-worktree",
@@ -374,7 +376,12 @@ suite.define(() => {
                       archived: false,
                       canContinue: true,
                       canArchive: true,
-                      createdActor: { type: "human", id: "profile-zoe", label: "Zoe" },
+                      createdActor: {
+                        type: "human",
+                        id: "profile-zoe",
+                        identity: { type: "profile", id: "profile-zoe" },
+                        label: "Zoe",
+                      },
                     },
                     {
                       threadId: "thread-other",
@@ -452,7 +459,7 @@ suite.define(() => {
           .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
       ).toEqual(["listitem", "listitem"]);
       const openclawProject = section.locator(
-        '[data-session-catalog-project="/Users/dev/openclaw"]',
+        '[data-session-catalog-project="project:/Users/dev/openclaw"]',
       );
       const openclawProjectItem = openclawProject.locator("..");
       const openclawProjectList = openclawProjectItem.locator(":scope > [role=list]");
@@ -465,7 +472,6 @@ suite.define(() => {
         await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
       ).toBe("2");
       const projectRows = section.locator(".sidebar-recent-session--catalog-project-child");
-      const localCatalogRow = section.locator('[data-session-key$=":thread-local"]');
       await expect.poll(() => projectRows.count()).toBe(3);
       expect(
         await openclawProjectList
@@ -506,13 +512,8 @@ suite.define(() => {
       // instead of reserving a phantom second line.
       for (const metric of threadRowMetrics) {
         expect(metric.singleLine).toBe(true);
+        expect(metric.height).toBeCloseTo(30, 1);
       }
-      const collapsedHeight = threadRowMetrics.at(0)?.height ?? Number.NaN;
-      for (const metric of threadRowMetrics) {
-        expect(metric.height).toBeCloseTo(collapsedHeight, 3);
-      }
-      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
-      expect(collapsedHeight).toBeCloseTo(30, 1);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
@@ -521,22 +522,6 @@ suite.define(() => {
           paddingTop: "4px",
         });
       }
-      const catalogRow = projectRows.first();
-      await expectHoverMarqueeAfterActionsAppear(catalogRow);
-      const catalogActionReservation = await catalogRow.evaluate((row) => {
-        const text = row.querySelector<HTMLElement>(".sidebar-recent-session__text");
-        const menu = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
-        return {
-          actionCount: row.getAttribute("data-session-row-action-count"),
-          menuWidth: menu?.getBoundingClientRect().width ?? 0,
-          paddingRight: text ? Number.parseFloat(getComputedStyle(text).paddingRight) : 0,
-        };
-      });
-      expect(catalogActionReservation.actionCount).toBe("1");
-      expect(catalogActionReservation.paddingRight).toBeCloseTo(
-        catalogActionReservation.menuWidth + 3,
-        0,
-      );
       const projectLabelTone = await openclawProject
         .locator(".sidebar-session-catalog-project__label")
         .evaluate((label) => {
@@ -568,7 +553,7 @@ suite.define(() => {
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
       expect(
         await section
-          .locator('[data-session-catalog-project="/Users/dev/other"]')
+          .locator('[data-session-catalog-project="project:/Users/dev/other"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("other");
@@ -598,7 +583,6 @@ suite.define(() => {
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
       ).toBe("none");
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await section.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
@@ -620,13 +604,13 @@ suite.define(() => {
       ).toEqual(["listitem", "listitem", "listitem"]);
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-ada"]')
+          .locator('[data-session-catalog-project="person:profile:profile-ada"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Ada");
       expect(
         await section
-          .locator('[data-session-catalog-project="person:profile-zoe"]')
+          .locator('[data-session-catalog-project="person:profile:profile-zoe"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("Zoe");
@@ -646,7 +630,7 @@ suite.define(() => {
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
-      expect(await localCatalogRow.count()).toBe(0);
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Other project session", { exact: true }).count()).toBe(1);
       expect(await openclawProject.count()).toBe(1);
@@ -658,21 +642,20 @@ suite.define(() => {
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
-      expect(await localCatalogRow.count()).toBe(1);
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(1);
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       expect(
         await page.evaluate(
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).not.toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await section.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
@@ -794,17 +777,14 @@ suite.define(() => {
         '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
       );
       await warning.waitFor({ state: "visible" });
-      await expect.poll(() => warning.getAttribute("title")).toContain("[NODE_LIST_FAILED]");
+      await expect.poll(() => tooltipTitleText(warning)).toContain("[NODE_LIST_FAILED]");
+      await expect.poll(() => tooltipTitleText(warning)).toContain("pairing database is locked");
       await expect
-        .poll(() => warning.getAttribute("title"))
-        .toContain("pairing database is locked");
-      await expect
-        .poll(() => warning.getAttribute("title"))
+        .poll(() => tooltipTitleText(warning))
         .toContain("Settings > Automation > Plugins");
       expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -988,15 +968,15 @@ suite.define(() => {
         (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
       ),
     ).toBe(true);
-    const read = await gateway.waitForRequest("sessions.catalog.read");
-    expect(read.params).toMatchObject({
+    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
       agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
     });
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks");
+    await composer.fill("continue with the final checks /status");
+    expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
     await gateway.setMethodResponse("sessions.list", {
       count: 1,
       defaults: {
@@ -1030,7 +1010,7 @@ suite.define(() => {
     const sent = await gateway.waitForRequest("chat.send");
     expect(sent.params).toMatchObject({
       sessionKey: "agent:main:adopted-codex",
-      message: "continue with the final checks",
+      message: "continue with the final checks /status",
     });
     await expect
       .poll(() => new URL(page.url()).pathname)

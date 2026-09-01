@@ -128,6 +128,7 @@ function loadGatewayStoreEntries(params: {
 function mergeSessionEntryIntoCombined(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
+  agentIdBySessionKey: Map<string, string>;
   entry: SessionEntry;
   agentId: string;
   canonicalKey: string;
@@ -159,11 +160,13 @@ function mergeSessionEntryIntoCombined(params: {
       : {}),
     ...(entry.spawnedBy ? { spawnedBy: resolveLineageKey(entry.spawnedBy) } : {}),
   };
+  params.agentIdBySessionKey.set(canonicalKey, agentId);
 }
 
 function mergeOpenIncognitoStores(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
+  agentIdBySessionKey: Map<string, string>;
   projection: GatewaySessionEntryProjection;
   targets: ReadonlyArray<{ agentId: string; storePath: string }>;
 }): string[] {
@@ -183,6 +186,7 @@ function mergeOpenIncognitoStores(params: {
       mergeSessionEntryIntoCombined({
         cfg: params.cfg,
         combined: params.combined,
+        agentIdBySessionKey: params.agentIdBySessionKey,
         entry,
         agentId: target.agentId,
         canonicalKey: sessionKey,
@@ -200,6 +204,7 @@ function filterCombinedStoreToConfiguredAgents(params: {
   cfg: OpenClawConfig;
   configuredAgentIds: ReadonlySet<string>;
   store: Record<string, SessionEntry>;
+  agentIdBySessionKey: Map<string, string>;
 }): void {
   const isConfiguredSessionKey = (key: string | undefined) => {
     const normalizedKey = normalizeOptionalString(key);
@@ -219,6 +224,7 @@ function filterCombinedStoreToConfiguredAgents(params: {
       isConfiguredSessionKey(entry.parentSessionKey);
     if (!keep) {
       delete params.store[key];
+      params.agentIdBySessionKey.delete(key);
     }
   }
 }
@@ -392,6 +398,7 @@ export function loadCombinedSessionStoreForGatewayCore(
   durableTargets: ReadonlyArray<{ agentId: string; storePath: string }>;
   storePath: string;
   store: Record<string, SessionEntry>;
+  agentIdBySessionKey: ReadonlyMap<string, string>;
 } {
   const projection = opts.projection ?? "full";
   // Count admission and projection share this exact target set. Otherwise an optional
@@ -407,6 +414,9 @@ export function loadCombinedSessionStoreForGatewayCore(
     storeConfig,
   } = resolveGatewaySessionStoreTargets(cfg, opts);
   const combined: Record<string, SessionEntry> = {};
+  // Unqualified keys such as global retain the owner of the projected row,
+  // including when multiple stores contain that key. Consumers must not guess it.
+  const agentIdBySessionKey = new Map<string, string>();
   for (const target of durableTargets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
@@ -431,6 +441,7 @@ export function loadCombinedSessionStoreForGatewayCore(
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
+        agentIdBySessionKey,
         entry,
         agentId: canonicalAgentId,
         canonicalKey,
@@ -441,28 +452,34 @@ export function loadCombinedSessionStoreForGatewayCore(
   const incognitoStorePaths = mergeOpenIncognitoStores({
     cfg,
     combined,
+    agentIdBySessionKey,
     projection,
     targets: incognitoTargets,
   });
   if (configuredAgentIds) {
-    filterCombinedStoreToConfiguredAgents({ cfg, configuredAgentIds, store: combined });
+    filterCombinedStoreToConfiguredAgents({
+      cfg,
+      configuredAgentIds,
+      store: combined,
+      agentIdBySessionKey,
+    });
   }
 
   const durableStorePaths = durableTargets.map((target) => target.storePath);
   const durableStorePath =
     preparedDurableStorePath ?? resolveCombinedDatabasePath(durableTargets, defaultAgentId);
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    return {
-      diagnostics,
-      durableStorePath,
-      durableTargets,
-      storePath: incognitoStorePaths.length > 0 ? "(multiple)" : durableStorePath,
-      store: combined,
-    };
-  }
-  const storePath = resolveCombinedStorePath(
-    [...durableStorePaths, ...incognitoStorePaths],
-    storeConfig,
-  );
-  return { diagnostics, durableStorePath, durableTargets, storePath, store: combined };
+  const storePath =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? incognitoStorePaths.length > 0
+        ? "(multiple)"
+        : durableStorePath
+      : resolveCombinedStorePath([...durableStorePaths, ...incognitoStorePaths], storeConfig);
+  return {
+    diagnostics,
+    durableStorePath,
+    durableTargets,
+    storePath,
+    store: combined,
+    agentIdBySessionKey,
+  };
 }

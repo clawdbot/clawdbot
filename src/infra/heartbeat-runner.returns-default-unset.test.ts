@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -228,12 +229,12 @@ function expectReplyCall(
 function replyBody(
   replySpy: ReturnType<typeof vi.fn>,
   index = 0,
-): { Body?: string; Provider?: string } {
+): Pick<MsgContext, "Body" | "InternalTurnSource"> {
   const call = replySpy.mock.calls[index];
-  return requireRecord(call?.[0], `reply call ${index} body`) as {
-    Body?: string;
-    Provider?: string;
-  };
+  return requireRecord(call?.[0], `reply call ${index} body`) as Pick<
+    MsgContext,
+    "Body" | "InternalTurnSource"
+  >;
 }
 
 type HeartbeatSeedOverride = Partial<Parameters<typeof seedSessionStore>[2]>;
@@ -892,7 +893,7 @@ describe("runHeartbeatOnce", () => {
 
     expect(res.status).toBe("ran");
     expect(sendWhatsApp).not.toHaveBeenCalled();
-    expect(replyBody(replySpy).Provider).toBe("exec-event");
+    expect(replyBody(replySpy).InternalTurnSource).toBe("exec");
   });
 
   it.each([
@@ -1229,7 +1230,8 @@ describe("runHeartbeatOnce", () => {
           To: "120363401234567890@g.us",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "120363401234567890@g.us",
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
+          Provider: undefined,
         },
         { isHeartbeat: true, suppressToolErrorWarnings: false },
         cfg,
@@ -1304,7 +1306,8 @@ describe("runHeartbeatOnce", () => {
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
-          Provider: "heartbeat",
+          InternalTurnSource: "heartbeat",
+          Provider: undefined,
         },
         { isHeartbeat: true, suppressToolErrorWarnings: false },
         cfg,
@@ -1403,7 +1406,8 @@ describe("runHeartbeatOnce", () => {
             SessionKey: overrideSessionKey,
             From: peerId,
             To: peerId,
-            Provider: "heartbeat",
+            InternalTurnSource: "heartbeat",
+            Provider: undefined,
           },
           { isHeartbeat: true, suppressToolErrorWarnings: false },
           cfg,
@@ -2209,7 +2213,7 @@ tasks:
         }
         if (expectCronContext) {
           const calledCtx = replyBody(replySpy);
-          expect(calledCtx.Provider, name).toBe("cron-event");
+          expect(calledCtx.InternalTurnSource, name).toBe("cron");
           expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
       } finally {
@@ -2257,7 +2261,7 @@ tasks:
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
-      expect(calledCtx.Provider).toBe("cron-event");
+      expect(calledCtx.InternalTurnSource).toBe("cron");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
     } finally {
@@ -2304,7 +2308,7 @@ tasks:
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
-      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.InternalTurnSource).toBe("exec");
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {

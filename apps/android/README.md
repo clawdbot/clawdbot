@@ -29,6 +29,10 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 - Open the folder `apps/android`.
 
+## Session colors
+
+Long-press a row on the Sessions screen and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Sessions screen, plus a dot beside the open chat title. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+
 ## Wear OS companion
 
 The `wear` app is a paired-phone companion with the same application ID and signing identity as the phone app. The watch discovers the phone through Wear OS Data Layer, then uses the phone's existing authenticated operator session. It never receives or stores Gateway tokens, passwords, TLS pins, or device-signing identity.
@@ -162,7 +166,7 @@ cd apps/android
 ./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
-`gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
+Set `ANDROID_HOME` to your installed Android SDK, or set `sdk.dir` in the local `apps/android/local.properties` file. For Homebrew's command-line tools, the SDK may be at `/opt/homebrew/share/android-commandlinetools`.
 
 ## Macrobenchmark (Startup + Frame Timing)
 

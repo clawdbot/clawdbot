@@ -27,13 +27,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "custodian panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "dashboard document"
     },
     {
@@ -49,6 +42,76 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Atkinson Hyperlegible"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "DM Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Fraunces"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Geist"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "IBM Plex Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Instrument Sans"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "JetBrains Mono"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Lora"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "Space Grotesk"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/typography.ts",
+      "text": "System"
     },
     {
       "count": 1,
@@ -290,41 +353,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "@BotFather"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "api.slack.com/apps"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "Developer Portal"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "signal-cli"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/channels/hub-meta.ts",
-      "text": "web.telegram.org"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/channels/view.nostr.ts",
@@ -455,13 +483,6 @@
       "name": "text",
       "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/model-providers/default-models-view.ts",
-      "text": "i"
     },
     {
       "count": 4,

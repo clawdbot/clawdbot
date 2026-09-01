@@ -21,17 +21,20 @@ export function createMediaProviderRegistry<TKey extends MediaProviderRegistryKe
   key: TKey,
   options: { directLookup?: boolean } = {},
 ) {
-  const buildProviderMaps = (cfg?: OpenClawConfig) =>
+  const buildProviderMaps = (cfg?: OpenClawConfig, additionalProviderIds?: readonly string[]) =>
     buildCapabilityProviderMaps(
       // The capability runtime's private provider type uses this same registry mapping.
       capabilityProviderRuntime.resolvePluginCapabilityProviders({
         key,
         cfg,
+        additionalProviderIds,
       }) as MediaProvider<TKey>[],
     );
 
   return {
-    listProviders: (cfg?: OpenClawConfig) => [...buildProviderMaps(cfg).canonical.values()],
+    listProviders: (cfg?: OpenClawConfig, additionalProviderIds?: readonly string[]) => [
+      ...buildProviderMaps(cfg, additionalProviderIds).canonical.values(),
+    ],
     getProvider: (providerId: string | undefined, cfg?: OpenClawConfig) => {
       const normalized = normalizeCapabilityProviderId(providerId);
       if (!normalized) {

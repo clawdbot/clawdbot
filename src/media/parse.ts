@@ -17,6 +17,14 @@ import { parseAudioTag } from "./audio-tags.js";
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
 const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
+const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
+  /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
+
+export function isRelativeAssistantMediaReference(url: string): boolean {
+  const trimmed = url.trim();
+  return Boolean(trimmed) && !RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE.test(trimmed);
+}
+
 /** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
   | {
@@ -38,7 +46,7 @@ type SplitMediaFromOutputOptions = {
 
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
-/** Converts file URLs into plain local paths before downstream media validation. */
+// Classify spelling only; preserve file URLs in output so native loaders own decoding and access.
 function normalizeMediaSource(src: string): string {
   return src.replace(FILE_URL_PREFIX_RE, "");
 }
@@ -166,9 +174,10 @@ function isAllowedRemoteMediaUrl(candidate: string): boolean {
 }
 
 function isValidMedia(
-  candidate: string,
+  source: string,
   opts?: { allowSpaces?: boolean; allowBareFilename?: boolean },
 ) {
+  const candidate = normalizeMediaSource(source);
   if (!candidate) {
     return false;
   }
@@ -578,9 +587,16 @@ export function splitMediaFromOutput(
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
+  // Line offsets and scanner spans advance in source order.
+  let fenceIndex = 0;
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
-    if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
+    let fence = fenceSpans[fenceIndex];
+    while (fence && lineOffset >= fence.end) {
+      fenceIndex += 1;
+      fence = fenceSpans[fenceIndex];
+    }
+    if (fence && lineOffset >= fence.start) {
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
@@ -637,10 +653,9 @@ export function splitMediaFromOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = normalizeMediaSource(cleanCandidate(part));
-        if (
-          isValidMedia(candidate, unwrapped || /\s/.test(part) ? { allowSpaces: true } : undefined)
-        ) {
+        const candidate = cleanCandidate(part);
+        const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
+        if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
           hasValidMedia = true;
           foundMediaToken = true;
@@ -662,7 +677,7 @@ export function splitMediaFromOutput(
         looksLikeLocalPath
       ) {
         // A single valid split plus invalid leftovers can be one local path containing spaces.
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
@@ -672,7 +687,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
-        const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const spacedFallback = cleanCandidate(payloadValue);
         if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
           media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
           hasValidMedia = true;
@@ -682,7 +697,7 @@ export function splitMediaFromOutput(
       }
 
       if (!hasValidMedia) {
-        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        const fallback = cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;

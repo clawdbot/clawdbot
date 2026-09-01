@@ -1,3 +1,5 @@
+import type { PluginManifestRecord } from "./manifest-registry.js";
+
 export function configSnapshot(config: Record<string, unknown> = {}) {
   return {
     snapshot: {
@@ -28,7 +30,7 @@ export function metadataSnapshot(params: {
   const installRecord =
     params.installRecord ??
     (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
-  const manifest = {
+  const manifest: PluginManifestRecord = {
     id,
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",

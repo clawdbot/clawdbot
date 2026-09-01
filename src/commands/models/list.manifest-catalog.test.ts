@@ -109,6 +109,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       index,
       manifestRegistry,
       plugins: manifestRegistry.plugins,
+      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     });
 
     expect(
@@ -133,6 +134,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       index: { plugins: [], diagnostics: [] },
       manifestRegistry,
       plugins: manifestRegistry.plugins,
+      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     });
 
     expect(
@@ -152,6 +154,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       index: { plugins: [], diagnostics: [] },
       manifestRegistry,
       plugins: manifestRegistry.plugins,
+      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     };
 
     expect(
@@ -174,6 +177,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       index: { plugins: [], diagnostics: [] },
       manifestRegistry,
       plugins: manifestRegistry.plugins,
+      byPluginId: new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     };
     mocks.getRemoteModelCatalogProviderOverlay.mockReturnValue({
       models: [{ id: "gpt-refreshed", name: "Refreshed GPT" }],
@@ -201,6 +205,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
         diagnostics: [],
       },
       plugins: [moonshotPlugin],
+      byPluginId: new Map([[moonshotPlugin.id, moonshotPlugin]]),
     };
 
     expect(
@@ -229,17 +234,20 @@ describe("resolveManifestCatalogCoverageForList", () => {
 
   it("marks only static non-augment owners as complete", async () => {
     const { resolveManifestCatalogCoverageForList } = await import("./list.manifest-catalog.js");
+    const plugins = [
+      anthropicRuntimeAugmentPlugin,
+      moonshotPlugin,
+      openrouterPlugin,
+      openaiRuntimePlugin,
+    ];
     const metadataSnapshot = {
       index: { plugins: [], diagnostics: [] },
       manifestRegistry: {
-        plugins: [
-          anthropicRuntimeAugmentPlugin,
-          moonshotPlugin,
-          openrouterPlugin,
-          openaiRuntimePlugin,
-        ],
+        plugins,
         diagnostics: [],
       },
+      plugins,
+      byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     };
 
     const coverage = resolveManifestCatalogCoverageForList({
@@ -267,6 +275,8 @@ describe("resolveManifestCatalogCoverageForList", () => {
         plugins: [externalPlugin],
         diagnostics: [],
       },
+      plugins: [externalPlugin],
+      byPluginId: new Map([[externalPlugin.id, externalPlugin]]),
     };
     mocks.resolvePluginContributionOwners.mockReturnValue(["external-moonshot"]);
     mocks.getPluginRecord.mockReturnValue(undefined);
@@ -289,6 +299,8 @@ describe("resolveManifestCatalogCoverageForList", () => {
         plugins: [openaiRuntimePlugin],
         diagnostics: [],
       },
+      plugins: [openaiRuntimePlugin],
+      byPluginId: new Map([[openaiRuntimePlugin.id, openaiRuntimePlugin]]),
     };
 
     const coverage = resolveManifestCatalogCoverageForList({

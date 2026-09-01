@@ -2,6 +2,7 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -128,18 +129,133 @@ export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   });
 }
 
-/** Parse only structurally valid persisted approvals without inventing fallback policy. */
-export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
+// Only schema field names may enter diagnostics; agent keys are always replaced by ordinals.
+const diagnosticFields = new Set([
+  "version",
+  "socket",
+  "path",
+  "token",
+  "defaults",
+  "agents",
+  "security",
+  "ask",
+  "askFallback",
+  "autoAllowSkills",
+  "allowlist",
+  "pattern",
+  "id",
+  "source",
+  "commandText",
+  "argPattern",
+  "lastUsedAt",
+  "lastUsedCommand",
+  "lastResolvedPath",
+]);
+
+function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unknown): string {
+  // Only the object arm has field issues. The string arm's root error would
+  // misdiagnose object metadata; Zod's union child paths are relative.
+  const fieldIssue =
+    issue.code === "invalid_union"
+      ? issue.errors[1]?.find((child) => child.path.length === 1)
+      : undefined;
+  const detail = fieldIssue ?? issue;
+  const issuePath = fieldIssue ? [...issue.path, ...fieldIssue.path] : issue.path;
+  let location = "";
+  // The schema has at most five path segments. Fixed field names and numeric
+  // indices bound the output even when source keys or values are enormous.
+  for (const [index, segment] of issuePath.slice(0, 5).entries()) {
+    if (index === 1 && issuePath[0] === "agents") {
+      const agents = isRecord(parsed) && isRecord(parsed.agents) ? parsed.agents : {};
+      const ordinal = typeof segment === "string" ? Object.keys(agents).indexOf(segment) + 1 : 0;
+      if (!ordinal) {
+        break;
+      }
+      location += ` entry #${ordinal}`;
+    } else if (
+      index === 3 &&
+      issuePath[2] === "allowlist" &&
+      typeof segment === "number" &&
+      Number.isSafeInteger(segment) &&
+      segment >= 0
+    ) {
+      location += `[${segment}]`;
+    } else if (typeof segment === "string" && diagnosticFields.has(segment)) {
+      location += `${location ? "." : ""}${segment}`;
+    } else {
+      break;
+    }
+  }
+  let reason = "invalid value";
+  switch (detail.code) {
+    case "invalid_type":
+      switch (detail.expected) {
+        case "string":
+          reason = "expected a string";
+          break;
+        case "number":
+          reason = "expected a finite number";
+          break;
+        case "boolean":
+          reason = "expected a boolean";
+          break;
+        case "array":
+          reason = "expected an array";
+          break;
+        case "object":
+          reason = "expected an object";
+          break;
+        default:
+          break;
+      }
+      break;
+    case "invalid_value":
+      reason = "expected a supported value";
+      break;
+    case "invalid_union":
+      reason = "expected a non-empty string or an object with a non-empty pattern";
+      break;
+    case "too_small":
+      reason = "expected a non-empty string";
+      break;
+    case "custom":
+      if (issuePath.at(-1) === "pattern") {
+        reason = "expected a non-empty string";
+      }
+      break;
+    default:
+      // Other Zod issue kinds retain a value-free reason, never raw error text.
+      break;
+  }
+  return `${location || "document"}: ${reason}`;
+}
+
+/** Validate canonical policy and expose only a bounded, value-free failure diagnostic. */
+export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return err("invalid JSON syntax");
+  }
+  try {
     const result = persistedExecApprovalsSchema.safeParse(parsed);
     if (result.success) {
-      return normalizeExecApprovalsInternal(result.data);
+      return ok(normalizeExecApprovalsInternal(result.data));
     }
+    const issue = result.error.issues[0];
+    return err(
+      issue ? formatPersistedExecApprovalsIssue(issue, parsed) : "invalid approvals structure",
+    );
   } catch {
-    // A partial Windows fallback write is existing state, not a missing policy.
+    return err("invalid approvals structure");
   }
-  return null;
+}
+
+/** Parse only structurally valid persisted approvals without inventing fallback policy. */
+export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
+  const result = parsePersistedExecApprovals(raw);
+  return result.ok ? result.value : null;
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {

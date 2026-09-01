@@ -6,7 +6,6 @@ import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
-import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
@@ -30,11 +29,12 @@ type StreamMessageOptions = Pick<
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
-  | "onAssistantAttachmentLoaded"
   | "onRequestOpenImage"
   | "onOpenImage"
+  | "onAssistantAttachmentLoaded"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
@@ -45,7 +45,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   showAssistantAvatar?: boolean;
-  startupPhase?: ChatRunStartupPhase;
+  startupLabel?: string;
   waitingApproval?: boolean;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -68,7 +68,7 @@ export function renderStreamGroupParts(
     part.kind === "reading-indicator"
       ? renderChatWorkingIndicator(part, {
           waitingApproval: opts.waitingApproval === true,
-          startupPhase: opts.startupPhase,
+          startupLabel: opts.startupLabel,
           outputTokens: opts.runOutputTokens,
           presentation,
         })
@@ -82,25 +82,9 @@ export function renderStreamGroupParts(
             },
             part.key,
             {
+              ...opts,
               isStreaming: part.isStreaming,
               showReasoning: false,
-              sessionKey: opts.sessionKey,
-              boardProvider: opts.boardProvider,
-              agentId: opts.agentId,
-              runActive: opts.runActive,
-              onRequestUpdate: opts.onRequestUpdate,
-              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              resourceBasePath: opts.resourceBasePath,
-              localMediaPreviewRoots: opts.localMediaPreviewRoots,
-              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
-              resolveArtifactDownload: opts.resolveArtifactDownload,
-              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
-              onRequestOpenImage: opts.onRequestOpenImage,
-              onOpenImage: opts.onOpenImage,
-              embedSandboxMode: opts.embedSandboxMode,
-              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
-              fetchLinkFavicon: opts.fetchLinkFavicon,
-              onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
             },
             opts.onOpenSidebar,
           ),
@@ -117,6 +101,9 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // is only the reading indicator has no timestamp and therefore no footer.
   const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
+  const active = parts.some(
+    (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
+  );
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part unless the presentation opts out.
@@ -137,7 +124,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
-      ${footerStartedAt !== null
+      ${footerStartedAt !== null && !active
         ? html`
             <div class="chat-group-footer">
               <div class="chat-group-footer__meta">
@@ -158,7 +145,12 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null },
-  opts: { expanded: boolean; onToggle: () => void; presentation?: "standalone" | "continuation" },
+  opts: {
+    expanded: boolean;
+    onToggle: () => void;
+    presentation?: "standalone" | "continuation";
+    browserTabPreviews?: unknown;
+  },
 ) {
   const duration = formatDurationCompact(item.durationMs);
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
@@ -182,6 +174,7 @@ export function renderWorkGroupSummary(
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true"></div>
+      ${opts.expanded ? nothing : (opts.browserTabPreviews ?? nothing)}
     </div>
   `;
   return opts.presentation === "continuation"

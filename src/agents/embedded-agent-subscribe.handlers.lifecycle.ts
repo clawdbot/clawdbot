@@ -12,7 +12,7 @@ import {
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {
-  classifyFailoverReason,
+  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
@@ -37,6 +37,7 @@ export {
 
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  const data = { phase: "start", startedAt: Date.now() };
   emitAgentEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -46,10 +47,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
       : {}),
     stream: "lifecycle",
-    data: {
-      phase: "start",
-      startedAt: Date.now(),
-    },
+    data,
   });
   runBestEffortCallback({
     label: "lifecycle agent event",
@@ -57,7 +55,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
     callback: () =>
       ctx.params.onAgentEvent?.({
         stream: "lifecycle",
-        data: { phase: "start" },
+        data,
       }),
   });
 }
@@ -150,17 +148,20 @@ export function handleAgentEnd(
 
   if (isError && lastAssistant) {
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "", {
-      provider: lastAssistant.provider,
+    const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
+      providerOwner: ctx.params.providerOwner ?? null,
     });
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
+      providerOwner: ctx.params.providerOwner,
     });
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
+      providerOwner: ctx.params.providerOwner,
     });
     const safeErrorText =
       buildTextObservationFields(errorText, {

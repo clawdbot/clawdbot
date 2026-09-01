@@ -4953,7 +4953,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(createTelegramBotTestStateDir(), "group-activation.json");
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5667,7 +5667,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
     expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime unchanged.",
+      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

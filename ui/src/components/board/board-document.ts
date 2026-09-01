@@ -259,6 +259,7 @@ export class OpenClawBoardDocument extends OpenClawLightDomElement {
       return nothing;
     }
     const callbacks = {
+      appViewGeneration: provider.appViewGeneration,
       applyOps: (ops) => provider.applyOps(ops),
       grant: (name, decision) => provider.grant(name, decision),
       selectTab: (tabId) => {

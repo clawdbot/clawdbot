@@ -2,10 +2,13 @@
 // Generates package-lock.json files that mirror pnpm lock policy for
 // published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
   mkdtempSync,
+  lstatSync,
+  realpathSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -16,9 +19,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import pMap from "p-map";
+import semver from "semver";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
+import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 
 type UnknownRecord = Record<string, unknown>;
@@ -30,7 +35,15 @@ type NpmLockExecInvocation = UnknownRecord & {
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
 };
+export type NpmLocalPackageArtifact = {
+  name: string;
+  version: string;
+  spec: string;
+  integrity: string;
+};
+
 type NpmLockOptions = {
+  localPackageArtifacts?: NpmLocalPackageArtifact[];
   env?: NodeJS.ProcessEnv;
   installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
 };
@@ -87,19 +100,23 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
   }
   const normalized: OverrideMap = {};
   for (const [key, value] of Object.entries(overrides)) {
+    // pnpm's removal marker is not an npm version. Final lock membership checks
+    // still reject dependencies resurrected by the npm runtime graph.
+    if (value === "-") {
+      continue;
+    }
     const scopedSeparator = key.indexOf(">");
     if (scopedSeparator > 0) {
       const parentSelector = key.slice(0, scopedSeparator).trim();
       const dependencyName = key.slice(scopedSeparator + 1).trim();
       if (parentSelector && dependencyName) {
-        const current = normalized[parentSelector];
-        const nested = isRecord(current) ? current : {};
-        nested[dependencyName] = normalizeOverrideValue(value);
-        normalized[parentSelector] = nested;
+        mergeOverrideEntry(normalized, parentSelector, {
+          [dependencyName]: normalizeOverrideValue(value),
+        });
         continue;
       }
     }
-    normalized[key] = normalizeOverrideValue(value);
+    mergeOverrideEntry(normalized, key, normalizeOverrideValue(value));
   }
   return normalized;
 }
@@ -125,7 +142,9 @@ function readWorkspace() {
 }
 
 function readPnpmLock() {
-  const lockfile: unknown = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const lockfile: unknown = parseYaml(
+    pnpmLockfileDocuments(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8")).dependencies,
+  );
   return lockfile;
 }
 
@@ -425,35 +444,26 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
     merged[name] = spec;
     return;
   }
-  if (isRecord(current) && isRecord(spec)) {
-    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
-      mergeOverrideEntry(current, nestedName, nestedSpec);
-    }
-    return;
-  }
-  if (
-    typeof current === "string" &&
-    isRecord(spec) &&
-    typeof spec["."] === "string" &&
-    exactOverrideVersionsMatch(current, spec["."])
-  ) {
-    const mergedEntry = { ".": preferredExactOverrideRootSpec(current, spec["."]) };
-    merged[name] = mergedEntry;
-    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
-      if (nestedName === ".") {
-        continue;
+  if (isRecord(current) || isRecord(spec)) {
+    // npm's scalar shorthand constrains the package itself, not its children.
+    // Promote it to "." so either input order retains both policies.
+    const currentObject = typeof current === "string" ? { ".": current } : current;
+    const incomingObject = typeof spec === "string" ? { ".": spec } : spec;
+    if (isRecord(currentObject) && isRecord(incomingObject)) {
+      merged[name] = currentObject;
+      for (const [nestedName, nestedSpec] of Object.entries(incomingObject)) {
+        mergeOverrideEntry(currentObject, nestedName, nestedSpec);
       }
-      mergeOverrideEntry(mergedEntry, nestedName, nestedSpec);
+      return;
     }
-    return;
   }
   if (
-    isRecord(current) &&
+    name === "." &&
+    typeof current === "string" &&
     typeof spec === "string" &&
-    typeof current["."] === "string" &&
-    exactOverrideVersionsMatch(current["."], spec)
+    exactOverrideVersionsMatch(current, spec)
   ) {
-    current["."] = preferredExactOverrideRootSpec(current["."], spec);
+    merged[name] = preferredExactOverrideRootSpec(current, spec);
     return;
   }
   if (JSON.stringify(current) !== JSON.stringify(spec)) {
@@ -511,7 +521,26 @@ function readNpmLockOverrides() {
   return expandScopedOverrideChildren(mergedOverrides);
 }
 
-function packageJsonForNpmLock(packageJson: UnknownRecord, npmLockOverrides: OverrideMap) {
+export function packageRuntimeDependencyField(packageJson: UnknownRecord, name: string) {
+  return recordAt(packageJson, "optionalDependencies")?.[name] !== undefined
+    ? "optionalDependencies"
+    : "dependencies";
+}
+
+function artifactMatchesOwnOverride(artifact: NpmLocalPackageArtifact, spec: unknown) {
+  return (
+    spec === undefined ||
+    spec === `$${artifact.name}` ||
+    spec === "*" ||
+    (typeof spec === "string" && semver.satisfies(artifact.version, spec))
+  );
+}
+
+function packageJsonForNpmLock(
+  packageJson: UnknownRecord,
+  npmLockOverrides: OverrideMap,
+  localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+) {
   const normalized = { ...packageJson };
   delete normalized.bundleDependencies;
   delete normalized.bundledDependencies;
@@ -527,8 +556,97 @@ function packageJsonForNpmLock(packageJson: UnknownRecord, npmLockOverrides: Ove
       ),
     );
   }
-  normalized.overrides = mergeOverrides(packageJson.overrides, npmLockOverrides, {});
+  const packageOverrides = normalizeOverrides(packageJson.overrides);
+  const policyOverrides = { ...npmLockOverrides };
+  const localOverrides: OverrideMap = {};
+  for (const artifact of localPackageArtifacts) {
+    const selector = `${artifact.name}@${artifact.version}`;
+    const current = packageOverrides[selector];
+    if (isRecord(current) && current["."] === `$${artifact.name}`) {
+      const field = packageRuntimeDependencyField(packageJson, artifact.name);
+      if (recordAt(packageJson, field)?.[artifact.name] === artifact.spec) {
+        // Reentry already selected the effective rule. Its synthetic exact key
+        // must not merge children from a previously shadowed exact policy.
+        localOverrides[selector] = current;
+        delete packageOverrides[selector];
+        delete policyOverrides[selector];
+        continue;
+      }
+      const incoming = npmLockOverrides[`${artifact.name}@${artifact.version}`];
+      const ownSpec = isRecord(incoming) ? incoming["."] : incoming;
+      if (!artifactMatchesOwnOverride(artifact, ownSpec)) {
+        throw new Error(`local package artifact conflicts with override for ${artifact.name}`);
+      }
+      // Source-owned references still use the ordinary first-pass policy merge.
+      current["."] = ownSpec ?? artifact.version;
+    }
+  }
+  const overrides = mergeOverrides(packageOverrides, policyOverrides, {}) ?? {};
+  for (const artifact of localPackageArtifacts) {
+    const selector = `${artifact.name}@${artifact.version}`;
+    const current =
+      localOverrides[selector] ??
+      Object.entries(overrides).find(([key]) => {
+        if (key === artifact.name) {
+          return true;
+        }
+        const parsed = parsePnpmPackageKey(key);
+        return (
+          parsed?.name === artifact.name &&
+          (parsed.version === "*" || semver.satisfies(artifact.version, parsed.version))
+        );
+      })?.[1];
+    const ownSpec = isRecord(current) ? current["."] : current;
+    if (!artifactMatchesOwnOverride(artifact, ownSpec)) {
+      throw new Error(`local package artifact conflicts with override for ${artifact.name}`);
+    }
+    // npm matches overrides in order. Only this version references the temporary
+    // direct file spec; keep broad registry pins and child policies for other versions.
+    delete overrides[selector];
+    localOverrides[selector] = { ...(isRecord(current) ? current : {}), ".": `$${artifact.name}` };
+    const field = packageRuntimeDependencyField(normalized, artifact.name);
+    const dependencies = recordAt(normalized, field);
+    if (!dependencies || dependencies[artifact.name] === undefined) {
+      throw new Error(`local package artifact is not a direct dependency: ${artifact.name}`);
+    }
+    normalized[field] = { ...dependencies, [artifact.name]: artifact.spec };
+  }
+  normalized.overrides =
+    Object.keys(localOverrides).length + Object.keys(overrides).length > 0
+      ? { ...localOverrides, ...overrides }
+      : undefined;
   return normalized;
+}
+
+function validateLocalPackageArtifacts(packageDir: string, artifacts: NpmLocalPackageArtifact[]) {
+  const root = realpathSync(packageDir);
+  if (new Set(artifacts.map(({ name }) => name)).size !== artifacts.length) {
+    throw new Error("duplicate local package artifact binding");
+  }
+  for (const artifact of artifacts) {
+    const target = path.resolve(packageDir, artifact.spec.slice("file:".length));
+    if (
+      !artifact.spec.startsWith("file:./") ||
+      !target.endsWith(".tgz") ||
+      !EXACT_VERSION_PATTERN.test(artifact.version) ||
+      !/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/u.test(artifact.name)
+    ) {
+      throw new Error(`invalid local package artifact: ${artifact.name}`);
+    }
+    const relative = path.relative(root, realpathSync(target));
+    if (
+      !relative ||
+      relative.startsWith("..") ||
+      path.isAbsolute(relative) ||
+      !lstatSync(target).isFile()
+    ) {
+      throw new Error(`local package artifact escapes package root: ${artifact.spec}`);
+    }
+    const integrity = `sha512-${createHash("sha512").update(readFileSync(target)).digest("base64")}`;
+    if (artifact.integrity !== integrity) {
+      throw new Error(`local package artifact integrity mismatch: ${artifact.name}`);
+    }
+  }
 }
 
 function copyLocalFileDependencies(
@@ -941,7 +1059,14 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     const packageJson = parseJsonObject(
       readFileSync(path.join(packageDir, "package.json"), "utf8"),
     );
+    const localPackageArtifacts = options.localPackageArtifacts ?? [];
+    validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
     const npmLockOverrides = readNpmLockOverrides();
+    const normalizedPackageJson = packageJsonForNpmLock(
+      packageJson,
+      npmLockOverrides,
+      localPackageArtifacts,
+    );
     const peerResolutionArgs = shouldUseLegacyPeerDepsForNpmLock(packageJson)
       ? ["--legacy-peer-deps"]
       : [];
@@ -956,9 +1081,9 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     ];
     writeFileSync(
       path.join(tempDir, "package.json"),
-      `${JSON.stringify(packageJsonForNpmLock(packageJson, npmLockOverrides), null, 2)}\n`,
+      `${JSON.stringify(normalizedPackageJson, null, 2)}\n`,
     );
-    copyLocalFileDependencies(packageJson, packageDir, tempDir);
+    copyLocalFileDependencies(normalizedPackageJson, packageDir, tempDir);
     runNpm(npmInstallArgs, tempDir, env);
     normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs, env);
     const generated = normalizeNpmVersionDrift(
@@ -966,7 +1091,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
-    assertNpmLockMatchesPnpmLock(generated);
+    assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts);
     return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -977,6 +1102,7 @@ function collectPnpmLockViolations(
   npmLock: unknown,
   pnpmLockPackages = readPnpmLockPackages(),
   pnpmLockIntegrities = readPnpmLockPackageIntegrities(),
+  localPackageArtifacts: NpmLocalPackageArtifact[] = [],
 ) {
   const packages = recordAt(npmLock, "packages");
   if (!packages) {
@@ -1010,9 +1136,14 @@ function collectPnpmLockViolations(
       violations.push({ path: lockPath, packageKey });
       continue;
     }
-    const expectedIntegrities = [...(pnpmLockIntegrities.get(packageKey) ?? [])].toSorted(
-      (left, right) => left.localeCompare(right),
+    // Only this direct occurrence may use the independently verified packed bytes.
+    // Registry copies, including nested copies of the same package, retain their lock hashes.
+    const artifact = localPackageArtifacts.find(
+      (entry) => lockPath === `node_modules/${entry.name}`,
     );
+    const expectedIntegrities = [
+      ...(artifact ? [artifact.integrity] : (pnpmLockIntegrities.get(packageKey) ?? [])),
+    ].toSorted((left, right) => left.localeCompare(right));
     if (
       expectedIntegrities.length > 0 &&
       (typeof metadata.integrity !== "string" || !expectedIntegrities.includes(metadata.integrity))
@@ -1028,8 +1159,31 @@ function collectPnpmLockViolations(
   return violations;
 }
 
-function assertNpmLockMatchesPnpmLock(npmLock: unknown) {
-  const violations = collectPnpmLockViolations(npmLock);
+function assertNpmLockMatchesPnpmLock(
+  npmLock: unknown,
+  localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+) {
+  const packages = recordAt(npmLock, "packages");
+  for (const artifact of localPackageArtifacts) {
+    const metadata = recordAt(packages, `node_modules/${artifact.name}`);
+    if (
+      !metadata ||
+      (metadata.name ?? artifact.name) !== artifact.name ||
+      metadata.version !== artifact.version ||
+      metadata.integrity !== artifact.integrity ||
+      metadata.resolved !== artifact.spec.replace(/^file:\.\//u, "file:")
+    ) {
+      throw new Error(
+        `npm lock differs from local package artifact: ${artifact.name}@${artifact.version}`,
+      );
+    }
+  }
+  const violations = collectPnpmLockViolations(
+    npmLock,
+    undefined,
+    undefined,
+    localPackageArtifacts,
+  );
   if (violations.length === 0) {
     return;
   }

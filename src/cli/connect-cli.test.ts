@@ -153,6 +153,7 @@ describe("connect cli", () => {
           displayName,
         }),
       );
+      expect(mocks.runNodeHost.mock.calls[0]?.[0].ephemeral === true).toBe(flag === "--ephemeral");
       expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
       expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
     },

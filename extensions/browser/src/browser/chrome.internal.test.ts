@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { createServer } from "node:http";
+import { Agent, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -13,11 +13,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
+    execFileSync: (...args: unknown[]) => {
+      const mock = execFileSyncMock.getMockImplementation();
+      return mock
+        ? mock(...args)
+        : (actual.execFileSync as unknown as (...actualArgs: unknown[]) => unknown)(...args);
+    },
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
 });
@@ -67,6 +74,7 @@ import {
   launchOpenClawChrome,
   ManagedChromeCleanupError,
   resolveOpenClawUserDataDir,
+  stopOwnedOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
@@ -401,6 +409,7 @@ describe("chrome.ts internal", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     spawnMock.mockReset();
+    execFileSyncMock.mockReset();
     ensurePortAvailableMock.mockReset();
     ensurePortAvailableMock.mockImplementation(async () => {});
     registerManagedProxyBrowserCdpBypassMock.mockReset();
@@ -1251,6 +1260,116 @@ describe("chrome.ts internal", () => {
               expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
               expect(fs.existsSync(path.join(userDataDir, "SingletonSocket"))).toBe(false);
               running.proc.kill?.("SIGTERM");
+            } finally {
+              await fsp.rm(userDataDir, { recursive: true, force: true });
+            }
+          },
+        });
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
+    it("stops a managed Chrome from another runtime through a pinned CDP connection", async () => {
+      const originalPlatform = process.platform;
+      const executablePath = path.join(tmpDir, "chrome");
+      await fsp.writeFile(executablePath, "");
+      const existsSync = fs.existsSync.bind(fs);
+      vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+        const value = String(candidate);
+        return (
+          value.endsWith("Local State") || value.endsWith("Preferences") || existsSync(candidate)
+        );
+      });
+
+      const managedPid = 43213;
+      let managedProcessAlive = true;
+      let processStartTime = "Fri Jul 17 12:00:00 2026";
+      let rotateProcessIdentity = true;
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(((pid, signal) => {
+        if (pid === managedPid && signal === 0 && !managedProcessAlive) {
+          const error = new Error("no such process") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        return true;
+      }) as typeof process.kill);
+      const connectionSpy = vi.spyOn(Agent.prototype, "createConnection");
+
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      try {
+        await withMockChromeCdpServer({
+          wsPath: "/devtools/browser/CROSS_PROCESS_OWNER",
+          onConnection: (server) => {
+            server.on("connection", (socket) => {
+              socket.on("message", (raw) => {
+                const message = JSON.parse(rawDataToString(raw)) as {
+                  id: number;
+                  method: string;
+                };
+                if (message.method === "SystemInfo.getProcessInfo") {
+                  if (rotateProcessIdentity) {
+                    processStartTime = "Fri Jul 17 12:01:00 2026";
+                    rotateProcessIdentity = false;
+                  }
+                  socket.send(
+                    JSON.stringify({
+                      id: message.id,
+                      result: { processInfo: [{ type: "browser", id: managedPid }] },
+                    }),
+                  );
+                  return;
+                }
+                expect(message.method).toBe("Browser.close");
+                managedProcessAlive = false;
+                socket.send(JSON.stringify({ id: message.id, result: {} }));
+              });
+            });
+          },
+          run: async (baseUrl) => {
+            const port = Number(new URL(baseUrl).port);
+            const profile = {
+              ...makeProfile(port),
+              cdpUrl: baseUrl,
+              driver: "openclaw",
+              executablePath,
+            } as ResolvedBrowserProfile;
+            const userDataDir = resolveOpenClawUserDataDir(profile.name);
+            execFileSyncMock.mockImplementation((command: string, args: string[]) => {
+              if (command === "ps" && args.includes("command=")) {
+                return `${executablePath} --remote-debugging-port=${port} --user-data-dir=${userDataDir}\n`;
+              }
+              if (command === "ps" && args.includes("lstart=")) {
+                return `${processStartTime}\n`;
+              }
+              if (command === "lsof") {
+                return `p${managedPid}\n`;
+              }
+              throw new Error(`unexpected command: ${command}`);
+            });
+            await fsp.mkdir(userDataDir, { recursive: true });
+            await fsp.symlink(
+              `${os.hostname()}-${managedPid}`,
+              path.join(userDataDir, "SingletonLock"),
+            );
+
+            try {
+              const resolved = makeResolved({
+                ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+              });
+              await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toBe(false);
+              expect(managedProcessAlive).toBe(true);
+              expect(killSpy).not.toHaveBeenCalledWith(managedPid, "SIGTERM");
+              await expect(
+                fsp.lstat(path.join(userDataDir, "SingletonLock")),
+              ).resolves.toBeTruthy();
+
+              await expect(stopOwnedOpenClawChrome(resolved, profile)).resolves.toBe(true);
+              expect(
+                connectionSpy.mock.calls.some(([options]) => typeof options.lookup === "function"),
+              ).toBe(true);
+              expect(killSpy).not.toHaveBeenCalledWith(managedPid, "SIGTERM");
+              expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
             } finally {
               await fsp.rm(userDataDir, { recursive: true, force: true });
             }

@@ -1,4 +1,4 @@
-import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -267,6 +267,7 @@ async function readNodeCodexHistory(params: {
     id: params.record.threadId,
     createdAt: params.record.createdAt ?? 0,
     modelProvider: params.record.modelProvider ?? "openai",
+    projectId: null,
     turns: page.data.toReversed(),
   };
   return {
@@ -352,9 +353,8 @@ async function continueNodeCodexSessionInner(params: {
       detachHint: "Start a new chat to leave the paired-node Codex session.",
       data: createCodexCliNodeConversationBindingData({
         nodeId,
-        // codex exec resume takes the CLI session id; forked threads share a
-        // session tree where the thread id and session id differ.
-        sessionId: record.sessionId?.trim() || params.threadId,
+        // CLI resume resolves a UUID as its exact thread; family session IDs can select a sibling.
+        sessionId: params.threadId,
         agentId: adopted.agentId,
         cwd: record.cwd,
       }),
@@ -382,10 +382,10 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.config,
     agentId: params.agentId,
-  }).defaultAgentId;
+  }).sessionAgentId;
   const sourceKey = sessionCatalogAdoptedSourceKey(`node:${nodeId}`, params.threadId);
   const operationKey = sessionCatalogAdoptedSourceKey(agentId, sourceKey);
   // Memoization is agent-qualified while the native action lock is source-qualified,

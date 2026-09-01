@@ -488,6 +488,10 @@
     "target": "添加能力（重定向）"
   },
   {
+    "source": "Adding capabilities",
+    "target": "添加能力"
+  },
+  {
     "source": "Adding capabilities (contributor guide)",
     "target": "添加能力（贡献者指南）"
   },
@@ -666,6 +670,10 @@
   {
     "source": "Doctor",
     "target": "Doctor"
+  },
+  {
+    "source": "Triage",
+    "target": "Triage"
   },
   {
     "source": "Config",
@@ -1396,6 +1404,10 @@
     "target": "后台进程"
   },
   {
+    "source": "Channel inbound API",
+    "target": "渠道入站 API"
+  },
+  {
     "source": "Channel outbound API",
     "target": "渠道出站 API"
   },
@@ -1652,6 +1664,14 @@
     "target": "Gateway 配置参考"
   },
   {
+    "source": "v2026.8.1 (AKA OpenClaw 2.0)",
+    "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.1",
+    "target": "v2026.8.1"
+  },
+  {
     "source": "v2026.7.1",
     "target": "v2026.7.1"
   },
@@ -1826,5 +1846,33 @@
   {
     "source": "geolocation",
     "target": "geolocation"
+  },
+  {
+    "source": "Memory provenance and deletion",
+    "target": "记忆溯源与删除"
+  },
+  {
+    "source": "Provenance & deletion",
+    "target": "溯源与删除"
+  },
+  {
+    "source": "Memory admission policy configuration",
+    "target": "记忆准入策略配置"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Built-in memory",
+    "target": "内置记忆"
+  },
+  {
+    "source": "macOS SSH tunnel",
+    "target": "macOS SSH 隧道"
+  },
+  {
+    "source": "Node and tsx startup errors",
+    "target": "Node 和 tsx 启动错误"
   }
 ]

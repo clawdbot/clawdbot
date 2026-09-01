@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
@@ -115,11 +116,14 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
 }
 
 function parseJson5Raw(raw: string, label: string): unknown {
+  let parsed: unknown;
   try {
-    return JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
   } catch (err) {
     throw new Error(`Failed to parse ${label}: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntry[] {

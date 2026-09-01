@@ -2007,8 +2007,16 @@ describe("subagent announce formatting", () => {
     });
 
     expect(delivery.delivered).toBe(false);
+    expect(delivery.reason).toBe("steer_dropped");
+    expect(delivery.terminal).toBeUndefined();
     expect(delivery.phases).toEqual([
-      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      {
+        phase: "steer-primary",
+        delivered: false,
+        path: "none",
+        reason: "steer_dropped",
+        error: undefined,
+      },
     ]);
     expect(direct).not.toHaveBeenCalled();
   });
@@ -2951,6 +2959,71 @@ describe("subagent announce formatting", () => {
       preserveFrozenResultFallback: true,
       task: expect.stringContaining("All pending descendants for that run have now settled"),
     });
+  });
+
+  it("terminates an accepted descendant wake after completion delivery closes", async () => {
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+    subagentRegistryMock.listSubagentRunsForRequester.mockReturnValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:main:subagent:parent:subagent:child",
+        requesterSessionKey: "agent:main:subagent:parent",
+        requesterDisplayKey: "parent",
+        task: "child task",
+        cleanup: "keep",
+        createdAt: 10,
+        execution: { endedAt: 20, outcome: { status: "ok" } },
+        cleanupCompletedAt: 21,
+        completion: { required: true, resultText: "child result" },
+      },
+    ]);
+    let releaseWake: (() => void) | undefined;
+    agentSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
+        }),
+    );
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { runId?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "chat.abort") {
+        return { aborted: true, runIds: [typed.params?.runId] };
+      }
+      return {};
+    });
+    let completionDeliveryAllowed = true;
+
+    const announce = runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-phase-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      roundOneReply: "waiting for child",
+      isCompletionDeliveryAllowed: () => completionDeliveryAllowed,
+    });
+    await vi.waitFor(() => expect(agentSpy).toHaveBeenCalledOnce());
+
+    completionDeliveryAllowed = false;
+    releaseWake?.();
+
+    await expect(announce).resolves.toBe("intentional_non_delivery");
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGatewaySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: expect.objectContaining({ runId: "run-parent-phase-2" }),
+      }),
+    );
   });
 
   it("does not re-wake an already woken run id", async () => {

@@ -54,13 +54,32 @@ describe("toPublicCronJob", () => {
     const job: CronStoredJob = {
       ...makeCronJob({}),
       toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 0,
+      },
     };
 
     expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
+    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTarget");
+    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTargetRequirement");
     expect(job.toolsAllowProvenance).toEqual({
       version: 1,
       source: "final-executable-surface",
     });
+    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
+  });
+
+  it("strips private creator provenance without mutating the stored job", () => {
+    const job: CronStoredJob = {
+      ...makeCronJob({}),
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
+    };
+
+    expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
+    expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
   });
 
   it("strips private runtime authority without mutating the stored job", () => {

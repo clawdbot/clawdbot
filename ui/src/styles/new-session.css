@@ -26,8 +26,43 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
-.new-session-page__incognito-toggle--active,
-.new-session-page__incognito-toggle--active:hover:not(:disabled) {
+.new-session-page__draft-toggle {
+  display: none;
+}
+
+:is(
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  corner-shape: superellipse(1.5);
+}
+
+:is(
+  .new-session-page__draft-toggle,
+  .new-session-page__incognito-toggle
+).shell-chrome-controls__button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
+  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
+}
+
+:is(
+    .new-session-page__draft-toggle,
+    .new-session-page__incognito-toggle
+  ).shell-chrome-controls__button
+  svg {
+  width: 19px;
+  height: 19px;
+}
+
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
+:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
+  :disabled
+) {
   border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
@@ -35,6 +70,33 @@ openclaw-new-session-page {
 
 html.openclaw-native-macos .new-session-page__incognito-rail {
   top: 52px;
+}
+
+@media (max-width: 560px) {
+  .new-session-page__incognito-rail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .new-session-page__draft-toggle {
+    display: inline-flex;
+  }
+
+  .new-session-page__draft-toggle--active.shell-chrome-controls__button {
+    width: auto;
+    padding-inline: 10px;
+    gap: 7px;
+  }
+
+  .new-session-page__draft-toggle-label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .new-session-page__composer .new-session-page__visibility--draft {
+    display: none;
+  }
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -60,44 +122,177 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   margin: 0 auto auto;
 }
 
+.new-session-page .agent-chat__welcome-identity {
+  gap: 12px;
+}
+
+.new-session-page .agent-chat__welcome-identity-copy {
+  gap: 6px;
+}
+
 /* Draft block inside the centered welcome column; the welcome centers text,
-   so reset alignment for the controls and composer. */
+   so reset alignment for the controls and composer.
+   The top margin is a paragraph break, not a nudge: the tagline is the last line
+   of the hero and the scope chips are the first line of the form, so they must
+   not read as one stack. */
 .new-session-page__draft {
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 34px;
   text-align: left;
 }
 
-.new-session-page__selection-status {
+.new-session-page__incognito-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-height: 0;
+  max-width: var(--chat-thread-max-width, 48rem);
+  margin: -8px auto 0;
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0;
+  filter: blur(4px);
+  pointer-events: none;
+  transform: translateY(-2px);
+  visibility: hidden;
+  white-space: nowrap;
+  transition:
+    max-height 160ms cubic-bezier(0.2, 0, 0, 1),
+    margin 160ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 120ms ease-out,
+    filter 120ms ease-out,
+    transform 120ms ease-out,
+    visibility 0s linear 160ms;
+}
+
+.new-session-page__incognito-notice--visible {
+  max-height: 20px;
+  margin-top: 0;
+  opacity: 1;
+  filter: blur(0);
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.new-session-page__incognito-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.new-session-page__incognito-notice-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+}
+
+.new-session-page--incognito .agent-chat__input {
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  border-style: dashed;
+}
+
+/* Image and emoji fallbacks carry the same welcome-avatar silhouette. */
+.new-session-page .agent-chat__avatar--text {
+  border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-session-page__incognito-notice {
+    transition-duration: 0ms;
+  }
+}
+
+/* Sits after the model and reasoning pickers: the footer row reads as the
+   settings for the next turn, and how the session is recorded is the last of
+   them, not the first thing between "+" and the model. The model control claims
+   order 3 in chat/layout.css, so this follows it.
+   Box, type and rhythm come from the composer's chip family tokens rather than
+   numbers of its own: this control is a peer of the pickers beside it, and it
+   used to announce itself as a different component — smaller text, shorter box,
+   pill corners and a muted foreground against their 13px squared-off chips. The
+   fallbacks keep it sane if it is ever rendered outside a composer. */
+.new-session-page__visibility {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 2px 8px;
+  order: 4;
+  gap: var(--chat-composer-chip-gap, 6px);
+  min-height: var(--chat-composer-chip-height, 30px);
+  padding-block: 0;
+  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
   border: 0;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: transparent;
+  color: var(--chat-composer-secondary, var(--muted));
   font: inherit;
-  font-size: 11px;
+  font-size: var(--chat-composer-chip-text, 13px);
+  line-height: 1.35;
   cursor: var(--cursor-action);
 }
 
-.new-session-page__selection-status:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
+/* Draft belongs with the attachment and permission controls. On pointer-first
+   layouts it stays quiet until the footer is explored; touch layouts keep the
+   action reachable because they have no persistent hover state. */
+@media (hover: hover) and (pointer: fine) {
+  .new-session-page__composer
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transition:
+      opacity 120ms var(--ease-out),
+      visibility 0s linear 160ms;
+  }
+
+  .new-session-page__composer
+    .agent-chat__composer-footer:is(:hover, :focus-within)
+    .agent-chat__composer-lead
+    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+    transition-delay: 0s;
+  }
 }
 
-.new-session-page__selection-status:disabled {
+.new-session-page__visibility:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
+}
+
+/* Active mode must read as toggled-on even while hovered: hover on an
+   inactive pill already shows a neutral fill, so active gets an accent
+   tint to stay distinguishable under the cursor. */
+.new-session-page__visibility--active,
+.new-session-page__visibility--active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.new-session-page__visibility:disabled {
   cursor: default;
   opacity: 0.5;
 }
 
-.new-session-page__selection-status svg {
-  width: 12px;
-  height: 12px;
+/* The mark has to be a block: left inline it sits on the label's baseline, which
+   parks it about 2px above the row's axis while every sibling control is centred
+   on its own box. Blocking it lets the wrapper collapse to the icon so the
+   button's `align-items: center` puts it on the same line as the label. */
+.new-session-page__visibility svg {
+  display: block;
+  width: var(--chat-composer-chip-icon, 14px);
+  height: var(--chat-composer-chip-icon, 14px);
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7px;
@@ -220,6 +415,10 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 .new-session-page__trigger-chevron {
   display: inline-flex;
   color: inherit;
+}
+
+.new-session-page__trigger-chevron--mobile {
+  display: none;
 }
 
 /* Icon templates only carry paths; without an explicit stroke rule the SVGs
@@ -423,6 +622,12 @@ wa-popover.new-session-page__select::part(body) {
   text-transform: uppercase;
 }
 
+wa-popover.new-session-page__picker-popover
+  .new-session-page__picker-root
+  > .new-session-page__menu-title:not(:first-child) {
+  margin-top: var(--space-2);
+}
+
 .new-session-page__project-search {
   display: block;
   padding: 4px 8px 6px;
@@ -498,13 +703,25 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-.new-session-page__menu-facts {
+.new-session-page__menu-meta {
   display: inline-flex;
   flex: 0 1 auto;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   max-width: 62%;
   overflow: hidden;
+}
+
+.new-session-page__menu-facts {
+  display: inline-flex;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.new-session-page__menu-meta > .session-context-meter {
+  flex: 0 0 84px;
 }
 
 .new-session-page__menu-fact {
@@ -630,29 +847,38 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-full) 0 0 var(--radius-full);
 }
 
-wa-dropdown.new-session-page__start-menu {
-  display: inline-flex;
-}
-
 .new-session-page__start-menu-trigger {
-  width: 22px;
-  min-width: 22px;
-  height: 36px;
-  padding: 0 4px 0 2px;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
   border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
   border-radius: 0 var(--radius-full) var(--radius-full) 0;
 }
 
 .new-session-page__start-menu-trigger svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
+}
+
+.new-session-page__start-submit--blocked {
+  cursor: var(--cursor-action);
+  filter: saturate(0.45);
+  opacity: 0.48;
 }
 
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
+/* No inset of its own: the editor's breathing room is the composer surface's
+   decision, and a left-only override here put the draft further from one edge
+   than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
-  padding-left: var(--chat-box-inset);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -677,13 +903,6 @@ wa-dropdown.new-session-page__start-menu {
 
 .new-session-page__composer[data-attachment-drop-active] > * {
   opacity: 0.5;
-}
-
-/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
-.new-session-page__blocked-submit {
-  padding: 4px var(--chat-box-inset) 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -908,23 +1127,152 @@ wa-dropdown.new-session-page__start-menu {
     gap: 4px 2px;
   }
 
-  /* A new session has visibility pills instead of the chat settings cluster.
-     Keep those pills intrinsic and let the model picker use the remaining width. */
-  .new-session-page__composer .agent-chat__composer-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-  }
-
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-    margin-left: auto;
-  }
-
   .new-session-page__select {
     position: static;
+  }
+}
+
+@container chat-composer (max-width: 480px) {
+  .new-session-page__composer .new-session-page__visibility {
+    flex: 0 0 var(--chat-composer-control-size);
+    width: var(--chat-composer-control-size);
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .new-session-page__composer .new-session-page__visibility-label {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
+    display: none;
+  }
+
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
+    width: var(--chat-composer-send-size);
+    min-width: var(--chat-composer-send-size);
+    height: var(--chat-composer-send-size);
+    padding: var(--chat-mobile-row-action-padding);
+  }
+
+  .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
+    width: var(--chat-mobile-row-icon-size);
+    height: var(--chat-mobile-row-icon-size);
+    color: var(--primary-foreground);
+  }
+
+  .new-session-page .agent-chat__welcome {
+    min-height: 100%;
+  }
+
+  .new-session-page .agent-chat__welcome-identity {
+    gap: 6px;
+    margin-block: auto;
+  }
+
+  .new-session-page .agent-chat__welcome-clawd {
+    margin-bottom: 0;
+  }
+
+  .new-session-page__draft {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    min-height: 0;
+  }
+
+  .new-session-page__triggers {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    width: calc(100% - 8px);
+    margin-inline: 4px;
+    margin-block-end: 8px;
+    padding: 0 calc(var(--chat-composer-editor-inset-inline, 12px) - 6px);
+    border: 0;
+    background: transparent;
+  }
+
+  .new-session-page__trigger,
+  .agent-select--compact .agent-select__trigger,
+  :root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+    height: 32px;
+    padding-inline: 6px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select {
+    width: 100%;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
+    margin-block-start: 6px;
+  }
+
+  .new-session-page__trigger-label {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .new-session-page__trigger {
+    gap: 0;
+  }
+
+  .new-session-page__trigger > .new-session-page__target-icon {
+    margin-inline-end: 8px;
+  }
+
+  .new-session-page__triggers
+    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
+    color: var(--muted);
+  }
+
+  .new-session-page__triggers
+    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron)
+    svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .new-session-page__trigger-chevron--desktop {
+    display: none;
+  }
+
+  .new-session-page__trigger-chevron--mobile {
+    display: inline-flex;
+    margin-inline-start: 4px;
+  }
+
+  .new-session-page__trigger-chevron--mobile svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .new-session-page__composer.agent-chat__composer-shell {
+    margin-top: 0;
+  }
+
+  .new-session-page__incognito-notice {
+    align-items: flex-start;
+    width: calc(100% - 8px);
+    max-height: 0;
+    max-width: var(--chat-thread-max-width, 48rem);
+    margin-inline: 4px;
+    padding-inline: 0;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .new-session-page__incognito-notice--visible {
+    max-height: 48px;
   }
 }

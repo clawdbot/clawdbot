@@ -94,15 +94,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -245,6 +241,7 @@ private fun UsageSettingsScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val providerCount = usageSummary.providers.size
   val issueCount = usageSummary.providers.count { it.error != null }
+  val usageConverging = usageRefreshVisible(usageRefreshing, usageSummary.refreshing)
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -262,7 +259,7 @@ private fun UsageSettingsScreen(
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(text = if (usageRefreshing) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageRefreshing, modifier = Modifier.weight(1f))
+      ClawSecondaryButton(text = if (usageConverging) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageConverging, modifier = Modifier.weight(1f))
     }
     usageErrorText?.let { errorText ->
       ClawPanel {
@@ -274,14 +271,17 @@ private fun UsageSettingsScreen(
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      usageSummary.providers.isEmpty() ->
+      usageSummary.providers.isNotEmpty() -> UsageProvidersPanel(providers = usageSummary.providers)
+      // The warning panel above already reports a failed load; adding
+      // "No usage data yet." beside it claims the operator has no providers.
+      usageErrorText != null -> Unit
+      else ->
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Provider limits will appear here when your gateway reports them."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> UsageProvidersPanel(providers = usageSummary.providers)
     }
   }
 }
@@ -1075,7 +1075,7 @@ private fun NotificationSettingsScreen(
 
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      viewModel.setNotificationForwardingEnabled(granted)
+      viewModel.setNotificationForwardingEnabled(granted && DeviceNotificationListenerService.isAccessEnabled(context))
     }
 
   fun setForwarding(checked: Boolean) {
@@ -1083,12 +1083,16 @@ private fun NotificationSettingsScreen(
       viewModel.setNotificationForwardingEnabled(false)
       return
     }
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+    if (!listenerEnabled) {
+      openNotificationListenerSettings(context)
+      return
+    }
     if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
     }
-    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
   SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {
@@ -2333,7 +2337,6 @@ internal fun SettingsDetailFrame(
 ) {
   ClawScaffold(
     contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
-    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
@@ -2548,6 +2551,11 @@ private fun UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
     UsageProviderListRow(provider = provider)
   }
 }
+
+internal fun usageRefreshVisible(
+  requestRefreshing: Boolean,
+  summaryRefreshing: Boolean,
+): Boolean = requestRefreshing || summaryRefreshing
 
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {

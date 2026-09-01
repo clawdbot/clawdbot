@@ -13,6 +13,7 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
   expectNoMockCallWithFields,
@@ -654,9 +655,10 @@ describe("executeAgentTurn: lifecycle progress", () => {
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
-  it("settles a successful same-candidate retry instead of its deferred failed attempt", async () => {
+  it("shows only the successful reply after a transient provider retry", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "lifecycle",
@@ -686,11 +688,15 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     const result = await executeTestTurn(
-      { opts: { runId: "run-recovered" } as GetReplyOptions },
+      { opts: { runId: "run-recovered", onBlockReply } as GetReplyOptions },
       { commandBody: "hello" },
     );
 
     expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([{ text: "recovered" }]);
+    }
+    expect(onBlockReply).not.toHaveBeenCalled();
     const lifecycleEvent = requireRecord(
       requireMockCallArgWithFields(
         emitAgentEvent,
@@ -776,7 +782,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("preserves GPT ack-turn final prose without reply-side truncation", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],
@@ -817,7 +823,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("does not trim GPT replies when the user asked for depth", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],

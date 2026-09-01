@@ -1,14 +1,21 @@
 // Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
+import crypto from "node:crypto";
+import fs from "node:fs";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
-import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
-import { setVoiceCallStateRuntime } from "./runtime-state.js";
+import {
+  createTestStorePath,
+  FakeProvider,
+  finalizeTestManagerCalls,
+} from "./manager.test-harness.js";
+import { TwilioProvider } from "./providers/twilio.js";
+import { getOptionalVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
@@ -154,6 +161,116 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
 
   afterEach(() => {
     resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("preserves finalized identity through signed HTTP callbacks and retries failed history reads", async () => {
+    const authToken = "synthetic-terminal-webhook-token";
+    const config = createConfig({
+      provider: "twilio",
+      agentId: "default-agent",
+      twilio: { accountSid: "AC-fixture", authToken },
+    });
+    const provider = new TwilioProvider({ accountSid: "AC-fixture", authToken });
+    vi.spyOn(provider, "initiateCall").mockResolvedValue({
+      providerCallId: "CA-terminal-identity",
+      status: "initiated",
+    });
+    const playback = vi.spyOn(provider, "playTts").mockResolvedValue();
+    const hangup = vi.spyOn(provider, "hangupCall").mockResolvedValue();
+    const storePath = createTestStorePath();
+    const manager = new CallManager(config, storePath);
+    const processing = vi.spyOn(manager, "processEvent");
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      const baseUrl = await server.start();
+      provider.setPublicUrl(baseUrl);
+      await manager.initialize(provider, baseUrl);
+      const started = await manager.initiateCall("+15550000001", "agent:sales:voice:http", {
+        agentId: "sales",
+      });
+      expect(started.success).toBe(true);
+      const url = new URL(baseUrl);
+      url.searchParams.set("callId", started.callId);
+      url.searchParams.set("type", "status");
+      const send = async (callStatus: string, sequence: string) => {
+        const form = new URLSearchParams({
+          CallSid: "CA-terminal-identity",
+          CallStatus: callStatus,
+          Direction: "outbound-api",
+          From: "+15550000000",
+          To: "+15550000001",
+          SequenceNumber: sequence,
+        });
+        form.sort();
+        const material = url.toString() + [...form].map(([key, value]) => key + value).join("");
+        const signature = crypto.createHmac("sha1", authToken).update(material).digest("base64");
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-twilio-signature": signature,
+          },
+          body: form.toString(),
+        });
+        await response.text();
+        return response.status;
+      };
+
+      expect(await send("in-progress", "1")).toBe(200);
+      await expect(manager.speak(started.callId, "Keep the original transcript.")).resolves.toEqual(
+        {
+          success: true,
+        },
+      );
+      await expect(manager.endCall(started.callId)).resolves.toEqual({ success: true });
+      const history = await manager.getCallHistory();
+      expect(history.at(-1)).toMatchObject({
+        callId: started.callId,
+        agentId: "sales",
+        sessionKey: "agent:sales:voice:http",
+        state: "hangup-bot",
+        transcript: [expect.objectContaining({ text: "Keep the original transcript." })],
+      });
+      expect(await send("completed", "2")).toBe(200);
+      const terminalCalls = processing.mock.calls.length;
+      expect(await send("completed", "2")).toBe(200);
+      expect(processing).toHaveBeenCalledTimes(terminalCalls);
+
+      const state = getOptionalVoiceCallStateRuntime()?.state;
+      if (!state) {
+        throw new Error("expected fixture SQLite runtime");
+      }
+      const openStore = state.openSyncKeyedStore.bind(state);
+      const fault = vi
+        .spyOn(state, "openSyncKeyedStore")
+        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+          const store = openStore<T>(options);
+          store.entries = () => {
+            throw new Error("synthetic signed callback history failure");
+          };
+          return store;
+        });
+      try {
+        expect(await send("completed", "3")).toBe(500);
+      } finally {
+        fault.mockRestore();
+      }
+      expect(await send("completed", "3")).toBe(200);
+      expect(processing).toHaveBeenCalledTimes(terminalCalls + 2);
+      expect(await manager.getCallHistory()).toEqual(history);
+      expect(manager.getActiveCalls()).toEqual([]);
+      expect(playback).toHaveBeenCalledTimes(1);
+      expect(hangup).toHaveBeenCalledTimes(1);
+    } finally {
+      try {
+        await server.stop();
+      } finally {
+        finalizeTestManagerCalls(manager);
+        resetPluginStateStoreForTests();
+        fs.rmSync(storePath, { recursive: true, force: true });
+      }
+    }
   });
 
   it("hangs up a rejected inbound replay only once across duplicate webhook delivery", async () => {

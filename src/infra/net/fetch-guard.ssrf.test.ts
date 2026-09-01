@@ -3,6 +3,9 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Load before cases own mocks; a timed-out import would resume inside the next case.
+import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
+import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
@@ -1016,6 +1019,50 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
+  it.each(["/next", undefined])(
+    "settles redirects before retained capture cancellation (location: %s)",
+    async (location) => {
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 302,
+        headers: location ? { location } : {},
+      });
+      const capture = response.clone();
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(okResponse());
+      const request = fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      }).then(
+        async (result) => {
+          try {
+            return (await readResponseWithLimit(result.response, 32)).toString("utf8");
+          } finally {
+            await result.release();
+          }
+        },
+        (error: unknown) => error,
+      );
+
+      try {
+        const result = await raceWithTimeoutResult(request, 500, undefined);
+        if (location) {
+          expect(result).toBe("ok");
+        } else {
+          expect(result).toBeInstanceOf(Error);
+          expect(result).toMatchObject({ message: "Redirect missing location header (302)" });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(location ? 2 : 1);
+        expect(response.bodyUsed).toBe(true);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await request;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it("strips sensitive headers when redirect crosses origins", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
@@ -1402,6 +1449,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   it("keeps headers when redirect stays on same origin", async () => {
     const lookupFn = createPublicLookup();
+    const beforeRequest = vi.fn();
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(redirectResponse("/next"))
@@ -1411,6 +1459,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://api.example.com/start",
       fetchImpl,
       lookupFn,
+      beforeRequest,
       init: {
         headers: {
           Authorization: "Bearer secret",
@@ -1419,6 +1468,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     const headers = getSecondRequestHeaders(fetchImpl);
+    expect(beforeRequest).toHaveBeenCalledTimes(2);
     expect(headers.get("authorization")).toBe("Bearer secret");
     await result.release();
   });
@@ -1669,8 +1719,6 @@ describe("fetchWithSsrFGuard hardening", () => {
         async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
       );
       const lookupFn = createLoopbackLookup();
-      const { waitForControlUiDocument } = await import("../../commands/control-ui-handoff.js");
-
       const readiness = await waitForControlUiDocument({
         url: "http://127.0.0.1:18789/dashboard/",
         deps: {
@@ -2201,19 +2249,57 @@ describe("fetchWithSsrFGuard hardening", () => {
         fetch: vi.fn(async () => okResponse()),
       };
       const fetchImpl = vi.fn(async () => okResponse());
+      const lookupFn = createPublicLookup();
+      const beforeRequest = vi.fn();
 
       const result = await fetchWithSsrFGuard({
         url: "https://public.example/resource",
         fetchImpl,
-        lookupFn: createPublicLookup(),
+        lookupFn,
+        beforeRequest,
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
+      expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
       expectAgentConstructorOptions({ bodyTimeout: 1_900_000, headersTimeout: 1_900_000 });
       await result.release();
     } finally {
       resetGlobalUndiciStreamTimeoutsForTests();
     }
+  });
+
+  it("propagates a final dispatch rejection without sending the request", async () => {
+    const rejection = new Error("request owner closed");
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeRequest: () => {
+          throw rejection;
+        },
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an asynchronous final dispatch callback before sending the request", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        beforeRequest: (() => Promise.resolve()) as never,
+      }),
+    ).rejects.toThrow("beforeRequest must be synchronous");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {

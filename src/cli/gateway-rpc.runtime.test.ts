@@ -180,7 +180,9 @@ describe("callGatewayFromCliRuntime", () => {
   });
 
   it("passes strict integer timeouts to the gateway call", async () => {
-    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" });
+    await callGatewayFromCliRuntime("cron.status", { timeout: "15000" }, undefined, {
+      defaultTimeoutMs: 10 * 60_000,
+    });
 
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({

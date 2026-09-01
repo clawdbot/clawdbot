@@ -21,93 +21,38 @@ export async function createMatrixQaCliSelfVerificationRuntime(params: {
   deviceId: string;
   userId: string;
 }) {
-  const outputDir = requireMatrixQaE2eeOutputDir(params.context);
-  const rootDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-cli-qa-"),
-  );
-  const artifactDir = path.join(
-    outputDir,
-    "cli-self-verification",
-    randomUUID().replaceAll("-", "").slice(0, 12),
-  );
-  const stateDir = path.join(rootDir, "state");
-  const configPath = path.join(rootDir, "config.json");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
-  await mkdir(artifactDir, { mode: 0o700, recursive: true });
-  await chmod(artifactDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(stateDir, { mode: 0o700, recursive: true });
-  await chmod(stateDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
-  await writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        plugins: {
-          allow: ["matrix"],
-          entries: {
-            matrix: { enabled: true },
-          },
+  return await createMatrixQaCliE2eeSetupRuntime({
+    artifactLabel: "cli-self-verification",
+    context: params.context,
+    initialConfig: {
+      plugins: {
+        allow: ["matrix"],
+        entries: {
+          matrix: { enabled: true },
         },
-        channels: {
-          matrix: {
-            defaultAccount: params.accountId,
-            accounts: {
-              [params.accountId]: {
-                accessToken: params.accessToken,
-                deviceId: params.deviceId,
-                encryption: true,
-                homeserver: params.context.baseUrl,
-                initialSyncLimit: 0,
-                name: "Matrix QA CLI self-verification",
-                network: {
-                  dangerouslyAllowPrivateNetwork: true,
-                },
-                startupVerification: "off",
-                userId: params.userId,
+      },
+      channels: {
+        matrix: {
+          defaultAccount: params.accountId,
+          accounts: {
+            [params.accountId]: {
+              accessToken: params.accessToken,
+              deviceId: params.deviceId,
+              encryption: true,
+              homeserver: params.context.baseUrl,
+              initialSyncLimit: 0,
+              name: "Matrix QA CLI self-verification",
+              network: {
+                dangerouslyAllowPrivateNetwork: true,
               },
+              startupVerification: "off",
+              userId: params.userId,
             },
           },
         },
       },
-      null,
-      2,
-    )}\n`,
-    { flag: "wx", mode: 0o600 },
-  );
-  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
-  const env = {
-    ...requireMatrixQaCliRuntimeEnv(params.context),
-    FORCE_COLOR: "0",
-    NO_COLOR: "1",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
-    await runMatrixQaOpenClawCli({
-      args,
-      env,
-      stdin,
-      timeoutMs,
-    });
-  const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
-    startMatrixQaOpenClawCli({
-      args,
-      env,
-      timeoutMs,
-    });
-  return {
-    configPath,
-    dispose: async () => {
-      await rm(rootDir, { force: true, recursive: true });
     },
-    run,
-    rootDir: artifactDir,
-    start,
-    stateDir,
-  };
+  });
 }
 
 export async function createMatrixQaCliE2eeSetupRuntime(params: {
@@ -119,58 +64,73 @@ export async function createMatrixQaCliE2eeSetupRuntime(params: {
   const rootDir = await mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-e2ee-setup-qa-"),
   );
-  const artifactDir = path.join(
-    outputDir,
-    params.artifactLabel,
-    randomUUID().replaceAll("-", "").slice(0, 12),
-  );
-  const stateDir = path.join(rootDir, "state");
-  const configPath = path.join(rootDir, "config.json");
-  await chmod(rootDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
-  await mkdir(artifactDir, { mode: 0o700, recursive: true });
-  await chmod(artifactDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
-  await mkdir(stateDir, { mode: 0o700, recursive: true });
-  await chmod(stateDir, 0o700).catch(() => undefined);
-  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
-  await writeFile(
-    configPath,
-    `${JSON.stringify(params.initialConfig ?? buildMatrixQaEmptyMatrixCliConfig(), null, 2)}\n`,
-    { flag: "wx", mode: 0o600 },
-  );
-  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
-  const env = {
-    ...requireMatrixQaCliRuntimeEnv(params.context),
-    FORCE_COLOR: "0",
-    NO_COLOR: "1",
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    OPENCLAW_STATE_DIR: stateDir,
-  };
-  const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
-    await runMatrixQaOpenClawCli({
-      args,
-      env,
-      stdin,
-      timeoutMs,
-    });
-  const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
-    startMatrixQaOpenClawCli({
-      args,
-      env,
-      timeoutMs,
-    });
-  return {
-    configPath,
-    dispose: async () => {
+  try {
+    const artifactDir = path.join(
+      outputDir,
+      params.artifactLabel,
+      randomUUID().replaceAll("-", "").slice(0, 12),
+    );
+    const stateDir = path.join(rootDir, "state");
+    const configPath = path.join(rootDir, "config.json");
+    await chmod(rootDir, 0o700);
+    await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
+    await mkdir(artifactDir, { mode: 0o700, recursive: true });
+    await chmod(artifactDir, 0o700);
+    await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
+    await mkdir(stateDir, { mode: 0o700, recursive: true });
+    await chmod(stateDir, 0o700);
+    await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(params.initialConfig ?? buildMatrixQaEmptyMatrixCliConfig(), null, 2)}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+    await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
+    const env = {
+      ...requireMatrixQaCliRuntimeEnv(params.context),
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_NO_AUTO_UPDATE: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const run = async (args: string[], timeoutMs = params.context.timeoutMs, stdin?: string) =>
+      await runMatrixQaOpenClawCli({
+        args,
+        env,
+        stdin,
+        timeoutMs,
+      });
+    const start = (args: string[], timeoutMs = params.context.timeoutMs) =>
+      startMatrixQaOpenClawCli({
+        args,
+        env,
+        timeoutMs,
+      });
+    return {
+      configPath,
+      dispose: async () => {
+        await rm(rootDir, { force: true, recursive: true });
+      },
+      run,
+      rootDir: artifactDir,
+      start,
+      stateDir,
+    };
+  } catch (error) {
+    // No disposer reaches the caller on rejection; the constructor still owns private state.
+    try {
       await rm(rootDir, { force: true, recursive: true });
-    },
-    run,
-    rootDir: artifactDir,
-    start,
-    stateDir,
-  };
+    } catch (cleanupError) {
+      const combinedFailure = new AggregateError(
+        [error, cleanupError],
+        "Matrix QA CLI setup and cleanup failed",
+        { cause: error },
+      );
+      throw combinedFailure;
+    }
+    throw error;
+  }
 }
 
 export async function createMatrixQaCliGatewayRuntime(params: {

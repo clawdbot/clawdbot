@@ -26,8 +26,8 @@ vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
 
-function createGatewayParentLikeCommand() {
-  const gateway = new Command().name("gateway");
+function createGatewayParentLikeCommand(program?: Command) {
+  const gateway = program ? program.command("gateway") : new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
   gateway.option("--port <port>", "Port for the gateway WebSocket");
   gateway.option("--token <token>", "Gateway token");
@@ -59,12 +59,13 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     {
       name: "forwards install option collisions from parent gateway command",
-      argv: ["install", "--force", "--port", "19000", "--token", "tok_test"],
+      argv: ["install", "--force", "--port", "19000", "--token", "tok_test", "--runtime", "bun"],
       assert: () => {
         const opts = expectSingleDaemonCall(runDaemonInstall);
         expect(opts.force).toBe(true);
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
+        expect(opts.runtime).toBe("bun");
       },
     },
     {
@@ -123,6 +124,34 @@ describe("addGatewayServiceCommands", () => {
     assert();
   });
 
+  it.each(["gateway", "daemon"])("parses preservation only on %s restart", async (name) => {
+    const program = new Command()
+      .enablePositionalOptions()
+      .exitOverride()
+      .configureOutput({ writeErr: () => {} });
+    if (name === "daemon") {
+      registerDaemonCli(program);
+    } else {
+      createGatewayParentLikeCommand(program);
+    }
+    await program.parseAsync([name, "restart", "--preserve-definition", "--json"], {
+      from: "user",
+    });
+    expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject({
+      preserveDefinition: true,
+      json: true,
+    });
+    for (const verb of ["install", "start", "stop", "uninstall"]) {
+      await expect(
+        program.parseAsync([name, verb, "--preserve-definition"], { from: "user" }),
+      ).rejects.toMatchObject({ code: "commander.unknownOption" });
+    }
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+    expect(runDaemonStart).not.toHaveBeenCalled();
+    expect(runDaemonStop).not.toHaveBeenCalled();
+    expect(runDaemonUninstall).not.toHaveBeenCalled();
+  });
+
   it.each(
     [
       { leaf: "status", runner: runDaemonStatus },
@@ -142,5 +171,31 @@ describe("addGatewayServiceCommands", () => {
     await program.parseAsync(argv, { from: "user" });
 
     expect(expectSingleDaemonCall(runner).json).toBe(true);
+  });
+
+  it("inherits an explicit parent port instead of a status leaf default", async () => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const status = gateway.commands.find((command) => command.name() === "status")!;
+    status.setOptionValueWithSource("port", "19003", "default");
+
+    await gateway.parseAsync(["--port", "19002", "status"], { from: "user" });
+
+    expect(expectSingleDaemonCall(runDaemonStatus).rpc).toMatchObject({
+      port: "19002",
+      localPortOverride: 19002,
+    });
+  });
+
+  it.each([
+    { argv: ["status", "--port", "0"], error: "--port must be an integer between 1 and 65535." },
+    {
+      argv: ["--port", "19002", "status", "--url", "ws://localhost:19002"],
+      error: "Use either --url or --port, not both.",
+    },
+  ])("rejects invalid status options $argv", async ({ argv, error }) => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions().exitOverride();
+
+    await expect(gateway.parseAsync(argv, { from: "user" })).rejects.toThrow(error);
+    expect(runDaemonStatus).not.toHaveBeenCalled();
   });
 });

@@ -85,6 +85,33 @@ describe("settings preference persistence", () => {
     expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
+  it("defaults task progress auto-collapse off and persists only the opt-in", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+
+    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatCollapseTaskProgress).toBe(true);
+    expect(loadSettings().chatCollapseTaskProgress).toBe(true);
+
+    saveSettings({ ...loadSettings(), chatCollapseTaskProgress: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatCollapseTaskProgress",
+    );
+
+    localStorage.setItem(
+      scopedKey,
+      JSON.stringify({ gatewayUrl: gwUrl, chatCollapseTaskProgress: "yes" }),
+    );
+    expect(loadSettings().chatCollapseTaskProgress).toBe(false);
+  });
+
   it("persists only the non-default catalog open target", () => {
     setTestLocation({
       protocol: "https:",
@@ -372,6 +399,35 @@ describe("settings preference persistence", () => {
 
     expect(loadSettings().textScale).toBe(125);
   });
+
+  it.each(["fontUi", "fontChat"] as const)(
+    "persists only explicit, supported %s overrides",
+    (key) => {
+      setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+      const defaults = loadSettings();
+      const scopedKey = `openclaw.control.settings.v1:${defaults.gatewayUrl}`;
+      expect(defaults[key]).toBeUndefined();
+
+      for (const face of ["geist", "lora", "system"] as const) {
+        saveSettings({ ...loadSettings(), [key]: face });
+        expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")[key]).toBe(face);
+        expect(loadSettings()[key]).toBe(face);
+      }
+      saveSettings({ ...loadSettings(), [key]: undefined });
+      expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(key);
+      expect(loadSettings()[key]).toBeUndefined();
+
+      for (const value of ["theme", "unknown-font", "Geist, sans-serif", 42, { family: "lora" }]) {
+        localStorage.setItem(
+          scopedKey,
+          JSON.stringify({ gatewayUrl: defaults.gatewayUrl, [key]: value }),
+        );
+        expect(loadSettings()[key]).toBeUndefined();
+        saveSettings(loadSettings());
+        expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(key);
+      }
+    },
+  );
 
   it("omits the inherited text scale and removes an authored override on reset", () => {
     setTestLocation({

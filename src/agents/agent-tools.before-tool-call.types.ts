@@ -108,7 +108,7 @@ type HookBlockedOutcome = {
 };
 
 export type HookOutcome =
-  | (HookBlockedOutcome & { kind: "veto" })
+  | (HookBlockedOutcome & { kind: "veto"; genericDecision?: true })
   | (HookBlockedOutcome & {
       kind: "failure";
       disposition: BeforeToolCallFailureDisposition;
@@ -116,6 +116,7 @@ export type HookOutcome =
   | {
       blocked: false;
       params: unknown;
+      ownerDecision?: true;
       approvalResolution?: PluginApprovalResolution;
       deferredApproval?: DeferredPluginToolApproval;
     };

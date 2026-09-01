@@ -1,9 +1,12 @@
+import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
  */
-
-import type { MediaKind } from "@openclaw/media-core/constants";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatSendIntent,
+  QueueMode,
+} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -26,12 +29,35 @@ export type ChatAttachment = {
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
   draftRevision: number;
 };
 
+export type ChatGoalDraftMode = { sessionId?: string } & (
+  | { action: "start" }
+  | { action: "edit"; goalId: string; previousDraft: string }
+);
+
+export type ChatGoalDraft = { sessionId?: string } & (
+  | { action: "start"; objective: string }
+  | { action: "edit"; goalId: string; objective: string }
+);
+
+export type ChatGoalAction = "pause" | "resume" | "clear";
+
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
+  goalMode?: ChatGoalDraftMode;
   message: string;
   attachments: ChatAttachment[];
   storageFailed: boolean;
@@ -43,7 +69,8 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "reviewing" | "strict-review-required" | "warning";
+  source?: "system";
   command?: string;
   riskLevel?: string;
   rationale?: string;
@@ -65,6 +92,9 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
+  attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -77,6 +107,11 @@ export type ChatQueueItem = {
   sendRunId?: string;
   /** One-send override retained with the durable row for reconnect and retry. */
   queueMode?: QueueMode;
+  /** Admission intent and its original issue time survive transport retries together. */
+  intent?: ChatSendIntent;
+  /** For structured admissions, preserve the originally selected session incarnation. */
+  sessionId?: string;
+  expectedLeafEntryId?: string | null;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -105,6 +140,8 @@ export type ChatItem =
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Collapse the body behind a disclosure; the label line stays visible. */
+      collapsedBody?: true;
     }
   | {
       kind: "divider";
@@ -144,6 +181,8 @@ export type ChatStreamSegment = {
   boundaryRunId?: string;
   /** Ordering-only boundary with no renderable assistant text. */
   boundaryMarker?: true;
+  /** Hidden durable replacement; cumulative text still owns the prefix baseline. */
+  persisted?: true;
   toolCallId?: string;
   itemId?: string;
 };
@@ -181,12 +220,26 @@ export function trimAccumulatedStreamPrefix(text: string, previousText: string |
   return text.slice(previousText.length).trimStart();
 }
 
+export function accumulatedStreamText(
+  segments: readonly ChatStreamSegment[],
+  normalize: (text: string) => string = (text) => text,
+): string | null {
+  let accumulated: string | null = null;
+  for (const segment of segments) {
+    if (streamSegmentUsesAccumulatedText(segment)) {
+      accumulated = advanceAccumulatedStreamText(accumulated, normalize(segment.text));
+    }
+  }
+  return accumulated;
+}
+
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
   kind: "group";
   key: string;
   role: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
@@ -220,6 +273,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
@@ -232,6 +294,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };
@@ -266,27 +329,31 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
-    boardWidgetName?: string;
-    mcpApp?: {
-      viewId: string;
-      serverName?: string;
-      toolName?: string;
-      uiResourceUri?: string;
-      toolCallId?: string;
-      originSessionKey?: string;
-    };
-  };
+  /** UI-local preview identity for results without a call or transcript id. */
+  previewRevision?: string;
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+        boardWidgetName?: string;
+        mcpApp?: {
+          viewId: string;
+          serverName?: string;
+          toolName?: string;
+          uiResourceUri?: string;
+          toolCallId?: string;
+          originSessionKey?: string;
+        };
+      }
+    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

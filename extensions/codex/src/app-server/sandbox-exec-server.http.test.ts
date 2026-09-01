@@ -1,4 +1,9 @@
 // Codex tests cover sandbox exec server.http plugin behavior.
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage } from "node:http";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -11,7 +16,9 @@ import {
   rpc,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -57,6 +64,96 @@ function splitUtf8ChildScript(params: {
     `  ${finish}`,
     "}, 25);",
   ].join("\n");
+}
+
+async function createLiveRedirectSandbox(
+  targetHost: "source.test" | "target.test" | "127.0.0.1" | "private.test",
+  redirectStatus = 302,
+) {
+  const requests: IncomingMessage[] = [];
+  const requestBodies: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request);
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      requestBodies.push(body);
+      if (request.url === "/redirect") {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("missing live redirect test server address");
+        }
+        response.writeHead(redirectStatus, {
+          location: `http://${targetHost}:${address.port}/final`,
+        });
+        response.end("redirect body");
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("final body");
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  const fixtureDir = tempDirs.make("codex-http-redirect-");
+  await writeFile(
+    join(fixtureDir, "sitecustomize.py"),
+    [
+      "import socket",
+      "original_getaddrinfo = socket.getaddrinfo",
+      "original_connect = socket.socket.connect",
+      "def getaddrinfo(host, *args, **kwargs):",
+      '    if host in ("source.test", "target.test"):',
+      '        host = "93.184.216.34"',
+      '    elif host == "private.test":',
+      '        host = "127.0.0.1"',
+      "    return original_getaddrinfo(host, *args, **kwargs)",
+      "def connect(self, address):",
+      '    if isinstance(address, tuple) and address[0] == "93.184.216.34":',
+      '        address = ("127.0.0.1", *address[1:])',
+      "    return original_connect(self, address)",
+      "socket.getaddrinfo = getaddrinfo",
+      "socket.socket.connect = connect",
+    ].join("\n"),
+  );
+
+  const env = { ...testExecEnv(), PYTHONPATH: fixtureDir };
+  const sandbox = createSandboxContext({
+    runShellCommand: async ({ script, stdin }) => {
+      const child = spawn("/bin/sh", ["-c", script], { env });
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.stdin.end(stdin);
+      const [code] = (await once(child, "close")) as [number];
+      return { code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) };
+    },
+    buildExecSpec: async ({ command }) => ({
+      argv: ["/bin/sh", "-c", command],
+      env,
+      stdinMode: "pipe-closed",
+    }),
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing live redirect test server address");
+  }
+  return {
+    sandbox,
+    url: `http://source.test:${address.port}/redirect`,
+    requests,
+    requestBodies,
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
 }
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
@@ -120,6 +217,221 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     expect(runShellCommand).not.toHaveBeenCalled();
     socket.close();
   });
+
+  it.each([
+    { redirectStatus: 302, streamResponse: false },
+    { redirectStatus: 302, streamResponse: true },
+    { redirectStatus: 308, streamResponse: false },
+    { redirectStatus: 308, streamResponse: true },
+  ])(
+    "returns $redirectStatus without exposing credentials when redirectPolicy=stop (stream=$streamResponse)",
+    async ({ redirectStatus, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox("target.test", redirectStatus);
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        const notifications = collectNotifications(socket);
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+
+        await expect(
+          rpc(socket, "http/request", {
+            requestId: `http-stop-${streamResponse}`,
+            method: "GET",
+            url: fixture.url,
+            headers: [{ name: "authorization", value: "Bearer regression-secret" }],
+            redirectPolicy: "stop",
+            streamResponse,
+          }),
+        ).resolves.toEqual({
+          status: redirectStatus,
+          headers: expect.arrayContaining([
+            expect.objectContaining({ name: "location", value: expect.stringContaining("/final") }),
+          ]),
+          bodyBase64: streamResponse ? "" : Buffer.from("redirect body").toString("base64"),
+        });
+        if (streamResponse) {
+          await expect(waitForHttpBodyDeltas(notifications, 2)).resolves.toEqual([
+            expect.objectContaining({
+              deltaBase64: Buffer.from("redirect body").toString("base64"),
+              done: false,
+            }),
+            expect.objectContaining({ deltaBase64: "", done: true }),
+          ]);
+        }
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        socket.close();
+        await fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    {
+      targetHost: "source.test",
+      preserveCredentials: true,
+      redirectStatus: 302,
+      streamResponse: false,
+    },
+    {
+      targetHost: "target.test",
+      preserveCredentials: false,
+      redirectStatus: 302,
+      streamResponse: false,
+    },
+    {
+      targetHost: "source.test",
+      preserveCredentials: true,
+      redirectStatus: 308,
+      streamResponse: true,
+    },
+    {
+      targetHost: "target.test",
+      preserveCredentials: false,
+      redirectStatus: 308,
+      streamResponse: true,
+    },
+  ] as const)(
+    "preserves redirect credentials only within the original origin ($targetHost $redirectStatus stream=$streamResponse)",
+    async ({ targetHost, preserveCredentials, redirectStatus, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox(targetHost, redirectStatus);
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        const notifications = collectNotifications(socket);
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+
+        await expect(
+          rpc(socket, "http/request", {
+            requestId: `http-follow-${targetHost}`,
+            method: "GET",
+            url: fixture.url,
+            headers: [
+              { name: "authorization", value: "Bearer regression-secret" },
+              { name: "cookie", value: "session=regression-secret" },
+              { name: "proxy-authorization", value: "Basic regression-secret" },
+              { name: "www-authenticate", value: "Bearer challenge-secret" },
+              { name: "cookie2", value: "session=another-regression-secret" },
+              { name: "x-request-id", value: "safe-request" },
+            ],
+            redirectPolicy: "follow",
+            streamResponse,
+          }),
+        ).resolves.toEqual({
+          status: 200,
+          headers: expect.arrayContaining([
+            expect.objectContaining({ name: "content-type", value: "text/plain" }),
+          ]),
+          bodyBase64: streamResponse ? "" : Buffer.from("final body").toString("base64"),
+        });
+        if (streamResponse) {
+          await expect(waitForHttpBodyDeltas(notifications, 2)).resolves.toEqual([
+            expect.objectContaining({
+              deltaBase64: Buffer.from("final body").toString("base64"),
+              done: false,
+            }),
+            expect.objectContaining({ deltaBase64: "", done: true }),
+          ]);
+        }
+        expect(fixture.requests).toHaveLength(2);
+        const redirectedHeaders = fixture.requests[1]?.headers;
+        expect(redirectedHeaders?.["x-request-id"]).toBe("safe-request");
+        for (const header of [
+          "authorization",
+          "cookie",
+          "proxy-authorization",
+          "www-authenticate",
+          "cookie2",
+        ]) {
+          if (preserveCredentials) {
+            expect(redirectedHeaders?.[header]).toBeTruthy();
+          } else {
+            expect(redirectedHeaders?.[header]).toBeUndefined();
+          }
+        }
+      } finally {
+        socket.close();
+        await fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    { redirectStatus: 301, originalMethod: "POST", redirectedMethod: "GET" },
+    { redirectStatus: 302, originalMethod: "POST", redirectedMethod: "GET" },
+    { redirectStatus: 302, originalMethod: "PUT", redirectedMethod: "PUT" },
+    { redirectStatus: 303, originalMethod: "PUT", redirectedMethod: "GET" },
+    { redirectStatus: 307, originalMethod: "POST", redirectedMethod: "POST" },
+    { redirectStatus: 308, originalMethod: "POST", redirectedMethod: "POST" },
+  ])(
+    "preserves upstream HTTP redirect method semantics ($redirectStatus $originalMethod)",
+    async ({ redirectStatus, originalMethod, redirectedMethod }) => {
+      const fixture = await createLiveRedirectSandbox("source.test", redirectStatus);
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+
+        await expect(
+          rpc(socket, "http/request", {
+            requestId: `http-method-${redirectStatus}-${originalMethod}`,
+            method: originalMethod,
+            url: fixture.url,
+            headers: [{ name: "content-type", value: "application/json" }],
+            bodyBase64: Buffer.from('{"message":"keep"}').toString("base64"),
+            redirectPolicy: "follow",
+          }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            status: 200,
+            bodyBase64: Buffer.from("final body").toString("base64"),
+          }),
+        );
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests[1]?.method).toBe(redirectedMethod);
+        expect(fixture.requests[1]?.headers["content-type"]).toBe(
+          redirectedMethod === "GET" ? undefined : "application/json",
+        );
+        expect(fixture.requestBodies[1]).toBe(
+          redirectedMethod === "GET" ? "" : '{"message":"keep"}',
+        );
+      } finally {
+        socket.close();
+        await fixture.close();
+      }
+    },
+  );
+
+  it.each([
+    { redirectStatus: 302, targetHost: "127.0.0.1", streamResponse: false },
+    { redirectStatus: 302, targetHost: "private.test", streamResponse: true },
+    { redirectStatus: 308, targetHost: "127.0.0.1", streamResponse: false },
+    { redirectStatus: 308, targetHost: "private.test", streamResponse: true },
+  ] as const)(
+    "blocks redirect destinations before connecting ($redirectStatus $targetHost stream=$streamResponse)",
+    async ({ redirectStatus, targetHost, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox(targetHost, redirectStatus);
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+
+        await expect(
+          rpc(socket, "http/request", {
+            requestId: "http-blocked-redirect",
+            method: "GET",
+            url: fixture.url,
+            redirectPolicy: "follow",
+            streamResponse,
+          }),
+        ).rejects.toThrow(/Blocked.*private\/internal\/special-use/);
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        socket.close();
+        await fixture.close();
+      }
+    },
+  );
 
   it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
     const buildExecSpec = vi.fn(async () => ({

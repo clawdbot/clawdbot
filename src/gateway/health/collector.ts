@@ -3,13 +3,16 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { resolveUnavailableChannelAccountSnapshot } from "../../channels/status/account-state.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -24,6 +27,8 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -43,7 +48,9 @@ import type {
   PluginHealthSummary,
 } from "./types.js";
 
-const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
+// `status --all` gives live health 8s, so the Gateway must finish first.
+const HEALTH_COLLECTION_TIMEOUT_MS = 7_000;
+const HEALTH_PROBE_CONCURRENCY = 5;
 const HEALTH_RECENT_SESSION_LIMIT = 5;
 const healthLog = createSubsystemLogger("health");
 
@@ -99,64 +106,69 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
-  if (ordered.length === 0 && defaultAgentId) {
-    ordered.push({ id: defaultAgentId });
-  }
 
   return { defaultAgentId, ordered };
 }
 
-export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
-  const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
+async function createHealthSessionStoreReader(agentIds: readonly string[]) {
+  const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
+  const { readSessionStoreSummaryReadOnly } =
+    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  let listed: ReturnType<typeof listSessionEntriesReadOnly>;
-  try {
-    listed = listSessionEntriesReadOnly({
-      ...(agentId ? { agentId } : {}),
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-  } catch (error) {
-    if (!isTransientSqliteError(error)) {
-      throw error;
-    }
-    // Health is best-effort: an empty snapshot beats failing on a transient lock.
-    listed = [];
-  }
-  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
-  let sessionCount = 0;
-  for (const { sessionKey, entry } of listed) {
-    if (sessionKey === "global" || sessionKey === "unknown") {
-      continue;
-    }
-    sessionCount += 1;
-    const session = { key: sessionKey, updatedAt: entry?.updatedAt ?? 0 };
-    const insertAt = recentSessions.findIndex(
-      (recentSession) => session.updatedAt > recentSession.updatedAt,
-    );
-    // Health returns only five rows. Keep the projection bounded while scanning
-    // so refreshes never sort the complete session snapshot.
-    if (insertAt >= 0) {
-      recentSessions.splice(insertAt, 0, session);
-      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
-        recentSessions.pop();
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
+    try {
+      return readSessionStoreSummaryReadOnly(scope, options);
+    } catch (error) {
+      if (!isTransientSqliteError(error)) {
+        throw error;
       }
-    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
-      recentSessions.push(session);
+      // Health is best-effort: one empty snapshot beats repeated transient lock failures.
+      return { count: 0, recent: [], byAgent: new Map() };
     }
-  }
-  const recent = recentSessions.map((session) => ({
-    key: session.key,
-    updatedAt: session.updatedAt || null,
-    age: session.updatedAt ? Date.now() - session.updatedAt : null,
+  });
+}
+
+function projectHealthSessions(
+  path: string,
+  summary: { count: number; recent: SessionEntrySummary[] },
+) {
+  const recent = summary.recent.map(({ sessionKey: key, entry }) => ({
+    key,
+    updatedAt: entry.updatedAt || null,
+    age: entry.updatedAt ? Date.now() - entry.updatedAt : null,
   }));
   return {
-    path: databasePath,
-    count: sessionCount,
+    path,
+    count: summary.count,
     recent,
   } satisfies HealthSummary["sessions"];
+}
+
+async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
+  const store = reader.read(storePath, agentId);
+  return projectHealthSessions(store.path, store);
+}
+
+/** Shares one bounded session snapshot across every configured agent in this collection. */
+export async function buildHealthAgentSummaries(
+  cfg: OpenClawConfig,
+  { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
+): Promise<AgentHealthSummary[]> {
+  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
+  return ordered.map((entry) => {
+    const store = reader.read(
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
+      entry.id,
+    );
+    return {
+      agentId: entry.id,
+      name: entry.name,
+      isDefault: entry.id === defaultAgentId,
+      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
+      sessions: projectHealthSessions(store.path, store),
+    };
+  });
 }
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
@@ -219,6 +231,292 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   return { loaded, errors, unavailable };
 }
 
+type HealthChannelPlan = {
+  plugin: ChannelPlugin;
+  defaultAccountId: string;
+  preferredAccountId: string;
+  accountIds: string[];
+  accountSummaries: Record<string, ChannelAccountHealthSummary>;
+};
+
+type HealthOperationRelease = () => void;
+type HealthOperationWaiter = {
+  deadlineAtMs: number;
+  resolve: (release: HealthOperationRelease | null) => void;
+  timer: ReturnType<typeof setTimeout>;
+  settled: boolean;
+};
+
+// Permits outlive response deadlines so an unfinished plugin hook cannot be
+// replaced by later health refreshes and amplify process-wide probe work.
+let activeHealthOperations = 0;
+const healthOperationWaiters: HealthOperationWaiter[] = [];
+
+function settleHealthOperationWaiter(
+  waiter: HealthOperationWaiter,
+  release: HealthOperationRelease | null,
+): void {
+  if (waiter.settled) {
+    return;
+  }
+  waiter.settled = true;
+  clearTimeout(waiter.timer);
+  waiter.resolve(release);
+}
+
+function releaseNextHealthOperationWaiter(): void {
+  while (healthOperationWaiters.length > 0) {
+    const waiter = healthOperationWaiters.shift();
+    if (!waiter || waiter.settled) {
+      continue;
+    }
+    if (Date.now() >= waiter.deadlineAtMs) {
+      settleHealthOperationWaiter(waiter, null);
+      continue;
+    }
+    settleHealthOperationWaiter(waiter, createHealthOperationRelease());
+    return;
+  }
+}
+
+function createHealthOperationRelease(): HealthOperationRelease {
+  activeHealthOperations += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    activeHealthOperations -= 1;
+    releaseNextHealthOperationWaiter();
+  };
+}
+
+async function acquireHealthOperationPermit(
+  deadlineAtMs: number,
+): Promise<HealthOperationRelease | null> {
+  if (Date.now() >= deadlineAtMs) {
+    return null;
+  }
+  if (activeHealthOperations < HEALTH_PROBE_CONCURRENCY) {
+    return createHealthOperationRelease();
+  }
+
+  return await new Promise<HealthOperationRelease | null>((resolve) => {
+    const waiter: HealthOperationWaiter = {
+      deadlineAtMs,
+      resolve,
+      timer: setTimeout(
+        () => {
+          const index = healthOperationWaiters.indexOf(waiter);
+          if (index >= 0) {
+            healthOperationWaiters.splice(index, 1);
+          }
+          settleHealthOperationWaiter(waiter, null);
+        },
+        Math.max(1, deadlineAtMs - Date.now()),
+      ),
+      settled: false,
+    };
+    if (typeof waiter.timer === "object" && "unref" in waiter.timer) {
+      waiter.timer.unref();
+    }
+    healthOperationWaiters.push(waiter);
+  });
+}
+
+function buildHealthTimeoutRecord(
+  accountId: string,
+  timeoutMs: number,
+): ChannelAccountHealthSummary {
+  const error = `health collection timed out after ${timeoutMs}ms`;
+  return {
+    accountId,
+    lastError: error,
+    probe: { ok: false, timedOut: true, error },
+  };
+}
+
+function resolveHealthProbeTimeoutMs(deadlineAtMs: number): number {
+  return Math.max(1, deadlineAtMs - Date.now());
+}
+
+async function buildHealthAccountRecord(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  defaultAccountId: string;
+  includeSensitive: boolean;
+  probe: boolean;
+  deadlineAtMs: number;
+  timeoutMs: number;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
+}): Promise<ChannelAccountHealthSummary> {
+  const timedOut = () => buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  const runtimeSnapshot =
+    params.runtimeSnapshot?.channelAccounts[params.plugin.id]?.[params.accountId] ??
+    (params.accountId === params.defaultAccountId
+      ? params.runtimeSnapshot?.channels[params.plugin.id]
+      : undefined);
+  const unavailable = resolveUnavailableChannelAccountSnapshot({
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
+    await resolveHealthAccountContext({
+      plugin: params.plugin,
+      cfg: params.cfg,
+      accountId: params.accountId,
+    });
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  if (diagnostics.length > 0) {
+    debugHealth(params.cfg, "account.diagnostics", {
+      channel: params.plugin.id,
+      accountId: params.accountId,
+      diagnostics,
+    });
+  }
+
+  let probe: unknown;
+  let lastProbeAt: number | null = null;
+  if (
+    probeAccount !== undefined &&
+    enabled &&
+    configured === true &&
+    params.probe &&
+    params.plugin.status?.probeAccount
+  ) {
+    try {
+      probe = await params.plugin.status.probeAccount({
+        account: probeAccount,
+        timeoutMs: resolveHealthProbeTimeoutMs(params.deadlineAtMs),
+        cfg: params.cfg,
+      });
+      lastProbeAt = Date.now();
+    } catch (error) {
+      probe = { ok: false, error: formatErrorMessage(error) };
+      lastProbeAt = Date.now();
+    }
+  }
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+
+  const probeRecord =
+    probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+  const bot =
+    probeRecord && typeof probeRecord.bot === "object"
+      ? (probeRecord.bot as { username?: string | null })
+      : null;
+  if (bot?.username) {
+    debugHealth(params.cfg, "probe.bot", {
+      channel: params.plugin.id,
+      accountId: params.accountId,
+      username: bot.username,
+    });
+  }
+
+  const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, probe);
+  const snapshotProbe = params.includeSensitive ? probe : nonSensitiveProbeFailure;
+  const snapshot: ChannelAccountSnapshot =
+    probeAccount === undefined
+      ? buildChannelAccountSnapshotFromInspection({
+          account: inspectedAccount,
+          accountId: params.accountId,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+        })
+      : await buildChannelAccountSnapshotFromAccount({
+          plugin: params.plugin,
+          cfg: params.cfg,
+          accountId: params.accountId,
+          account: probeAccount,
+          runtime: runtimeSnapshot,
+          probe: snapshotProbe,
+          enabledFallback: enabled,
+          configuredFallback: configured,
+        });
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  if (lastProbeAt) {
+    snapshot.lastProbeAt = lastProbeAt;
+  }
+  const healthState = resolveChannelHealthState(snapshot, {
+    channelId: params.plugin.id,
+    now: Date.now(),
+    staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+    channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  });
+  if (healthState !== undefined) {
+    snapshot.healthState = healthState;
+  }
+
+  const summary =
+    probeAccount !== undefined && params.plugin.status?.buildChannelSummary
+      ? await params.plugin.status.buildChannelSummary({
+          account: probeAccount,
+          cfg: params.cfg,
+          defaultAccountId: params.accountId,
+          snapshot,
+        })
+      : undefined;
+  if (Date.now() >= params.deadlineAtMs) {
+    return timedOut();
+  }
+  // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
+  const record = redactChannelStatusSummaryBaseUrl(
+    summary && typeof summary === "object"
+      ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
+      : ({
+          ...snapshot,
+          accountId: params.accountId,
+        } satisfies ChannelAccountHealthSummary),
+  );
+  if (record.configured === undefined && probeAccount !== undefined) {
+    record.configured = configured;
+  }
+  if (params.includeSensitive && record.probe === undefined && probe !== undefined) {
+    record.probe = probe;
+  }
+  if (!params.includeSensitive) {
+    const summaryProbeFailure = buildNonSensitiveProbeFailure(params.plugin.id, record.probe);
+    const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
+    if (safeProbeFailure) {
+      record.probe = safeProbeFailure;
+    } else {
+      delete record.probe;
+    }
+  }
+  if (record.lastProbeAt === undefined && lastProbeAt) {
+    record.lastProbeAt = lastProbeAt;
+  }
+  record.accountId = params.accountId;
+  return record;
+}
+
+async function runHealthAccountWithinDeadline(
+  params: Parameters<typeof buildHealthAccountRecord>[0],
+): Promise<ChannelAccountHealthSummary> {
+  const release = await acquireHealthOperationPermit(params.deadlineAtMs);
+  if (!release) {
+    return buildHealthTimeoutRecord(params.accountId, params.timeoutMs);
+  }
+
+  const operation = buildHealthAccountRecord(params);
+  void operation.then(release, release);
+  const result = await awaitWithinDeadline(() => operation, params.deadlineAtMs);
+  return result === ABSOLUTE_DEADLINE_EXPIRED
+    ? buildHealthTimeoutRecord(params.accountId, params.timeoutMs)
+    : result;
+}
+
 /** Collects the gateway-owned health snapshot for an explicit trust audience. */
 export async function collectGatewayHealthSnapshot(params: {
   audience: HealthSnapshotAudience;
@@ -228,25 +526,16 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
+  const start = Date.now();
+  const timeoutMs = Math.min(
+    resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
+    HEALTH_COLLECTION_TIMEOUT_MS,
+  );
+  const deadlineAtMs = start + timeoutMs;
   const cfg = await readRuntimeHealthConfig();
   const { defaultAgentId, ordered } = resolveHealthAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
-  const sessionCache = new Map<string, HealthSummary["sessions"]>();
-  const agents: AgentHealthSummary[] = [];
-  for (const entry of ordered) {
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id });
-    const sessionCacheKey = `${storePath}\0${entry.id}`;
-    const sessions =
-      sessionCache.get(sessionCacheKey) ?? (await buildHealthSessionSummary(storePath, entry.id));
-    sessionCache.set(sessionCacheKey, sessions);
-    agents.push({
-      agentId: entry.id,
-      name: entry.name,
-      isDefault: entry.id === defaultAgentId,
-      heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-      sessions,
-    });
-  }
+  const agents = await buildHealthAgentSummaries(cfg, { defaultAgentId, ordered });
   const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
   const configuredHeartbeatAgentId = normalizeOptionalString(
     cfg.agents?.defaults?.heartbeat?.agentId,
@@ -271,8 +560,6 @@ export async function collectGatewayHealthSnapshot(params: {
       summaryAgent?.agentId,
     ));
 
-  const start = Date.now();
-  const cappedTimeout = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HEALTH_TIMEOUT_MS, 50);
   const includeSensitive = params.audience === "admin";
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
@@ -280,8 +567,7 @@ export async function collectGatewayHealthSnapshot(params: {
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
-
-  for (const plugin of plugins) {
+  const channelPlans: HealthChannelPlan[] = plugins.map((plugin) => {
     channelLabels[plugin.id] = plugin.meta.label ?? plugin.id;
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
@@ -317,122 +603,59 @@ export async function collectGatewayHealthSnapshot(params: {
       preferredAccountId,
       accountIdsToProbe,
     });
-    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
-
-    for (const accountId of accountIdsToProbe) {
-      const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
-        await resolveHealthAccountContext({
-          plugin,
-          cfg,
-          accountId,
-        });
-      if (diagnostics.length > 0) {
-        debugHealth(cfg, "account.diagnostics", { channel: plugin.id, accountId, diagnostics });
-      }
-
-      let probe: unknown;
-      let lastProbeAt: number | null = null;
-      if (enabled && configured && params.probe && plugin.status?.probeAccount) {
-        try {
-          probe = await plugin.status.probeAccount({
-            account: probeAccount,
-            timeoutMs: cappedTimeout,
-            cfg,
-          });
-          lastProbeAt = Date.now();
-        } catch (error) {
-          probe = { ok: false, error: formatErrorMessage(error) };
-          lastProbeAt = Date.now();
-        }
-      }
-
-      const probeRecord =
-        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
-      const bot =
-        probeRecord && typeof probeRecord.bot === "object"
-          ? (probeRecord.bot as { username?: string | null })
-          : null;
-      if (bot?.username) {
-        debugHealth(cfg, "probe.bot", { channel: plugin.id, accountId, username: bot.username });
-      }
-
-      const runtimeSnapshot =
-        params.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
-        (accountId === defaultAccountId ? params.runtimeSnapshot?.channels[plugin.id] : undefined);
-      const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
-      const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
-      const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
-        plugin,
+    return {
+      plugin,
+      defaultAccountId,
+      preferredAccountId,
+      accountIds: accountIdsToProbe,
+      accountSummaries: {},
+    };
+  });
+  const accountTasks = channelPlans.flatMap((plan) =>
+    plan.accountIds.map((accountId) => ({ plan, accountId })),
+  );
+  const { results: accountResults } = await runTasksWithConcurrency({
+    tasks: accountTasks.map(({ plan, accountId }) => async () => ({
+      plan,
+      accountId,
+      record: await runHealthAccountWithinDeadline({
+        plugin: plan.plugin,
         cfg,
         accountId,
-        account: snapshotAccount,
-        runtime: runtimeSnapshot,
-        probe: snapshotProbe,
-        enabledFallback: enabled,
-        configuredFallback: configured,
-      });
-      if (lastProbeAt) {
-        snapshot.lastProbeAt = lastProbeAt;
-      }
-      const healthState = resolveChannelHealthState(snapshot, {
-        channelId: plugin.id,
-        now: Date.now(),
-        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
-      });
-      if (healthState !== undefined) {
-        snapshot.healthState = healthState;
-      }
-
-      const summary = plugin.status?.buildChannelSummary
-        ? await plugin.status.buildChannelSummary({
-            account: probeAccount,
-            cfg,
-            defaultAccountId: accountId,
-            snapshot,
-          })
-        : undefined;
-      // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
-      const record = redactChannelStatusSummaryBaseUrl(
-        summary && typeof summary === "object"
-          ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
-          : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
-      );
-      if (record.configured === undefined) {
-        record.configured = configured;
-      }
-      if (includeSensitive && record.probe === undefined && probe !== undefined) {
-        record.probe = probe;
-      }
-      if (!includeSensitive) {
-        const summaryProbeFailure = buildNonSensitiveProbeFailure(plugin.id, record.probe);
-        const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
-        if (safeProbeFailure) {
-          record.probe = safeProbeFailure;
-        } else {
-          delete record.probe;
-        }
-      }
-      if (record.lastProbeAt === undefined && lastProbeAt) {
-        record.lastProbeAt = lastProbeAt;
-      }
-      record.accountId = accountId;
-      accountSummaries[accountId] = record;
+        defaultAccountId: plan.defaultAccountId,
+        includeSensitive,
+        probe: params.probe,
+        deadlineAtMs,
+        timeoutMs,
+        runtimeSnapshot: params.runtimeSnapshot,
+      }),
+    })),
+    limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
+    throwOnError: true,
+  });
+  for (const result of accountResults) {
+    if (result) {
+      result.plan.accountSummaries[result.accountId] = result.record;
     }
+  }
 
+  for (const plan of channelPlans) {
     const defaultSummary =
-      accountSummaries[preferredAccountId] ??
-      accountSummaries[defaultAccountId] ??
-      accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
+      plan.accountSummaries[plan.preferredAccountId] ??
+      plan.accountSummaries[plan.defaultAccountId] ??
+      plan.accountSummaries[plan.accountIds[0] ?? plan.preferredAccountId];
     const fallbackSummary =
       defaultSummary ??
-      accountSummaries[
-        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      plan.accountSummaries[
+        expectDefined(
+          Object.keys(plan.accountSummaries)[0],
+          "object.keys(account summaries) entry at 0",
+        )
       ];
     if (fallbackSummary) {
-      channels[plugin.id] = {
+      channels[plan.plugin.id] = {
         ...fallbackSummary,
-        accounts: accountSummaries,
+        accounts: plan.accountSummaries,
       } satisfies ChannelHealthSummary;
     }
   }

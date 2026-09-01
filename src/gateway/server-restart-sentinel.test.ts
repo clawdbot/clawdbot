@@ -185,11 +185,11 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     createManagedOutgoingMediaBlocks: vi.fn<CreateManagedOutgoingMediaBlocksMock>(async (params) =>
-      (params.mediaUrls ?? []).map((mediaUrl) => ({
-        type: params.attachments?.[0]?.type ?? "image",
-        artifactId: `artifact:${mediaUrl}`,
-        url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
-        openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
+      (params.items ?? []).map((item) => ({
+        type: item.mimeType?.startsWith("audio/") ? "audio" : "image",
+        artifactId: `artifact:${item.url}`,
+        url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
+        openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
       })),
     ),
     attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(() => true),
@@ -1570,13 +1570,15 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       agentId: "main",
-      mediaUrls: [attachment.mediaUrl],
-      attachments: [
-        { type: attachment.type, path: attachment.mediaUrl, mimeType: attachment.mimeType },
+      items: [
+        {
+          url: attachment.mediaUrl,
+          mimeType: attachment.mimeType,
+          trustedLocal: true,
+        },
       ],
       stateDir: testState.stateDir,
       localRoots: [testState.statePath("media")],
-      allowLocalNonImage: true,
     });
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1786,8 +1788,13 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith(
       expect.objectContaining({
-        mediaUrls: ["/tmp/one.png"],
-        attachments: [{ type: "image", path: "/tmp/one.png", name: "one.png" }],
+        items: [
+          {
+            url: "/tmp/one.png",
+            filename: "one.png",
+            trustedLocal: true,
+          },
+        ],
       }),
     );
     expect(mocks.mergeSessionDeliveryPreparedMediaBlocks).toHaveBeenCalledWith(

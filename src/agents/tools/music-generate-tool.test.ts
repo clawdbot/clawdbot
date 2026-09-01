@@ -288,20 +288,6 @@ describe("createMusicGenerateTool", () => {
     ).toBeNull();
   });
 
-  it("registers when music-generation config is present", () => {
-    expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
-            },
-          },
-        }),
-      }),
-    );
-  });
-
   it("tells song requests to generate audio instead of only lyrics", () => {
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({
@@ -598,6 +584,97 @@ describe("createMusicGenerateTool", () => {
     expect(generateMusicOptions(1).timeoutMs).toBe(180_000);
     expect(detailsOf(defaultResult).timeoutMs).toBe(180_000);
     expect(detailsOf(overrideResult).timeoutMs).toBe(180_000);
+  });
+
+  it("runs explicit deployment refs and preserves timeout-only music defaults", async () => {
+    const provider = {
+      id: "music-plugin",
+      models: [],
+      capabilities: {},
+      isConfigured: () => true,
+      generateMusic: vi.fn(async () => ({
+        tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
+      })),
+    };
+    musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([provider]);
+    musicGenerationRuntimeMocks.generateMusic.mockResolvedValue({
+      provider: "music-plugin",
+      model: "deployment",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
+    });
+    mediaStoreMocks.saveMediaBuffer.mockResolvedValue({
+      path: "/tmp/deployment.mp3",
+      id: "deployment.mp3",
+      size: 5,
+      contentType: "audio/mpeg",
+    });
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: { defaults: { musicGenerationModel: { timeoutMs: 180_000 } } },
+        }),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: { musicGenerationProviders: [provider] },
+        } as never,
+      }),
+    );
+
+    const result = await tool.execute("call-explicit-deployment", {
+      prompt: "night-drive synthwave",
+      model: "music-plugin/deployment",
+    });
+
+    expect(generateMusicOptions()).toMatchObject({
+      modelOverride: "music-plugin/deployment",
+      timeoutMs: 180_000,
+    });
+    expect(detailsOf(result).timeoutMs).toBe(180_000);
+  });
+
+  it("rejects oversized inline reference images before music generation", async () => {
+    musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue([
+      {
+        id: "minimax",
+        defaultModel: "music-2.6",
+        models: ["music-2.6"],
+        capabilities: { edit: { enabled: true, maxInputImages: 1 } },
+      },
+    ]);
+    musicGenerationRuntimeMocks.generateMusic.mockResolvedValue({
+      provider: "minimax",
+      model: "music-2.6",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [{ buffer: Buffer.from("music"), mimeType: "audio/mpeg" }],
+    });
+    mediaStoreMocks.saveMediaBuffer.mockResolvedValue({
+      path: "/tmp/generated.mp3",
+      id: "generated.mp3",
+      size: 5,
+      contentType: "audio/mpeg",
+    });
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              mediaMaxMb: 8 / (1024 * 1024),
+              musicGenerationModel: { primary: "minimax/music-2.6" },
+            },
+          },
+        }),
+      }),
+    );
+
+    await expect(
+      tool.execute("call-oversized-inline-reference", {
+        prompt: "night-drive synthwave",
+        image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
+      }),
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    expect(musicGenerationRuntimeMocks.generateMusic).not.toHaveBeenCalled();
   });
 
   it("keeps provider lyrics and generated attachment metadata from becoming delivery directives", async () => {

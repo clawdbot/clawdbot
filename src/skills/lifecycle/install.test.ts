@@ -15,7 +15,7 @@ import {
 } from "../loading/frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
-import type { SkillEntry } from "../types.js";
+import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installSkill } from "./install.js";
 import { skillsInstallTesting } from "./install.test-support.js";
 
@@ -24,10 +24,18 @@ vi.mock("../../process/exec.js", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
-async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
+async function writeInstallableSkill(
+  workspaceDir: string,
+  name: string,
+  installSpec: SkillInstallSpec = {
+    id: "deps",
+    kind: "node",
+    package: "example-package",
+  },
+): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(
@@ -35,7 +43,7 @@ async function writeInstallableSkill(workspaceDir: string, name: string): Promis
     `---
 name: ${name}
 description: test skill
-metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+metadata: ${JSON.stringify({ openclaw: { install: [installSpec] } })}
 ---
 
 # ${name}
@@ -275,6 +283,7 @@ describe("installSkill before_install hooks", () => {
   });
 
   it("blocks install when before_install rejects the skill", async () => {
+    const sha256 = "A1B2C3D4".repeat(8);
     const handler = vi.fn().mockReturnValue({
       block: true,
       blockReason: "Blocked by plugin lifecycle hook",
@@ -282,7 +291,12 @@ describe("installSkill before_install hooks", () => {
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
     await withWorkspaceCase(async ({ workspaceDir }) => {
-      await writeInstallableSkill(workspaceDir, "blocked-skill");
+      await writeInstallableSkill(workspaceDir, "blocked-skill", {
+        id: "deps",
+        kind: "download",
+        url: "https://example.com/runtime.tar.gz",
+        sha256: ` ${sha256} `,
+      });
 
       const result = await installSkill({
         workspaceDir,
@@ -292,6 +306,16 @@ describe("installSkill before_install hooks", () => {
 
       expect(result.ok).toBe(false);
       expect(result.message).toBe("Blocked by plugin lifecycle hook");
+      expect(handler.mock.calls[0]?.[0]).toMatchObject({
+        skill: {
+          installId: "deps",
+          installSpec: {
+            kind: "download",
+            url: "https://example.com/runtime.tar.gz",
+            sha256: sha256.toLowerCase(),
+          },
+        },
+      });
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });

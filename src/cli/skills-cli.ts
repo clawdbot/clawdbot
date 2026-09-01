@@ -25,6 +25,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -42,10 +43,8 @@ import {
 } from "../skills/lifecycle/source-install.js";
 import {
   getSkillCuratorStatus,
-  pinCuratedSkill,
-  restoreCuratedSkill,
+  SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
   type SkillCuratorStatus,
-  unpinCuratedSkill,
 } from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
@@ -67,10 +66,11 @@ import type {
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
-import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -89,20 +89,6 @@ type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
 >;
-
-function resolveSkillClawHubRiskOptions(
-  acknowledgeClawHubRisk: boolean,
-  action: "installing" | "updating",
-) {
-  const riskOptions = resolveClawHubRiskAcknowledgementCliOptions({
-    acknowledgeClawHubRisk,
-    action,
-  });
-  return {
-    ...(riskOptions.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(riskOptions.onClawHubRisk ? { onClawHubRisk: riskOptions.onClawHubRisk } : {}),
-  };
-}
 
 function formatSkillWarning(message: string): string {
   return message.includes("╭─") ? message : theme.warn(message);
@@ -143,6 +129,22 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
+async function callSkillsGateway<T>(params: {
+  config: ResolvedSkillsWorkspace["config"];
+  method: string;
+  params: Record<string, unknown>;
+  timeoutMs?: number;
+  requiredMethods?: string[];
+}): Promise<T> {
+  const { callGateway } = await import("../gateway/call.js");
+  return await callGateway<T>({
+    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+    ...params,
+  });
+}
+
 function normalizeExplicitAgentId(agentId?: string): string | undefined {
   const normalizedAgentId = agentId?.trim();
   if (agentId !== undefined && !normalizedAgentId) {
@@ -182,37 +184,33 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
-async function loadGatewaySkillsStatusReport(
-  resolved: ResolvedSkillsWorkspace,
-): Promise<SkillStatusReport | null> {
-  try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillStatusReport>({
-      config: resolved.config,
-      method: "skills.status",
-      params: { agentId: resolved.agentId },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch {
-    return null;
-  }
-}
-
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
-  const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
-  if (gatewayReport) {
-    return gatewayReport;
+  try {
+    return await callSkillsGateway<SkillStatusReport>({
+      config: resolved.config,
+      method: "skills.status",
+      params: { agentId: resolved.agentId },
+    });
+  } catch (error) {
+    if (
+      !(await canFallbackToImplicitLocalGateway({
+        config: resolved.config,
+        error,
+        legacyMethod: "skills.status",
+        legacyAgentId: true,
+      }))
+    ) {
+      throw error;
+    }
+    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.config,
+      agentId: resolved.agentId,
+    });
   }
-  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
-    config: resolved.config,
-    agentId: resolved.agentId,
-  });
 }
 
 async function runSkillsAction(
@@ -375,6 +373,17 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   if (status.lastError) {
     lines.push(`Last error: ${status.lastError}`);
   }
+  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
+  for (const [workspace, review] of Object.entries(status.collectionReview)) {
+    lines.push(
+      `Collection review ${workspace.slice(0, 8)}: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+    );
+  }
+  for (const [workspace, review] of Object.entries(status.experienceReview)) {
+    lines.push(
+      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
+    );
+  }
   const keyCounts = new Map<string, number>();
   for (const skill of status.skills) {
     keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
@@ -395,104 +404,91 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function loadGatewaySkillCuratorStatus(
+async function withOfflineGatewayLock<T>(
   config: ReturnType<typeof getRuntimeConfig>,
-): Promise<SkillCuratorStatus | null> {
+  gatewayError: unknown,
+  action: () => T | Promise<T>,
+): Promise<T> {
+  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+  const lock = await acquireGatewayLock({
+    allowInTests: true,
+    port: resolveGatewayPort(config, process.env),
+    role: "skill-workshop-apply",
+    timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+  }).catch(() => undefined);
+  if (!lock) {
+    throw gatewayError;
+  }
+  // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus>({
-      config,
-      method: "skills.curator.status",
-      params: {},
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
-    }
-    return null;
+    return await action();
+  } finally {
+    await lock.release();
   }
 }
 
-async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
-  const config = getRuntimeConfig();
-  return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
-}
-
-async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skill: string) {
+async function callSkillCurator<T>(
+  method: "status" | "pin" | "restore" | "unpin",
+  params: { skill?: string },
+  loadLocal: () => T,
+): Promise<T> {
   const config = getRuntimeConfig();
   try {
-    const { callGateway } = await import("../gateway/call.js");
-    return await callGateway<SkillCuratorStatus["skills"][number]>({
+    return await callSkillsGateway<T>({
       config,
       method: `skills.curator.${method}`,
-      params: { skill },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
+      params,
     });
-  } catch (err) {
-    if (config.gateway?.mode === "remote") {
-      throw err;
+  } catch (error) {
+    if (
+      !(await canFallbackToImplicitLocalGateway({
+        config,
+        error,
+        ...(method === "status" ? { legacyMethod: "skills.curator.status" } : {}),
+      }))
+    ) {
+      throw error;
     }
+    return method === "status"
+      ? loadLocal()
+      : await withOfflineGatewayLock(config, error, loadLocal);
   }
-  if (method === "pin") {
-    return pinCuratedSkill(skill);
-  }
-  if (method === "unpin") {
-    return unpinCuratedSkill(skill);
-  }
-  return restoreCuratedSkill(skill);
+}
+
+function throwRetiredSkillCuratorAction(): never {
+  throw new Error(SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE);
+}
+
+async function runSkillCuratorMutation(
+  method: "pin" | "restore" | "unpin",
+  skill: string,
+): Promise<never> {
+  // Retired actions still reach the Gateway so remote operators get its error;
+  // the local fallback raises the same message when no Gateway answers.
+  await callSkillCurator(method, { skill }, throwRetiredSkillCuratorAction);
+  return throwRetiredSkillCuratorAction();
 }
 
 async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
 ): Promise<SkillProposalApplyResult> {
-  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
-    await import("../gateway/call.js");
   let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
-    proposal = await callGateway<SkillProposalReadResult>({
+    proposal = await callSkillsGateway<SkillProposalReadResult>({
       config: resolved.config,
       method: "skills.proposals.inspect",
       params: { agentId: resolved.agentId, proposalId },
-      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
       requiredMethods: ["skills.proposals.apply"],
     });
   } catch (err) {
-    const isOfflineCandidate =
-      isGatewayCredentialsRequiredError(err) ||
-      (isGatewayTransportError(err) && err.kind === "closed" && err.code === 1006);
-    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
+    if (!(await canFallbackToImplicitLocalGateway({ config: resolved.config, error: err }))) {
       throw err;
     }
 
-    // Hold the canonical Gateway ownership locks across local mutation. This
-    // makes offline apply atomic with Gateway startup, so a new process cannot
-    // inherit a stale process-local skill snapshot.
-    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
-    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-    try {
-      lock = await acquireGatewayLock({
-        allowInTests: true,
-        port: resolveGatewayPort(resolved.config, process.env),
-        role: "skill-workshop-apply",
-        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
-      });
-    } catch {
-      throw err;
-    }
-    if (!lock) {
-      throw err;
-    }
-    try {
+    return await withOfflineGatewayLock(resolved.config, err, async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
         workspaceDir: resolved.workspaceDir,
@@ -508,12 +504,10 @@ async function runSkillProposalApply(
         proposalId,
         expectedRevisionHash: reviewedProposal.revisionHash,
       });
-    } finally {
-      await lock.release();
-    }
+    });
   }
 
-  return await callGateway<SkillProposalApplyResult>({
+  return await callSkillsGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
     params: {
@@ -522,8 +516,6 @@ async function runSkillProposalApply(
       expectedRevisionHash: proposal.revisionHash,
     },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
 }
 
@@ -532,16 +524,12 @@ async function runSkillProposalEvaluate(
   proposalId: string,
   correlationId?: string,
 ): Promise<SkillProposalEvaluateResult> {
-  const { callGateway } = await import("../gateway/call.js");
-  const proposal = await callGateway<SkillProposalReadResult>({
+  const proposal = await callSkillsGateway<SkillProposalReadResult>({
     config: resolved.config,
     method: "skills.proposals.inspect",
     params: { agentId: resolved.agentId, proposalId },
-    timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
-  return await callGateway<SkillProposalEvaluateResult>({
+  return await callSkillsGateway<SkillProposalEvaluateResult>({
     config: resolved.config,
     method: "skills.proposals.evaluate",
     params: {
@@ -551,8 +539,6 @@ async function runSkillProposalEvaluate(
       ...(correlationId ? { correlationId } : {}),
     },
     timeoutMs: GATEWAY_SKILLS_EVALUATION_TIMEOUT_MS,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
   });
 }
 
@@ -642,11 +628,6 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
-    .option(
       "--acknowledge-install-policy-warning",
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
@@ -665,8 +646,6 @@ export function registerSkillsCli(program: Command) {
           version?: string;
           force?: boolean;
           forceInstall?: boolean;
-          acknowledgeClawhubRisk?: boolean;
-          acknowledgeClawHubRisk?: boolean;
           acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
@@ -689,8 +668,6 @@ export function registerSkillsCli(program: Command) {
             const clawHubOnlyOption = [
               opts.version && "--version",
               opts.forceInstall && "--force-install",
-              (opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true) &&
-                "--acknowledge-clawhub-risk",
             ].find(Boolean);
             if (clawHubOnlyOption) {
               defaultRuntime.error(
@@ -745,10 +722,7 @@ export function registerSkillsCli(program: Command) {
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
-            ...resolveSkillClawHubRiskOptions(
-              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
-              "installing",
-            ),
+            confirmInstall: resolveClawHubInstallConfirmation(),
             logger: {
               info: (message) => defaultRuntime.log(message),
               warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
@@ -781,11 +755,6 @@ export function registerSkillsCli(program: Command) {
       false,
     )
     .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings without prompting",
-      false,
-    )
-    .option(
       "--acknowledge-install-policy-warning",
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
@@ -799,8 +768,6 @@ export function registerSkillsCli(program: Command) {
           all?: boolean;
           force?: boolean;
           forceInstall?: boolean;
-          acknowledgeClawhubRisk?: boolean;
-          acknowledgeClawHubRisk?: boolean;
           acknowledgeInstallPolicyWarning?: boolean;
           global?: boolean;
           agent?: string;
@@ -835,10 +802,6 @@ export function registerSkillsCli(program: Command) {
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
-            ...resolveSkillClawHubRiskOptions(
-              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
-              "updating",
-            ),
             logger: {
               info: (message) => defaultRuntime.log(message),
               warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
@@ -968,12 +931,12 @@ export function registerSkillsCli(program: Command) {
 
   const curator = skills
     .command("curator")
-    .description("Inspect and manage skill lifecycle curation")
+    .description("Inspect skill usage and collection review outcomes")
     .option("--json", "Output as JSON", false);
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const status = await loadSkillCuratorStatus();
+      const status = await callSkillCurator("status", {}, getSkillCuratorStatus);
       if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;
@@ -984,24 +947,17 @@ export function registerSkillsCli(program: Command) {
 
   curator
     .command("status")
-    .description("Show curator run and lifecycle status")
+    .description("Show skill usage and collection review status")
     .action(showCuratorStatus);
 
   for (const action of ["pin", "unpin", "restore"] as const) {
     curator
       .command(action)
-      .description(`${action} a curated skill`)
+      .description(`${action} is retired; collection review manages skills`)
       .argument("<skill>", "Skill name or key")
-      .action(async (skill: string, opts: { json?: boolean }, command: Command) => {
+      .action(async (skill: string) => {
         await runCommandWithRuntime(defaultRuntime, async () => {
-          const result = await runSkillCuratorMutation(action, skill);
-          if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          defaultRuntime.writeStdout(
-            `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
-          );
+          await runSkillCuratorMutation(action, skill);
         });
       });
   }

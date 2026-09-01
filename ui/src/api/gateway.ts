@@ -1,8 +1,6 @@
 import {
   buildGatewayConnectAuth,
-  buildDeviceAuthPayload,
   ConnectErrorDetailCodes,
-  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   formatConnectErrorMessage,
@@ -49,10 +47,10 @@ import {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
   loadOrCreateDeviceIdentity,
-  signDevicePayload,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
@@ -230,51 +228,13 @@ async function deriveLegacyV4RecoveryScope(material: string | undefined): Promis
   }
 }
 
-async function buildGatewayConnectDevice(params: {
-  deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
-  client: ConnectParams["client"];
-  role: string;
-  scopes: string[];
-  authToken?: string;
-  connectNonce: string | null;
-  connectChallengeTs: number | null | undefined;
-}): Promise<NonNullable<ConnectParams["device"]> | undefined> {
-  const { deviceIdentity } = params;
-  if (!deviceIdentity) {
-    return undefined;
-  }
-  if (params.connectChallengeTs === null) {
-    throw new Error("gateway connect challenge timestamp invalid");
-  }
-  // The Control UI alone supports pre-challenge Gateways; that timeout fallback has no server time.
-  const signedAtMs = params.connectChallengeTs ?? Date.now();
-  const nonce = params.connectNonce ?? "";
-  const payload = buildDeviceAuthPayload({
-    deviceId: deviceIdentity.deviceId,
-    clientId: params.client.id,
-    clientMode: params.client.mode,
-    role: params.role,
-    scopes: params.scopes,
-    signedAtMs,
-    token: params.authToken ?? null,
-    nonce,
-  });
-  const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
-  return {
-    id: deviceIdentity.deviceId,
-    publicKey: deviceIdentity.publicKey,
-    signature,
-    signedAt: signedAtMs,
-    nonce,
-  };
-}
-
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
+  private maxInboundSilenceMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
@@ -294,9 +254,7 @@ export class GatewayBrowserClient {
               this.maxPayloadBytes !== undefined &&
               new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
             ) {
-              throw new Error(
-                "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-              );
+              throw new GatewayPayloadLimitError();
             }
             socket.send(data);
           },
@@ -389,6 +347,15 @@ export class GatewayBrowserClient {
 
   get connected() {
     return this.client.connected;
+  }
+
+  get needsWakeReconnect() {
+    return (
+      !this.client.connected ||
+      (this.lastInboundActivityAtMs !== null &&
+        this.maxInboundSilenceMs !== null &&
+        Date.now() - this.lastInboundActivityAtMs > this.maxInboundSilenceMs)
+    );
   }
 
   get recoveryScope() {
@@ -484,14 +451,16 @@ export class GatewayBrowserClient {
         role,
         scopes,
         device,
+        // Tests bind these compact wire literals to the canonical capability registry.
         caps: [
-          GATEWAY_CLIENT_CAPS.AGENT_KIND,
-          GATEWAY_CLIENT_CAPS.APPROVALS,
-          GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
-          GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
-          GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-          GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
-          GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+          "agent-kind",
+          "approvals",
+          "task-suggestions",
+          "terminal-offset-seq",
+          "tool-events",
+          "inline-widgets",
+          "ui-commands",
+          "usage-refreshing",
         ],
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,
@@ -570,12 +539,12 @@ export class GatewayBrowserClient {
         : DEFAULT_GATEWAY_TICK_INTERVAL_MS,
       { minMs: MIN_GATEWAY_TICK_WATCH_INTERVAL_MS },
     );
+    this.maxInboundSilenceMs = tickIntervalMs * 2;
     this.lastInboundActivityAtMs = Date.now();
     this.tickWatchTimer = setInterval(() => {
-      const lastActivityAtMs = this.lastInboundActivityAtMs;
       // Preserve long-running requests while real Gateway heartbeats arrive;
       // only a silent socket should enter the shared reconnect lifecycle.
-      if (lastActivityAtMs !== null && Date.now() - lastActivityAtMs > tickIntervalMs * 2) {
+      if (this.needsWakeReconnect) {
         this.forceReconnect("tick timeout");
       }
     }, tickIntervalMs);
@@ -587,6 +556,7 @@ export class GatewayBrowserClient {
       this.tickWatchTimer = null;
     }
     this.lastInboundActivityAtMs = null;
+    this.maxInboundSilenceMs = null;
   }
 
   private handleConnectFailure(err: GatewayProtocolRequestError, plan: ConnectPlan) {
@@ -745,5 +715,14 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
+  }
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
   }
 }

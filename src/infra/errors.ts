@@ -25,6 +25,14 @@ export function readErrorName(err: unknown): string {
   return typeof name === "string" ? name : "";
 }
 
+export function readErrorCause(error: unknown): unknown {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits direct optional cause access without coercion.
+  return (error as { cause?: unknown }).cause;
+}
+
 export function collectErrorGraphCandidates(
   err: unknown,
   resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,

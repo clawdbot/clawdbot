@@ -37,7 +37,6 @@ function toChatChannelMeta(params: {
     detailLabel: normalizeOptionalString(params.channel.detailLabel),
     systemImage: normalizeOptionalString(params.channel.systemImage),
     arrayFieldMode: "non-empty",
-    selectionDocsPrefixMode: "defined",
   });
 }
 

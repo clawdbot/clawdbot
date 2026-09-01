@@ -16,13 +16,13 @@ import {
   sameDefaultInferenceRoute,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { redactSetupInferenceError } from "./setup-inference-activate.js";
 import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
   type VerifySetupInferenceResult,
   invalidSetupConfigError,
+  redactSetupInferenceError,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
 import {
@@ -321,7 +321,7 @@ export async function verifySetupInferenceConfig(params: {
         if (!credential) {
           throw new Error("staged profile missing after verification");
         }
-        return { profileId: profile.profileId, credential };
+        return { ...profile, credential };
       });
     };
     const retainStagedAuthProfiles = () => {

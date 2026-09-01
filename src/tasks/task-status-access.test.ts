@@ -22,7 +22,7 @@ vi.mock("./task-registry.js", () => ({
   listTaskRecords: mocks.listTaskRecords,
   listTaskRecordsUnsorted: mocks.listTaskRecordsUnsorted,
   listTasksForAgentId: vi.fn(),
-  listTasksForSessionKey: vi.fn(),
+  listTasksForRelatedSessionKey: vi.fn(),
 }));
 
 describe("generated media task snapshots", () => {

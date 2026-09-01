@@ -136,7 +136,6 @@ function createPage(params: {
   connected?: boolean;
   hello?: ApplicationGatewaySnapshot["hello"];
   id?: string;
-  withBootFallback?: boolean;
 }) {
   const source = createGateway(params.client, params.connected, params.hello);
   const page = document.createElement(APPROVAL_PAGE_ELEMENT_NAME) as TestApprovalPage;
@@ -145,11 +144,6 @@ function createPage(params: {
     gateway: source.gateway,
   } as unknown as ApplicationContext);
   page.approvalId = params.id ?? "exec:approval-1";
-  if (params.withBootFallback) {
-    const fallback = document.createElement("main");
-    fallback.className = "approval-page approval-page--booting";
-    page.append(fallback);
-  }
   provider.append(page);
   document.body.append(provider);
   return { page, source };
@@ -399,19 +393,6 @@ describe("ApprovalPage", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(page.querySelector("h1")?.textContent).toBe("Approved");
     expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
-  });
-
-  it("replaces the host boot fallback instead of duplicating the page", async () => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
-    const { page } = createPage({
-      client: { request } as unknown as GatewayBrowserClient,
-      withBootFallback: true,
-    });
-
-    await settle(page);
-
-    expect(page.querySelectorAll(".approval-page")).toHaveLength(1);
-    expect(page.querySelector(".approval-page--booting")).toBeNull();
   });
 
   it("loads a durable approval and sends a kind-bound resolution", async () => {

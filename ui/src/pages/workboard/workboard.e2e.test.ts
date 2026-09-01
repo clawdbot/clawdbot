@@ -13,6 +13,7 @@ import type {
   WorkboardCard,
   WorkboardStatus,
 } from "../../lib/workboard/index.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -26,7 +27,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard");
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
@@ -50,9 +51,18 @@ type RecordedPage = {
 };
 
 type ProofArtifacts = {
+  directory: string;
   screenshots: string[];
   videos: string[];
 };
+
+function createProofArtifacts(scope: string): ProofArtifacts {
+  return {
+    directory: captureUiProofEnabled ? createControlUiE2eArtifactDir(scope) : "",
+    screenshots: [],
+    videos: [],
+  };
+}
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
@@ -126,6 +136,22 @@ async function chooseWorkboardSelectFieldOption(
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }, optionValue);
   await waitForWorkboardSelectValue(control, optionValue ?? "");
+}
+
+async function expectWorkboardSelectTextFits(control: Locator): Promise<void> {
+  await control.click();
+  await expect.poll(() => control.getAttribute("open")).not.toBeNull();
+  const overflow = await control.evaluate((select) => {
+    const trigger = select.shadowRoot?.querySelector<HTMLElement>('[part="display-input"]');
+    const labels = [...select.querySelectorAll<HTMLElement>(".picker-select__label")];
+    return {
+      options: labels.map((label) => label.scrollWidth - label.clientWidth),
+      trigger: trigger ? trigger.scrollWidth - trigger.clientWidth : Number.POSITIVE_INFINITY,
+    };
+  });
+  expect(overflow.trigger).toBeLessThanOrEqual(1);
+  expect(overflow.options.every((value) => value <= 1)).toBe(true);
+  await control.press("Escape");
 }
 
 async function setWorkboardDraftField(
@@ -271,34 +297,30 @@ function cardsListResponse(
 }
 
 function statusColumn(page: Page, status: string) {
-  return page
-    .locator(".workboard-column")
-    .filter({
-      has: page.locator(".workboard-column__header h2", {
-        hasText: new RegExp(`^${status}$`, "u"),
-      }),
-    })
-    .first();
+  const statusClass = status.trim().toLowerCase().replaceAll(/\s+/gu, "-");
+  return page.locator(`.workboard-column--${statusClass}`).first();
 }
 
 function cardInColumn(page: Page, status: string, title: string) {
   return statusColumn(page, status).locator(".workboard-card", { hasText: title }).first();
 }
 
-async function newRecordedPage(label: string): Promise<RecordedPage> {
-  await mkdir(artifactDir, { recursive: true });
-  const rawVideoDir = path.join(artifactDir, `${label}-raw`);
-  await rm(rawVideoDir, { force: true, recursive: true });
-  await mkdir(rawVideoDir, { recursive: true });
+async function newRecordedPage(
+  artifacts: ProofArtifacts,
+  label: string,
+  options: { hasTouch?: boolean } = {},
+): Promise<RecordedPage> {
+  const rawVideoDir = path.join(artifacts.directory, `${label}-raw`);
+  if (captureUiProofEnabled) {
+    await mkdir(rawVideoDir, { recursive: true });
+  }
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
     context = await suite.browser.newContext({
+      hasTouch: options.hasTouch,
       locale: "en-US",
-      recordVideo: {
-        dir: rawVideoDir,
-        size: viewport,
-      },
+      recordVideo: captureUiProofEnabled ? { dir: rawVideoDir, size: viewport } : undefined,
       serviceWorkers: "block",
       viewport,
     });
@@ -308,7 +330,6 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await rm(rawVideoDir, { force: true, recursive: true });
     throw error;
   }
 }
@@ -318,7 +339,10 @@ async function captureScreenshot(
   artifacts: ProofArtifacts,
   name: string,
 ): Promise<void> {
-  const screenshotPath = path.join(artifactDir, `${name}.png`);
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const screenshotPath = path.join(artifacts.directory, `${name}.png`);
   await page.screenshot({ fullPage: true, path: screenshotPath });
   artifacts.screenshots.push(screenshotPath);
 }
@@ -329,24 +353,21 @@ async function closeRecordedPage(
   label: string,
 ): Promise<void> {
   const video = recorded.page.video();
-  try {
-    await recorded.context.close();
-    if (!video) {
-      return;
-    }
-    const rawVideoPath = await video.path();
-    const videoPath = path.join(artifactDir, `${label}.webm`);
-    await copyFile(rawVideoPath, videoPath);
-    artifacts.videos.push(videoPath);
-  } finally {
-    await rm(recorded.rawVideoDir, { force: true, recursive: true });
+  await recorded.context.close();
+  if (!video) {
+    return;
   }
+  const rawVideoPath = await video.path();
+  const videoPath = path.join(artifacts.directory, `${label}.webm`);
+  await copyFile(rawVideoPath, videoPath);
+  artifacts.videos.push(videoPath);
+  // Preserve the raw recording if close or copy fails; only remove the retained copy's source.
+  await rm(recorded.rawVideoDir, { force: true, recursive: true });
 }
 
 suite.define(() => {
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-lifecycle");
     const createdCard = card({
       id: "card-1",
       labels: ["ui", "proof"],
@@ -388,7 +409,7 @@ suite.define(() => {
       updatedAt: baseTime + 5,
     });
 
-    const writable = await newRecordedPage("workboard-writable");
+    const writable = await newRecordedPage(artifacts, "workboard-writable");
     await writable.page.clock.install();
     try {
       const writableGateway = await installMockGateway(writable.page, {
@@ -434,6 +455,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("ArrowUp");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "high");
@@ -441,6 +463,7 @@ suite.define(() => {
 
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
+      await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
       await writable.page.keyboard.press("Home");
       await writable.page.keyboard.press("Enter");
       await waitForWorkboardSelectValue(prioritySelect, "all");
@@ -566,9 +589,7 @@ suite.define(() => {
         .not.toContain("workboard-card--dragging");
 
       const moveBefore = (await writableGateway.getRequests("workboard.cards.move")).length;
-      await dragSource.dragTo(
-        statusColumn(writable.page, "Running").locator(".workboard-column__cards"),
-      );
+      await dragSource.dragTo(statusColumn(writable.page, "Running"));
       const moveRequest = await waitForNextRequest(
         writableGateway,
         "workboard.cards.move",
@@ -686,7 +707,7 @@ suite.define(() => {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
     }
 
-    const readOnly = await newRecordedPage("workboard-read-only");
+    const readOnly = await newRecordedPage(artifacts, "workboard-read-only");
     try {
       const readOnlyGateway = await installMockGateway(readOnly.page, {
         methodResponses: {
@@ -731,15 +752,17 @@ suite.define(() => {
       await closeRecordedPage(readOnly, artifacts, "workboard-read-only");
     }
 
-    await writeFile(
-      path.join(artifactDir, "manifest.json"),
-      `${JSON.stringify(artifacts, null, 2)}\n`,
-      "utf-8",
-    );
+    if (captureUiProofEnabled) {
+      await writeFile(
+        path.join(artifacts.directory, "manifest.json"),
+        `${JSON.stringify(artifacts, null, 2)}\n`,
+        "utf-8",
+      );
+    }
   });
 
   it("keeps card titles visible when a column overflows its height", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-overflow");
     const crowdedColumnCardCount = 8;
     const overflowTitle = (index: number) =>
       `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;
@@ -754,7 +777,7 @@ suite.define(() => {
       }),
     );
 
-    const recorded = await newRecordedPage("workboard-overflow");
+    const recorded = await newRecordedPage(artifacts, "workboard-overflow");
     try {
       await installMockGateway(recorded.page, {
         methodResponses: {
@@ -791,8 +814,181 @@ suite.define(() => {
     }
   });
 
+  it("collapses empty stages into rails without squeezing active columns", async () => {
+    const artifacts = createProofArtifacts("workboard-collapsed-columns");
+    const reviewCard = card({
+      id: "review-card",
+      status: "review",
+      title: "Review the completed implementation",
+    });
+    const doneCard = card({
+      id: "done-card",
+      status: "done",
+      title: "Previously completed work",
+    });
+    const recorded = await newRecordedPage(artifacts, "workboard-collapsed-columns");
+    try {
+      const gateway = await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([reviewCard, doneCard]),
+          "workboard.cards.move": { card: { ...reviewCard, status: "ready" } },
+        },
+      });
+      await recorded.page.setViewportSize({ height: 760, width: 1200 });
+      const response = await recorded.page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      await recorded.page.locator(".workboard-column--review .workboard-card").waitFor();
+
+      const collapsedColumns = recorded.page.locator(".workboard-column--collapsed");
+      await expect.poll(() => collapsedColumns.count()).toBe(0);
+      const emptyColumns = recorded.page.locator(".workboard-select--empty-columns");
+      await expectWorkboardSelectTextFits(emptyColumns);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Hide empty", emptyColumns);
+      await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(2);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Show all", emptyColumns);
+      await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(9);
+      await chooseWorkboardSelectFieldOption(emptyColumns, "Collapse empty", emptyColumns);
+      await expect.poll(() => collapsedColumns.count()).toBe(7);
+      const collapsedWidth = await recorded.page
+        .locator(".workboard-column--ready")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      const reviewWidth = await recorded.page
+        .locator(".workboard-column--review")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      expect(collapsedWidth).toBeGreaterThanOrEqual(44);
+      expect(collapsedWidth).toBeLessThanOrEqual(52);
+      expect(reviewWidth).toBeGreaterThanOrEqual(262);
+
+      const readyRail = recorded.page.locator(".workboard-column--ready .workboard-column__rail");
+      const collapsedRailStyle = await readyRail.evaluate((rail) => ({
+        boxShadow: getComputedStyle(rail).boxShadow,
+        hasExpandIcons: rail.querySelectorAll('[class*="direction-icon--expand-"]').length === 2,
+      }));
+      expect(collapsedRailStyle.boxShadow).not.toBe("none");
+      expect(collapsedRailStyle.hasExpandIcons).toBe(true);
+
+      const reviewHeader = recorded.page.locator(
+        ".workboard-column--review .workboard-column__header",
+      );
+      const collapseButton = reviewHeader.getByRole("button", { name: "Collapse Review column" });
+      expect(await collapseButton.evaluate((button) => getComputedStyle(button).opacity)).toBe("0");
+      expect(await collapseButton.locator('[class*="direction-icon--collapse-"]').count()).toBe(2);
+      await collapseButton.focus();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+      await collapseButton.blur();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("0");
+      await reviewHeader.hover();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+
+      await recorded.page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedMotionTransitions = await recorded.page.evaluate(() => ({
+        collapse: getComputedStyle(
+          document.querySelector(".workboard-column__collapse") as HTMLElement,
+        ).transitionDuration,
+        rail: getComputedStyle(
+          document.querySelector(".workboard-column__rail-icon") as HTMLElement,
+        ).transitionDuration,
+      }));
+      expect(reducedMotionTransitions).toEqual({ collapse: "0s", rail: "0s" });
+      await recorded.page.emulateMedia({ reducedMotion: "no-preference" });
+
+      await captureScreenshot(recorded.page, artifacts, "10-collapsed-columns-desktop");
+
+      await recorded.page.getByRole("button", { name: "Expand Ready column" }).click();
+      await expect
+        .poll(() => recorded.page.locator(".workboard-column--ready").getAttribute("class"))
+        .not.toContain("workboard-column--collapsed");
+      const expandedWidth = await recorded.page
+        .locator(".workboard-column--ready")
+        .evaluate((column) => column.getBoundingClientRect().width);
+      expect(expandedWidth).toBeGreaterThanOrEqual(262);
+      await recorded.page.getByRole("button", { name: "Collapse Ready column" }).click();
+
+      const viewPreset = recorded.page.locator(".workboard-select--toolbar").first();
+      await chooseWorkboardSelectFieldOption(viewPreset, "Review", viewPreset);
+      const singleColumnBoard = recorded.page.locator(
+        ".workboard-board--page.workboard-board--single-column",
+      );
+      const singleColumnGeometry = await singleColumnBoard.evaluate((board) => {
+        const column = board.querySelector(".workboard-column") as HTMLElement;
+        return {
+          boardWidth: board.getBoundingClientRect().width,
+          columnWidth: column.getBoundingClientRect().width,
+        };
+      });
+      expect(singleColumnGeometry.columnWidth).toBeGreaterThanOrEqual(
+        singleColumnGeometry.boardWidth * 0.45,
+      );
+      expect(singleColumnGeometry.columnWidth).toBeLessThanOrEqual(680);
+      await chooseWorkboardSelectFieldOption(viewPreset, "All cards", viewPreset);
+
+      const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
+      await recorded.page
+        .locator(".workboard-column--review .workboard-card")
+        .dragTo(recorded.page.locator(".workboard-column--ready .workboard-column__rail"));
+      const moveRequest = await waitForNextRequest(gateway, "workboard.cards.move", moveCount);
+      expect(requestParams(moveRequest)).toMatchObject({ id: reviewCard.id, status: "ready" });
+
+      await recorded.page.setViewportSize({ height: 760, width: 700 });
+      await expectWorkboardSelectTextFits(emptyColumns);
+      const backlogRail = recorded.page.locator(".workboard-column--backlog");
+      const mobileLayout = await backlogRail.evaluate((column) => ({
+        railWritingMode: getComputedStyle(
+          column.querySelector(".workboard-column__rail") as HTMLElement,
+        ).writingMode,
+        width: column.getBoundingClientRect().width,
+      }));
+      expect(mobileLayout.railWritingMode).toBe("horizontal-tb");
+      expect(mobileLayout.width).toBeGreaterThan(250);
+      await captureScreenshot(recorded.page, artifacts, "11-collapsed-columns-mobile");
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-collapsed-columns");
+    }
+  });
+
+  it("keeps touch collapse controls visible and at least 44px", async () => {
+    await suite.withPage({ hasTouch: true }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([
+            card({ id: "touch-review-card", status: "review", title: "Review on touch" }),
+          ]),
+        },
+      });
+      await page.setViewportSize({ height: 844, width: 390 });
+      const response = await page.goto(`${suite.server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+
+      const collapseButton = page.getByRole("button", { name: "Collapse Review column" });
+      await collapseButton.waitFor({ state: "visible" });
+      const touchGeometry = await collapseButton.evaluate((button) => {
+        const bounds = button.getBoundingClientRect();
+        return {
+          height: bounds.height,
+          opacity: getComputedStyle(button).opacity,
+          width: bounds.width,
+        };
+      });
+      expect(touchGeometry.opacity).toBe("1");
+      expect(touchGeometry.width).toBeGreaterThanOrEqual(44);
+      expect(touchGeometry.height).toBeGreaterThanOrEqual(44);
+    });
+  });
+
   it("filters persisted boards and keeps the selection in the URL", async () => {
-    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const artifacts = createProofArtifacts("workboard-board-filter");
     const defaultCard = card({ id: "default-card", title: "Default board work" });
     const opsCard = card({
       id: "ops-card",
@@ -819,7 +1015,7 @@ suite.define(() => {
         archivedAt: baseTime,
       },
     ];
-    const recorded = await newRecordedPage("workboard-board-filter");
+    const recorded = await newRecordedPage(artifacts, "workboard-board-filter");
     try {
       await installMockGateway(recorded.page, {
         methodResponses: {

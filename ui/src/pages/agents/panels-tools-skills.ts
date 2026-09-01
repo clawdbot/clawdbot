@@ -2,7 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders agents panels tools skills screen content.
 import { html, nothing } from "lit";
-import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
+import {
+  normalizeToolPolicyName,
+  resolveToolProfilePolicy,
+} from "../../../../src/agents/tool-policy-shared.js";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -12,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggle,
@@ -20,15 +24,13 @@ import { t } from "../../i18n/index.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
-  isAllowedByPolicy,
-  matchesList,
   resolveAgentConfig,
   resolveAgentSkillsFilter,
   resolveToolProfileOptions,
-  resolveToolProfile,
   resolveToolSections,
 } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -38,6 +40,7 @@ import {
 } from "../../lib/skills-shared.ts";
 import type { GitHubIdentityController } from "./github-identity-controller.ts";
 import { renderGitHubIdentity } from "./github-identity-view.ts";
+import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
@@ -172,12 +175,9 @@ function handleRuntimeToolJump(event: Event, anchorId: string) {
   window.history.replaceState(null, "", nextUrl);
 
   requestAnimationFrame(() => {
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView?.({
       block: "center",
-      behavior: reducedMotion ? "auto" : "smooth",
+      behavior: resolveScrollBehavior(),
     });
     target.querySelector<HTMLElement>("summary")?.focus();
   });
@@ -274,7 +274,7 @@ export function renderAgentTools(params: {
   const deny = hasAgentAllow ? [] : Array.isArray(agentTools.deny) ? agentTools.deny : [];
   const basePolicy = hasAgentAllow
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
-    : (resolveToolProfile(profile) ?? undefined);
+    : resolveToolProfilePolicy(profile);
   const toolIds = toolSections.flatMap((section) => section.tools.map((tool) => tool.id));
 
   const resolveAllowed = (toolId: string) => {
@@ -371,7 +371,7 @@ export function renderAgentTools(params: {
   const runtimeAvailability = !params.runtimeSessionMatchesSelectedAgent
     ? renderSettingsEmpty(t("agentTools.switchAgent"))
     : params.toolsEffectiveLoading && !params.toolsEffectiveResult && !params.toolsEffectiveError
-      ? renderSettingsEmpty(t("agentTools.loadingAvailable"))
+      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingAvailable"), rows: 2 })
       : params.toolsEffectiveError
         ? renderSettingsEmpty(t("agentTools.availableError"))
         : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
@@ -421,9 +421,6 @@ export function renderAgentTools(params: {
       : nothing}
     ${hasGlobalAllow
       ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
-      : nothing}
-    ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-      ? html`<div class="callout info">${t("agentTools.loadingCatalog")}</div>`
       : nothing}
     ${params.toolsCatalogError
       ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
@@ -520,7 +517,15 @@ export function renderAgentTools(params: {
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
-        <div class="agents-panel-body agent-tools-grid">
+        ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingCatalog") })
+          : nothing}
+        <div
+          class="agents-panel-body agent-tools-grid"
+          ?hidden=${params.toolsCatalogLoading &&
+          !params.toolsCatalogResult &&
+          !params.toolsCatalogError}
+        >
           ${toolSections.map((section) => {
             const sortedTools = sortSectionTools(section.tools);
             const enabledSectionCount = section.tools.filter(

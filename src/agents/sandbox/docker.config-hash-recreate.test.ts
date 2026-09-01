@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxConfigHash,
@@ -18,6 +18,7 @@ type SpawnCall = {
   command: string;
   args: string[];
   globalArgs: string[];
+  envFileContents?: string;
 };
 
 const spawnState = vi.hoisted(() => ({
@@ -86,7 +87,13 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   }
   // The tests assert docker CLI arguments without requiring Docker; this mock
   // implements only the inspect/create/start/rm calls used by ensureSandboxContainer.
-  spawnState.calls.push({ command, args, globalArgs });
+  const envFileIndex = args.indexOf("--env-file");
+  const envFile = envFileIndex === -1 ? undefined : args[envFileIndex + 1];
+  const call: SpawnCall = { command, args, globalArgs };
+  if (args[0] === "create" && envFile) {
+    call.envFileContents = fs.readFileSync(envFile, "utf8");
+  }
+  spawnState.calls.push(call);
 
   let code = 0;
   let stdout = "";
@@ -164,7 +171,7 @@ let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
 let resolveDockerEnvPolicyEpoch: typeof import("./docker.js").resolveDockerEnvPolicyEpoch;
 let PODMAN_SANDBOX_ENGINE: typeof import("./docker.js").PODMAN_SANDBOX_ENGINE;
 
-async function loadFreshDockerModuleForTest() {
+beforeAll(async () => {
   vi.resetModules();
   vi.doMock("./registry.js", () => ({
     readRegistryEntry: registryMocks.readRegistryEntry,
@@ -177,7 +184,7 @@ async function loadFreshDockerModuleForTest() {
   }));
   ({ ensureSandboxContainer, resolveDockerEnvPolicyEpoch, PODMAN_SANDBOX_ENGINE } =
     await import("./docker.js"));
-}
+});
 
 function createSandboxConfig(
   dns: string[],
@@ -256,7 +263,7 @@ async function ensureSandboxCreateCallForTest(params: {
 }
 
 describe("ensureSandboxContainer config-hash recreation", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     spawnState.calls.length = 0;
     spawnState.containerExists = true;
     spawnState.inspectRunning = true;
@@ -271,7 +278,6 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
-    await loadFreshDockerModuleForTest();
   });
 
   it("serializes concurrent provisioning for one container", async () => {
@@ -322,6 +328,29 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       sessionKey: scopeKey,
     });
   });
+
+  it.each(["docker", "podman"] as const)(
+    "delivers configured %s create environment without exposing values in process arguments",
+    async (backend) => {
+      const sentinel = "synthetic-container-create-transport-value";
+      const cfg = createSandboxConfig([], undefined, "rw", { CONFIGURED_VALUE: sentinel });
+      cfg.backend = backend;
+      spawnState.containerExists = false;
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+      const createCall = await ensureSandboxCreateCallForTest({
+        cfg,
+        ...(backend === "podman" ? { engine: PODMAN_SANDBOX_ENGINE } : {}),
+      });
+
+      expect(createCall.args.join(" ")).not.toContain(sentinel);
+      expect(createCall.envFileContents).toContain(`CONFIGURED_VALUE=${sentinel}\n`);
+      expect(createCall.envFileContents).toContain("OPENCLAW_CLI=1\n");
+      const envFile = collectDockerFlagValues(createCall.args, "--env-file")[0];
+      expect(envFile).toBeDefined();
+      expect(fs.existsSync(envFile!)).toBe(false);
+    },
+  );
 
   it("recreates shared container when array-order change alters hash", async () => {
     // Docker flag order is part of the runtime contract, so order-sensitive
@@ -532,9 +561,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
     expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
-    expect(collectDockerFlagValues(createCall.args, "--env")).toEqual(
-      expect.arrayContaining(["LANG=C.UTF-8", "GEMINI_API_KEY=dummy-gemini"]),
-    );
+    expect(createCall.args).not.toContain("--env");
+    expect(createCall.envFileContents).toContain("LANG=C.UTF-8\n");
+    expect(createCall.envFileContents).toContain("GEMINI_API_KEY=dummy-gemini\n");
 
     const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
     expect(registryUpdate?.configHash).toBe(newHash);

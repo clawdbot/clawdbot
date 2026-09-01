@@ -249,7 +249,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.ts"]);
   });
 
   it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
@@ -260,7 +260,7 @@ describe("createScopedVitestConfig", () => {
       passWithNoTests: true,
     });
 
-    expect(requireTestConfig(config).include).toEqual(["normalization-core/**/*.test.*"]);
+    expect(requireTestConfig(config).include).toEqual(["**/*.test.ts"]);
   });
 
   it("relativizes scoped include and exclude patterns to the configured dir", () => {
@@ -1137,7 +1137,17 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
+    expect(testConfig.include?.every((pattern) => pattern.startsWith("ui/src/"))).toBe(true);
+    for (const [file, included] of [
+      ["ui/src/pages/chat/chat-view.test.ts", true],
+      ["ui/src/components/form-controls.browser.test.ts", true],
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+    ] as const) {
+      expect(
+        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        file,
+      ).toBe(included);
+    }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
   });
 

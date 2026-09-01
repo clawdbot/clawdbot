@@ -5,7 +5,7 @@ import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -208,12 +208,15 @@ export class McpLoopbackToolCache {
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
       JSON.stringify(params.skillWorkshop?.proposalRevision ?? null),
+      // A delegation-restricted attempt must never read or seed the cached
+      // full-capability list for the same session/run context.
+      params.delegationCapability === "report_only" ? "delegation:report_only" : "",
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",
-      params.execSession?.execSecurity ?? "",
-      params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
+      params.execSession?.permissionMode ?? "",
+      params.execOverrides?.mode ?? "",
       params.execOverrides?.host ?? "",
       params.execOverrides?.security ?? "",
       params.execOverrides?.ask ?? "",

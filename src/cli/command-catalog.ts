@@ -10,7 +10,13 @@ type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
-export type CliPluginRegistryScope = "all" | "channels" | "configured-channels" | "memory";
+export type CliPluginRegistryScope =
+  | "all"
+  | "channels"
+  | "configured-channels"
+  | "memory"
+  | "sandbox-backends"
+  | "sandbox-management";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
 };
@@ -67,6 +73,14 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
+// These commands own their state boundary; bootstrap must not observe or initialize it first.
+const PASSIVE_STARTUP_POLICY = {
+  configGuard: "skip",
+  loadPlugins: "never",
+  ensureCliPath: false,
+  networkProxy: "bypass",
+} satisfies Partial<CliCommandPathPolicy>;
+
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
@@ -82,13 +96,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["database"],
     // Release-local database inspection must not observe default state or load runtime policy.
-    policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
-      hideBanner: true,
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    },
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
   },
   {
     commandPath: ["crestodian"], // hidden alias
@@ -127,6 +135,25 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
+  {
+    commandPath: ["sandbox"],
+    policy: {
+      loadPlugins: ({ argv, commandPath }) =>
+        !(
+          (commandPath[1] === "list" || commandPath[1] === "recreate") &&
+          hasFlag(argv, "--browser")
+        ),
+      pluginRegistry: { scope: "sandbox-backends" },
+    },
+  },
+  {
+    commandPath: ["sandbox", "list"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
+  {
+    commandPath: ["sandbox", "recreate"],
+    policy: { pluginRegistry: { scope: "sandbox-management" } },
+  },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
     commandPath: ["agents"],
@@ -204,12 +231,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["audit"],
-    policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
-      ensureCliPath: false,
-      networkProxy: "bypass",
-    },
+    policy: { ...PASSIVE_STARTUP_POLICY },
   },
   {
     commandPath: ["gateway"],
@@ -256,7 +278,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   { commandPath: ["gateway", "start"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "stop"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "stop"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   { commandPath: ["gateway", "uninstall"], exact: true, policy: { networkProxy: "bypass" } },
   {
     commandPath: ["gateway", "usage-cost"],
@@ -429,6 +455,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
     },
   },
+  {
+    commandPath: ["triage"],
+    policy: { configGuard: "skip", loadPlugins: "never" },
+  },
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
@@ -472,6 +502,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node", "worker"],
     exact: true,
     policy: {
+      // The app worker owns node startup, not Gateway channel schemas or Doctor preflight.
+      configGuard: "validate",
       hideBanner: true,
       loadPlugins: "never",
       ownsProtocolStdout: true,
@@ -545,6 +577,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
   {
+    commandPath: ["update", "cleanup"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
     commandPath: ["update"],
     policy: {
       configGuard: "skip",
@@ -577,6 +614,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "plugins-list" },
   },
+  // Authoring commands operate on a target package, not operator config, and a
+  // scaffolded plugin build can run through an older CLI; the startup guard
+  // would abort them on a host config they never read.
+  { commandPath: ["plugins", "build"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "validate"], exact: true, policy: { configGuard: "skip" } },
+  { commandPath: ["plugins", "init"], exact: true, policy: { configGuard: "skip" } },
   {
     commandPath: ["onboard"],
     exact: true,

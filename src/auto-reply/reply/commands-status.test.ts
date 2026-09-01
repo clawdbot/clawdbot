@@ -123,11 +123,18 @@ const codexStatusModel: ModelDefinitionConfig = {
   maxTokens: 128_000,
 };
 
-async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
-  const commandParams = buildCommandTestParams("/status", baseCfg);
+async function buildStatusReplyForTest(params: {
+  sessionKey?: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  verbose?: boolean;
+}) {
+  const cfg = params.cfg ?? baseCfg;
+  const commandParams = buildCommandTestParams("/status", cfg);
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
-    cfg: baseCfg,
+    cfg,
+    agentId: params.agentId,
     command: commandParams.command,
     sessionEntry: commandParams.sessionEntry,
     sessionKey,
@@ -250,6 +257,7 @@ async function writeTranscriptUsageLog(params: {
     cacheWrite: number;
     totalTokens: number;
   };
+  model?: string;
 }) {
   const storePath = path.join(
     params.dir,
@@ -271,7 +279,7 @@ async function writeTranscriptUsageLog(params: {
         {
           message: {
             role: "assistant",
-            model: "claude-opus-4-5",
+            model: params.model ?? "claude-opus-4-5",
             usage: params.usage,
           },
         },
@@ -466,6 +474,45 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
   });
 
+  it.each(["research", "ops"])("isolates global task status for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-status-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildStatusReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: "all" } },
+            ops: { sandbox: { mode: "off" } },
+          },
+        },
+      },
+    });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
+    expect(reply?.text).toContain(`${agentId} private task`);
+    expect(reply?.text).not.toContain(
+      `${agentId === "research" ? "ops" : "research"} private task`,
+    );
+    expect(reply?.text).not.toContain("unknown private task");
+    expect(reply?.text).toContain(`Execution: ${agentId === "research" ? "docker/all" : "direct"}`);
+  });
+
   it("hides stale completed task rows from the session task line", async () => {
     createRunningTaskRunCore({
       runtime: "subagent",
@@ -496,25 +543,25 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("done a while ago");
   });
 
-  it("shows a recent failure when no active tasks remain", async () => {
+  it("shows blocked completion outcomes when no active tasks remain", async () => {
     createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:acp:status-task-failed",
-      runId: "run-status-task-failed",
-      task: "failed background task",
+      runId: "run-status-task-blocked",
+      task: "blocked background task",
     });
-    failTaskRunByRunIdCore({
-      runId: "run-status-task-failed",
+    completeTaskRunByRunIdCore({
+      runId: "run-status-task-blocked",
       endedAt: Date.now(),
-      error: "approval denied",
+      terminalOutcome: "blocked",
+      terminalSummary: "Additional input required.",
     });
 
     const reply = await buildStatusReplyForTest({});
 
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("failed background task");
-    expect(reply?.text).toContain("approval denied");
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(reply?.text).toContain("blocked background task");
+    expect(reply?.text).toContain("Additional input required.");
   });
 
   it("does not leak internal runtime context through the task status line", async () => {
@@ -673,6 +720,155 @@ describe("buildStatusReply subagent summary", () => {
       });
 
       expect(normalizeTestText(text)).toContain("Context: 1.0k/200k");
+    });
+  });
+
+  it("uses a prepared context window in ordinary /status text and presentation", async () => {
+    const commandParams = buildCommandTestParams("/status", baseCfg);
+    const reply = await buildStatusReply({
+      cfg: baseCfg,
+      command: commandParams.command,
+      sessionEntry: {
+        sessionId: "sess-status-prepared-context",
+        updatedAt: 0,
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: commandParams.sessionKey,
+      parentSessionKey: commandParams.sessionKey,
+      sessionScope: commandParams.sessionScope,
+      storePath: commandParams.storePath,
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+    const table = reply?.presentation?.blocks.find((block) => block.type === "table");
+
+    expect(normalizeTestText(reply?.text ?? "")).toContain("Context: 45k/1.0m");
+    expect(table?.type === "table" ? table.rows : []).toContainEqual([
+      "📚 Context",
+      expect.stringContaining("45k/1.0m"),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "binds a bare transcript model to its prepared provider entry",
+      sessionId: "sess-status-recovered-bare-model-context",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      transcriptModel: "small-model",
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+        {
+          provider: "deepseek",
+          id: "small-model",
+          contextWindow: 128_000,
+          contextTokens: 128_000,
+        },
+      ],
+      expectedContext: "Context: 45k/128k",
+      rejectedContext: "Context: 45k/1.0m",
+    },
+    {
+      name: "binds a qualified transcript model to its exact prepared entry",
+      sessionId: "sess-status-recovered-qualified-model-context",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      transcriptModel: "deepseek/deepseek-v4-flash",
+      thinkingCatalog: [
+        {
+          provider: "deepseek",
+          id: "deepseek-v4-flash",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      expectedContext: "Context: 45k/1.0m",
+      rejectedContext: "Context: 45k/200k",
+    },
+    {
+      name: "keeps a cross-route qualified transcript model unbound",
+      sessionId: "sess-status-recovered-cross-route-model-context",
+      provider: "openrouter",
+      model: "google/gemini-2.5-pro",
+      transcriptModel: "google/gemini-2.5-pro",
+      thinkingCatalog: [
+        {
+          provider: "openrouter",
+          id: "google/gemini-2.5-pro",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      expectedContext: "Context: 45k/200k",
+      rejectedContext: "Context: 45k/1.0m",
+    },
+  ])("$name", async (testCase) => {
+    await withTempHome(async (dir) => {
+      await writeTranscriptUsageLog({
+        dir,
+        agentId: "main",
+        sessionId: testCase.sessionId,
+        model: testCase.transcriptModel,
+        usage: {
+          input: 45_000,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 45_000,
+        },
+      });
+
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId: testCase.sessionId,
+          updatedAt: 0,
+          modelSelectionLocked: true,
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: testCase.provider,
+        model: testCase.model,
+        contextTokens: 1_000_000,
+        thinkingCatalog: testCase.thinkingCatalog,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
+      });
+
+      expect(normalizeTestText(text)).toContain(testCase.expectedContext);
+      expect(normalizeTestText(text)).not.toContain(testCase.rejectedContext);
     });
   });
 
@@ -1895,23 +2091,9 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
+  it("uses native Claude CLI auth labels for anthropic models running on the Claude CLI runtime", async () => {
     await withTempHome(
-      async (dir) => {
-        const authPath = path.join(dir, ".claude", ".credentials.json");
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
-            claudeAiOauth: {
-              accessToken: "access-token",
-              refreshToken: "refresh-token",
-              expiresAt: Date.now() + 60_000,
-            },
-          }),
-          "utf8",
-        );
-
+      async () => {
         const text = await buildStatusText({
           cfg: {
             ...baseCfg,
@@ -1943,7 +2125,7 @@ describe("buildStatusReply subagent summary", () => {
 
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
-        expect(normalized).toContain("oauth (claude-cli)");
+        expect(normalized).toContain("native (claude-cli)");
       },
       {
         env: {
@@ -1954,7 +2136,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("prefers active Claude CLI OAuth over selected env API-key labels for runtime aliases", async () => {
+  it("prefers active native Claude CLI auth over selected env API-key labels for runtime aliases", async () => {
     const text = await buildStatusText({
       cfg: {
         ...baseCfg,
@@ -1993,12 +2175,12 @@ describe("buildStatusReply subagent summary", () => {
       isGroup: false,
       defaultGroupActivation: () => "mention",
       modelAuthOverride: "api-key (env: ANTHROPIC_API_KEY)",
-      activeModelAuthOverride: "oauth (claude-cli)",
+      activeModelAuthOverride: "native (claude-cli)",
     });
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
-    expect(normalized).toContain("oauth (claude-cli)");
+    expect(normalized).toContain("native (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");
   });

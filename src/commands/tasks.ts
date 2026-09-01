@@ -39,30 +39,37 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import {
+  matchesTaskStatusFilter,
   TASK_RUNTIMES,
-  TASK_STATUSES,
+  TASK_STATUS_FILTERS,
   type TaskNotifyPolicy,
   type TaskRecord,
 } from "../tasks/task-registry.types.js";
-import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  formatTaskStatus,
+  formatTaskStatusDetail,
+  isTaskStatusIssue,
+} from "../tasks/task-status.js";
 import {
   TASK_SYSTEM_AUDIT_CODES,
   TASK_SYSTEM_AUDIT_SEVERITIES,
   type TaskSystemAuditCode,
   type TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
   type TaskSystemAuditFinding,
 } from "./tasks-audit-system.js";
 import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintenance.js";
+import { formatTextCell } from "./text-format.js";
 
 const RUNTIME_PAD = 8;
-const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+const CHILD_SESSION_PAD = 36;
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
@@ -128,47 +135,22 @@ function configureTaskMaintenanceFromConfig(): void {
 }
 
 function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return maxChars <= 0
-    ? ""
-    : truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
-function shortToken(value: string | undefined, maxChars = ID_PAD): string {
+function formatTokenCell(value: string | undefined, width = ID_PAD): string {
   const sanitized = sanitizeTerminalText(normalizeOptionalString(value) ?? "").trim();
-  if (!sanitized) {
-    return "n/a";
-  }
-  return truncate(sanitized, maxChars);
-}
-
-function formatTaskStatusCell(status: string, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost" || status === "timed_out") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  return theme.muted(padded);
+  return formatTextCell(sanitized || "n/a", width);
 }
 
 function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const header = [
     "Task".padEnd(ID_PAD),
     "Kind".padEnd(RUNTIME_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Delivery".padEnd(DELIVERY_PAD),
     "Run".padEnd(RUN_PAD),
-    "Child Session",
+    "Child Session".padEnd(CHILD_SESSION_PAD),
     "Summary",
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
@@ -180,12 +162,12 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       80,
     );
     const line = [
-      shortToken(task.taskId).padEnd(ID_PAD),
+      formatTokenCell(task.taskId),
       task.runtime.padEnd(RUNTIME_PAD),
-      formatTaskStatusCell(task.status, rich),
+      formatTaskStatusCell(formatTaskStatus(task), rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
-      shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      shortToken(task.childSessionKey, 36).padEnd(36),
+      formatTokenCell(task.runId, RUN_PAD),
+      formatTokenCell(task.childSessionKey, CHILD_SESSION_PAD),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -195,7 +177,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 
 function formatTaskListSummary(tasks: TaskRecord[]) {
   const summary = summarizeTaskRecords(tasks);
-  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${tasks.filter(isTaskStatusIssue).length} issues`;
 }
 
 function formatAgeMs(ageMs: number | undefined): string {
@@ -224,7 +206,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
     "Severity".padEnd(8),
     "Code".padEnd(22),
     "Item".padEnd(ID_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Age".padEnd(8),
     "Detail",
   ].join(" ");
@@ -243,7 +225,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
         scope.padEnd(8),
         severityCell,
         finding.code.padEnd(22),
-        shortToken(finding.token).padEnd(ID_PAD),
+        formatTokenCell(finding.token),
         status,
         formatAgeMs(finding.ageMs).padEnd(8),
         truncate(sanitizeTerminalText(finding.detail), 88),
@@ -276,12 +258,12 @@ export async function tasksListCommand(
   runtime: RuntimeEnv,
 ) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
-  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
   const tasks = reconcileInspectableTasks().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
     }
-    if (statusFilter && task.status !== statusFilter) {
+    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
       return false;
     }
     return true;
@@ -344,7 +326,7 @@ export async function tasksShowCommand(
     `taskId: ${task.taskId}`,
     `kind: ${task.runtime}`,
     `sourceId: ${task.sourceId ?? "n/a"}`,
-    `status: ${task.status}`,
+    `status: ${formatTaskStatus(task)}`,
     `result: ${task.terminalOutcome ?? "n/a"}`,
     `delivery: ${task.deliveryStatus}`,
     `notify: ${task.notifyPolicy}`,
@@ -643,7 +625,7 @@ export async function tasksMaintenanceCommand(
     info(
       sessionMaintenance.skippedReason
         ? `Session registry: sweep skipped (${sessionMaintenance.skippedReason})`
-        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
+        : `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations · ${sessionMaintenance.skippedStores} skipped ${sessionMaintenance.skippedStores === 1 ? "store" : "stores"}`,
     ),
   );
   runtime.log(

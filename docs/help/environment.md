@@ -219,6 +219,12 @@ A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning
 
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
+This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. OpenClaw's dotenv loader does not expand environment variable values. For example, `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace` in a runtime `.env` file remains literal when OpenClaw loads it.
+
+Since OpenClaw does not expand these values, give path variables fully-resolved absolute paths. `OPENCLAW_WORKSPACE_DIR` does not expand a leading `~` either, because it goes straight to `path.resolve`. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do expand `~`. A workspace-local `.env` file drops the entire `OPENCLAW_*` namespace, since it is untrusted input, so set these variables in the trusted global `.env` at `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
+
+Docker Compose follows its own [interpolation rules](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/). In the bundled `docker-compose.yml`, `OPENCLAW_WORKSPACE_DIR` from the project `.env` selects the host directory for the workspace bind mount. The container-side `OPENCLAW_WORKSPACE_DIR` stays pinned to `/home/node/.openclaw/workspace`.
+
 ## Secret refs vs `${ENV}` strings
 
 OpenClaw supports two env-driven patterns:

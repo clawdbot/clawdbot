@@ -10,8 +10,6 @@ import {
   canvasWidgetNameForDocument,
   hasLoadedBoardSnapshot,
   mcpAppWidgetNameForViewId,
-  recordSessionBoardAvailability,
-  sessionHasBoard,
   type BoardCommandEvent,
   type BoardProvider,
 } from "./provider.ts";
@@ -349,12 +347,11 @@ describe("board providers", () => {
     expect(listeners.size).toBe(0);
   });
 
-  it("preserves known board availability until the first gateway snapshot loads", async () => {
+  it("distinguishes an unloaded board from a loaded empty snapshot", async () => {
     mockLocation.search = "";
-    const sessionKey = "agent:main:loading-board-availability";
+    const sessionKey = "agent:main:loading-board";
     const emptySnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
     let resolveSnapshot: ((snapshot: typeof emptySnapshot) => void) | undefined;
-    recordSessionBoardAvailability(sessionKey, true);
     const lease = acquireBoardProviderForSession(sessionKey, {
       request: vi.fn(
         () =>
@@ -368,32 +365,15 @@ describe("board providers", () => {
     try {
       expect(boardProviderForSession(sessionKey)).toBeInstanceOf(GatewayBoardProvider);
       expect(hasLoadedBoardSnapshot(lease.provider)).toBe(false);
-      expect(sessionHasBoard(sessionKey)).toBe(true);
 
       resolveSnapshot?.(emptySnapshot);
       await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(emptySnapshot));
 
       expect(hasLoadedBoardSnapshot(lease.provider)).toBe(true);
-      expect(sessionHasBoard(sessionKey)).toBe(false);
     } finally {
       resolveSnapshot?.(emptySnapshot);
       lease.release();
     }
-  });
-
-  it("preserves known availability when a provider is released before its first load", () => {
-    mockLocation.search = "";
-    const sessionKey = "agent:main:provisional-provider";
-    recordSessionBoardAvailability(sessionKey, true);
-    const lease = acquireBoardProviderForSession(sessionKey, {
-      request: vi.fn(() => new Promise(() => {})) as never,
-      addEventListener: () => () => {},
-    });
-
-    lease.release();
-
-    expect(boardExists(lease.provider.snapshot$.value)).toBe(false);
-    expect(sessionHasBoard(sessionKey)).toBe(true);
   });
 
   it("provides two mock tabs with mixed widget sizes", () => {

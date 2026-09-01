@@ -36,6 +36,12 @@ the CLI fallback on the Gateway host.
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
+- `preflight-insufficient-space`: free space on the filesystems containing
+  preflight staging (the checkout's `.artifacts` area on POSIX) and the
+  package-manager store, then retry. The updater stops on
+  confirmed ENOSPC instead of trying older commits; it does not delete shared
+  package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
+  for staging placement and the older published-updater limitation.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: retry after checking package-manager ownership and
@@ -66,6 +72,14 @@ openclaw update
 Use `openclaw update --dry-run` to preview a new attempt. If a package update
 failed after installation began, follow the installer recovery steps in
 [Updating](/install/updating#alternative-re-run-the-installer).
+
+If the updater crashes or is killed after the Gateway stops, the Gateway stays
+stopped unless the updater completed and verified recovery. Inspect
+`openclaw gateway status --deep`, repair the reported dependency or installation
+failure, and rerun `openclaw update`. A failed Git dependency install restores
+and rebuilds the previous runtime before allowing an automatic restart. Restarts
+after verified recovery still check the installed configuration, service ownership,
+and Gateway health.
 
 ## Rollback boundary
 

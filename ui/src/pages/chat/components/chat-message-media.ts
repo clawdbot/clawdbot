@@ -1,10 +1,12 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
 import {
   getMediaFileExtension,
+  getMediaFileName,
   hasVideoMediaFileExtension,
 } from "../../../lib/media-file-extension.ts";
 
@@ -15,9 +17,12 @@ export type PairingQrExpiryNotice = {
 
 export type ImageBlock = {
   url: string;
+  factIndex?: number;
   artifactId?: string;
+  fileName?: string;
   openUrl?: string;
   alt?: string;
+  sizeBytes?: number;
   width?: number;
   height?: number;
 };
@@ -28,6 +33,8 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  canonicalMessageKey?: string;
+  connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
   authToken?: string | null;
@@ -42,10 +49,11 @@ export type RenderableImageBlock = ImageBlock & {
 };
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;
+export type AssistantAttachmentItem = AttachmentItem | AttachmentFailureItem;
 
 type ChatMediaResourceKind =
   | "assistant-attachment"
-  | "document-preview"
   | "managed-image"
   | "managed-media"
   | "pairing-qr";
@@ -322,7 +330,13 @@ export function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
 }
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
+  if (
+    !images.some((entry) =>
+      block.factIndex !== undefined
+        ? entry.factIndex === block.factIndex
+        : entry.factIndex === undefined && entry.url === block.url && entry.alt === block.alt,
+    )
+  ) {
     images.push(block);
   }
 }
@@ -333,7 +347,7 @@ function buildBase64ImageUrl(params: { data: string; mediaType?: string }): stri
     : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
 }
 
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+export function isImageMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim()) {
     const normalized = mediaType.trim().toLowerCase();
     if (normalized.startsWith("image/")) {
@@ -348,6 +362,12 @@ function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
     ext !== undefined &&
     ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
   );
+}
+
+export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
+  const normalizedMediaType =
+    typeof mediaType === "string" ? mediaType.split(";", 1)[0]?.trim().toLowerCase() : "";
+  return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
 }
 
 function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
@@ -386,16 +406,117 @@ function labelForMediaPath(mediaPath: string): string {
   try {
     if (/^https?:\/\//i.test(trimmed)) {
       const parsed = new URL(trimmed);
-      return parsed.pathname.split("/").pop()?.trim() || parsed.hostname || trimmed;
+      return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
     }
   } catch {}
   return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+}
+
+function crossOriginStructuredSvgAttachment(
+  source: unknown,
+  mediaType: unknown,
+  metadata: Record<string, unknown> = {},
+): AttachmentItem | null {
+  if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
+    return null;
+  }
+  try {
+    const url = new URL(source, window.location.href);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.origin === window.location.origin
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const sizeBytes = asFiniteNumber(metadata.sizeBytes);
+  return {
+    type: "attachment",
+    attachment: {
+      url: source,
+      kind: "image",
+      label:
+        (typeof metadata.fileName === "string" && metadata.fileName.trim()) ||
+        (typeof metadata.alt === "string" && metadata.alt.trim()) ||
+        labelForMediaPath(source),
+      mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
+      ...(typeof metadata.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    },
+  };
+}
+
+export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
+  const content = asNonArrayRecord(message).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const attachments: AttachmentItem[] = [];
+  const append = (attachment: AttachmentItem | null) => {
+    if (
+      attachment &&
+      !attachments.some((item) => item.attachment.url === attachment.attachment.url)
+    ) {
+      attachments.push(attachment);
+    }
+  };
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = asNonArrayRecord(block);
+    if (entry.type === "image") {
+      const source = asOptionalRecord(entry.source);
+      append(
+        crossOriginStructuredSvgAttachment(entry.url, entry.mimeType ?? source?.media_type, entry),
+      );
+    } else if (entry.type === "image_url") {
+      const imageUrl = asOptionalRecord(entry.image_url);
+      append(crossOriginStructuredSvgAttachment(imageUrl?.url, undefined));
+    } else if (entry.type === "input_image") {
+      const imageUrl = entry.image_url;
+      const source = asOptionalRecord(entry.source);
+      append(
+        crossOriginStructuredSvgAttachment(
+          typeof imageUrl === "string" ? imageUrl : asOptionalRecord(imageUrl)?.url,
+          undefined,
+        ),
+      );
+      append(crossOriginStructuredSvgAttachment(source?.url, source?.media_type));
+    }
+  }
+  return attachments;
 }
 
 export function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
+  const layout = asNonArrayRecord(asNonArrayRecord(m["__openclaw"]).mediaImageLayout);
+  const slots = Array.isArray(layout.slots) ? layout.slots.map(asNonArrayRecord) : [];
+  const factIndexes = slots.length > 0 ? new Set(slots.map((slot) => slot.factIndex)) : undefined;
+  // Reject ambiguous layouts before deduplication: fact positions, including
+  // holes and duplicate sources, are the persisted attachment identity.
+  const validLayout =
+    factIndexes !== undefined &&
+    !(Array.isArray(layout.suppressedFactIndexes) && layout.suppressedFactIndexes.length > 0) &&
+    slots.every(
+      (slot) =>
+        (slot.kind === "inline" || slot.kind === "offloaded") &&
+        typeof slot.factIndex === "number" &&
+        Number.isSafeInteger(slot.factIndex) &&
+        slot.factIndex >= 0,
+    ) &&
+    factIndexes.size === slots.length;
+  const inlineSlots = validLayout ? slots.filter((slot) => slot.kind === "inline") : [];
+  const alignedInline =
+    inlineSlots.length > 0 &&
+    Array.isArray(content) &&
+    content.filter((block) => asNonArrayRecord(block).type === "image").length ===
+      inlineSlots.length;
+  let inlineIndex = 0;
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -407,13 +528,18 @@ export function extractImages(message: unknown): ImageBlock[] {
       if (b.type === "image") {
         // Handle source object format from optimistic user sends.
         const source = b.source as Record<string, unknown> | undefined;
+        const factIndex = alignedInline ? inlineSlots[inlineIndex]?.factIndex : undefined;
         const imageMeta = {
+          ...(typeof factIndex === "number" ? { factIndex } : {}),
           artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
           alt: typeof b.alt === "string" ? b.alt : undefined,
+          fileName: typeof b.fileName === "string" ? b.fileName : undefined,
           openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
+          sizeBytes: asFiniteNumber(b.sizeBytes),
           width: typeof b.width === "number" ? b.width : undefined,
           height: typeof b.height === "number" ? b.height : undefined,
         };
+        inlineIndex += 1;
         if (source?.type === "base64" && typeof source.data === "string") {
           appendImageBlock(images, {
             url: buildBase64ImageUrl({
@@ -431,27 +557,39 @@ export function extractImages(message: unknown): ImageBlock[] {
             }),
             ...imageMeta,
           });
-        } else if (typeof b.url === "string") {
+        } else if (
+          typeof b.url === "string" &&
+          !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
+        ) {
           appendImageBlock(images, { url: b.url, ...imageMeta });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
+        if (
+          typeof imageUrl?.url === "string" &&
+          !crossOriginStructuredSvgAttachment(imageUrl.url, undefined)
+        ) {
           appendImageBlock(images, { url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
+        if (
+          typeof imageUrl === "string" &&
+          !crossOriginStructuredSvgAttachment(imageUrl, undefined)
+        ) {
           appendImageBlock(images, { url: imageUrl });
         } else if (imageUrl && typeof imageUrl === "object") {
           const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string") {
+          if (typeof url === "string" && !crossOriginStructuredSvgAttachment(url, undefined)) {
             appendImageBlock(images, { url });
           }
         }
         const source = b.source as Record<string, unknown> | undefined;
-        if (typeof source?.url === "string") {
+        if (
+          typeof source?.url === "string" &&
+          !crossOriginStructuredSvgAttachment(source.url, source.media_type)
+        ) {
           appendImageBlock(images, { url: source.url });
         } else if (typeof source?.data === "string") {
           appendImageBlock(images, {
@@ -476,11 +614,22 @@ export function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
-    if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+    factIndex,
+  } of readTranscriptMediaEntries(message)) {
+    if (!isImageMediaPath(mediaPath, mediaType) || isSvgImageMediaPath(mediaPath, mediaType)) {
       continue;
     }
-    appendImageBlock(images, { url: mediaPath });
+    appendImageBlock(images, {
+      url: mediaPath,
+      fileName,
+      sizeBytes,
+      ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
+    });
   }
 
   return images;
@@ -576,15 +725,27 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
-    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+    durationMs,
+    width,
+    height,
+  } of readTranscriptMediaEntries(message)) {
+    const image = isImageMediaPath(mediaPath, mediaType);
+    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
+    if (image && !svg) {
       continue;
     }
-    const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
-      ? "audio"
-      : isVideoTranscriptMediaPath(mediaPath, mediaType)
-        ? "video"
-        : "document";
+    const kind = svg
+      ? "image"
+      : isAudioTranscriptMediaPath(mediaPath, mediaType)
+        ? "audio"
+        : isVideoTranscriptMediaPath(mediaPath, mediaType)
+          ? "video"
+          : "document";
     attachments.push({
       type: "attachment",
       attachment: {
@@ -592,6 +753,10 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
         kind,
         label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
       },
     });
   }

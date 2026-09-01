@@ -7,16 +7,8 @@ export const EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON = "external-supervisor-u
 export const NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON =
   "service management skipped: non-default state dir or config path";
 
-type GatewaySupervisorMode = "auto" | "external";
-
-function resolveGatewaySupervisorMode(env: NodeJS.ProcessEnv = process.env): GatewaySupervisorMode {
-  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external"
-    ? "external"
-    : "auto";
-}
-
 export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveGatewaySupervisorMode(env) === "external";
+  return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
 export function formatExternalSupervisorActionRequired(action: string): string {

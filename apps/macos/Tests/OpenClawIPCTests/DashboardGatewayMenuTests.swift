@@ -3,29 +3,6 @@ import Testing
 
 @MainActor
 struct DashboardGatewayMenuTests {
-    @Test func `connection label names primary only for multiple gateways`() {
-        let primary = Self.entry(id: "primary", name: "Mac Studio", isPrimary: true, health: .ok)
-        let profile = Self.entry(id: "profile:travel", name: "Travel", canPromote: true)
-        let cases: [(AppState.ConnectionMode, ControlChannel.ConnectionState, [DashboardGatewayEntry], String)] = [
-            (.unconfigured, .degraded("ignored"), [primary], "OpenClaw Not Configured"),
-            (.unconfigured, .degraded("ignored"), [primary, profile], "OpenClaw Not Configured — Mac Studio"),
-            (.local, .degraded("ignored"), [primary], "OpenClaw Active"),
-            (.local, .degraded("ignored"), [primary, profile], "OpenClaw Active — Mac Studio"),
-            (.remote, .connected, [primary], "Remote OpenClaw Active"),
-            (.remote, .connected, [primary, profile], "Remote OpenClaw Active — Mac Studio"),
-            (.remote, .connecting, [primary], "Remote OpenClaw Connecting"),
-            (.remote, .degraded("auth failed"), [primary], "Remote OpenClaw Needs Attention"),
-            (.remote, .degraded("auth failed"), [primary, profile], "Remote OpenClaw Needs Attention — Mac Studio"),
-        ]
-
-        for (mode, controlState, entries, expected) in cases {
-            #expect(DashboardGatewayMenuModel.connectionLabel(
-                mode: mode,
-                controlState: controlState,
-                entries: entries) == expected)
-        }
-    }
-
     @Test func `menu model is gated and preserves catalog facts`() {
         let primary = Self.entry(id: "primary", name: "Mac Studio", isPrimary: true, health: .ok)
         let profile = Self.entry(

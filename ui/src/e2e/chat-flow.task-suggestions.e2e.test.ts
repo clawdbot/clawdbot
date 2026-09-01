@@ -3,6 +3,7 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/inde
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
@@ -181,7 +182,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");

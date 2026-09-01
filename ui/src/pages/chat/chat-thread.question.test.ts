@@ -121,6 +121,29 @@ describe("question chat items", () => {
     ).toContain("Format: Detailed");
   });
 
+  it("never echoes a secret answer in the terminal transcript summary", () => {
+    const answered = prompt("answered");
+    answered.questions = [
+      {
+        questionId: "api_key",
+        header: "API key",
+        question: "Provide the deployment API key",
+        options: [],
+        isSecret: true,
+        secretStore: { name: "FAKE_DEPLOYMENT_API_KEY", kind: "secret" },
+      },
+    ];
+    answered.answeredElsewhere = true;
+    answered.answers = { answers: { api_key: ["fake-secret-never-render"] } };
+    const container = document.createElement("div");
+
+    render(renderChatQuestionSummary(answered), container);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
+    expect(container.textContent).not.toContain("fake-secret-never-render");
+    expect(container.innerHTML).not.toContain("fake-secret-never-render");
+  });
+
   it("omits questions belonging to another session", () => {
     const other = prompt("pending");
     other.sessionKey = "agent:other:main";

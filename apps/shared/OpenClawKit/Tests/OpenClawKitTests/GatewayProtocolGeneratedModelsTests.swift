@@ -3,6 +3,107 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayProtocolGeneratedModelsTests {
+    @Test(arguments: ["clawhub", "official"], [false, true])
+    func `optional install literals preserve omitted and explicit values`(
+        source: String,
+        acknowledged: Bool) throws
+    {
+        let identifier = source == "clawhub" ? "packageName" : "pluginId"
+        let acknowledgement = acknowledged ? #","acknowledgeInstallPolicyWarning":true"# : ""
+        let data = Data(#"{"source":"\#(source)","\#(identifier)":"fixture"\#(acknowledgement)}"#.utf8)
+        let request = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        let expected: Bool? = acknowledged ? true : nil
+        switch request {
+        case let .clawhub(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .official(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        }
+        let actualJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        let expectedJSON = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+        #expect(actualJSON == expectedJSON)
+    }
+
+    @Test
+    func `optional install literals default to absent`() throws {
+        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture")
+        let official = PluginsInstallParamsOfficial(pluginid: "fixture")
+        #expect(clawhub.acknowledgeinstallpolicywarning == nil)
+        #expect(official.acknowledgeinstallpolicywarning == nil)
+        for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
+            let encoded = try #require(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+            #expect(encoded["acknowledgeInstallPolicyWarning"] == nil)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func `optional install literal initializers preserve and validate supplied values`(literal: Bool) throws {
+        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture", acknowledgeinstallpolicywarning: literal)
+        let official = PluginsInstallParamsOfficial(pluginid: "fixture", acknowledgeinstallpolicywarning: literal)
+        #expect(clawhub.acknowledgeinstallpolicywarning == literal)
+        #expect(official.acknowledgeinstallpolicywarning == literal)
+        for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
+            if literal {
+                let encoded = try #require(
+                    JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+                #expect(encoded["acknowledgeInstallPolicyWarning"] as? Bool == true)
+            } else {
+                #expect(throws: EncodingError.self) {
+                    try JSONEncoder().encode(request)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: ["clawhub", "official"], ["false", "null"])
+    func `optional install literals reject present invalid values`(source: String, literal: String) {
+        let identifier = source == "clawhub" ? "packageName" : "pluginId"
+        let data = Data(
+            #"{"source":"\#(source)","\#(identifier)":"fixture","acknowledgeInstallPolicyWarning":\#(literal)}"#
+                .utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        }
+    }
+
+    @Test(arguments: [
+        (#"{"type":"profile","id":"same"}"#, "profile"),
+        (#"{"type":"agent","id":"same"}"#, "agent"),
+        (#"{"type":"remote","pluginId":"slack","domain":"workspace","idKind":"user","id":"same"}"#, "remote"),
+        (#"{"type":"observation","pluginId":null,"accountId":null,"senderKind":"unknown","id":"same"}"#, "observation"),
+        (#"{"type":"legacy","actorType":"human","source":null,"id":"same"}"#, "legacy"),
+    ])
+    func `inline object union branches have typed declarations and round trip`(
+        json: String,
+        expectedType: String) throws
+    {
+        let data = Data(#"{"identity":\#(json)}"#.utf8)
+        let participant = try JSONDecoder().decode(SessionParticipant.self, from: data)
+        switch participant.identity {
+        case .profile: #expect(expectedType == "profile")
+        case .agent: #expect(expectedType == "agent")
+        case .remote: #expect(expectedType == "remote")
+        case .observation: #expect(expectedType == "observation")
+        case .legacy: #expect(expectedType == "legacy")
+        }
+        let encoded = try JSONEncoder().encode(participant)
+        let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
+        let expected = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+        #expect(actual == expected)
+    }
+
+    @Test(arguments: [
+        #"{"type":"unknown","id":"same"}"#,
+        #"{"type":"profile"}"#,
+        #"{"type":"profile","id":"same","pluginId":"slack"}"#,
+        #"{"type":"remote","id":"same"}"#,
+    ])
+    func `inline object union decoding rejects unknown incomplete and mixed variants`(json: String) {
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(SessionParticipantIdentity.self, from: Data(json.utf8))
+        }
+    }
+
     @Test
     func `generated frames decode legacy minimums and additive fields`() throws {
         let request = try JSONDecoder().decode(

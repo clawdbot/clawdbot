@@ -1,10 +1,10 @@
 // Control UI tests cover the initial-connect splash shown instead of the
 // login gate while the Gateway resolves its first connection attempt.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -18,7 +18,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("initial-connect-splash", artifactRoot)
+    : undefined;
+});
 const viewport = { height: 900, width: 1280 };
 
 let browser: Browser;
@@ -26,9 +32,6 @@ let server: ControlUiE2eServer;
 const openContexts = new Set<BrowserContext>();
 
 async function createPage(): Promise<Page> {
-  if (artifactDir) {
-    await mkdir(artifactDir, { recursive: true });
-  }
   const context = await browser.newContext({
     viewport,
     ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
@@ -39,11 +42,38 @@ async function createPage(): Promise<Page> {
   return page;
 }
 
-async function captureProof(page: Page, name: string): Promise<void> {
-  if (!artifactDir) {
-    return;
+async function waitForSettledSurface(page: Page): Promise<void> {
+  // Playwright visibility ignores opacity. Let entrance/resize motion finish;
+  // do not fast-forward animations or wait for perpetual descendant motion.
+  const surface = page.locator(".connect-splash, .shell");
+  await expect
+    .poll(() =>
+      surface.evaluate(
+        (element) =>
+          getComputedStyle(element).opacity === "1" &&
+          element
+            .getAnimations()
+            .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+            .every((animation) => animation.playState === "finished"),
+      ),
+    )
+    .toBe(true);
+}
+
+async function takeProofScreenshot(page: Page, name: string, content: Locator[]): Promise<Buffer> {
+  // Lazy hosts can have boxes before their definitions or children have loaded.
+  await Promise.all(content.map((locator) => locator.waitFor()));
+  await waitForSettledSurface(page);
+  return page.screenshot({
+    fullPage: true,
+    ...(artifactDir ? { path: path.join(artifactDir, `${name}.png`) } : {}),
+  });
+}
+
+async function captureProof(page: Page, name: string, content: Locator[]): Promise<void> {
+  if (artifactDir) {
+    await takeProofScreenshot(page, name, content);
   }
-  await page.screenshot({ fullPage: true, path: path.join(artifactDir, `${name}.png`) });
 }
 
 async function traceLoginGateMounts(page: Page): Promise<() => Promise<boolean>> {
@@ -122,13 +152,39 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
     expect(await page.locator("openclaw-app-sidebar").count()).toBe(0);
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-    await captureProof(page, "01-centered-connecting-mascot");
+    // Inspect the compositor output, not the mascot's already-painted backing canvas.
+    // This regression runs in memory even when optional artifact retention is off.
+    const proof = await takeProofScreenshot(page, "01-centered-connecting-mascot", [
+      mascot.locator("canvas"),
+    ]);
+    const painted = await page.evaluate(
+      async ({ png, bounds }) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${png}`;
+        await image.decode();
+        const crop = document.createElement("canvas");
+        crop.width = bounds.width;
+        crop.height = bounds.height;
+        const context = crop.getContext("2d")!;
+        context.drawImage(image, -bounds.x, -bounds.y);
+        const pixels = context.getImageData(0, 0, crop.width, crop.height).data;
+        // Reject a flat (or effectively invisible) crop without fixing the pose or palette.
+        return pixels.some(
+          (value, index) => index % 4 !== 3 && Math.abs(value - pixels[index % 4]!) > 10,
+        );
+      },
+      { png: proof.toString("base64"), bounds: mascotBounds! },
+    );
+    expect(painted, "connecting proof must contain the centered mascot").toBe(true);
 
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
-    await captureProof(page, "02-connected-content");
+    await captureProof(page, "02-connected-content", [
+      page.locator(".sidebar-brand"),
+      page.locator(".agent-chat__composer-combobox textarea"),
+    ]);
   });
 
   it("centers the animated mascot until the chat route finishes loading", async () => {
@@ -183,12 +239,15 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
             ((loadingBounds?.y ?? 0) + (loadingBounds?.height ?? 0) / 2),
         ),
       ).toBeLessThanOrEqual(1);
-      await captureProof(page, "03-centered-pending-chat-mascot");
+      await captureProof(page, "03-centered-pending-chat-mascot", [mascot.locator("canvas")]);
 
       releaseChatModule();
       await page.locator("openclaw-chat-page").waitFor();
       expect(await loadingState.count()).toBe(0);
-      await captureProof(page, "04-loaded-chat-content");
+      await captureProof(page, "04-loaded-chat-content", [
+        page.locator(".sidebar-brand"),
+        page.locator(".agent-chat__composer-combobox textarea"),
+      ]);
     } finally {
       releaseChatModule();
     }
@@ -204,7 +263,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
-    await captureProof(page, "05-credentialless-connecting-mascot");
+    await captureProof(page, "05-credentialless-connecting-mascot", [
+      page.locator(".connect-splash openclaw-mascot canvas"),
+    ]);
 
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
@@ -218,7 +279,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const workspaceModules = new Set([
       "/src/components/app-sidebar.ts",
       "/src/components/browser/browser-panel.ts",
-      "/src/components/custodian/custodian-panel.ts",
+      "/src/components/assistant-panel.ts",
       "/src/components/desktop/desktop-panel.ts",
       "/src/components/terminal/terminal-panel-registration.ts",
       "/src/pages/chat/chat-page.ts",
@@ -259,6 +320,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
     expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
     await page.evaluate(() => document.fonts.ready);
+    // Compare section layouts at rest, not the shell's translated entrance frame.
+    await waitForSettledSurface(page);
     const sectionTitles = [
       "Found on this Gateway",
       "Run a model locally",
@@ -274,7 +337,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     );
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
-    await captureProof(page, "06-first-run-routed-before-detection");
+    await captureProof(page, "06-first-run-routed-before-detection", [loadingSections]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expect
       .poll(() =>
@@ -283,7 +346,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         ),
       )
       .toBe(true);
-    await captureProof(page, "06b-first-run-routed-before-detection-mobile");
+    await captureProof(page, "06b-first-run-routed-before-detection-mobile", [loadingSections]);
     await page.setViewportSize(viewport);
 
     await gateway.resolveDeferred("openclaw.setup.detect", {
@@ -292,10 +355,10 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
           kind: "claude-cli",
           brandId: "claude",
           label: "Claude Code",
-          detail: "Signed in locally",
+          detail: "Installed, not signed in",
           modelRef: "claude-cli/claude-opus-5",
           recommended: false,
-          credentials: true,
+          credentials: false,
         },
       ],
       manualProviders: [{ id: "openai", brandId: "openai", label: "OpenAI" }],
@@ -317,6 +380,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     await loading.waitFor({ state: "detached" });
     await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    // Restoring desktop starts a grid-row transition after the responsive Lit update.
+    await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
+    await waitForSettledSurface(page);
     const readySectionTops = await Promise.all(
       sectionTitles.map(
         async (name) => (await page.getByRole("heading", { name }).boundingBox())!.y,
@@ -326,7 +392,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       Math.max(...readySectionTops.map((top, index) => Math.abs(top - loadingSectionTops[index]!))),
     ).toBeLessThanOrEqual(13);
     expect([...requestedWorkspaceModules]).toEqual([]);
-    await captureProof(page, "07-first-run-model-setup-ready");
+    const setupHeading = page.getByRole("heading", { name: "Connect a verified AI model" });
+    await captureProof(page, "07-first-run-model-setup-ready", [setupHeading]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expect
       .poll(() =>
@@ -335,7 +402,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         ),
       )
       .toBe(true);
-    await captureProof(page, "07b-first-run-model-setup-ready-mobile");
+    await captureProof(page, "07b-first-run-model-setup-ready-mobile", [setupHeading]);
   });
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
@@ -378,7 +445,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await expect
       .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
-    await captureProof(page, "06-gateway-starting-progress");
+    await captureProof(page, "06-gateway-starting-progress", [
+      splash.locator("openclaw-mascot canvas"),
+    ]);
 
     await expect
       .poll(async () => (await gateway.getRequests("connect")).length)

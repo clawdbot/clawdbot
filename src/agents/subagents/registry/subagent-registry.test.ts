@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type {
   SessionAccessScope,
@@ -53,6 +54,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -61,6 +63,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -424,6 +427,7 @@ describe("subagent registry seam flow", () => {
   });
   let mod: RegistryHarness;
   const recoveryRuntime: GatewayRecoveryRuntime = {
+    abortAgent: vi.fn(),
     dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: (params, timeoutMs) =>
       mocks.callGateway({
@@ -433,7 +437,14 @@ describe("subagent registry seam flow", () => {
       }) as never,
     sendRecoveryNotice: vi.fn(),
   };
-  const activateRegistry = () => mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+  const activateRegistry = () =>
+    mod.activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime,
+          resolveGatewayContext: () => ({ recoveryRuntime }),
+        }) as never,
+    );
   const hydrateAndActivateRegistry = () => {
     mod.initSubagentRegistry();
     activateRegistry();
@@ -1137,16 +1148,36 @@ describe("subagent registry seam flow", () => {
       completion: { required: false },
     });
 
-    expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
-    expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
-    expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
-    expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
-
-    expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
-    expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
-      status: "killed",
+    const launch = createDeferred();
+    const started = createDeferred();
+    enqueueSwarmRun({
+      groupId: "delayed-acceptance",
+      runId,
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.resolve();
+        await launch.promise;
+      },
+      onStartFailure: () => true,
     });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    try {
+      await started.promise;
+      expect(mod.markSubagentRunTerminated({ runId, reason: "manual kill" })).toBe(1);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
+      expect(mod.startQueuedSubagentRun(runId, "gateway-launch-kill")).toBe(false);
+      expect(mod.getSubagentRunByRunId("gateway-launch-kill")).toBeUndefined();
+
+      expect(mod.settleFailedQueuedSubagentLaunch(runId, "launch response lost")).toBe(true);
+      expect(mod.getSubagentRunByRunId(runId)?.collectorCompletion).toMatchObject({
+        status: "killed",
+      });
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    } finally {
+      launch.resolve();
+      await launch.promise;
+      releaseSwarmRun(runId);
+    }
   });
 
   it("records early structured output through the child session identity", () => {
@@ -2037,6 +2068,14 @@ describe("subagent registry seam flow", () => {
 
   it("detaches subagent completion from a disposed requester transcript owner", async () => {
     const sessionKey = "agent:main:main";
+    const activeGatewayContext = { recoveryRuntime } as never;
+    mod.activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime,
+          resolveGatewayContext: () => activeGatewayContext,
+        }) as never,
+    );
     let disposed = false;
     let resolveWait: (value: Record<string, unknown>) => void = () => {};
     const pendingWait = new Promise<Record<string, unknown>>((resolve) => {
@@ -2089,6 +2128,12 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
     expect(freshCompletionWrite).toHaveBeenCalledOnce();
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    const announceParams = (
+      mocks.runSubagentAnnounceFlow.mock.calls as unknown as Array<
+        [{ resolveGatewayContext?: () => unknown }]
+      >
+    )[0]?.[0];
+    expect(announceParams?.resolveGatewayContext?.()).toBe(activeGatewayContext);
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
@@ -5715,6 +5760,10 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retains delete-mode successful completions through the delivery deadline", async () => {
+    const persist = (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) =>
+      saveSubagentRegistryChangesToSqlite(runs, runIds ?? [...runs.keys()]);
+    mocks.persistSubagentRunsToDisk.mockImplementation(persist);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(persist);
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({

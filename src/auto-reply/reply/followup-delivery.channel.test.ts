@@ -9,7 +9,8 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import { deliverFollowupDecision } from "./followup-delivery.js";
+import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 
 const channelState = vi.hoisted(() => ({
@@ -138,6 +139,101 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it("renders post-compaction model failures after queued payload selection", () => {
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { text: "⚠️ Provider billing failed.", isError: true },
+          postCompactionModelFailure: true,
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed.",
+          isError: true,
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { mode: "first", duplicate: "media" },
+    { mode: "batched", duplicate: "media" },
+    { mode: "first", duplicate: "text" },
+    { mode: "batched", duplicate: "text" },
+  ] as const)(
+    "preserves the $mode reply slot when earlier $duplicate was already sent",
+    ({ mode, duplicate }) => {
+      const duplicatePayload =
+        duplicate === "media"
+          ? { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" }
+          : { text: "already sent", replyToId: "parent" };
+
+      expect(
+        resolveFollowupDeliveryPayloads({
+          cfg: {},
+          payloads: [duplicatePayload, { text: "actual answer", replyToId: "parent" }],
+          originatingChannel: "discord",
+          originatingReplyToMode: mode,
+          sentMediaUrls: ["/tmp/already-sent.png"],
+          sentTexts: ["already sent"],
+        }),
+      ).toEqual([{ text: "actual answer", replyToId: "parent" }]);
+    },
+  );
+
+  it("dedupes later Slack replies against their actual first-mode transport thread", () => {
+    const slack = createChannelPlugin("slack");
+    slack.threading = {
+      resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => {
+        const inheritedThread = threadId == null ? undefined : String(threadId);
+        // First-mode can clear replyToId; Slack still falls back to the inherited thread.
+        return {
+          threadId: null,
+          replyToId:
+            replyToIsExplicit === false
+              ? (inheritedThread ?? replyToId)
+              : (replyToId ?? inheritedThread),
+        };
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", plugin: slack, source: "test" }]),
+    );
+
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: {},
+        payloads: [
+          { text: "first answer", replyToId: "111.000" },
+          { text: "already sent", replyToId: "222.000" },
+        ],
+        messageProvider: "slack",
+        originatingChannel: "slack",
+        originatingReplyToMode: "first",
+        originatingTo: "channel:C1",
+        originatingThreadId: "111.000",
+        sentTexts: ["already sent"],
+        sentTargets: [
+          {
+            tool: "slack",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "111.000",
+            text: "already sent",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "first answer", replyToId: "111.000" }]);
+  });
+
   it("emits one safe cross-channel error when a terminal payload fails after status delivery", async () => {
     const onBlockReply = await deliverBatch({
       messageProvider: "discord",

@@ -91,6 +91,18 @@ export function resolveDiscordReferencedReplyMessage(message: Message): Message 
     : (message.referencedMessage ?? null);
 }
 
+export function resolveDiscordReferencedReplyMessageId(message: Message): string | null {
+  const referenceType = message.messageReference?.type;
+  if (Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE) {
+    return null;
+  }
+  return (
+    normalizeOptionalString(message.messageReference?.message_id) ??
+    normalizeOptionalString(message.referencedMessage?.id) ??
+    null
+  );
+}
+
 export function formatDiscordSnapshotAuthor(
   author: DiscordSnapshotAuthor | null | undefined,
 ): string | undefined {

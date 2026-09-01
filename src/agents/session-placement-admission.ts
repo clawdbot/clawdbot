@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
@@ -23,6 +24,11 @@ type SessionPlacementSandboxParams = {
 };
 
 export type SessionPlacementAdmissionProvider = {
+  assertCompactionSuccessorAllowed: (params: {
+    currentTarget: SessionTranscriptRuntimeTarget;
+    successorSessionId: string;
+  }) => void;
+  recoverTerminalTurn?: (session: { sessionId: string; sessionKey?: string }) => string | undefined;
   executeLocalTurn: <T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) => Promise<T>;
   executeTurn: (
     claim: LocalTurnPlacementClaim,
@@ -76,6 +82,17 @@ export function installSessionPlacementAdmissionProvider(
   };
 }
 
+/** Captures the exact placement owner, including standalone absence, before awaited work. */
+export function captureSessionPlacementCompactionSuccessorAssertion(): SessionPlacementAdmissionProvider["assertCompactionSuccessorAllowed"] {
+  const provider = state.provider;
+  return (params) => {
+    if (state.provider !== provider) {
+      throw new Error("session placement owner changed during compaction successor acceptance");
+    }
+    provider?.assertCompactionSuccessorAllowed(params);
+  };
+}
+
 export async function withSessionPlacementTurnAdmission(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
@@ -119,4 +136,12 @@ export async function resolveSessionPlacementSandbox(
   params: SessionPlacementSandboxParams,
 ): Promise<SandboxContext | null> {
   return (await state.provider?.resolveSandbox?.(params)) ?? null;
+}
+
+/** The current placement owner alone can settle a proven terminal worker turn. */
+export function recoverTerminalSessionPlacementTurn(session: {
+  sessionId: string;
+  sessionKey?: string;
+}): string | undefined {
+  return state.provider?.recoverTerminalTurn?.(session);
 }

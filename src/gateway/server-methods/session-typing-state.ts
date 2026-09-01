@@ -1,6 +1,7 @@
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { presenceUserKey } from "../../shared/presence-user.js";
 
 export const TYPING_THROTTLE_MS = 1_000;
 export const TYPING_PREVIEW_THROTTLE_MS = 250;
@@ -50,14 +51,11 @@ export function clearSessionTypingState(): void {
 
 export function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
   return new Set(
-    listSystemPresence()
-      .filter(
-        (entry) =>
-          entry.user?.id &&
-          entry.watchedSessions?.some((sessionKey) => sessionKeys.has(sessionKey)),
-      )
-      .map((entry) => entry.user?.id)
-      .filter((id): id is string => Boolean(id)),
+    listSystemPresence().flatMap((entry) =>
+      entry.user?.id && entry.watchedSessions?.some((sessionKey) => sessionKeys.has(sessionKey))
+        ? [presenceUserKey(entry.user)]
+        : [],
+    ),
   );
 }
 

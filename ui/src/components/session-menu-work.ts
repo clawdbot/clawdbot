@@ -22,8 +22,6 @@ type SessionMenuWorkResult = {
   worktreePath: string | null;
 };
 
-export type SessionPullRequestIndicatorState = "none" | "open" | "merged";
-
 // Menu offers a single Open PR action; prefer the PR a maintainer most
 // likely wants: active first, merged history next, closed last.
 const PR_STATE_ORDER = ["open", "draft", "merged", "closed"] as const;
@@ -38,15 +36,6 @@ function pickSessionMenuPullRequestUrl(
     }
   }
   return null;
-}
-
-export function resolveSessionPullRequestIndicatorState(
-  pullRequests: readonly ControlUiSessionPullRequest[],
-): SessionPullRequestIndicatorState {
-  if (pullRequests.some(({ state }) => state === "open" || state === "draft")) {
-    return "open";
-  }
-  return pullRequests.some(({ state }) => state === "merged") ? "merged" : "none";
 }
 
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {

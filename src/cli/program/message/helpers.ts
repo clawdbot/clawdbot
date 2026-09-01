@@ -15,7 +15,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
-import { isMessageBroadcastSuccessful } from "../../../infra/outbound/message-action-contracts.js";
+import { resolveMessageActionOutcome } from "../../../infra/outbound/message-action-contracts.js";
 import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
 import {
   resolveConfiguredChannelPluginIds,
@@ -221,7 +221,7 @@ export function createMessageCliHelpers(
     if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
       await withPluginRuntimeRegistryScope(pluginRegistry, runPluginStopHooks);
     }
-    failed ||= result?.kind === "broadcast" && !isMessageBroadcastSuccessful(result);
+    failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
     defaultRuntime.exit(failed ? 1 : 0);
   };
 

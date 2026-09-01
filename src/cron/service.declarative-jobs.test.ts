@@ -198,6 +198,42 @@ describe("CronService declarative jobs", () => {
     }
   });
 
+  it("keeps the first creator across declaration convergence and restart", async () => {
+    const { storePath } = await makeStorePath();
+    const writer = createCronService(storePath);
+    await writer.start();
+    let createdId = "";
+
+    try {
+      const created = declarativeResult(
+        await writer.add(declaration(), {
+          createdActor: { type: "human", source: "profile", id: "profile-ada" },
+        }),
+      );
+      createdId = created.id;
+      expect(created.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+      });
+
+      const converged = declarativeResult(
+        await writer.add(declaration({ displayName: "Updated report" }), {
+          createdActor: { type: "human", source: "profile", id: "profile-bob" },
+        }),
+      );
+      expect(converged).toMatchObject({ created: false, updated: true, id: created.id });
+      expect(converged.job).toMatchObject({
+        createdActor: { type: "human", id: "profile-ada" },
+      });
+    } finally {
+      writer.stop();
+    }
+
+    const reader = createCronService(storePath, false);
+    await expect(reader.readJob(createdId)).resolves.toMatchObject({
+      createdActor: { type: "human", id: "profile-ada" },
+    });
+  });
+
   it("keeps declaration-key uniqueness local to the caller visibility predicate", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

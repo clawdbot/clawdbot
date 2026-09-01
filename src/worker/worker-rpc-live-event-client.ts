@@ -1,11 +1,6 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import {
-  type WorkerConnection,
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection.js";
+import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
 
 type WorkerLiveEventClientOptions = {
@@ -53,15 +48,7 @@ export class WorkerLiveEventClient {
     this.maxSentSeqValue = this.ackedSeqValue;
     this.unsubscribers = [
       connection.onReady(() => this.pump()),
-      connection.onStateChange((state) => {
-        if (state.kind === "fenced") {
-          this.rejectAll(new WorkerFencedError(state.reason));
-        } else if (state.kind === "failed") {
-          this.rejectAll(state.error);
-        } else if (state.kind === "stopped") {
-          this.rejectAll(new WorkerConnectionStoppedError());
-        }
-      }),
+      connection.onTerminalError((error) => this.rejectAll(error)),
     ];
   }
 
@@ -196,7 +183,7 @@ export class WorkerLiveEventClient {
         return;
       }
       fenceForOwnershipError(this.connection, response.error);
-      throw new Error(response.error.message);
+      throw new Error(`${response.error.message}: ${response.error.details.reason}`);
     } catch (error) {
       if (
         error instanceof WorkerConnectionInterruptedError &&

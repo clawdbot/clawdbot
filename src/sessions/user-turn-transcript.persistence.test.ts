@@ -13,6 +13,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-he
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
+import { buildChannelUserTurnSender } from "./user-turn-transcript.metadata.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
@@ -189,6 +190,90 @@ describe("persistUserTurnTranscript", () => {
       }
     }
   });
+
+  it.each(["profile", "observation"] as const)(
+    "sender provenance round-trips %s without display inference",
+    async (type) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("sender-provenance-") });
+      const identity =
+        type === "profile"
+          ? { type, id: "shared-id" }
+          : {
+              type,
+              id: "shared-id",
+              pluginId: "test-channel",
+              accountId: null,
+              senderKind: "unknown" as const,
+            };
+      const sender =
+        type === "profile"
+          ? { id: identity.id, name: "Same label", identity }
+          : buildChannelUserTurnSender({
+              SenderId: "shared-id",
+              SenderName: "Same label",
+              Provider: "test-channel",
+            });
+      await persistUserTurnTranscript({ ...target, input: { text: "hello", sender } });
+      const [message] = await readTranscriptMessages(target);
+      expect(message?.["__openclaw"]).toMatchObject({
+        senderId: "shared-id",
+        senderName: "Same label",
+        senderIdentity: identity,
+      });
+    },
+  );
+
+  it.each(["retain", "omit", "replace", "in-place", "raw-redact", "forge"] as const)(
+    "sender provenance hook %s respects original producer evidence",
+    async (mode) => {
+      const target = createSqliteTranscriptTarget({
+        dir: tempDirs.make("sender-provenance-hook-"),
+      });
+      const identity = { type: "profile", id: "original" };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+          __openclaw: {
+            senderId: "original",
+            senderName: "Original",
+            senderIsOwner: true,
+            ...(mode === "forge" ? {} : { senderIdentity: identity }),
+          },
+        },
+        target,
+        beforeMessageWrite: ({ message }) => {
+          const metadata =
+            mode === "in-place" ? message["__openclaw"]! : { ...message["__openclaw"] };
+          if (mode === "omit") {
+            delete metadata.senderIdentity;
+          }
+          if (mode === "replace" || mode === "forge") {
+            metadata.senderIdentity = { type: "profile", id: "forged" };
+          }
+          if (mode === "in-place") {
+            (metadata.senderIdentity as { id: string }).id = "forged";
+          }
+          if (mode === "raw-redact") {
+            delete metadata.senderId;
+          }
+          return {
+            ...message,
+            __openclaw: { ...metadata, senderName: "Edited display", senderIsOwner: false },
+          };
+        },
+      });
+      await recorder.persistApproved();
+      const [message] = await readTranscriptMessages(target);
+      expect(message?.["__openclaw"]).toEqual({
+        ...(mode === "raw-redact" ? {} : { senderId: "original" }),
+        senderName: "Edited display",
+        senderIsOwner: true,
+        ...(mode === "retain" ? { senderIdentity: { type: "profile", id: "original" } } : {}),
+      });
+    },
+  );
 
   it("omits __openclaw when no sender metadata is provided", async () => {
     const dir = tempDirs.make("openclaw-user-turn-append-nosender-");
@@ -367,6 +452,51 @@ describe("persistUserTurnTranscript", () => {
     ]);
     expect(hookCalls).toBe(1);
   });
+
+  it.each([true, false])(
+    "protects internal Goal metadata across write hooks (Goal: %s)",
+    async (isGoal) => {
+      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("openclaw-goal-hook-") });
+      const intent = {
+        kind: "session-goal-resume",
+        version: 1,
+        goalId: "goal-1",
+        operationId: "resume-1",
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Continue pursuing the current goal.",
+          timestamp: 123,
+          ...(isGoal
+            ? {
+                display: false as const,
+                provenance: { kind: "internal_system" as const },
+                __openclaw: { intent },
+              }
+            : {}),
+        },
+        target,
+        beforeMessageWrite: () =>
+          castAgentMessage({
+            role: "user",
+            content: "redacted",
+            timestamp: 123,
+            display: true,
+            provenance: { kind: "external_user" },
+            __openclaw: { intent: { kind: "forged" } },
+          }),
+      });
+      await recorder.persistApproved();
+      const [message] = await readTranscriptMessages(target);
+      expect((message?.["__openclaw"] as Record<string, unknown> | undefined)?.intent).toEqual(
+        isGoal ? intent : undefined,
+      );
+      if (isGoal) {
+        expect(message).toMatchObject({ display: false, provenance: { kind: "internal_system" } });
+      }
+    },
+  );
 
   it.each([
     {

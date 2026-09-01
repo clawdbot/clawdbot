@@ -75,6 +75,7 @@ async function maybeSendDiscordWebhookText(params: {
   identity?: OutboundIdentity;
   replyToId?: string | null;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }): Promise<{ messageId: string; channelId: string } | null> {
   if (params.threadId == null) {
     return null;
@@ -107,6 +108,7 @@ async function maybeSendDiscordWebhookText(params: {
     username: persona.username,
     avatarUrl: persona.avatarUrl,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
   });
   return result;
 }
@@ -144,6 +146,7 @@ async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageC
           }
         : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
     },
   };
 }
@@ -202,6 +205,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
                   await ctx.onPlatformSendDispatch?.();
                 }
               : undefined,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
           });
           if (webhookResult) {
             return toDiscordOutboundDeliveryResult(webhookResult);
@@ -235,6 +239,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
             onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
           }),
         );
       }
@@ -256,11 +261,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
           reply: options.reply?.scope === "all" ? options.reply : undefined,
         });
         const threadId = captionResult.receipt?.threadId;
-        if (!threadId) {
-          return toDiscordOutboundDeliveryResult(mediaResult);
-        }
         return toDiscordOutboundDeliveryResult({
-          ...captionResult,
+          ...(threadId ? captionResult : mediaResult),
           receipt: createDiscordSendReceiptFromResults({
             results: [captionResult, mediaResult],
             threadId,
@@ -280,6 +282,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       sessionKey,
       inboundEventKind,
       onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
     }) => {
       if (!createDiscordActionGate({ cfg, accountId })("polls")) {
         throw new Error("Discord polls are disabled.");
@@ -294,6 +297,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         silent: silent ?? undefined,
         cfg,
         onPlatformSendDispatch,
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
       discordInboundEventDelivery.notify({
         sessionKey,

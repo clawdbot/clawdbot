@@ -1,9 +1,12 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
-import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
+import {
+  formatQaScenarioFailureSuffix,
+  sanitizeQaProgressValue as sanitizeQaSuiteProgressValue,
+} from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   measureRuntimeParityCellTiming,
@@ -103,7 +106,7 @@ export async function runQaFlowSuiteStandard(
   });
   const transport = transportFactoryResult.adapter;
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gateway = createQaGatewayChild();
   let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
@@ -123,7 +126,7 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
-    const activeGateway = await startQaGatewayChild({
+    const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
@@ -156,7 +159,6 @@ export async function runQaFlowSuiteStandard(
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
     });
-    gateway = activeGateway;
     writeQaSuiteProgress(
       progressEnabled,
       `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
@@ -282,12 +284,15 @@ export async function runQaFlowSuiteStandard(
       let scenarioResult: QaSuiteScenarioResult =
         params?.captureRuntimeParityCell || scenarioRetryCount === 0
           ? await runSelectedScenario()
-          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
+          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () => {
+              // Both attempts share append-only Gateway logs. Retain the failed
+              // attempt through final cleanup even when its retry passes.
+              preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
               writeQaSuiteProgress(
                 progressEnabled,
                 `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-              ),
-            );
+              );
+            });
       if (scenarioResult.status === "pass" && params?.roundTripProbe?.scenarioId === scenario.id) {
         const probeResult = await runQaSuiteRoundTripProbe({
           probe: params.roundTripProbe,
@@ -321,7 +326,7 @@ export async function runQaFlowSuiteStandard(
       scenarios.push(scenarioResult);
       writeQaSuiteProgress(
         progressEnabled,
-        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+        `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}${formatQaScenarioFailureSuffix(scenarioResult)}`,
       );
       liveScenarioOutcomes[index] = {
         id: scenario.id,
@@ -400,7 +405,11 @@ export async function runQaFlowSuiteStandard(
           concurrency,
           channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          channelDriverSelection: params?.channelDriverSelection,
+          // Nested workers retain the selection for transport setup, but the outer
+          // aggregate alone owns readiness publication under the shared output tree.
+          channelDriverSelection: isQaSuiteNestedRun(params)
+            ? undefined
+            : params?.channelDriverSelection,
           isolatedWorkers: false,
           writeEvidenceFile: params?.writeEvidenceFile,
           // Same "filtered → executed list, unfiltered → null" convention as
@@ -449,13 +458,11 @@ export async function runQaFlowSuiteStandard(
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
       cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
       cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
-      stopGateway: activeGateway
-        ? () =>
-            activeGateway.stop({
-              keepTemp,
-              preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
-            })
-        : undefined,
+      stopGateway: () =>
+        activeGateway.stop({
+          keepTemp,
+          preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
+        }),
       disposeAgentHarnesses: () => disposeRegisteredAgentHarnesses(),
       stopProvider: activeMock ? () => activeMock.stop() : undefined,
       finishLab: ownsLab

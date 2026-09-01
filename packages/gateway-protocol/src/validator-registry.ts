@@ -4,10 +4,13 @@ import type {
   AuditActivityListParams,
   AuditRunInspectParams,
   WebPushSubscribeParams,
+  WebPushPreferencesGetParams,
+  WebPushPreferencesSetParams,
   WebPushTestParams,
   WebPushUnsubscribeParams,
   WebPushVapidPublicKeyParams,
 } from "./schema-modules.js";
+import { WorkerComputerParamsSchema } from "./schema/worker-computer.js";
 import type { ValidationError } from "./validation-errors.js";
 export {
   validateSessionsDispatchParams,
@@ -22,6 +25,8 @@ export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestF
 export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
 export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
 export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
+export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
+export const validateWorkerComputerParams = compile(WorkerComputerParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
@@ -194,6 +199,12 @@ export const validateWebPushUnsubscribeParams = compile<WebPushUnsubscribeParams
   S.WebPushUnsubscribeParamsSchema,
 );
 export const validateWebPushTestParams = compile<WebPushTestParams>(S.WebPushTestParamsSchema);
+export const validateWebPushPreferencesGetParams = compile<WebPushPreferencesGetParams>(
+  S.WebPushPreferencesGetParamsSchema,
+);
+export const validateWebPushPreferencesSetParams = compile<WebPushPreferencesSetParams>(
+  S.WebPushPreferencesSetParamsSchema,
+);
 export const validateSecretsResolveParams = compile(S.SecretsResolveParamsSchema);
 export const validateSecretsResolveResult = compile(S.SecretsResolveResultSchema);
 export const validateSecretsStoreListParams = compile(S.SecretsStoreListParamsSchema);
@@ -202,6 +213,7 @@ export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSche
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
@@ -252,6 +264,8 @@ export const validateSessionsViewerPresenceSetParams = compile(
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+export const validateSessionsGoalUpdateParams = compile(S.SessionsGoalUpdateParamsSchema);
+export const validateSessionsGoalClearParams = compile(S.SessionsGoalClearParamsSchema);
 export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
@@ -306,6 +320,9 @@ export const validateSystemAgentSetupDetectParams = compile(S.SystemAgentSetupDe
 export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVerifyParamsSchema);
 export const validateSystemAgentSetupActivateParams = compile(
   S.SystemAgentSetupActivateParamsSchema,
+);
+export const validateSystemAgentSetupActivateStartParams = compile(
+  S.SystemAgentSetupActivateStartParamsSchema,
 );
 export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,
@@ -434,6 +451,10 @@ export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSc
 export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);
+export const validateExecApprovalGrantsListParams = compile(S.ExecApprovalGrantsListParamsSchema);
+export const validateExecApprovalGrantsRevokeParams = compile(
+  S.ExecApprovalGrantsRevokeParamsSchema,
+);
 export const validateQuestionRequestParams = compile(S.QuestionRequestParamsSchema);
 export const validateQuestionWaitAnswerParams = compile(S.QuestionWaitAnswerParamsSchema);
 export const validateQuestionResolveParams = compile(S.QuestionResolveParamsSchema);
@@ -441,7 +462,9 @@ export const validateQuestionGetParams = compile(S.QuestionGetParamsSchema);
 export const validateQuestionListParams = compile(S.QuestionListParamsSchema);
 export const validatePluginApprovalRequestParams = compile(S.PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = compile(S.PluginApprovalResolveParamsSchema);
+export const validateCapabilityConsentErrorDetails = compile(S.CapabilityConsentErrorDetailsSchema);
 export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
+export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
 export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);

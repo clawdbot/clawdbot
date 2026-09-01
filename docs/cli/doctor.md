@@ -34,9 +34,43 @@ Doctor has five postures:
 | Repair                    | `openclaw doctor --fix`                      | Applies supported repairs, using prompts unless non-interactive repair is safe. |
 | Lint                      | `openclaw doctor --lint [--json]`            | Read-only findings with threshold-based exit codes for CI gates.                |
 | Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`     | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.   |
-| Session SQLite migration  | `openclaw doctor --session-sqlite <mode>`    | Inspects, imports, validates, compacts, recovers, or restores session state.    |
+| Session SQLite tools      | `openclaw doctor --session-sqlite <mode>`    | Inspects or maintains SQLite sessions and explicitly imports legacy history.    |
 
 Use `openclaw doctor --json` when an operator or script wants the advisory Doctor report as JSON. It exits successfully after producing a report; inspect `ok` and `findings` for health state. Use explicit `openclaw doctor --lint --json` when CI should exit nonzero for findings at the selected severity threshold. Prefer `--fix` when a human operator wants Doctor to edit config or state.
+
+After an exec-approval format upgrade, Doctor reports older generated approvals
+that are no longer active because they were not tied to a working directory.
+`openclaw doctor --fix` removes those inactive generated entries and leaves
+manual allowlist rules unchanged. Rerun affected workflows and choose
+**Always allow here** to renew trust for the intended directory. The normal
+`openclaw update` finalization runs this safe repair automatically.
+
+Explicit repair stops the matching managed Gateway before inspecting plugins or
+mutable state, excludes other processes during repair, verifies readiness,
+and restarts the same service once. It preserves the service definition and does
+not start a service that was already stopped. Run repair from a shell outside the
+Gateway process tree. For externally supervised or unmatched installations, stop
+and start the Gateway through its owning supervisor.
+
+This maintenance window also applies when repair ultimately finds no changes.
+Diagnostic runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
+Custom state directories remain runtime-only and do not adopt a native service.
+
+When an updater supplies an explicit Gateway activation policy, Doctor leaves
+stop and restart ownership with that updater. The native manager must confirm
+the service is already offline before repair. If `openclaw update --no-restart`
+reaches Doctor while that service is running, repair fails without stopping or
+restarting it; stop the service through its owner, then retry the update.
+
+If service inspection is unavailable or an unmatched service can still run,
+Doctor refuses maintenance before changing config or state. Inspect it with
+`openclaw gateway status --deep`, restore service-manager access, and stop the
+service through its owner. Once the native manager confirms it is offline,
+Doctor can repair its selected state without changing or starting that service.
+
+If migration or config repair cannot finish, Doctor leaves the stopped service
+stopped and reports an incomplete repair. Resolve the reported blocker, rerun
+`openclaw doctor --fix`, then start the service through its owner.
 
 ## Examples
 
@@ -76,29 +110,29 @@ openclaw channels status --probe
 
 ## Options
 
-| Option                          | Effect                                                                                                                                                                                  |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                            |
-| `--yes`                         | Accept defaults without prompting.                                                                                                                                                      |
-| `--repair` / `--fix`            | Apply recommended non-service repairs without prompting (`--fix` is an alias). Gateway service installs/rewrites still require interactive confirmation or explicit `gateway` commands. |
-| `--force`                       | Apply aggressive repairs, including overwriting custom service config.                                                                                                                  |
-| `--non-interactive`             | Run without prompts; safe migrations and non-service repairs only.                                                                                                                      |
-| `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                 |
-| `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                           |
-| `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                     |
-| `--lint`                        | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                            |
-| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                 |
-| `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                               |
-| `--session-sqlite <mode>`       | Run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                         |
-| `--session-sqlite-store <path>` | With `--session-sqlite`: select one legacy `sessions.json` store path.                                                                                                                  |
-| `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                   |
-| `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                 |
-| `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                             |
-| `--json`                        | Emit read-only JSON. Bare `--json` is advisory; combine with `--lint` for threshold-based exit codes. With another machine mode, emit that mode's existing JSON report.                 |
-| `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                       |
-| `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                        |
-| `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                             |
-| `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                              |
+| Option                          | Effect                                                                                                                                                                                                      |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                                |
+| `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                             |
+| `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Preserve the installed service definition; use explicit `gateway` commands to replace it. |
+| `--force`                       | Apply aggressive config/state repairs. Repair maintenance still preserves the installed service definition.                                                                                                 |
+| `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                       |
+| `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                     |
+| `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                               |
+| `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                         |
+| `--lint`                        | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                                                |
+| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                     |
+| `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                   |
+| `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                                   |
+| `--session-sqlite-store <path>` | With `--session-sqlite`: select a SQLite database or legacy `sessions.json` source, subject to the mode's selection rules below.                                                                            |
+| `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                                       |
+| `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                                     |
+| `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                                                 |
+| `--json`                        | Emit read-only JSON. Bare `--json` is advisory; combine with `--lint` for threshold-based exit codes. With another machine mode, emit that mode's existing JSON report.                                     |
+| `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                                           |
+| `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                                            |
+| `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                                                 |
+| `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                                                  |
 
 `--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`. Bare `--json` uses the default read-only lint check selection but keeps Doctor's advisory exit behavior. Both read-only postures reject `--repair`, `--fix`, `--force`, `--yes`, and `--generate-gateway-token`. Explicit `--lint` also rejects `--session-sqlite` modes and their selectors, including `--github-issue`. Other machine modes can still use `--json` for their own output.
 
@@ -211,6 +245,13 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
+The probes also warn with `plugin.version_drift` when an enabled official plugin
+in the installed index belongs to a different release cohort than the upgraded
+OpenClaw CLI. Follow the reported plugin update command, then restart the
+Gateway. Exact npm pins receive an update command only after the registry
+confirms that target exists. Independently versioned community plugins and
+disabled plugins are excluded; version drift alone does not change the exit code.
+
 Container image startup is the exception to the usual "run doctor after
 updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it
 runs safe state and plugin repairs before reporting ready. If repair cannot
@@ -222,12 +263,28 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
+
+For malformed legacy `exec-approvals.json`, Doctor preserves the original bytes and reports the first validation problem, for example `agents entry #2.allowlist[1].lastUsedAt: expected a finite number`. Agent entries are numbered from 1 in JavaScript `Object.keys` order; allowlist indices start at 0. This can differ from JSON text order, especially for numeric keys. To locate entry #2 locally, use `Object.keys(JSON.parse(raw).agents)[1]`, where `raw` is the file contents. Diagnostics omit agent keys and policy values, and migration receipts contain no diagnostic detail. JSON syntax and invalid UTF-8 receive separate reasons.
+
+Repair the preserved file locally, then rerun `openclaw doctor --fix` with the same `OPENCLAW_STATE_DIR` setting (leave it unset if it was unset before). Exec approvals remain blocked until migration succeeds. Do not delete the file or broaden its policy to bypass validation.
+
+Agent database schema upgrades are reported with the database path and the observed before and after versions, independently of media rewrites. The media persistence message appears only when transcript sessions or trajectory rows were rewritten and includes both counts. A run that does both reports both; an unchanged rerun reports neither.
+
+Device Pair and Active Memory legacy JSON imports check namespace capacity before writing. If the missing entries do not fit, doctor warns and leaves the source unchanged. These imports also verify that source keys and pre-existing destination keys remain in SQLite before reporting completion and archiving the source. A retention warning keeps the source available for inspection and retry; do not delete it to silence the warning, because it may contain state that SQLite did not retain. Resolve the capacity problem before rerunning `openclaw doctor --fix`.
+
+Microsoft Teams conversation, poll, and SSO token imports also verify that selected legacy keys and pre-existing destination keys remain in SQLite before archiving. Poll imports check both metadata and vote buckets; existing conversation and poll retention rules still select which legacy rows to import. If any required keys are missing, doctor warns and leaves the legacy file in place without reporting completion. Existing SQLite conversations, poll metadata, voter selections, and SSO tokens still take precedence over matching legacy values. These checks do not roll back rows already evicted during import.
+
 Doctor also reports when shared auth still uses the legacy `agents/main/agent/openclaw-agent.sqlite` owner. `openclaw doctor --fix` copies its auth profile and runtime-state rows into `state/openclaw.sqlite`, verifies the exact payloads, removes the source rows, and records the new ownership only after the transaction succeeds. Auth resolution has no dual-read fallback: before migration the legacy database is complete; after migration the shared state database is complete. Once relocated, deleting `main` no longer risks fleet credentials.
 
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing canonical SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars fail closed: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
+
+After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime schema readiness for existing configured, default-layout, and registered databases before reporting completion, including stores whose migration failed before registration. A blocked required migration exits nonzero; stop the Gateway and other OpenClaw processes, then rerun repair. Unrelated advisory warnings, including archived transcript repair failures, do not make a ready database fail this check. Missing databases are not created by the readiness check.
+
+Doctor also checks every configured agent workspace and active sandbox workspace for retired setup state and interrupted migration claims. Repair exits nonzero while any of these files still block agent turns, even if their data already reached SQLite. Gateway startup checks the same workspace readiness before starting channels. Keep the retained files in place and rerun `openclaw doctor --fix` to finish verified cleanup; neither check imports or deletes legacy state.
 
 ## Shared state SQLite compaction
 
@@ -280,16 +337,43 @@ compatible backup or upgrade OpenClaw for a newer schema.
 
 ## Session SQLite migration
 
-OpenClaw imports legacy session rows and transcript history into each agent's
-SQLite database automatically during gateway startup and during
-`openclaw doctor --fix`. `openclaw doctor --session-sqlite <mode>` is the
-targeted inspection and validation tool for that migration. Current runtime
-session rows live in
-`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Legacy
-`sessions.json` files are migration sources. Hot transcript JSONL files are
-imported and archived out of the active sessions directory after successful
-import; archive-tier JSONL files remain support artifacts, not runtime
-fallbacks.
+Runtime session rows and transcripts live in SQLite, by default at
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway and local
+CLI startup do not import, restore, or rewrite legacy session JSON/JSONL files.
+When startup finds a legacy session store, it refuses readiness and prints a
+`doctor --fix` command for the active profile instead of serving empty history.
+
+To upgrade history from an older file-backed installation, stop the Gateway,
+back up its state, and run `openclaw doctor --fix` before restarting it.
+`openclaw doctor --session-sqlite <mode>` provides targeted inspection,
+import, validation, and SQLite maintenance. Legacy `sessions.json` files are
+migration sources. Hot transcript JSONL files are imported and archived after
+successful import; archive-tier JSONL files remain support artifacts, not
+runtime fallbacks.
+
+The public Doctor migration path stages transcript payloads and performs branch
+and provider repairs in a private, temporary SQLite database instead of retaining
+complete histories in memory. It keeps the raw transcript untouched until archiving it through an
+exclusive same-filesystem move, avoiding both an extra full `.pre-doctor` raw
+copy and a rewritten intermediate file. Standalone transcript repair retains
+its original backup behavior.
+
+For large histories, plan space for the original JSON/JSONL files, the temporary
+SQLite spool, and the destination database and WAL at the same time. Keep free
+space on both the system temporary volume and the volume holding OpenClaw state;
+the resulting SQLite database can be larger than the original JSONL. Streaming
+reduces whole-history memory pressure, but individual records are still parsed
+in memory and SQLite also uses native memory. Do not size a host from the JSONL
+byte count or JavaScript heap limit alone; there is no fixed disk, RAM, or
+migration-time guarantee.
+
+Staging is removed when the operation finishes and is never used as a runtime
+store or resumed after an interruption; retries use the original sources and
+committed session data. After import, Doctor checkpoints and incrementally vacuums databases that already
+support auto-vacuum, retaining full integrity and foreign-key checks before and
+after cleanup. Databases without auto-vacuum still need a full `VACUUM` to enable
+it. Incremental cleanup frees unused pages but does not repack partially filled
+pages; explicit session and shared-state `compact` modes still run a full `VACUUM`.
 
 The regular `openclaw doctor` pass also reports canonical SQLite transcripts
 whose initial session header was never persisted. `openclaw doctor --fix`
@@ -302,7 +386,7 @@ Modes:
 
 | Mode       | Behavior                                                                                                               |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `inspect`  | Read legacy and SQLite counts, plus unreferenced JSONL files, without importing.                                       |
+| `inspect`  | Read SQLite counts and any selected legacy-source diagnostics without importing; legacy files are not required.        |
 | `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
 | `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
@@ -312,34 +396,44 @@ Modes:
 
 Selectors:
 
-- Default: the configured default agent store, when that legacy store file exists.
+- Default: the configured default agent store; SQLite inspection does not require a legacy file.
 - `--session-sqlite-agent <id>`: one configured agent.
 - `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
-- `--session-sqlite-store <path>`: one explicit legacy `sessions.json` path.
+- `--session-sqlite-store <path>`: one explicit `.sqlite` database or legacy `sessions.json` path.
 
-Manual inspection sequence:
+`dry-run`, `import`, and `validate` select existing legacy sources only. An
+explicit `.sqlite` path selects no legacy targets in those modes; it is never
+parsed or archived as JSON. Use `inspect`, `compact`, or corruption recovery
+with `recover` for a SQLite target. Recovering or restoring archived sources
+from migration manifests requires the original legacy selector or agent-store
+discovery that includes it. Legacy `sessions.json` selector paths remain
+supported and resolve to their corresponding SQLite stores for maintenance.
+
+With the Gateway stopped and its state backed up, inspect and import legacy
+history:
 
 ```bash
 openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
-openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
-openclaw doctor --session-sqlite compact --session-sqlite-all-agents
-openclaw doctor --session-sqlite recover --github-issue
+openclaw doctor --session-sqlite inspect --session-sqlite-all-agents --json
 ```
 
-Back up the OpenClaw state directory before running `import` on an install with
-important history. `validate` exits non-zero when a selected legacy entry is
-missing from SQLite, a session id differs, or a transcript event count differs.
+`import` validates rows and transcript event counts before archiving its
+legacy sources. After a successful import, `validate` may select no legacy
+targets; use `inspect` to see the current SQLite state. While legacy sources
+remain, `validate` exits non-zero when a selected entry is missing from SQLite,
+a session id differs, or a transcript event count differs.
 When using `--session-sqlite-store <path>`, check that the report contains the
-expected target count; a nonexistent explicit store path selects no targets.
+expected target count; a nonexistent legacy source selects no targets for
+`dry-run`, `import`, or `validate`.
 
 SQLite deletes reclaim pages inside the database first; they do not necessarily
 shrink the database file immediately. After deleting or archiving large
 transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
 to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
-sizes. Compaction requires a regular file with the current agent schema, the
-selected agent's durable owner metadata, and no open handle in the doctor
+sizes. Compaction requires a regular file with the current agent schema, its
+durable database owner metadata, and no open handle in the doctor
 process. The destructive `import`, `compact`, `recover`, and `restore` modes
 hold the same state ownership lock as Gateway startup for their full operation;
 `inspect`, `dry-run`, and `validate` remain read-only and do not take it. Stop
@@ -353,8 +447,11 @@ checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
-into the archive. If startup reports a failed session SQLite migration after
-artifacts moved, run recovery:
+into the archive. Recovery references stay in the current sessions directory,
+including for backups with old-machine absolute transcript paths. Retrying an
+interrupted import keeps the index and previously archived transcripts restorable.
+If an explicit import fails after artifacts moved, keep the Gateway stopped and
+run recovery:
 
 ```bash
 openclaw doctor --session-sqlite recover --github-issue
@@ -364,13 +461,16 @@ Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, refreshes the
 sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
 body that avoids transcript contents, raw environment, secrets, and unbounded
-config. When no failed migration manifest exists but a selected agent SQLite
-database is corrupt, not a database, or has journal sidecars without a main
-database, recovery copies the complete file set to a temporary inspection
-directory. SQLite can roll back a valid hot journal in that disposable copy
+config. When no failed migration manifest exists, recovery inspects selected
+SQLite databases using temporary copies of their complete file sets. SQLite
+can roll back a valid hot journal in that disposable copy
 before `quick_check`, `integrity_check`, and `foreign_key_check` run, while the
-original forensic files remain untouched. Failed integrity checks or orphaned
-sidecars preserve the DB, WAL, SHM, and rollback-journal files by renaming the
+original forensic files remain untouched during inspection. Recovery attempts
+to repair canonical index corruption in place after schema and owner validation.
+Schema, owner, and I/O errors, as well as failed or refused index repairs,
+leave the original database in place with a diagnostic. Other confirmed
+corruption or orphaned sidecars
+preserve the DB, WAL, SHM, and rollback-journal files by renaming the
 whole discovered set with one `.corrupt-<timestamp>` suffix. A caught rename
 failure rolls already-moved files back before reporting failure, so a
 recoverable file set is not silently split. Stop the Gateway before recovery;
@@ -381,18 +481,36 @@ it writes the local support report and prints a prefilled issue URL.
 
 `restore` remains the lower-level undo operation. It uses manifest
 `sourcePath -> archivePath` records, moves archived artifacts back only when the
-original path is missing, reports conflicts when both paths exist, and leaves
-the SQLite database in place. When several manifests recorded the same original
-path, restore plans all candidates before moving any of them. Identical archives
+original path is missing, reports conflicts for independently existing originals,
+and leaves the SQLite database in place. Publication is exclusive: a file or
+symbolic link created during verification is not replaced. Restore moves the
+original without copying its contents, and fails without consuming the archive
+if the filesystem cannot publish it safely. Recorded interrupted publications
+can be retried, including with older manifests or after the replacement SQLite
+database has been removed. If restore recreates a missing sessions directory,
+retries repeat its parent-directory durability check before consuming the archive.
+When several manifests recorded the same original path, restore plans all
+candidates before moving any of them. Identical archives
 are safe duplicates, and one nonempty legacy `sessions.json` may supersede empty
 copies created by older writers. Distinct nonempty indexes, distinct transcript
 archives, invalid archives, and archives missing without a recorded prior
 restore fail closed so restore cannot silently replace or hide recoverable data.
 
+After verifying the migration and current history, use
+`openclaw update cleanup --dry-run` to inspect retained recovery data without
+stopping the Gateway. Apply with `openclaw update cleanup` or
+`openclaw update cleanup --yes --json` only after stopping the Gateway and other
+SQLite maintenance for the same profile/state directory. This permanently
+retires eligible rollback originals; it does not remove current SQLite history
+or operator backups. Manifests remain while retained or pending artifacts need
+them, so interrupted cleanup can be resumed. Restore distinguishes intentional
+disposal, pending cleanup, and unexpected missing files. See
+[Update cleanup](/cli/update#update-cleanup).
+
 ### Downgrading After Session SQLite Migration
 
-Before starting an older file-backed OpenClaw version, restore the archived
-legacy transcript artifacts:
+With the Gateway stopped, use the current CLI to restore archived legacy
+transcript artifacts before starting an older file-backed OpenClaw version:
 
 ```bash
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
@@ -403,6 +521,11 @@ in those entries. After the SQLite migration, successful imports move hot JSONL
 transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
 see that history until restore moves those manifest-recorded artifacts back to
 their original paths.
+
+If `openclaw update cleanup` already disposed of the originals, restore reports
+that outcome and cannot recreate them. You need an independent backup containing
+those legacy files; see [Pre-update backups](/install/updating#before-updating-create-a-verified-backup)
+for portable-archive exclusions.
 
 Restore does not delete SQLite data. Sessions created after the SQLite flip
 exist only in SQLite and will not appear to the older runtime. If you later
@@ -420,8 +543,8 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
-- On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to replace the active launcher.
-- `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` to replace the launcher.
+- On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to rewrite the managed base unit. If a systemd drop-in overrides `ExecStart=` or `WorkingDirectory=`, inspect it with `systemctl --user cat <unit>.service` and update or remove that drop-in yourself; reinstalling the base does not replace it. `Environment=` drop-ins remain supported.
+- `doctor --fix --non-interactive` preserves the installed gateway service definition, including during update repair. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
@@ -442,6 +565,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor reports an info note when Codex-mode agents are configured and personal Codex CLI assets exist in the operator's Codex home. Local Codex app-server launches use isolated per-agent homes; install the Codex plugin first if needed, then use `openclaw migrate plan codex` to inventory assets that should be promoted deliberately.
 - Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead if you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
+- Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
 - If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials. For exec-backed SecretRefs, doctor skips execution unless `--allow-exec` is present.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.

@@ -1,10 +1,58 @@
 // Plugin install fixture helpers build generated bundle layouts for install tests.
 import fs from "node:fs";
 import path from "node:path";
+import { withTempDir } from "../../test-utils/temp-dir.js";
+import type { PluginInstallArtifactConsentHandler } from "../install-types.js";
+import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
 
 type MakeTempDir = () => string;
 
 type BundleFixtureFormat = "agent" | "codex" | "claude" | "cursor";
+
+type PluginArtifactInstallMockParams = {
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
+};
+
+export async function invokePluginArtifactInstallMock<
+  TResult extends { ok: boolean; pluginId?: string; version?: string },
+>(
+  mock: unknown,
+  params: PluginArtifactInstallMockParams,
+  fixture?: { manifest?: Record<string, unknown> },
+): Promise<TResult> {
+  const result = await (mock as (params: PluginArtifactInstallMockParams) => Promise<TResult>)(
+    params,
+  );
+  const reviewArtifact = params.onBeforePluginArtifactCommit;
+  const pluginId = result.pluginId;
+  if (
+    !result.ok ||
+    !pluginId ||
+    !reviewArtifact ||
+    params.dryRun ||
+    (params.expectedPluginId && params.expectedPluginId !== pluginId)
+  ) {
+    return result;
+  }
+  return await withTempDir("openclaw-plugin-staged-", async (rootDir) => {
+    const stagedArtifactDir = fs.realpathSync(rootDir);
+    createColdPluginFixture({
+      rootDir: stagedArtifactDir,
+      pluginId,
+      ...(result.version ? { packageVersion: result.version } : {}),
+      ...(fixture?.manifest ? { manifest: fixture.manifest } : {}),
+    });
+    await reviewArtifact({
+      pluginId,
+      stagedArtifactDir,
+      mode: params.mode ?? "install",
+    });
+    return result;
+  });
+}
 
 export function createBundleInstallFixtureFactory(makeTempDir: MakeTempDir) {
   return function setupBundleInstallFixture(params: {

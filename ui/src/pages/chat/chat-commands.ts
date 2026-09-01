@@ -3,6 +3,7 @@ import type { CommandsListResult } from "../../../../packages/gateway-protocol/s
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
@@ -28,9 +29,11 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import type { ChatExportResult } from "./export.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 
@@ -76,7 +79,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     sessionsResultAgentId?: string | null;
     createChatSession?: () => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;
-    exportCurrentChat?: () => Promise<void> | void;
+    exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
   } & UiSessionDefaultsHost &
@@ -229,8 +232,9 @@ async function requestRemoteSlashCommands(
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
+  sessionKey?: string,
 ): Promise<SlashCommandDef[]> {
-  const metadata = peekChatMetadata(client, agentId);
+  const metadata = peekChatMetadata(client, { agentId, sessionKey });
   // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
   // so no TTL applies here. The cache below owns only commands.list-derived entries.
   if (Array.isArray(metadata?.commands)) {
@@ -277,6 +281,7 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  sessionKey?: string;
   shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
@@ -288,7 +293,7 @@ export async function refreshSlashCommands(params: {
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
-  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  const commands = await loadRemoteSlashCommands(params.client, agentId, params.sessionKey);
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
@@ -389,7 +394,10 @@ export async function dispatchChatSlashCommand(
       }
       break;
     case "export-session":
-      await host.exportCurrentChat?.();
+      if ((await host.exportCurrentChat?.()) === "empty") {
+        injectCommandResult(host, t("chat.commandResults.emptyExport"));
+        scheduleChatScroll(host, false, false, { contentChanged: true });
+      }
       return "completed";
   }
 
@@ -459,12 +467,11 @@ export async function dispatchChatSlashCommand(
       host,
       `/${name} ${args}`.trim(),
       host.chatRunId,
-      undefined,
       resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
     );
   }
 
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
+  if (result.modelChanged) {
     if (targetIsCurrent()) {
       await host.refreshCurrentSessionTools?.();
     }
@@ -483,12 +490,12 @@ export async function dispatchChatSlashCommand(
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {
-  host.chatMessages = [
+  publishChatSessionProjectionMessages(host, [
     ...host.chatMessages,
     {
       role: "system",
       content,
       timestamp: Date.now(),
     },
-  ];
+  ]);
 }

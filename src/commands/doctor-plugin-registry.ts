@@ -11,6 +11,7 @@ import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   removePluginInstallRecordFromRecords,
@@ -19,7 +20,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
+import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
@@ -41,12 +42,12 @@ import {
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   InvalidPluginInstallRecordStateError,
-  migratePluginRegistryForInstall,
-  preflightPluginRegistryInstallMigration,
-  type PluginRegistryInstallMigrationParams,
+  migratePluginRegistryForDoctor,
+  preflightPluginRegistryDoctorMigration,
+  type PluginRegistryDoctorMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
 
-type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParams, "config"> &
+type PluginRegistryDoctorRepairParams = Omit<PluginRegistryDoctorMigrationParams, "config"> &
   InstalledPluginIndexRecordStoreOptions & {
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
@@ -397,7 +398,7 @@ async function loadInstallRecordsWithoutPluginIds(
 export async function detectPluginRegistryHealthIssues(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryHealthIssue[]> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+  const preflight = preflightPluginRegistryDoctorMigration(params);
   const issues: PluginRegistryHealthIssue[] = [];
   if (preflight.action === "migrate") {
     issues.push({
@@ -605,9 +606,9 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
+  let preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>;
   try {
-    preflight = preflightPluginRegistryInstallMigration(params);
+    preflight = preflightPluginRegistryDoctorMigration(params);
   } catch (error) {
     if (!(error instanceof InvalidPluginInstallRecordStateError)) {
       throw error;
@@ -615,6 +616,10 @@ export async function maybeRepairPluginRegistryState(
     note(error.message, "Plugin registry");
     return { config: params.config };
   }
+
+  // Earlier Doctor stages can commit install-record repairs inside another metadata scope.
+  // This refresh owns the next write, so it must start from the durable ledger.
+  clearLoadInstalledPluginIndexInstallRecordsCache();
 
   const migrationParams = {
     ...params,
@@ -632,8 +637,6 @@ export async function maybeRepairPluginRegistryState(
       ...removedStaleLocalBundledPluginIds,
     ]),
   ];
-  const shouldPersistRepairedInstallRecords =
-    stalePluginIdsToRemove.length > 0 || retiredStaleManagedNpmInstallGenerations;
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
       note(
@@ -648,17 +651,13 @@ export async function maybeRepairPluginRegistryState(
   }
 
   if (preflight.action !== "skip-existing") {
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       ...migrationParams,
-      ...(shouldPersistRepairedInstallRecords
-        ? {
-            installRecords: await loadInstallRecordsWithoutPluginIds(
-              params,
-              stalePluginIdsToRemove,
-              staleManagedNpmBundledPluginRepair?.installRecords,
-            ),
-          }
-        : {}),
+      installRecords: await loadInstallRecordsWithoutPluginIds(
+        params,
+        stalePluginIdsToRemove,
+        staleManagedNpmBundledPluginRepair?.installRecords,
+      ),
     });
     if (result.migrated) {
       const total = result.current.plugins.length;
@@ -684,15 +683,11 @@ export async function maybeRepairPluginRegistryState(
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
-      ...(shouldPersistRepairedInstallRecords
-        ? {
-            installRecords: await loadInstallRecordsWithoutPluginIds(
-              params,
-              stalePluginIdsToRemove,
-              staleManagedNpmBundledPluginRepair?.installRecords,
-            ),
-          }
-        : {}),
+      installRecords: await loadInstallRecordsWithoutPluginIds(
+        params,
+        stalePluginIdsToRemove,
+        staleManagedNpmBundledPluginRepair?.installRecords,
+      ),
     });
     const total = index.plugins.length;
     const enabled = index.plugins.filter((plugin) => plugin.enabled).length;

@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
-import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   type HeartbeatTerminalToolFailure,
@@ -13,7 +13,7 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -35,8 +35,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasActiveCronJobs,
-  hasActiveCronJobsExceptMarker,
+  hasActiveCronJobsExceptMarkers,
   isCronActiveJobMarkerCurrent,
+  listCronHeartbeatWaitOwners,
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
@@ -97,6 +98,7 @@ import {
 } from "./outbound/targets.js";
 
 const log = heartbeatLog;
+const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -224,30 +226,46 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
   if (getSize(CommandLane.Main) > 0) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }
 
-  // Ignore only the exact Cron lane task that owns this wake. Other queued or active
-  // Cron work and all CronNested work remain busy signals.
-  const owningCronJobMarker = opts.owningCronJobMarker;
-  const ownsActiveCronRun = owningCronJobMarker
-    ? isCronActiveJobMarkerCurrent(owningCronJobMarker)
-    : false;
+  // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
+  // Keep unrelated Cron work and all CronNested work as busy signals.
+  const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
+  const directOwner =
+    opts.owningCronJobMarker && isCronActiveJobMarkerCurrent(opts.owningCronJobMarker)
+      ? opts.owningCronJobMarker
+      : undefined;
+  const owningCronJobMarkers = [
+    ...heartbeatWaitOwners.activeJobMarkers,
+    ...(directOwner ? [directOwner] : []),
+  ];
   const cronBusy =
-    ownsActiveCronRun && owningCronJobMarker
-      ? hasActiveCronJobsExceptMarker(owningCronJobMarker)
+    owningCronJobMarkers.length > 0
+      ? hasActiveCronJobsExceptMarkers(owningCronJobMarkers)
       : hasActiveCronJobs();
-  const owningCronLaneTaskMarker = opts.owningCronLaneTaskMarker;
-  const ownsCronLaneTask =
-    ownsActiveCronRun &&
-    owningCronLaneTaskMarker?.lane === CommandLane.Cron &&
-    isCommandLaneTaskMarkerCurrent(owningCronLaneTaskMarker);
+  const owningCronLaneTaskIds = new Set(
+    [
+      ...heartbeatWaitOwners.owningCronLaneTaskMarkers,
+      ...(directOwner && opts.owningCronLaneTaskMarker ? [opts.owningCronLaneTaskMarker] : []),
+    ]
+      .filter(
+        (marker): marker is CommandLaneTaskMarker =>
+          marker?.lane === CRON_COMMAND_LANE && isCommandLaneTaskMarkerCurrent(marker),
+      )
+      .map((marker) => marker.taskId),
+  );
   const cronLaneDepth = getSize(CommandLane.Cron);
   // HookDispatch is included so moving hook agent runs off `cron-nested` onto
   // their own lane does not silently stop them from suppressing heartbeats.
   // They are still active agent work; only the lane they occupy changed.
   const cronLaneBusy =
-    cronLaneDepth > (ownsCronLaneTask ? 1 : 0) ||
+    cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
   if (cronBusy || cronLaneBusy) {
@@ -318,6 +336,11 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
         mainSessionRecovery.view.status === "recoverable")) ||
     hasCurrentRestartRecoveryDelivery
   ) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
@@ -327,16 +350,18 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       : undefined;
   const pendingFinalDeliveryIsHeartbeatAck =
     typeof pendingFinalDeliveryText === "string" &&
-    stripHeartbeatToken(pendingFinalDeliveryText, {
-      mode: "heartbeat",
-      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    }).shouldSkip;
+    isHeartbeatAcknowledgementText(pendingFinalDeliveryText);
   if (
     recentSessionEntry?.pendingFinalDelivery !== undefined &&
     !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }
 
@@ -543,14 +568,14 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       upserts: [
         {
           sessionKey: isolatedSessionKey,
-          buildEntry: ({ store }) => {
+          buildEntry: ({ currentEntry }) => {
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
               agentId,
               nowMs: startedAt,
               forceNew: true,
-              store,
+              store: currentEntry ? { [isolatedSessionKey]: currentEntry } : {},
             });
             const nextEntry = {
               ...cronSession.sessionEntry,
@@ -656,7 +681,7 @@ export async function invokeHeartbeatAgentRun(
       OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
       AccountId: delivery.accountId,
       MessageThreadId: delivery.threadId,
-      Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+      InternalTurnSource: hasExecCompletion ? "exec" : hasCronEvents ? "cron" : "heartbeat",
       SessionKey: runSessionKey,
       AgentId: agentId,
     },
@@ -664,15 +689,14 @@ export async function invokeHeartbeatAgentRun(
     cfg,
   );
   const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
-  if (agentTurnStatus === "superseded") {
-    return { kind: "preempted" } as const;
+  if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
+    return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;
   }
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
   const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
     resolveHeartbeatTerminalToolFailure(replyResult);
-  const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
-  const replyPayload = selectedReplyPayload;
+  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
   const agentRunFailed = agentTurnStatus === "failed";
   if (
     heartbeatScratchProposal !== undefined &&

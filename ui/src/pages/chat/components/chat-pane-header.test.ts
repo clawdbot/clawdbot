@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { html, render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
@@ -14,6 +13,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import type { SessionCapability } from "../../../lib/sessions/index.ts";
+import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
@@ -26,15 +26,14 @@ import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneParentSession,
-  resolveChatPaneWorkspace,
 } from "./chat-pane-header.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 const containers: HTMLElement[] = [];
 
 afterEach(() => {
-  vi.useRealTimers();
   containers.splice(0).forEach((container) => container.remove());
+  vi.restoreAllMocks();
   Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__");
 });
 
@@ -81,10 +80,16 @@ function mountIntegratedPresenceHeader(params: {
 }) {
   const client = { instanceId: "self-instance" } as unknown as GatewayBrowserClient;
   const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const actor = {
+    type: "human" as const,
+    id: "profile-ada",
+    identity: { type: "profile" as const, id: "profile-ada" },
+    label: "Ada",
+  };
   const session = row({
     key: state.sessionKey,
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+    createdActor: actor,
+    owner: { actor },
   });
   state.settings = {} as ChatPageHost["settings"];
   state.sessionsResult = {
@@ -404,12 +409,20 @@ describe("chat pane header", () => {
   it("leads with the project, then a separator, then the session title", () => {
     const { container } = mountHeader();
     const crumbs = container.querySelector(".chat-pane__crumbs");
-    const segments = [...(crumbs?.children ?? [])].map((child) => child.className);
-    expect(segments).toEqual([
-      "chat-pane__workspace-menu",
-      "chat-pane__crumb-sep",
-      "chat-pane__session-title chat-pane__session-title-button",
+    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
+      "chat-pane__project-row",
+      "chat-pane__session-trail",
     ]);
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__project-row")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual(["chat-pane__workspace-menu"]);
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual(["chat-pane__crumb-sep", "chat-pane__session-title chat-pane__session-title-button"]);
     expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.textContent).toBe("/");
     expect(crumbs?.querySelector(".chat-pane__crumb-sep")?.getAttribute("aria-hidden")).toBe(
       "true",
@@ -421,8 +434,11 @@ describe("chat pane header", () => {
     const { container, props } = mountHeader({ parentSession });
     const crumbs = container.querySelector(".chat-pane__crumbs");
 
-    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
-      "chat-pane__workspace-menu",
+    expect(
+      [...(crumbs?.querySelector(".chat-pane__session-trail")?.children ?? [])].map(
+        (child) => child.className,
+      ),
+    ).toEqual([
       "chat-pane__crumb-sep",
       "chat-pane__parent-session",
       "chat-pane__crumb-sep",
@@ -437,9 +453,9 @@ describe("chat pane header", () => {
   it("drops the separator when the session has no project segment", () => {
     const { container } = mountHeader({ workspaceLabel: null, workspaceRoot: null });
     expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
-    expect(container.querySelector(".chat-pane__crumbs")?.firstElementChild?.className).toContain(
-      "chat-pane__session-title",
-    );
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+    expect(crumbs?.firstElementChild?.className).toBe("chat-pane__session-trail");
+    expect(crumbs?.querySelector(".chat-pane__session-title")).not.toBeNull();
   });
 
   it("keeps the rename input inside the trail so the project stays visible", () => {
@@ -475,8 +491,8 @@ describe("chat pane header", () => {
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
         owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
         participants: [
-          { type: "human", id: "profile-bob", label: "Bob" },
-          { type: "agent", id: "research", label: "Research" },
+          { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+          { identity: { type: "agent", id: "research" }, label: "Research" },
         ],
         participantCount: 2,
       }),
@@ -488,10 +504,11 @@ describe("chat pane header", () => {
 
     expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     expect(
-      [...(facepile?.querySelectorAll("[data-viewer-id]") ?? [])].map((avatar) =>
-        avatar.getAttribute("data-viewer-id"),
+      [...(facepile?.querySelectorAll(".viewer-avatar") ?? [])].map((avatar) =>
+        avatar.getAttribute("aria-label"),
       ),
-    ).toEqual(["profile-bob", "research"]);
+    ).toEqual(["Bob", "Research"]);
+    expect(facepile?.querySelector("[data-viewer-id]")).toBeNull();
   });
 
   it.each([
@@ -502,6 +519,7 @@ describe("chat pane header", () => {
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada", "profile-zoe"],
+      qualified: true,
       expectedChip: true,
       expectedViewers: ["profile-zoe"],
     },
@@ -509,6 +527,7 @@ describe("chat pane header", () => {
       name: "keeps the owner when the owner chip is hidden",
       owners: [{ type: "human" as const, id: "profile-ada", label: "Ada" }],
       viewers: ["profile-ada", "profile-zoe"],
+      qualified: true,
       expectedChip: false,
       expectedViewers: ["profile-ada", "profile-zoe"],
     },
@@ -519,17 +538,33 @@ describe("chat pane header", () => {
         { type: "human" as const, id: "profile-zoe", label: "Zoe" },
       ],
       viewers: ["profile-ada"],
+      qualified: true,
       expectedChip: true,
       expectedViewers: [],
     },
-  ])("$name", async ({ owners, viewers, expectedChip, expectedViewers }) => {
+    {
+      name: "keeps a raw viewer whose ID matches the displayed profile owner",
+      owners: [
+        { type: "human" as const, id: "profile-ada", label: "Ada" },
+        { type: "human" as const, id: "profile-zoe", label: "Zoe" },
+      ],
+      viewers: ["profile-ada"],
+      qualified: false,
+      expectedChip: true,
+      expectedViewers: ["profile-ada"],
+    },
+  ])("$name", async ({ owners, viewers, qualified, expectedChip, expectedViewers }) => {
     const sessionKey = "agent:main:current";
     const { container } = mountIntegratedPresenceHeader({
       owners,
       presence: viewers.map((id) => ({
         instanceId: `${id}-instance`,
         ts: 1,
-        user: { id, name: id },
+        user: {
+          id,
+          name: id,
+          ...(qualified ? { identity: { type: "profile" as const, id } } : {}),
+        },
         watchedSessions: [sessionKey],
       })),
     });
@@ -559,7 +594,11 @@ describe("chat pane header", () => {
     const guest = {
       instanceId: "profile-zoe-instance",
       ts: 1,
-      user: { id: "profile-zoe", name: "Zoe" },
+      user: {
+        id: "profile-zoe",
+        identity: { type: "profile", id: "profile-zoe" },
+        name: "Zoe",
+      },
       watchedSessions: [sessionKey],
     } satisfies PresenceEntry;
     const mounted = mountIntegratedPresenceHeader({ owners, presence: [guest] });
@@ -571,22 +610,26 @@ describe("chat pane header", () => {
     expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).toContain(
       "session-owner-chip--away",
     );
-    mounted.pane.presencePayload = {
-      presence: [
-        {
-          instanceId: "profile-ada-instance",
-          ts: 1,
-          user: { id: "profile-ada", name: "Ada" },
-          watchedSessions: [sessionKey],
-        },
-        guest,
-      ],
-    };
-    mounted.renderHeader();
-    await ownerChip?.updateComplete;
-    expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).not.toContain(
-      "session-owner-chip--away",
-    );
+    for (const identity of [undefined, { type: "profile" as const, id: "profile-ada" }]) {
+      mounted.pane.presencePayload = {
+        presence: [
+          {
+            instanceId: "profile-ada-instance",
+            ts: 1,
+            user: { id: "profile-ada", identity, name: "Ada" },
+            watchedSessions: [sessionKey],
+          },
+          guest,
+        ],
+      };
+      mounted.renderHeader();
+      await ownerChip?.updateComplete;
+      expect(
+        mounted.container
+          .querySelector(".session-owner-chip--header")
+          ?.classList.contains("session-owner-chip--away"),
+      ).toBe(identity === undefined);
+    }
   });
 
   it("renders the durable session actor avatar with the header attribution semantics", async () => {
@@ -784,164 +827,10 @@ describe("chat pane parent resolution", () => {
   });
 });
 
-describe("chat pane workspace chip icon", () => {
-  async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
-    const { container } = mountHeader({ workspaceIcon });
-    const element = container.querySelector("openclaw-workspace-icon") as
-      | (HTMLElement & { updateComplete?: Promise<unknown> })
-      | null;
-    await element?.updateComplete;
-    return { container, element };
-  }
-
-  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
-    const { container, element } = await mountChip(null);
-    expect(element).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-  });
-
-  it("keeps the folder glyph while credentials are not ready", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: [],
-      authReady: false,
-    });
-    expect(element).not.toBeNull();
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
-  });
-
-  it("keeps the folder glyph when the icon route fails", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("workspace icon unavailable"));
-    const { container } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      expect.objectContaining({ headers: { Authorization: "Bearer token" } }),
-    );
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    fetchSpy.mockRestore();
-  });
-
-  it("recovers the workspace icon after a transient route timeout", async () => {
-    vi.useFakeTimers();
-    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        headers: new Headers({ "retry-after": "1" }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        blob: async () => png,
-      } as unknown as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
-    try {
-      const { container, element } = await mountChip({
-        routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-        authTokens: ["token"],
-        authReady: true,
-      });
-      await Promise.resolve();
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(container.querySelector(".workspace-icon")).toBeNull();
-      expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await Promise.resolve();
-      await element?.updateComplete;
-
-      expect(fetchSpy).toHaveBeenCalledTimes(2);
-      expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
-      expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-        "blob:recovered-workspace-icon",
-      );
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
-  });
-
-  it("does not refetch a missing project icon when the header rerenders", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue({ ok: false, status: 404 } as Response);
-    const workspaceIcon = {
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: ["token"],
-      authReady: true,
-    };
-    const mounted = mountHeader({ workspaceIcon });
-    const element = mounted.container.querySelector("openclaw-workspace-icon") as
-      | (HTMLElement & { updateComplete?: Promise<unknown> })
-      | null;
-
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    await element?.updateComplete;
-    render(
-      html`${renderChatPaneHeader({ ...mounted.props, title: "Updated title", workspaceIcon })}`,
-      mounted.container,
-    );
-    await element?.updateComplete;
-    await Promise.resolve();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    render(
-      html`${renderChatPaneHeader({
-        ...mounted.props,
-        workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] },
-      })}`,
-      mounted.container,
-    );
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
-    fetchSpy.mockRestore();
-  });
-
-  it("retries the next credential when a stale token is rejected", async () => {
-    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        blob: async () => png,
-      } as unknown as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:workspace-icon");
-
-    await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: ["stale-token", "session-password"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
-      headers: { Authorization: "Bearer session-password" },
-    });
-    vi.restoreAllMocks();
-  });
-});
-
 describe("chat pane workspace resolution", () => {
   it("uses worktree repo vocabulary with spawned cwd", () => {
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({
           spawnedCwd: "/tmp/worktrees/title-bar",
           worktree: { id: "wt-1", branch: "title-bar", repoRoot: "/src/openclaw" },
@@ -952,7 +841,7 @@ describe("chat pane workspace resolution", () => {
 
   it("does not substitute the agent workspace for a missing worktree checkout", () => {
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({
           worktree: { id: "wt-missing", branch: "feature", repoRoot: "/src/openclaw" },
         }),
@@ -964,7 +853,7 @@ describe("chat pane workspace resolution", () => {
 
   it("matches the gateway root order: spawned workspace before spawned cwd", () => {
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({
           spawnedWorkspaceDir: "/src/openclaw",
           spawnedCwd: "/src/openclaw/packages/nested",
@@ -973,7 +862,7 @@ describe("chat pane workspace resolution", () => {
     ).toEqual({ root: "/src/openclaw", label: "openclaw" });
     // execCwd is exec-node routing state; it never overrides local facts.
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({ execCwd: "/remote/stale", spawnedCwd: "/src/openclaw" }),
       }),
     ).toEqual({ root: "/src/openclaw", label: "openclaw" });
@@ -981,7 +870,7 @@ describe("chat pane workspace resolution", () => {
 
   it("prefers exec cwd and falls back to the agent workspace", () => {
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({ execNode: "build-mac", execCwd: "/remote/build" }),
         agentWorkspace: "/local/default",
       }),
@@ -989,13 +878,13 @@ describe("chat pane workspace resolution", () => {
     // Without execCwd, gateway-local facts must not stand in for a path that
     // lives on another machine.
     expect(
-      resolveChatPaneWorkspace({
+      resolveSessionWorkspace({
         session: row({ execNode: "build-mac", spawnedCwd: "/local/spawned" }),
         agentWorkspace: "/local/default",
         worktreePath: "/local/worktree",
       }),
     ).toEqual({ root: null, label: null });
-    expect(resolveChatPaneWorkspace({ session: row(), agentWorkspace: "/src/openclaw" })).toEqual({
+    expect(resolveSessionWorkspace({ session: row(), agentWorkspace: "/src/openclaw" })).toEqual({
       root: "/src/openclaw",
       label: "openclaw",
     });

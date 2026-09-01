@@ -24,7 +24,7 @@ import type {
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -32,10 +32,18 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
+import {
+  bindAssembledAgentToolActionDescriptor,
+  copyAgentToolMetadata,
+} from "./agent-tool-metadata.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
+import {
+  type SkillInstructionDeliveryCache,
+  wrapToolMemoryFlushAppendOnlyWrite,
+} from "./agent-tools.read.js";
 import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
@@ -55,12 +63,14 @@ import {
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import {
   buildConversationToolPolicyPipelineSteps,
+  projectConversationToolNames,
   resolveConversationToolPolicies,
 } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -78,13 +88,11 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
-import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
 import {
-  createCodingTools,
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "./sessions/index.js";
+  resolveSessionPermissionCoreToolPolicy,
+  resolveSessionPermissionExecPolicy,
+} from "./session-permission-exec-mode.js";
+import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { resolveToolFsConfig } from "./tool-fs-policy.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.js";
@@ -166,6 +174,8 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 /** Public options for building one plugin-owned agent tool surface. */
 type OpenClawCodingToolsOptions = {
   agentId?: string;
+  /** Retained policy owner; execution identity remains agentId/runSessionKey. */
+  policyAgentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
@@ -188,6 +198,7 @@ type OpenClawCodingToolsOptions = {
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
+  stagedMediaPaths?: ReadonlyMap<string, string>;
   sessionKey?: string;
   /**
    * The durable store session key for the live run when it differs from the
@@ -229,6 +240,8 @@ type OpenClawCodingToolsOptions = {
    */
   spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
+  /** Explicitly distinguishes live Gateway session policy from a pinned run override. */
+  sessionConfigSource?: "runtime" | "pinned";
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
@@ -314,6 +327,8 @@ type OpenClawCodingToolsOptions = {
   modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  /** Attempt-local full skill reads that remain visible in the model context. */
+  skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -390,7 +405,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
-  const sandboxToolPolicy = sandbox?.tools;
   const capabilityProfile =
     options?.conversationCapabilityProfile ??
     resolveConversationCapabilityProfile({
@@ -399,7 +413,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       runSessionKey: options?.runSessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
-      agentId: options?.agentId,
+      agentId: options?.policyAgentId ?? options?.agentId,
       agentDir: options?.agentDir,
       agentAccountId: options?.agentAccountId,
       messageProvider: options?.messageProvider,
@@ -431,7 +445,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       cwd: options?.cwd,
       spawnWorkspaceDir: options?.spawnWorkspaceDir,
       skillsSnapshot: options?.skillsSnapshot,
-      sandboxToolPolicy,
+      sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
@@ -440,6 +454,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
+  // Tool restrictions can belong to another agent. Never use that owner for
+  // credentials, requester identity, or execution hooks.
+  const executionAgentId =
+    options?.agentId ??
+    (options?.runSessionKey
+      ? resolveSessionAgentId({ config: options.config, sessionKey: options.runSessionKey })
+      : agentId);
+  const executionSessionKey = options?.runSessionKey ?? options?.sessionKey;
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -484,6 +506,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     additionalProfileAllow: runtimeProfileAlsoAllow,
     additionalPolicyAllow: toolSearchControlAllowlist,
   });
+  const sandboxWorkspaceMediaReadAllowed =
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: ["read"],
+      warn: () => undefined,
+    }).length === 1;
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -496,11 +524,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
   const preparedRunEnvironment =
-    execRuntimeConfig && agentId
+    execRuntimeConfig && executionAgentId
       ? prepareGitHubToolEnvironment({
           config: execRuntimeConfig,
           sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-          agentId,
+          agentId: executionAgentId,
         })
       : undefined;
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
@@ -523,6 +551,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       options?.senderIsOwner === false || options?.isTurnTainted?.() === true
         ? "untrusted"
         : "agent",
+    sessionId: options?.sessionId,
+    sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
@@ -562,10 +592,17 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  const effectiveExecPolicy = sessionPermissionPolicy
+    ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
+    : applyExecPolicyLayer(execConfig, options?.exec);
+  // A scheduled cap narrows the rebuilt exec tool to its captured policy.
+  // Its approval floor outranks a reused full session; the wrapper below
+  // prevents caller arguments from weakening either restriction.
+  const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
+    abortSignal: options?.abortSignal,
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,
@@ -575,26 +612,23 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sandbox,
     skillsSnapshot: options?.skillsSnapshot,
     skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
+    skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
     modelContextWindowTokens: options?.modelContextWindowTokens,
     imageSanitization,
+    modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    ...(includeBaseCodingTools
-      ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }
-      : {}),
-    baseToolFactories: {
-      createEditTool,
-      createReadTool,
-      createWriteTool,
-    },
     applyPatchEnabled,
     applyPatchWorkspaceOnly,
     execDefaults: {
       ...execDefaults,
-      bypassHostApprovalFloors: sessionCoreToolPolicy?.bypassHostApprovalFloors,
-      host: options?.exec?.host ?? execConfig.host,
-      mode: effectiveExecPolicy.mode,
+      bypassHostApprovalFloors:
+        scheduledExecTarget?.ask !== "always" &&
+        sessionCoreToolPolicy?.bypassHostApprovalFloors &&
+        effectiveExecPolicy.security === "full",
+      host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
+      mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
       security: effectiveExecPolicy.security,
-      ask: effectiveExecPolicy.ask,
+      ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
       config: execRuntimeConfig,
       preparedRunEnvironment,
       reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
@@ -680,11 +714,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const pluginToolCallerIdentity =
-    agentId && options?.sessionKey?.trim()
+  const toolCallerIdentity =
+    options && executionAgentId && executionSessionKey?.trim()
       ? {
-          agentId,
-          sessionKey: options.sessionKey.trim(),
+          agentId: executionAgentId,
+          sessionKey: executionSessionKey.trim(),
+          ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
           turnSourceChannel: resolveGatewayMessageChannel(
             options.messageChannel ?? options.messageProvider,
           ),
@@ -700,6 +735,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       : resolveOpenClawPluginToolsForOptions({
           options: {
             agentSessionKey: options?.sessionKey,
+            runSessionKey: options?.runSessionKey,
             runId: options?.runId,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
@@ -733,7 +769,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             modelHasVision: options?.modelHasVision,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
-            requesterAgentIdOverride: agentId,
+            requesterAgentIdOverride: executionAgentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             clientCaps: options?.clientCaps,
             toolBindings: options?.toolBindings,
@@ -742,7 +778,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
+  );
   const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
@@ -758,9 +794,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
+  const scheduledCoreTools = scheduledExecTarget
+    ? coreTools.map((tool) =>
+        tool.name === "exec"
+          ? copyAgentToolMetadata(tool, pinExecToolTarget(tool, scheduledExecTarget))
+          : tool,
+      )
+    : coreTools;
   const tools: AnyAgentTool[] = [
-    ...coreTools,
-    // Channel docking: include channel-defined agent tools (login, etc.).
+    ...scheduledCoreTools,
+    // Include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools
       ? mergeAgentRingZeroTools(
@@ -771,6 +814,20 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            sessionPermissionPolicy,
+            execSession: sessionPermissionPolicy
+              ? { permissionMode: sessionPermissionPolicy.mode }
+              : undefined,
+            execOverrides: {
+              host: options?.exec?.host ?? execConfig.host,
+              mode: effectiveExecPolicy.mode,
+              security: effectiveExecPolicy.security,
+              ask: effectiveExecPolicy.ask,
+              node: options?.exec?.node ?? execConfig.node,
+            },
+            approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
+              ? [options.approvalReviewerDeviceId]
+              : undefined,
             runSessionKey: options?.runSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
@@ -793,6 +850,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
+            stagedMediaPaths: options?.stagedMediaPaths,
+            sandboxWorkspaceMediaReadAllowed,
             fsPolicy,
             workspaceDir: workspaceRoot,
             spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
@@ -803,6 +862,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               : runtimeRoot,
             sandboxed: Boolean(sandbox),
             config: options?.config,
+            sessionConfigSource: options?.sessionConfigSource,
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
@@ -830,6 +890,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,
             computerContextEpoch: options?.computerContextEpoch,
+            computerTransport: resolveSessionPlacementComputer(options?.operationalRunInstance),
             registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
@@ -843,7 +904,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
-            requesterAgentIdOverride: agentId,
+            requesterAgentIdOverride: executionAgentId,
             requesterSenderId: options?.senderId,
             senderIsOwner: options?.senderIsOwner,
             authProfileStore: options?.authProfileStore,
@@ -904,7 +965,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     modelProvider: options?.modelProvider,
     modelApi: options?.modelApi,
     modelId: options?.modelId,
-    agentId: options?.agentId,
+    agentId,
     sessionKey: options?.sessionKey,
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
@@ -956,6 +1017,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // Collector output is a run contract, not an operator-configurable capability.
     authorizedTools.push(swarmStructuredOutputTool);
   }
+  authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);
   processToolAvailabilityRef.value = authorizedTools.some((tool) => tool.name === "process");
   if (shouldInheritEffectiveToolAllowlist) {
     // Snapshot exporter only: this copies authorizedTools for descendants and
@@ -977,7 +1039,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   } satisfies PluginHookToolRequesterContext;
   const hasRequester = Object.keys(requester).length > 0;
   const hookContext = {
-    agentId,
+    agentId: executionAgentId,
     ...(options?.config ? { config: options.config } : {}),
     cwd: codingRoot,
     workspaceDir: workspaceRoot,
@@ -986,7 +1048,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...(sandboxRoot && sandboxFsBridge && allowWorkspaceWrites
       ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge } }
       : {}),
-    sessionKey: options?.sessionKey,
+    sessionKey: executionSessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
     trigger: options?.trigger,
@@ -1013,9 +1075,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     emitBeforeToolCallDiagnostics: options?.emitBeforeToolCallDiagnostics,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
     abortSignal: options?.abortSignal,
-    agentId,
+    agentId: executionAgentId,
     recordToolPrepStage: options?.recordToolPrepStage,
-  });
+  }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
 }
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */

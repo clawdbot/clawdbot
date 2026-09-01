@@ -6,7 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
-import type { CronJobState } from "./types.js";
+import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
   "nextRunAtMs",
@@ -183,7 +183,7 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
     payloadKind !== "script" &&
-    payloadKind !== "heartbeat"
+    !isSystemOwnedCronPayloadKind(payloadKind)
   ) {
     return "invalid-payload";
   }

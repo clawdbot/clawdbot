@@ -9,6 +9,7 @@ import "./cron-page.ts";
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
+  routeSearch: string;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
   render: () => typeof nothing;
@@ -177,7 +178,103 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("CronPage header", () => {
+  it("uses the shared settings header with concise context and scope actions", async () => {
+    const gateway = createGateway(
+      { request: createRequest() } as unknown as GatewayBrowserClient,
+      false,
+    );
+    const context = createContext(gateway);
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const page = createPage(context, { render: true });
+
+    await page.updateComplete;
+
+    expect(page.querySelector(".page-title")?.textContent).toBe("Automations");
+    expect(page.querySelector(".content-header--settings")).not.toBeNull();
+    expect(page.querySelector(".page-subtitle")?.textContent).toBe(
+      "Scheduled tasks and recurring agent runs.",
+    );
+    expect(page.querySelector(".page-header-actions .agent-scope-control")).not.toBeNull();
+  });
+});
+
 describe("CronPage editor state sync", () => {
+  it("opens a linked job's history after its jobs load and highlights the linked run", async () => {
+    const job: CronJob = {
+      id: "linked-job",
+      name: "Linked automation",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+      state: {},
+    };
+    const jobs = createDeferred<CronJobsListResult>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return jobs.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, triggersEnabled: true };
+      }
+      if (method === "cron.runs") {
+        const entries =
+          (params as { id?: string }).id === job.id
+            ? [
+                {
+                  ts: 2,
+                  jobId: job.id,
+                  action: "finished",
+                  runId: "cron:linked-job:2",
+                  summary: "Another run",
+                },
+                {
+                  ts: 1,
+                  jobId: job.id,
+                  action: "finished",
+                  runId: "cron:linked-job:1",
+                  summary: "Linked run",
+                },
+              ]
+            : [];
+        return { entries, total: entries.length, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    page.routeSearch = "?job=linked-job&run=cron%3Alinked-job%3A1";
+
+    await waitForCronPage(() => expect(page.cron.cronLoading).toBe(true));
+    expect(page.cron.cronEditingJobId).toBeNull();
+    jobs.resolve(cronListResponse([job]));
+
+    await waitForCronPage(() => {
+      expect(page.cron.cronEditingJobId).toBe(job.id);
+      expect(
+        page
+          .querySelector('[data-test-id="cron-detail-tab-history"]')
+          ?.getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain(
+        "Linked run",
+      );
+    });
+    expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+  });
+
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },
@@ -452,12 +549,13 @@ describe("CronPage editor state sync", () => {
         expect.objectContaining({
           name: "Agent-scoped task",
           agentId: scenario.expectedAgentId,
+          delivery: { mode: "none" },
         }),
       );
     });
   });
 
-  it("scopes list, stats, and run history requests to the selected agent", async () => {
+  it("scopes list and run history requests to the selected agent", async () => {
     const request = createRequest();
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
     createPage(createContext(gateway, "writer"));
@@ -518,25 +616,6 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
     await waitForCronPage(() =>
       expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
-    );
-  });
-
-  it("drills from the failing stat into run history filtered to errors", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway), { render: true });
-
-    await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-stat-failing"]')).not.toBeNull(),
-    );
-    (page.querySelector('[data-test-id="cron-stat-failing"]') as HTMLButtonElement).click();
-
-    await waitForCronPage(() => expect(page.querySelector(".cron-activity")).not.toBeNull());
-    expect(page.cron.cronRunsStatuses).toEqual(["error"]);
-    expect(request).toHaveBeenCalledWith(
-      "cron.runs",
-      expect.objectContaining({ statuses: ["error"] }),
     );
   });
 

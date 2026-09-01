@@ -13,6 +13,7 @@ import {
   sanitizeToolUseResultPairing,
   sanitizeToolUseResultPairingForModel,
 } from "../../session-transcript-repair.js";
+import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
@@ -46,14 +47,6 @@ type AnthropicToolResultContentBlock = {
   tool_use_id?: unknown;
   tool_call_id?: unknown;
 };
-
-function isThinkingLikeReplayBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
-}
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
   const seenToolCallIds = new Set<string>();
@@ -164,7 +157,7 @@ function sanitizeReplayToolCallInputs(
     }
     if (
       allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
+      message.content.some((block) => isThinkingLikeBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
@@ -274,7 +267,7 @@ function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined):
     return false;
   }
   return (
-    content.some((block) => isThinkingLikeReplayBlock(block)) &&
+    content.some((block) => isThinkingLikeBlock(block)) &&
     content.some((block) => isReplayToolCallBlock(block))
   );
 }

@@ -5,6 +5,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
+import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -54,6 +56,14 @@ export type McpLoopbackRequestContext = {
    */
   toolsAllow?: string[];
   skillWorkshop?: SkillWorkshopRunOptions;
+  /**
+   * Attempt-local authority to start or redirect delegated work, stamped into
+   * the grant so a fallback completion-report turn running on a CLI backend
+   * gets the same gate as an embedded attempt. The loopback surface enforces
+   * it on both tools/list and tools/call, so CLI-side advisory flags cannot
+   * reopen it. Unset keeps the full delegation surface.
+   */
+  delegationCapability?: DelegationCapability;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Host-owned creator origin; child MCP request fields cannot widen it. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
@@ -61,7 +71,7 @@ export type McpLoopbackRequestContext = {
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;

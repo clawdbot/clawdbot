@@ -569,11 +569,9 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("scopes configured-default wording to direct model selections", () => {
+  it("documents explicit model persistence scopes", () => {
     const model = requireChatCommand("model");
-    expect(model.description).toBe(
-      "Show or set the model; direct owner/admin selections request a default update.",
-    );
+    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
   it("detects known text commands", () => {
@@ -604,18 +602,7 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: createChannelTestPluginBase({
-            id: "discord",
-            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -638,6 +625,14 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    for (const [surface, expected] of [
+      ["discord", true],
+      [" SLACK ", false],
+    ] as const) {
+      expect(shouldHandleTextCommands({ cfg, surface, commandSource: "text" })).toBe(expected);
+    }
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
@@ -675,8 +670,8 @@ describe("commands registry", () => {
     ).toBe("/help@some_other_bot");
   });
 
-  it("keeps unregistered dock underscore aliases unchanged", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
+  it("keeps unregistered underscore aliases unchanged", () => {
+    expect(normalizeCommandBody("/unknown_command")).toBe("/unknown_command");
   });
 });
 

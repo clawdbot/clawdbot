@@ -18,12 +18,6 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const cliAgentsProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cli-agents-picker",
-);
 
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
@@ -119,14 +113,19 @@ suite.define(() => {
 
   it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -183,7 +182,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "picker-group.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
         });
       }
 
@@ -202,7 +201,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "catalog-target.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
         });
       }
     } finally {
@@ -263,7 +262,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(true);
-      expect(await page.locator(".chat-send-btn").count()).toBe(1);
+      expect(await page.locator(".new-session-page__start-submit").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -271,14 +270,19 @@ suite.define(() => {
 
   it("creates a worktree, starts the catalog session, and opens its terminal", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -384,7 +388,7 @@ suite.define(() => {
         .poll(() => terminalTooltip.evaluate((element) => element.getAttribute("content")))
         .toBe("Clear session capability overrides before starting in a terminal.");
       expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
-      await composer.getByRole("button", { name: /session options/ }).click();
+      await composer.locator(".new-session-page__selection-status").click();
       await capabilityMenu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
       await page.keyboard.press("Escape");
       await expect.poll(() => terminalTrigger.isEnabled()).toBe(true);
@@ -393,12 +397,11 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "terminal-split.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "terminal-split.png"),
         });
       }
 
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       const worktreeRequest = await gateway.waitForRequest("worktrees.create");
       expect(worktreeRequest.params).toEqual({
@@ -435,7 +438,6 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
         .toBe(true);
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
       await expect
         .poll(async () => {
           const currentRequests = await gateway.getRequests();
@@ -490,7 +492,6 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await page.locator(".new-session-page__message").fill("keep this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
-      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
 
       await expect
         .poll(() => page.locator(".new-session-page__alert-message").textContent())

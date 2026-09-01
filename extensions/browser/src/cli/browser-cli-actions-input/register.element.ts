@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserNonNegativeIntegerOption,
@@ -44,9 +45,8 @@ export function registerBrowserElementCommands(
 
   const runElementAction = async (params: {
     cmd: Command;
-    body: Record<string, unknown>;
+    body: BrowserActRequest;
     successMessage: string | ((result: unknown) => string);
-    timeoutMs?: number;
   }): Promise<void> => {
     const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
     try {
@@ -54,7 +54,6 @@ export function registerBrowserElementCommands(
         parent,
         profile,
         body: params.body,
-        timeoutMs: params.timeoutMs,
       });
       const successMessage =
         typeof params.successMessage === "function"
@@ -215,7 +214,6 @@ export function registerBrowserElementCommands(
           targetId: normalizeOptionalString(opts.targetId),
           timeoutMs,
         },
-        timeoutMs,
         successMessage: `scrolled into view: ${refValue}`,
       });
     });

@@ -39,14 +39,14 @@ function observeCronJobWrites(
   const suffix = ++cronJobWriteObserverId;
   const functionName = `observe_cron_job_write_${suffix}`;
   const triggerName = `observe_cron_job_write_${suffix}`;
-  database.function(functionName, (writtenJobId, stateJson, runningAtMs) => {
+  database.function(functionName, (writtenJobId, stateJson) => {
     if (writtenJobId !== jobId || typeof stateJson !== "string") {
       return 0;
     }
-    const state = JSON.parse(stateJson) as { queuedAtMs?: number };
+    const state = JSON.parse(stateJson) as { queuedAtMs?: number; runningAtMs?: number };
     observer({
       ...(typeof state.queuedAtMs === "number" ? { queuedAtMs: state.queuedAtMs } : {}),
-      ...(typeof runningAtMs === "number" ? { runningAtMs } : {}),
+      ...(typeof state.runningAtMs === "number" ? { runningAtMs: state.runningAtMs } : {}),
     });
     return 0;
   });
@@ -54,7 +54,7 @@ function observeCronJobWrites(
     CREATE TEMP TRIGGER ${triggerName}
     AFTER UPDATE ON cron_jobs
     BEGIN
-      SELECT ${functionName}(NEW.job_id, NEW.state_json, NEW.running_at_ms);
+      SELECT ${functionName}(NEW.job_id, NEW.state_json);
     END;
   `);
   return () => database.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);

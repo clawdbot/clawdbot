@@ -17,7 +17,21 @@ export type ProviderConfig = {
   timeoutSeconds?: number;
 };
 export type ParsedArgs = Record<string, string>;
-export type LaneResult = { status: string; error?: string } & Record<string, unknown>;
+export type PackagedUpgradeTiming = {
+  name: "total" | "package-install" | "package-install-omit-optional" | "staged-swap" | "doctor";
+  durationMs: number;
+};
+export type PackagedUpgradeFallbackEvidence = {
+  reason: "timeout" | "swap-cleanup";
+  action: "direct-candidate-install";
+};
+export type LaneResult = {
+  status: string;
+  error?: string;
+  phaseTimings?: LaneState["phaseTimings"];
+  updateTimings?: PackagedUpgradeTiming[];
+  updateFallback?: PackagedUpgradeFallbackEvidence;
+} & Record<string, unknown>;
 export type CandidateBuild = {
   candidateTgz: string;
   candidateVersion: string;
@@ -80,6 +94,11 @@ export type LaneCommandParams = {
 };
 export type AgentOutputOptions = { logText?: string; logPath?: string };
 export type SummaryPayload = {
+  platform?: string;
+  runnerOs?: string;
+  runnerLabel?: string;
+  nodeVersion?: string;
+  npmVersion?: string;
   provider: string;
   suite: string;
   mode: string;
@@ -100,6 +119,8 @@ export type SummaryPayload = {
     agentOutput?: string;
     error?: string;
     phaseTimings?: LaneState["phaseTimings"];
+    updateTimings?: PackagedUpgradeTiming[];
+    updateFallback?: PackagedUpgradeFallbackEvidence;
   };
 };
 
@@ -525,22 +546,6 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
-export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform) && platform !== "win32";
-}
-
-export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
-  return true;
-}
-
 export function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -562,10 +567,6 @@ export function shouldRunMainChannelDevUpdate(ref: string) {
     return false;
   }
   return resolveExpectedDevUpdateRef(ref) === "main";
-}
-
-export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
-  return platform === "win32";
 }
 
 export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
@@ -591,6 +592,58 @@ export function verifyPackagedUpgradeUpdateResult(
     `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
       `${result.stdout}\n${result.stderr}`,
     )}`,
+  );
+}
+
+const PACKAGED_UPGRADE_TIMING_FIELDS = [
+  ["global update", "package-install"],
+  ["global update (omit optional)", "package-install-omit-optional"],
+  ["global install swap", "staged-swap"],
+  ["openclaw doctor", "doctor"],
+] as const;
+const PACKAGED_UPGRADE_TIMING_MAX_MS = 60 * 60 * 1000;
+
+export function parsePackagedUpgradeUpdateTimings(stdout: string): PackagedUpgradeTiming[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return [];
+  }
+
+  const result = parsed as { durationMs?: unknown; steps?: unknown };
+  const timings: PackagedUpgradeTiming[] = [];
+  if (isBoundedTimingMs(result.durationMs)) {
+    timings.push({ name: "total", durationMs: result.durationMs });
+  }
+  if (!Array.isArray(result.steps)) {
+    return timings;
+  }
+
+  for (const [stepName, timingName] of PACKAGED_UPGRADE_TIMING_FIELDS) {
+    const step = result.steps.find(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        (candidate as { name?: unknown }).name === stepName,
+    ) as { durationMs?: unknown } | undefined;
+    if (step && isBoundedTimingMs(step.durationMs)) {
+      timings.push({ name: timingName, durationMs: step.durationMs });
+    }
+  }
+  return timings;
+}
+
+function isBoundedTimingMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= PACKAGED_UPGRADE_TIMING_MAX_MS
   );
 }
 

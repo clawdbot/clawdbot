@@ -3,6 +3,11 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
+  capacityMeter: {
+    workerSlots: "{used} of {total} slots busy",
+    unavailable: "Slot utilization unavailable",
+    execHost: "Codex exec",
+  },
   common: {
     health: "Health",
     ok: "OK",
@@ -137,6 +142,7 @@ export const en: TranslationMap = {
       zoomOut: "Zoom out",
       zoomReset: "Reset zoom",
       terminalPanel: "Toggle terminal panel",
+      homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
@@ -188,6 +194,7 @@ export const en: TranslationMap = {
     },
   },
   githubPreview: {
+    coAuthors: "Co-authored by {logins}",
     loading: "Loading GitHub details…",
     unavailable: "GitHub preview unavailable",
     states: {
@@ -207,16 +214,20 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
+    agentNotepad: "Agent Notepad",
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
-    noPrYet: "No PR yet",
+    runsOn: "Runs on {providerId} · {profileId}",
     more: "+{count} more",
     changedFile: "{count} file",
     changedFiles: "{count} files",
     pullRequestLabel: "Pull request #{number}, {state}",
+    pullRequestAuthorLabel: "Opened by {login}",
     states: {
       open: "Open",
       draft: "Draft",
@@ -231,6 +242,8 @@ export const en: TranslationMap = {
   },
   sessionProgressCard: {
     title: "Progress",
+    composerTitle: "Task progress",
+    shortCount: "{completed} of {total}",
     noteLabel: "Progress note",
     dismiss: "Dismiss progress card",
     dismissFailed: "Could not dismiss the progress card. Try again.",
@@ -240,11 +253,25 @@ export const en: TranslationMap = {
     widgetUnavailable: "Session progress is unavailable.",
     widgetAccessDenied: "Select a session you can access or change sharing for this session.",
     countLabel: "{completed} of {total} completed",
+    activity: {
+      updated: "Updated {time}",
+      completed: "Completed {time}",
+      failed: "Failed {time}",
+      stopped: "Stopped {time}",
+    },
+    outcome: {
+      completed: "Completed",
+      failed: "Failed",
+      stopped: "Stopped",
+    },
     stepLabel: "{step}, {status}",
     status: {
       completed: "completed",
+      failed: "failed",
       inProgress: "in progress",
+      paused: "paused",
       pending: "pending",
+      stopped: "stopped",
     },
     receipt: {
       updating: "Updating progress",
@@ -259,7 +286,7 @@ export const en: TranslationMap = {
     refreshingStaleSnapshot:
       "Refreshing channel status in the background; showing the last successful snapshot.",
     hub: {
-      connectedTitle: "Your channels",
+      connectedTitle: "Connected channels",
       addTitle: "Add a channel",
       addSubtitle: "Pick a service and follow the guided setup.",
       updatedAgo: "Updated {ago}",
@@ -331,7 +358,7 @@ export const en: TranslationMap = {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
       genericTitle: "a channel",
-      subtitle: "A short guided setup — you can fine-tune everything later.",
+      subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
       sessionExpired:
@@ -340,7 +367,7 @@ export const en: TranslationMap = {
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
-      docs: "Docs",
+      viewDocs: "View docs",
       doneTitle: "Channel configured",
       doneBody:
         "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
@@ -494,11 +521,9 @@ export const en: TranslationMap = {
       commitsBehind: "{count} commits behind",
     },
     sidebar: {
-      action: "Update",
       campaignTarget: "{status} · {target}",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
-      dismissUntilRestartOrVersion: "Hide until next restart or update",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -535,6 +560,8 @@ export const en: TranslationMap = {
       policyTitle: "Update policy",
       channel: "Release channel",
       channelDescription: "Choose which OpenClaw release track this Gateway follows.",
+      checkForUpdates: "Check for updates",
+      checkForUpdatesDescription: "Periodically check for new versions and show update notices.",
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
@@ -542,6 +569,7 @@ export const en: TranslationMap = {
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
         "Extended stable reports available releases but never installs them automatically.",
+      checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
       commits: "Commits",
@@ -558,8 +586,8 @@ export const en: TranslationMap = {
       updateNowDescription: "Install the available update and restart the Gateway.",
       latestAttempt: "Latest update attempt",
       attemptedAt: "Attempted",
-      attemptTarget: "Target",
-      installedIdentity: "Installed",
+      beforeUpdate: "Before update",
+      afterAttempt: "After attempt",
       attemptInstallKind: "Attempt install type",
       attemptReason: "Reason code",
       failedStep: "Failure details",
@@ -582,9 +610,9 @@ export const en: TranslationMap = {
     verificationFailedWithIdentity:
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
-      "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     outcomeUnknown:
-      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -612,6 +640,8 @@ export const en: TranslationMap = {
       alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
+      managedServiceHandoffUnavailable:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
       managedServiceHandoffFailed:
         "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
@@ -716,7 +746,6 @@ export const en: TranslationMap = {
       versionDriftTitle:
         "Device {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       workerVersion: "Worker {version}",
-      workerSlots: "Worker slots {available}/{total}",
       workerMissing: "worker missing",
       workerMissingTitle:
         "The Gateway-managed worker bundle is missing. Start a new session on this device to reinstall it.",
@@ -875,7 +904,9 @@ export const en: TranslationMap = {
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
-    anyAvailableNode: "Any available node",
+    autoDevice: "Auto",
+    autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
     noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
@@ -886,7 +917,6 @@ export const en: TranslationMap = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
-    workerSlots: "Worker slots {available}/{total}",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
@@ -915,7 +945,7 @@ export const en: TranslationMap = {
     runsOn: "Runs on {place}",
     browse: "Browse folders",
     browseRequiresAdmin:
-      "To browse outside agent workspaces, open the access status, request admin, then approve in Devices.",
+      "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     connectMachine: "Connect a machine…",
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
@@ -948,8 +978,8 @@ export const en: TranslationMap = {
     incognitoDescription: "Keep this session only until the Gateway restarts",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
-    composerOptionsSelected: "Add attachments or session options ({count} selected)",
     messagePlaceholder: "What should this session work on?",
+    dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
     startInTerminal: "Start in terminal",
@@ -1033,7 +1063,8 @@ export const en: TranslationMap = {
     sessionArchived: "Session archived",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",
+    deleteAllArchivedConfirm:
+      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -1079,7 +1110,7 @@ export const en: TranslationMap = {
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
-    dashboardAvailable: "Dashboard available",
+    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
@@ -1127,7 +1158,6 @@ export const en: TranslationMap = {
     statusTimeout: "Timed out",
     waitingForAnswer: "Waiting for your answer",
     waitingForApproval: "Waiting for approval",
-    waitingForConcurrency: "Waiting for a concurrency slot",
     runFailedReason: "Run failed: {reason}",
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
@@ -1154,8 +1184,8 @@ export const en: TranslationMap = {
     automationAttached: "Automation attached",
     incognito: "Incognito session",
     cloudWorkerPlacement: "Placement: {state}",
-    cloudWorkerPlacementConflict: "Placement: {state} · 1 workspace conflict",
-    cloudWorkerPlacementConflicts: "Placement: {state} · {count} workspace conflicts",
+    placementWorkspaceConflict: "{placement} · 1 workspace conflict",
+    placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
     cloudWorkerDiskWarning: "Cloud session disk space is low",
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
@@ -1164,6 +1194,19 @@ export const en: TranslationMap = {
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
     setIconMenu: "Set icon",
+    setColorMenu: "Color",
+    setIconColorMenu: "Icon & color",
+    sessionColor: "Session color: {color}",
+    colors: {
+      red: "Red",
+      blue: "Blue",
+      green: "Green",
+      yellow: "Yellow",
+      purple: "Purple",
+      orange: "Orange",
+      pink: "Pink",
+      cyan: "Cyan",
+    },
     iconEmojiSection: "Emoji",
     iconGlyphSection: "Icons",
     customEmojiCell: "Custom emoji…",
@@ -1178,10 +1221,20 @@ export const en: TranslationMap = {
     markRead: "Mark as read",
     markUnreadCount: "Mark {count} as unread",
     markReadCount: "Mark {count} as read",
-    forkSession: "Fork",
+    forkSession: "Fork conversation",
     forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
-    copySessionId: "Copy session ID",
+    copySessionId: "Session ID",
+    copySessionLink: "Session link",
+    copyMarkdown: "Conversation as Markdown",
+    openNewTab: "New tab",
+    openNewWindow: "New window",
+    splitBelow: "Split below",
+    workspaceEditors: "Workspace · editor",
+    resetAppearance: "Reset to default",
+    copyTranscriptChanged: "Conversation changed while copying. Try again.",
+    openWindowBlocked: "Allow pop-ups for this site, then try again.",
+    splitUnavailable: "Open a conversation on a wide screen to use split view.",
     openPullRequest: "Open PR",
     openInEditorMenu: "Open in",
     archiveSession: "Archive session",
@@ -1204,24 +1257,29 @@ export const en: TranslationMap = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    initialTurnPausedByWorkerStop:
+      "Worker stop requested. Review the initial message before retrying.",
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
-    deleteSessionConfirm: 'Delete "{session}" and its transcript?',
+    deleteSessionConfirm:
+      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsConfirm: "Delete {count} sessions and their transcripts?",
+    deleteSessionsConfirm:
+      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nThis will delete the session entry and archive its transcript.",
+      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nThis will delete the session entries and archive their transcripts.",
+      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
     groupByPerson: "Person",
     showSessionPreview: "Show message preview",
+    hideEmptyGroups: "Hide empty groups",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
     groupByChannel: "Channel",
@@ -1238,8 +1296,6 @@ export const en: TranslationMap = {
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    newGroupMovePartial:
-      "Group created, but some selected sessions were not moved because the list changed. Move them from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1513,11 +1569,8 @@ export const en: TranslationMap = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    readGuide: "Read the guide",
-    showAdvanced: "Show advanced",
-    advancedHidden: "{count} advanced setting hidden",
-    advancedHiddenPlural: "{count} advanced settings hidden",
     advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -1528,7 +1581,6 @@ export const en: TranslationMap = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: "Default: {value}",
     usingDefault: "Using default: {value}",
-    resetToDefault: "Reset to default",
     select: "Select...",
     enumOn: "On",
     enumOff: "Off",
@@ -1603,8 +1655,8 @@ export const en: TranslationMap = {
         description: "Gateway server settings (port, auth, binding)",
       },
       wizard: {
-        label: "Setup Wizard",
-        description: "Setup wizard state and history",
+        label: "Setup",
+        description: "Discovery preferences for setup and read-only setup history.",
       },
       meta: {
         label: "Metadata",
@@ -1689,7 +1741,7 @@ export const en: TranslationMap = {
       title: "Model & Thinking",
       model: "Model",
       thinking: "Thinking",
-      fastMode: "Fast mode",
+      fastMode: "Fast Mode",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {
@@ -1702,6 +1754,8 @@ export const en: TranslationMap = {
         auto: "Auto",
         fast: "Fast",
         standard: "Standard",
+        on: "On",
+        off: "Off",
       },
     },
     channels: {
@@ -1756,6 +1810,7 @@ export const en: TranslationMap = {
   },
   configView: {
     adminRequired: "Configuration changes require operator.admin access.",
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -1802,7 +1857,7 @@ export const en: TranslationMap = {
       mcp: "MCP",
       theme: "Theme",
       ui: "UI",
-      wizard: "Setup Wizard",
+      wizard: "Setup",
     },
     themes: {
       claw: {
@@ -1817,6 +1872,38 @@ export const en: TranslationMap = {
         label: "Dash",
         description: "Chocolate blueprint",
       },
+      absolutely: {
+        label: "Absolutely",
+        description: "Clay on graphite",
+      },
+      tide: {
+        label: "Tide",
+        description: "Slate & steel",
+      },
+      beacon: {
+        label: "Beacon",
+        description: "Maximum contrast",
+      },
+      phosphor: {
+        label: "Phosphor",
+        description: "Green on glass",
+      },
+      crt: {
+        label: "CRT",
+        description: "Console mono",
+      },
+      manuscript: {
+        label: "Manuscript",
+        description: "Ink on paper",
+      },
+      rose: {
+        label: "Rosé",
+        description: "Plum & rose",
+      },
+      miami: {
+        label: "Miami",
+        description: "Magenta & cyan",
+      },
     },
     textSizes: {
       small: "Small",
@@ -1825,14 +1912,13 @@ export const en: TranslationMap = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
     syncedHint: "Synced across your devices through the gateway.",
     syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
-      hint: "Receive browser push notifications from your gateway.",
-      nativeHint: "Notifications are shown natively by the OpenClaw app on this Mac.",
-      unavailableHint: "Not available in this browser.",
+      unavailableHint: "Browser unsupported.",
       unavailable: "Unavailable",
       checking: "Checking...",
       granted: "Granted",
@@ -1857,18 +1943,65 @@ export const en: TranslationMap = {
       subscribing: "Subscribing...",
       enable: "Enable notifications",
       openSystemSettings: "Open System Settings",
-      blockedHint:
-        "Notifications are blocked. Update your browser site permissions to allow notifications.",
-      nativeBlockedHint:
-        "Notifications are disabled for OpenClaw in macOS. Allow them in System Settings > Notifications.",
+      blockedHint: "Allow notifications in this site's browser permissions.",
+      nativeBlockedHint: "Allow OpenClaw in macOS System Settings > Notifications.",
+      iosInstallRequired: "On iPhone or iPad, use Share > Add to Home Screen, then open OpenClaw.",
+      accountDefaults: "Account defaults",
+      installedApp: "This browser or app",
+      deliverDevice: "Deliver to this browser or app",
+      notificationLabel: "Notification label",
+      approvalRequested: "Approval requested",
+      agentFinished: "Agent finished",
+      agentQuestion: "Agent question",
+      scheduledTaskFailed: "Scheduled task failed",
+      backgroundTaskFailed: "Background task failed",
+      lockScreenDetail: "Lock-screen detail",
+      lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
+      private: "Private",
+      namesOnly: "Names only",
+      detailed: "Detailed",
+      quietHours: "Quiet hours",
+      quietHoursWindow: "Quiet hours window",
+      timeZone: "Time zone",
+      onlyAgents: "Only these agents",
+      inherit: "Use account default",
+      inheritDetail: "Use account detail level",
+      inheritQuietHours: "Use account quiet hours",
+      overrideAgents: "Override for this device",
     },
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choose a theme family.",
+      typography: "Typography",
+      fonts: {
+        ui: "Interface",
+        chat: "Chat prose",
+        themeDefault: "Theme default",
+        themeFace: "{theme} · {face}",
+        system: "System",
+        previewCaption: "OpenClaw · A little clarity goes a long way",
+        previewProse:
+          "Good typography makes room for the conversation. Choose a face that feels comfortable to read.",
+        previewCode: 'const greeting = "Hello, world!";',
+      },
+      fontNotes: {
+        "instrument-sans": "Contemporary and crisp",
+        geist: "Clean and precise",
+        "dm-sans": "Warm and versatile",
+        "ibm-plex-sans": "Engineered and humanist",
+        "space-grotesk": "Geometric with character",
+        "atkinson-hyperlegible": "Distinct shapes for easy reading",
+        fraunces: "Expressive reading serif",
+        lora: "Calm, literary serif",
+        "jetbrains-mono": "Clear, evenly spaced letters",
+        system: "No webfont",
+      },
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
+      usingInheritedAccent: "Using inherited accent",
+      usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
         claw: "Claw red",
@@ -1906,6 +2039,8 @@ export const en: TranslationMap = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgressHint: "Keep active task progress collapsed until you open it.",
     },
     sidebarPrefs: {
       title: "Sidebar",
@@ -1991,10 +2126,20 @@ export const en: TranslationMap = {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    scope: {
+      standingGrant:
+        'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
+      standingGrantDays:
+        'Always allow runs this exact command for "{automation}" without asking, for {count} days (revocable)',
+      messageSend: "Sends to {count} recipient(s) via {target}",
+      payment: "Pays {amount} {currency} to {target}",
+      externalPost: "Posts externally to {target}",
+    },
     expiresIn: "expires in {time}",
     expired: "expired",
     execApprovalNeeded: "Exec approval needed",
     pluginApprovalNeeded: "Plugin approval needed",
+    requestedBySession: "Approval requested by session {session}",
     pending: "{count} pending",
     otherPending: "Other pending requests",
     reviewRequest: "Review approval from {agent}: {command}",
@@ -2003,6 +2148,7 @@ export const en: TranslationMap = {
     agentPending: "{count} pending approvals",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
     reviewOnly: "Review only. Sign in with approval access to record a decision.",
     deny: "Deny",
@@ -2260,7 +2406,6 @@ export const en: TranslationMap = {
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
     searching: "Searching…",
-    acknowledgeRisk: "Acknowledge risk and install",
     disconnected: "Not connected to gateway.",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
@@ -2376,7 +2521,16 @@ export const en: TranslationMap = {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    profile: "Browser profile: {profile}",
+    navigationBlocked:
+      "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
     title: "Browser",
+    open: "Open",
+    openPanel: "Open browser panel",
+    moreActions: "More actions",
+    copyUrl: "Copy URL",
+    openNewTab: "Open in new tab",
     toggle: "Toggle browser panel",
     close: "Close browser panel",
     resize: "Resize browser panel",
@@ -2418,6 +2572,7 @@ export const en: TranslationMap = {
       canvasUnavailable: "Canvas 2D context unavailable.",
     },
     annotatePrompt: {
+      browserTarget: "Browser target: {target}",
       // introTitled/elementDetail (not intro/element): translated keys never
       // retranslate on source-wording changes, so the provenance-label rewrite
       // required fresh key names to propagate to all locales.
@@ -2554,7 +2709,7 @@ export const en: TranslationMap = {
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
     communications: "Messages and text-to-speech settings.",
-    appearance: "Theme, UI, and setup wizard settings.",
+    appearance: "Theme and UI settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
@@ -2577,9 +2732,8 @@ export const en: TranslationMap = {
   },
   cloudWorkersPage: {
     intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    documentation: "Cloud worker documentation",
     sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how Crabbox provisions and retires a worker.",
+    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",
     editProfile: "Edit profile",
@@ -2597,7 +2751,6 @@ export const en: TranslationMap = {
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
     providerList: "View supported backends",
-    customClass: "Custom…",
     fields: {
       profileId: "Profile ID",
       profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
@@ -2605,9 +2758,8 @@ export const en: TranslationMap = {
       backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
       backendPlaceholder: "hetzner",
       machineClass: "Machine class",
-      machineClassHelp: "Choose a portable class or enter an exact provider instance type.",
-      customClass: "Custom machine class",
-      customClassPlaceholder: "c7a.24xlarge",
+      machineClassHelp:
+        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -2633,7 +2785,7 @@ export const en: TranslationMap = {
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
       backend: "Enter a Crabbox backend, such as aws or hetzner.",
-      machineClass: "Choose a machine class or enter an instance type up to 128 characters.",
+      machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
       binary: "Enter an absolute Crabbox binary path or leave the field empty.",
@@ -2663,6 +2815,7 @@ export const en: TranslationMap = {
     retry: "Retry",
   },
   modelSetup: {
+    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     heading: "Connect a verified AI model",
     intro:
       "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
@@ -2671,14 +2824,16 @@ export const en: TranslationMap = {
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
       action: "Connect an AI provider",
     },
-    connectionFailure: {
-      title: "Configured AI needs attention",
-      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
-      action: "Review connection",
-    },
     loading: "Checking this Gateway for available AI access…",
+    testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
     checkAgain: "Check again",
+    recovery: {
+      unknown:
+        "The previous activation is unresolved. You can verify and use the selected model, or check again after the setup attempt has finished. No activation will be repeated automatically.",
+      wait: "The previous setup attempt may still be running. Wait for its bounded setup window to finish, then choose Check again to retry.",
+      useCurrent: "Verify & use selected model",
+    },
     verify: {
       title: "Selected model",
       button: "Check model",
@@ -2703,7 +2858,6 @@ export const en: TranslationMap = {
       testAndUse: "Test & use",
       retry: "Retry test",
       testingButton: "Testing…",
-      testing: "Testing — asking {modelRef} for a quick reply…",
     },
     empty: {
       title: "Recommended installs",
@@ -2891,6 +3045,23 @@ export const en: TranslationMap = {
       doneBody: "Migrated {migrated}, skipped {skipped}. You can continue setting up OpenClaw.",
     },
   },
+  assistantPanel: {
+    title: "Assistant sidebar",
+    home: "Home",
+    toggle: "Talk to your Home agent",
+    openHome: "Open Home full page",
+    close: "Close assistant sidebar",
+    resize: "Resize assistant sidebar",
+    dockBottom: "Dock assistant sidebar at bottom",
+    dockRight: "Dock assistant sidebar at right",
+    context: "Working on: {context}",
+    contextOff: "Work context off",
+    removeContext: "Remove work context",
+    includeContext: "Include work context",
+    selection: "Selected text",
+    attachSelection: "Attach selected text",
+    removeSelection: "Remove selected text",
+  },
   custodian: {
     title: "OpenClaw",
     subtitleCaretaker: "System setup and care.",
@@ -2987,7 +3158,6 @@ export const en: TranslationMap = {
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
-    connectorsLink: "Discover one-click connectors on the Plugins page.",
     servers: "Servers",
     oauth: "OAuth",
     filtered: "Filtered",
@@ -3037,7 +3207,7 @@ export const en: TranslationMap = {
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
@@ -3353,7 +3523,9 @@ export const en: TranslationMap = {
     remove: "Remove",
     removing: "Removing…",
     removeNamed: "Remove {name}",
-    removeConfirm: "Remove this plugin package and all of its entries?",
+    removeConfirmTitle: "Remove {name}?",
+    removeConfirmMessage:
+      "Removing this plugin package and all of its entries restarts the Gateway immediately and interrupts active sessions.",
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",
@@ -3365,6 +3537,7 @@ export const en: TranslationMap = {
     detailCategory: "Category",
     detailPackage: "Package",
     detailPluginId: "Plugin ID",
+    capabilities: "Capabilities",
     offlineTitle: "Gateway offline",
     offlineBody: "Connect to browse installed and recommended plugins.",
     optionalCapability: "Optional OpenClaw capability.",
@@ -3383,8 +3556,9 @@ export const en: TranslationMap = {
     install: "Install",
     installing: "Installing…",
     installNamed: "Install {name}",
-    acknowledgeRisk: "Acknowledge risk and install",
-    defaultRiskWarning: "Review the ClawHub warning before installing this plugin.",
+    installConfirmTitle: "Install {name}?",
+    installConfirmMessage:
+      "Installing this plugin restarts the Gateway immediately and interrupts active sessions.",
     policyReviewTitle: "Security review needed",
     policyReviewBodyKnown: "Policy warnings: {count}. Not installed.",
     policyReviewBodyReason: "{reason} Not installed.",
@@ -3397,8 +3571,8 @@ export const en: TranslationMap = {
       "Install anyway approves every install-policy warning encountered during this install. Each warning is checked again before installation continues.",
     installAnyway: "Install anyway",
     connectToChange: "Connect to the gateway to change plugins.",
-    adminRequired: "Browsing only. Plugin changes require operator.admin access.",
-    changesDisabled: "Browsing only. This gateway does not allow plugin changes.",
+    adminRequired: "Plugin changes require operator.admin access.",
+    changesDisabled: "This gateway does not allow plugin changes.",
     configRefreshFailed: "Could not refresh Control UI configuration: {error}",
     installedSuccess: "Installed {name}.",
     installedRestart: "Installed {name}. A Gateway restart is required to apply the change.",
@@ -3419,12 +3593,13 @@ export const en: TranslationMap = {
     codeMode: {
       title: "Code Mode",
       description:
-        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
+        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
     },
     swarm: {
       title: "Swarm",
       description: "Let Code Mode orchestrate groups of subagents in parallel.",
       defaultPhase: "Unphased",
+      progress: "{complete} of {total}",
     },
     toolSearch: {
       title: "Tool Search",
@@ -3555,8 +3730,31 @@ export const en: TranslationMap = {
   },
   presence: {
     rosterTitle: "Online",
+    card: {
+      details: "Details for {name}",
+      loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
+      ariaLabel: "Activity for {name}",
+      person: "Person",
+      onlineFor: "Online for",
+      where: "Where",
+      reportedTimeZone: "Reported time zone: {zone}",
+      lastActivity: "Last activity",
+      notObserved: "Not observed yet",
+      viewingNow: "Viewing now",
+      recentSessions: "Recent sessions",
+      noVisibleSessions: "No visible sessions being viewed.",
+      noRecentSessions: "No recent visible sessions.",
+      sessionUpdated: "Session updated",
+      ago: "ago",
+      viewActivity: "View activity",
+      controlUi: "Control UI",
+      cli: "Command line",
+      app: "App",
+    },
   },
   activityFeed: {
+    partialHistory:
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
     sessionsMode: "Sessions",
     searchPlaceholder: "Search session titles…",
     time: "Time",
@@ -3576,6 +3774,7 @@ export const en: TranslationMap = {
     unknownDate: "Unknown date",
     noSessions: "No sessions match these filters.",
     automationGroup: "{count} automation sessions",
+    automation: "Automation",
     inspectRun: "Inspect run",
     backToSessions: "Back to sessions",
     channelLabel: "Channel: {value}",
@@ -3588,7 +3787,7 @@ export const en: TranslationMap = {
     viewingNow: "Viewing now",
     notViewing: "Not viewing a session right now.",
     notFoundTitle: "Person not found",
-    notFoundDescription: "No presence or session activity matches this identity.",
+    notFoundDescription: "No online presence or visible session association matches this identity.",
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -3920,7 +4119,7 @@ export const en: TranslationMap = {
       batchError: "Analysis error",
       modelMissing: "No vision model",
       modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel (for example codex/gpt-5.6-sol) or configure tools.media models.",
+        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
     },
     actions: {
       pause: "Pause",
@@ -4185,7 +4384,12 @@ export const en: TranslationMap = {
     labelsPlaceholder: "ui, docs",
     searchPlaceholder: "Search cards",
     allPriorities: "All priorities",
-    hideEmptyColumns: "Hide empty columns",
+    emptyColumns: "Empty columns",
+    showEmptyColumns: "Show all",
+    collapseEmptyColumns: "Collapse empty",
+    hideEmptyColumns: "Hide empty",
+    collapseColumn: "Collapse {column} column",
+    expandColumn: "Expand {column} column",
     emptyColumn: "Drop work here",
     emptyFilteredTitle: "No cards match this view",
     emptyFilteredHint: "Change the view, search, priority, agent, or archive filter.",
@@ -4239,10 +4443,14 @@ export const en: TranslationMap = {
     eventStale: "Stale session",
   },
   connection: {
+    disconnectedTitle: "Disconnected",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
+    restarting: "Restarting…",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
+    settingsChangesUnavailable:
+      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
@@ -4252,6 +4460,7 @@ export const en: TranslationMap = {
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
       status: "Limited access",
+      inboxState: "Administrator access required",
       showDetails: "Show limited access details",
       closeDetails: "Close limited access details",
       request: "Request admin",
@@ -4301,8 +4510,6 @@ export const en: TranslationMap = {
     },
   },
   attention: {
-    custodianAlertAria: "Ask OpenClaw, {count} undismissed alert",
-    custodianAlertsAria: "Ask OpenClaw, {count} undismissed alerts",
     cronErrorUnknown: "Unknown error",
     cronFailed: "{job} failed",
     cronOverdue: "{job} overdue",
@@ -4311,6 +4518,7 @@ export const en: TranslationMap = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
+    dismissShown: "Dismiss shown",
     emptyTitle: "Nothing waiting",
     emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
@@ -4340,6 +4548,25 @@ export const en: TranslationMap = {
         "These automations are overdue:\n{facts}\nExplain why they have not run and how to fix them.",
       modelAuthExpiredQuestion:
         "These model-provider credentials need attention:\n{facts}\nExplain what expired and how to re-authenticate them.",
+    },
+  },
+  standingGrants: {
+    title: "Standing grants",
+    description:
+      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
+    historyTitle: "Approval history",
+    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
+    stateUntilRevoked: "Until revoked",
+    stateExpiresIn: "Expires in {count}d",
+    stateExpired: "Expired",
+    stateRevoked: "Revoked",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    columns: {
+      automation: "Automation",
+      command: "Command",
+      uses: "Uses",
+      state: "State",
     },
   },
   approvalHistory: {
@@ -4616,6 +4843,7 @@ export const en: TranslationMap = {
       pageNotFound: "No wiki page found for {lookup}.",
       previewTruncated: "Showing the first chunk of this page.",
       previewTruncatedWithTotal: "Showing the first chunk of this page ({count} total lines).",
+      boundedResults: "Showing the newest {returned} of {total} items.",
       importedClusterSummary: "Imported chats clustered around {label}.",
       withheldDigestOne: "{count} digest was withheld pending review.",
       withheldDigests: "{count} digests were withheld pending review.",
@@ -4649,6 +4877,7 @@ export const en: TranslationMap = {
   },
   modelProviders: {
     title: "Configured providers",
+    configureModels: "Configure Models",
     subtitle: "Model providers with auth, plan, quota, and cost data.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
@@ -4741,10 +4970,10 @@ export const en: TranslationMap = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Default models",
-      subtitle: "Choose the primary, ordered fallbacks, and utility model.",
-      primary: "Default model",
-      utility: "Utility model",
+      title: "Defaults",
+      subtitle: "Applies across all providers and models where applicable.",
+      primary: "Model",
+      utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
@@ -4752,14 +4981,21 @@ export const en: TranslationMap = {
         "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
       disabled: "Disabled",
-      fallbacks: "Fallbacks",
-      noFallbacks: "No fallback models configured.",
-      unsaved: "Unsaved changes",
-      addFallback: "Add fallback",
+      fallback: "Fallback Model",
+      noFallback: "No fallback model",
       selectModel: "Select a model",
-      selectFallback: "Select a fallback model",
       noModels: "Configure a provider before selecting default models.",
-      saved: "Default models saved.",
+      thinkingHelpLabel: "About thinking defaults",
+      thinkingHelp:
+        "Sets the default for new sessions when no session-specific thinking level is set. OpenClaw maps unsupported levels to the closest option supported by the selected model.",
+      thinkingDefaultHelp:
+        "Uses the selected model's thinking policy instead of saving a global thinking override.",
+      fastModeHelpLabel: "About fast mode defaults",
+      fastModeHelp:
+        "Sets the default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
+      fastModeDefaultHelp:
+        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+      saved: "Defaults saved.",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -4769,7 +5005,7 @@ export const en: TranslationMap = {
       saveKey: "Save API key for {provider} from Control UI",
       removeKey: "Remove API key for {provider} from Control UI",
       addProvider: "Add model provider {provider} from Control UI",
-      defaultModel: "Update default model selection from Control UI",
+      defaultModel: "Update defaults from Control UI",
     },
   },
   usage: {
@@ -4797,6 +5033,7 @@ export const en: TranslationMap = {
     providerUsage: {
       title: "Provider plans & billing",
       subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      stalled: "Provider usage did not finish loading. Refresh to retry.",
       unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
       balance: "Balance",
       spend: "Usage",
@@ -4869,18 +5106,15 @@ export const en: TranslationMap = {
     },
     export: {
       label: "Export",
+      changed: "Session context changed while preparing the export. Refresh usage and try again.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",
     },
     cacheStatus: {
-      warning: "Usage cache is rebuilding in the background. Displayed totals may be stale.",
-      title: "{status}: {pending} pending, {stale} stale, {cached} cached",
-      status: {
-        refreshing: "refreshing",
-        stale: "stale",
-        partial: "partial",
-      },
+      warning: "Usage data may be incomplete. Checking for updated totals automatically.",
+      paused:
+        "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
     empty: {
       title: "Start with a date range",
@@ -5062,9 +5296,12 @@ export const en: TranslationMap = {
     togglePasswordVisibility: "Toggle password visibility",
     failure: {
       rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      profileUnavailable: {
+        title: "Profile verification unavailable",
+        stepRetry: "Retry shortly.",
+        stepAdmin:
+          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
       authRequired: {
         title: "Auth required",
         summary:
@@ -5152,6 +5389,8 @@ export const en: TranslationMap = {
   },
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
+    errorDetails: "Error details",
+    copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
       criticalTitle: "Cloud session disk space is critically low",
@@ -5161,11 +5400,22 @@ export const en: TranslationMap = {
         "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
     },
     sendErrors: {
+      outboxPayloadCopied:
+        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
+      outboxPayloadCapacity:
+        "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
+      outboxPayloadUnavailable:
+        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+      outboxPayloadMissing:
+        "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
@@ -5175,6 +5425,12 @@ export const en: TranslationMap = {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
+      notFoundTitle: "Session not found",
+      notFoundExplanation: "The session may have been removed, or the link may be incorrect.",
+      goToMain: "Go to main session",
+      viewSessions: "View sessions",
+      catalogShareUnavailable: "This shared session route is unavailable.",
+      catalogShareInvalid: "This {catalog} share URL is invalid.",
     },
     commandResults: {
       startingNewThread: "Starting new session...",
@@ -5182,6 +5438,7 @@ export const en: TranslationMap = {
       stoppingCurrentRun: "Stopping current run...",
       chatHistoryCleared: "Chat history cleared.",
       exportingThread: "Exporting session...",
+      emptyExport: "There are no messages to export yet.",
       unknownCommand: "Unknown command: `{command}`",
       options: "Options: {options}.",
       sessionUnavailable: "Session capability is unavailable",
@@ -5468,6 +5725,16 @@ export const en: TranslationMap = {
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
     },
+    mermaid: {
+      title: "Mermaid diagram",
+      options: "Diagram options",
+      diagram: "Show diagram",
+      source: "Show source",
+      copySource: "Copy source",
+      expand: "Expand diagram",
+      rendering: "Rendering diagram…",
+      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+    },
     codeBlock: {
       languageFallback: "Code",
       hiddenLine: "1 hidden line",
@@ -5486,6 +5753,8 @@ export const en: TranslationMap = {
       titleMany: "{count} cloud workspace conflicts",
       description:
         "OpenClaw kept your local versions and applied the other cloud changes. Inspect the staged result or take its version for a conflicted path.",
+      summary: "Local versions kept; inspect or take the cloud version.",
+      showCommands: "Show commands",
       morePaths: "+{count} more paths",
       stagedResult: "Staged cloud result",
       copyStagedResult: "Copy staged result ref",
@@ -5514,6 +5783,19 @@ export const en: TranslationMap = {
       label: "Session reset",
       description: "The earlier conversation was cleared.",
     },
+    outboxRecoveryTitle: "Saved messages need a destination",
+    outboxRecoveryDescription:
+      "An older browser version did not preserve every destination. These drafts and queued messages have not been sent by recovery. Open an empty non-Incognito conversation, then restore an entry here for review. Attachment drafts may appear separately.",
+    outboxRecoveryConfirm:
+      "Confirm this destination for the saved entry. Queued messages will remain paused for review and Retry. If delivery was uncertain, check the conversation before retrying.",
+    outboxRecoveryRestore: "Restore here for review",
+    outboxRecoveryConflict:
+      "This destination has a newer draft or queue, or changed during confirmation. Open an empty conversation and try again. The saved entry is still available.",
+    outboxRecoveryStorageFailed:
+      "Browser storage could not complete recovery. The original saved data has been retained. Free browser storage and reload to try again.",
+    outboxRecoveryFull:
+      "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
+    outboxRecoveryMessages: "Queued messages: {count}",
     restartRecoveryTitle: "This session ended during a restart.",
     restartRecoveryDisabled: "Its transcript is safe.",
     resumeInNewSession: "Resume in new session",
@@ -5525,6 +5807,8 @@ export const en: TranslationMap = {
         deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
         warningLabel: "Guardian warning",
         warningFallback: "Guardian stopped the requested action.",
+        strictReviewRequiredLabel: "Guardian review required",
+        strictReviewRequiredSummary: "Guardian is reviewing this action before it can continue.",
         requestedAction: "Requested action",
         unknownRisk: "unknown",
         noRationale: "No rationale was provided.",
@@ -5537,6 +5821,10 @@ export const en: TranslationMap = {
       gatewayRestarted: {
         label: "System · gateway restarted",
       },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      showContent: "Show content",
     },
     progressLabels: {
       shelling: "Shelling",
@@ -5561,8 +5849,8 @@ export const en: TranslationMap = {
     },
     turnRecap: {
       doneIn: "Done in {duration}",
-      tokens: "{count} tokens",
-      tokensOne: "1 token",
+      tokens: "{count} output tokens",
+      tokensOne: "1 output token",
     },
     commands: {
       arguments: "Command arguments",
@@ -5643,18 +5931,31 @@ export const en: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
+      connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
+      initialTurnPending:
+        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+      notSent: "Not sent",
+      deliveryUnconfirmed: "Delivery unconfirmed",
+      checkDelivery: "Check delivery",
+      checkDeliveryHelp:
+        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
+      discard: "Discard",
+      discardPendingMessage:
+        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
       editQueuedMessage: "Edit queued message",
+      moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
-        waitingForRun: "Waiting for current run",
+        blockedByUnconfirmed:
+          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
@@ -5663,15 +5964,34 @@ export const en: TranslationMap = {
       imageCount: "Image ({count})",
     },
     goals: {
+      composerMode: "Goal",
+      sessionChanged: "Conversation changed. Cancel and select Goal again.",
+      start: "Start goal",
+      save: "Save goal",
+      startHint: "Enter your objective.",
+      editHint: "Save without starting a run.",
+      objectivePlaceholder: "What should this goal accomplish?",
+      cancel: "Cancel goal entry",
+      offline: "Reconnect to manage goals.",
+      busy: "Wait for this run to finish. Your draft is unchanged.",
+      annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
+      actionPending: "Wait for the pending goal action.",
+      admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       edit: "Edit goal",
+      editChip: "Edit",
       pause: "Pause goal",
+      pauseChip: "Pause",
       resume: "Resume goal",
+      resumeChip: "Resume",
       clear: "Clear goal",
+      clearChip: "Clear",
       showDetails: "Show goal details",
       hideDetails: "Hide goal details",
     },
     questions: {
       other: "Type your own answer here",
+      answer: "Answer",
+      answerPlaceholder: "{label}",
       submit: "Submit",
       next: "Next",
       back: "Back",
@@ -5683,6 +6003,10 @@ export const en: TranslationMap = {
       eyebrow: "Question",
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
+      storeRequestedBy: "Requested by {agent} · {session}",
+      storeEntry: "Stores {name} as {kind}",
+      storeReplacement: "Replaces {name} — last updated {updated}",
+      storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",
       submitting: "Submitting…",
       submitFailed: "Could not submit: {error}",
       answered: "Answered",
@@ -5694,7 +6018,7 @@ export const en: TranslationMap = {
     imageLightbox: {
       label: "Image preview: {title}",
       open: "Open image {title}",
-      openOriginal: "Open original",
+      openOriginal: "Open in new tab",
       copy: "Copy image",
       download: "Download image",
       copyFailed: "Could not copy this image. Check clipboard access and try again.",
@@ -5721,7 +6045,6 @@ export const en: TranslationMap = {
       currentMessage: "current message",
       actions: "Message actions",
       selectionActions: "Selection actions",
-      moreDetails: "More details",
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
@@ -5734,6 +6057,9 @@ export const en: TranslationMap = {
       tooLargeToDisplay: "This message is too large to display here.",
       unknownDate: "Unknown date",
       toolSender: "Tool",
+      forwardedFrom: "From",
+      forwardedFromAgent: "Forwarded from {agentId}",
+      forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",
       voiceNote: "Voice note",
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
@@ -5743,9 +6069,14 @@ export const en: TranslationMap = {
       play: "Play",
       pause: "Pause",
       seek: "Seek media",
+      mute: "Mute",
+      unmute: "Unmute",
+      volume: "Volume",
       download: "Download {filename}",
       preparing: "Preparing playback…",
-      videoUnavailable: "Can't play this format — download instead.",
+      openVideo: "Expand {filename} in the media overlay",
+      videoPreview: "Video preview: {title}",
+      closeVideoPreview: "Close video preview",
     },
     modelControls: {
       default: "Default",
@@ -5755,10 +6086,14 @@ export const en: TranslationMap = {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      sessionOverride: "Session override",
+      onlyForSession: "Only for this session",
+      selectionTargetSession: "Selection target: This session only",
+      selectionTargetAgent: "Selection target: This agent's default",
+      selectionTargetGlobal: "Selection target: Global default",
+      useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
-      fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
+      fastHelp: "Faster responses, higher usage of limits.",
       contextWindow: "Context window",
       contextWindowAria: "Context window: {state}",
       speedUnsupported: "Speed control is not supported for this model.",
@@ -5767,25 +6102,25 @@ export const en: TranslationMap = {
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
-      refreshingModels: "Refreshing models…",
       modelsUnavailable: "Models unavailable",
       noModelsAvailable: "No models available",
+      emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
+      useDefaultReasoning: "Use default reasoning ({level})",
       fastResponsesAria: "Fast responses: {state}",
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose permissions for new runs.",
-      nextRun: "New permissions apply to the next run.",
+      help: "Choose permissions for this session.",
+      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
-      rootLabel: "Root",
-      sessionRoot: "Session root: {root}",
+      defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
       modes: {
         "read-only": {
-          label: "Read only",
+          label: "Read Only",
           description: "Read within the session root; writes and commands are blocked.",
         },
         guarded: {
@@ -5797,20 +6132,19 @@ export const en: TranslationMap = {
           description: "An AI reviewer checks requests beyond the session root.",
         },
         full: {
-          label: "Full access",
+          label: "Full Access",
           description: "No reviewer; files and commands are unrestricted.",
         },
       },
     },
     rail: {
-      title: "Session companion",
+      title: "Side chat",
       subtitle: "Ask about this session or its project",
-      expand: "Expand session companion",
-      collapse: "Collapse session companion",
-      close: "Close session companion",
-      show: "Show session companion",
-      moreActions: "More companion actions",
-      clear: "Clear companion session",
+      expand: "Expand side chat",
+      collapse: "Collapse side chat",
+      close: "Close side chat",
+      show: "Show side chat",
+      clear: "Clear side chat",
       pullRequests: "Pull requests",
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",
@@ -5822,16 +6156,16 @@ export const en: TranslationMap = {
         stopped: "Why did it stop?",
         remaining: "What's left?",
       },
-      askLabel: "Ask the session companion",
+      askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
-      askBusy: "The companion is already answering a question.",
+      askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
-      askRateLimited: "The companion reached its question limit. Try again shortly.",
-      askUnavailable: "The companion cannot answer right now.",
+      askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       asOf: "as of {time}",
       health: {
@@ -5910,10 +6244,18 @@ export const en: TranslationMap = {
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
       loading: "Loading chat",
-      earlierHistoryAvailable: "Earlier history available",
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
+    },
+    pendingInputs: {
+      queued: "Message received. Waiting for the agent to start it.",
+      cancelled:
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+      interrupted:
+        "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      earlier: "Show earlier messages",
+      latest: "Show latest messages",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",
@@ -5934,8 +6276,6 @@ export const en: TranslationMap = {
       runInterrupted: "Interrupted",
       runStatus: "Run status: {status}",
       compactingContext: "Compacting context...",
-      compacting: "Compacting",
-      compact: "Compact",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       fallbackCleared: "Fallback cleared: {model}",
@@ -5954,7 +6294,6 @@ export const en: TranslationMap = {
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
-      compactRecommendedContext: "Compact recommended session context",
       removeAttachment: "Remove attachment",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
@@ -5998,8 +6337,8 @@ export const en: TranslationMap = {
         savingBlocked: "Wait for the current session capability change to finish.",
       },
       overrides: {
-        count: "{count} session overrides",
-        countOne: "{count} session override",
+        count: "{count} overrides",
+        countOne: "{count} override",
         clear: "Clear session overrides",
       },
       contextUsage: {
@@ -6032,7 +6371,10 @@ export const en: TranslationMap = {
       cameraPreview: "Camera preview",
       dismissVoiceInputError: "Dismiss voice input error",
       microphoneAccessFailed: "Unable to access microphone inputs.",
+      microphoneAccessPending:
+        "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
+      microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
       microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
@@ -6043,20 +6385,31 @@ export const en: TranslationMap = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
-      holdToRecordSetting: "Hold microphone button to dictate",
+      realtimeTalkCapability: "Tap to talk",
+      dictationCapability: "Dictation",
+      realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
+      dictationProviderUnavailableShort: "No transcription provider is configured.",
+      talkCapabilityChecking: "Checking provider availability…",
+      talkCapabilityUnknown: "Provider availability could not be verified.",
+      openRealtimeTalkSettings: "Talk settings",
+      openDictationSettings: "Transcription setup",
+      configureCapability: "Configure",
+      holdToRecordSetting: "Hold microphone button to start dictation",
+      holdToDictate: "Hold to start dictation",
       holdToRecordSettingDescription:
-        "Hold the composer microphone button, speak, then release to insert text without sending.",
+        "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
       dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
-      dictationConnecting: "Starting dictation…",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
       dictationFailed: "Dictation failed.",
+      dictationInterruptedRecovery:
+        "Captured text was inserted. Check your connection and try again.",
+      dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
-      dictationFinalizationTimedOut:
-        "Dictation stopped before the last partial transcript could be finalized.",
-      dictationProviderUnavailable: "No transcription provider is configured for dictation.",
-      dictationRecording: "Recording {elapsed}",
-      dictationReleaseToInsert: "Release to insert dictation",
+      dictationListening: "Listening…",
+      dictationStopAndKeep: "Stop and keep text",
+      dictationProviderUnavailable:
+        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
@@ -6065,7 +6418,7 @@ export const en: TranslationMap = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
-      voiceGestureHint: "Tap to talk · Hold to dictate",
+      voiceGestureHint: "Tap to talk · Hold to start dictation",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
@@ -6077,20 +6430,31 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      audio: "Audio",
+      expand: "Open {filename} in the side panel",
+      open: "Open",
+      previewUnavailable: "Preview unavailable",
       readFailed: "Could not attach: {names}{more}",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
-      checking: "Checking...",
+      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileNotFound: "File not found. Check the path and try again.",
+      failureUnsupportedFormat:
+        "Rejected by the local attachment allowlist. Send a supported file type.",
+      notSent: "Not sent",
+      video: "Video",
     },
     voice: {
       asking: "Asking OpenClaw...",
+      preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",
     },
     selectors: {
       loadMoreSessions: "Show more",
+      loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",
@@ -6386,6 +6750,7 @@ export const en: TranslationMap = {
     partial: "{saved}/{total}: {error}",
     confirmDelete: "Delete {name}?",
     deleted: "Deleted {name}.",
+    deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",
@@ -6482,15 +6847,16 @@ export const en: TranslationMap = {
     },
     actions: {
       runNow: "Run now",
+      runNowJob: "Run now: {name}",
       runIfDue: "Run if due",
-      pause: "Pause",
-      resume: "Resume",
+      pauseJob: "Pause: {name}",
+      resumeJob: "Resume: {name}",
       clone: "Clone",
       remove: "Remove",
       removeConfirmTitle: 'Remove "{name}"?',
       removeConfirmMessage:
         "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
-      more: "More actions",
+      moreJob: "More actions for {name}",
     },
     runNotStarted: {
       notDue: "This automation is not due yet.",
@@ -6707,6 +7073,7 @@ export const en: TranslationMap = {
     },
     runEntry: {
       noSummary: "No summary.",
+      deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
       openRunChat: "Open run chat",
       next: "Next {rel}",

@@ -1,23 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
-  readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+} from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import {
   inspectPluginRegistry,
   loadPluginRegistrySnapshotWithMetadata,
-  refreshPluginRegistry,
 } from "./plugin-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -46,6 +50,16 @@ function createCandidate(rootDir: string): PluginCandidate {
     "utf8",
   );
   return { idHint: "demo", source, rootDir, origin: "global" };
+}
+
+function createPackagedCandidate(rootDir: string): PluginCandidate {
+  const candidate = createCandidate(rootDir);
+  fs.writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({ name: "demo", version: "1.0.0" }),
+    "utf8",
+  );
+  return { ...candidate, packageDir: rootDir, packageName: "demo", packageVersion: "1.0.0" };
 }
 
 function createEmptyIndex(stateDir: string): InstalledPluginIndex {
@@ -128,6 +142,7 @@ describe("plugin registry inspection", () => {
       }),
       "utf8",
     );
+    clearPluginMetadataLifecycleCaches();
     const manifest = await inspectPluginRegistry({
       stateDir,
       candidates: [candidate],
@@ -171,7 +186,64 @@ describe("plugin registry inspection", () => {
     ]);
     expect(inspection.state).toBe("stale");
     expect(inspection.refreshReasons).toEqual(["source-changed"]);
+    expect(inspection.differences).toEqual([
+      {
+        pluginId: "demo",
+        persistedSource: sourceCandidate.source,
+        derivedSource: builtSource,
+      },
+    ]);
     expect(inspection.current.plugins[0]?.source).toBe(builtSource);
+  });
+
+  it("inspects package changes with fresh file facts", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "demo");
+    const sourceDir = makeTempDir();
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createPackagedCandidate(pluginDir);
+    createPackagedCandidate(sourceDir);
+    const env = {
+      ...hermeticEnv(),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = { plugins: { entries: { demo: { enabled: true } } } };
+    await refreshPluginRegistry({
+      reason: "manual",
+      stateDir,
+      config,
+      env,
+      installRecords: {
+        demo: { source: "path", sourcePath: sourceDir, installPath: pluginDir, version: "1.0.0" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "demo", version: "2.0.0" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ name: "demo", version: "2.0.0" }),
+      "utf8",
+    );
+
+    const inspection = await inspectPluginRegistry({
+      stateDir,
+      config,
+      env,
+    });
+
+    expect(inspection.state).toBe("stale");
+    expect(inspection.refreshReasons).toEqual(["stale-package"]);
+    expect(inspection.differences).toEqual([
+      {
+        pluginId: "demo",
+        persistedSource: candidate.source,
+        derivedSource: candidate.source,
+      },
+    ]);
   });
 
   it("uses the configured system-agent workspace for the freshness verdict", async () => {

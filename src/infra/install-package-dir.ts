@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -56,20 +57,6 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
   await writeJson(manifestPath, manifest, { trailingNewline: true });
-}
-
-function formatNpmDependencyInstallFailure(result: SpawnResult): string {
-  const detail = result.stderr.trim() || result.stdout.trim();
-  if (detail) {
-    return detail;
-  }
-  if (result.code !== null) {
-    return `exit code ${result.code} (no output from npm)`;
-  }
-  if (result.signal) {
-    return `signal ${result.signal} (no output from npm)`;
-  }
-  return `termination ${result.termination} (no output from npm)`;
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -352,7 +339,7 @@ export async function installPackageDir<
         }
       })();
       if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${formatNpmDependencyInstallFailure(npmRes)}`);
+        return await fail(`npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);

@@ -101,6 +101,7 @@ describe("check-dependency-pins", () => {
       `overrides:
   exact: 1.2.3
   alias: "npm:@scope/real-package@2.3.4"
+  parent>unused-adapter: "-"
 packageExtensions:
   parent@1.0.0:
     dependencies:
@@ -124,6 +125,7 @@ packageExtensions:
         tag: "latest",
         broad: ">=1 <2",
         gitFloating: "github:owner/repo#main",
+        invalidRemoval: "-",
       },
     });
     writeJson(path.join(dir, "extensions", "demo", "package.json"), {
@@ -163,6 +165,7 @@ packageExtensions:
         name: "gitFloating",
         spec: "github:owner/repo#main",
       },
+      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
     ]);
   });
 

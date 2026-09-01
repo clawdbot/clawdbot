@@ -98,6 +98,9 @@ describe("clawhub packages", () => {
                 releaseId: "rel_demo",
                 version: "2026.3.22",
               },
+              overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
+              securityAuditUrl:
+                "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
               trust: {
                 scanStatus: "clean",
                 moderationState: null,
@@ -121,6 +124,9 @@ describe("clawhub packages", () => {
         id: "rel_demo",
         version: "2026.3.22",
       },
+      overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
+      securityAuditUrl:
+        "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
       trust: {
         scanStatus: "clean",
         moderationState: null,
@@ -156,5 +162,28 @@ describe("clawhub packages", () => {
           ),
       }),
     ).rejects.toThrow("expected reasons to be a string array");
+  });
+
+  it("rejects package security reports without their audit overview", async () => {
+    await expect(
+      fetchClawHubPackageSecurity({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              securityAuditUrl:
+                "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
+              trust: {
+                blockedFromDownload: false,
+                reasons: [],
+                pending: false,
+                stale: false,
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      }),
+    ).rejects.toThrow("expected overview to be a non-empty string");
   });
 });

@@ -33,9 +33,26 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "default", selector: "#plain-checkbox" },
   { expected: "default", selector: "#role-button" },
   { expected: "default", selector: ".settings-secret__toggle" },
+  { expected: "default", selector: ".nav-item" },
+  { expected: "default", selector: ".nav-item__text" },
+  { expected: "default", selector: ".sidebar-recent-session__link" },
+  { expected: "default", selector: ".sidebar-recent-session__name" },
+  { expected: "default", selector: ".sidebar-online__person" },
+  { expected: "default", selector: ".sidebar-brand__new-thread" },
+  { expected: "default", selector: ".sidebar-new-session" },
+  { expected: "default", selector: ".sidebar-session-catalog-new" },
+  { expected: "default", selector: ".settings-sidebar__item" },
+  { expected: "default", selector: ".settings-sidebar__subitem" },
+  { expected: "default", selector: ".sidebar-issues-panel__navigation-link" },
+  { expected: "default", selector: ".sidebar-approval-row__open-session" },
+  { expected: "default", selector: ".sidebar-footer-build" },
+  { expected: "default", selector: ".sidebar-more-menu a" },
   // Links and explicit new-tab controls keep the hand.
   { expected: "pointer", selector: "#real-link" },
-  { expected: "pointer", selector: ".nav-item" },
+  { expected: "pointer", selector: "#sidebar-external-link" },
+  { expected: "pointer", selector: "#sidebar-help-link" },
+  { expected: "pointer", selector: "#sidebar-new-tab-link" },
+  { expected: "pointer", selector: "#sidebar-new-tab-action" },
   { expected: "pointer", selector: "#new-tab-link" },
   { expected: "pointer", selector: "#new-tab-button" },
   { expected: "pointer", selector: "#shadow-new-tab-button", shadow: true },
@@ -51,6 +68,7 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
   { expected: "default", selector: ".session-tokens" },
   { expected: "default", selector: ".agent-tools-runtime-chip--more" },
+  { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
 ];
 
 function readUiCss(): string {
@@ -59,6 +77,7 @@ function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/sidebar-update-card.css",
+    "ui/src/styles/sidebar-issues.css",
     "ui/src/styles/sessions.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
@@ -82,7 +101,26 @@ function fixtureDocument(): string {
       <input id="plain-text-input" type="text" value="text" />
       <div id="role-button" role="button" tabindex="0">Role button</div>
       <a id="real-link" href="https://example.com">Real link</a>
-      <a class="nav-item" href="#/chat">Nav rail</a>
+      <aside class="sidebar">
+        <a class="nav-item" href="/chat"><span class="nav-item__text">Home</span></a>
+        <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
+        <a class="sidebar-online__person" href="/activity">Person</a>
+        <a class="sidebar-brand__new-thread" href="/new">New session</a>
+        <a class="sidebar-new-session" href="/new">New group session</a>
+        <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
+        <a class="sidebar-issues-panel__navigation-link" href="/settings/channels">Channel issue</a>
+        <a class="sidebar-approval-row__open-session" href="/chat/test">Open approval session</a>
+        <a id="sidebar-external-link" href="https://example.com">External link</a>
+        <a id="sidebar-new-tab-link" class="nav-item" href="/chat" target="_BLANK">New tab</a>
+        <a id="sidebar-new-tab-action" class="nav-item" href="/chat" data-new-tab-action>New window</a>
+      </aside>
+      <aside class="settings-sidebar">
+        <a class="settings-sidebar__item" href="/settings">Settings</a>
+        <a class="settings-sidebar__subitem" href="/settings#theme">Theme</a>
+        <a class="sidebar-footer-build" href="/settings/about">Build</a>
+      </aside>
+      <div class="sidebar-more-menu"><div class="sidebar-customize-menu__item"><a href="/activity">Activity</a></div></div>
+      <div class="sidebar-agent-menu"><div class="sidebar-customize-menu__item"><a id="sidebar-help-link" href="https://example.com/docs" target="_blank">Docs</a></div></div>
       <a id="new-tab-link" class="btn" href="https://example.com/docs" target="_blank">Docs</a>
       <button id="new-tab-button" class="btn" type="button" data-new-tab-action>New tab</button>
       <button id="disabled-new-tab-button" class="btn btn--ghost" type="button" data-new-tab-action disabled>Unavailable new tab</button>
@@ -90,6 +128,7 @@ function fixtureDocument(): string {
       <button class="sidebar-update-card__hold" type="button" disabled>Hold</button>
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
+      <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
       <div class="sidebar-session-group-drag-handle"></div>
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>

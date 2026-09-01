@@ -21,6 +21,8 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Prepare Git owner
+      uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
     - name: Validate refs are trusted
       id: validate
       env:
@@ -30,7 +32,7 @@ runs:
       run: |
         set -euo pipefail
 
-        git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+        python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
         validate_ref() {
           local label="$1"

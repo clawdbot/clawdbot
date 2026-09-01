@@ -15,6 +15,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
@@ -39,6 +40,7 @@ import {
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
@@ -52,6 +54,7 @@ import {
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
+  QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
   QA_STRANDED_FINAL_RECOVERY_PROMPT_RE,
@@ -96,6 +99,8 @@ import {
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
+  QA_KILL_RESTART_PROMPT_RE,
+  QA_KILL_RESTART_RECOVERED_MARKER,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
@@ -134,7 +139,7 @@ import {
   buildQaA2aMessageToolMirrorSessionsSendArgs,
   hasToolErrorOutput,
   extractSessionStatusSessionKey,
-  isHeartbeatPrompt,
+  resolveHeartbeatPromptReply,
 } from "./mock-openai-directives.js";
 import {
   buildReleaseAuditJson,
@@ -154,6 +159,8 @@ import {
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputValue,
@@ -296,9 +303,12 @@ const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recover
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Keep each real provider request active long enough for retries to span the
-// unchanged five-minute recovery bound while remaining below first-byte timeout.
-const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
+// Complete ordinary retries inside their diagnostic request allowance, then
+// leave the fifth request active so recovery can honor both the cumulative
+// no-progress bound and the current request's own allowance.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
+const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -907,6 +917,14 @@ async function buildResponsesPayload(
     return buildFailedResponseEvents();
   }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  // The hard-kill fixture shares the first real checkpoint below, but recovery
+  // must settle without scheduling the repeated-restart fixture's later waits.
+  if (
+    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
+    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
+  ) {
+    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
+  }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);
     const currentControlCallId = extractToolOutputCallId(input);
@@ -962,7 +980,9 @@ async function buildResponsesPayload(
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
             'if (!target) throw new Error("qa_restart_wait unavailable");',
-            "await target({});",
+            // Bridge calls drain inside exec; explicitly yield while this hold is pending.
+            // The restart scenario must interrupt a real wait call, not a timing guess.
+            'await Promise.all([target({}), yield_control("restart checkpoint")]);',
             `return "CHECKPOINT-${nextCheckpoint}";`,
           ].join("\n"),
         });
@@ -1040,10 +1060,10 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const isActiveFailedToolTerminalRecovery =
-    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+  const isActiveEmptyResponseSideEffectExhaustion =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1094,7 +1114,11 @@ async function buildResponsesPayload(
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      ? buildQaToolSearchArgs(
+          targetTool,
+          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
+          allInputText,
+        )
       : {};
     if (
       targetTool &&
@@ -1358,35 +1382,36 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
-    }
+  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
     }
+    if (isActiveEmptyResponseSideEffectExhaustion) {
+      return buildAssistantEvents("");
+    }
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
+    }
     return buildAssistantEvents("");
   }
-  if (isActiveFailedToolTerminalRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("If a tool failed, say so; never claim completion or success.")) {
-        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
-      }
-      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
-      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
-    }
+  if (QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt)) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
     }
-    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
+    if (!hasToolErrorOutput(parseToolOutputJson(rawToolOutput), rawToolOutput)) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+    return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return buildAssistantEvents("HEARTBEAT_OK");
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return buildAssistantEvents(heartbeatReply);
   }
   if (/fanout worker alpha/i.test(prompt)) {
     return buildAssistantEvents("ALPHA-OK");
@@ -1737,6 +1762,31 @@ async function buildResponsesPayload(
     if (sessionsSendArgs && hasDeclaredTool(body, "sessions_send")) {
       return buildToolCallEventsWithArgs("sessions_send", sessionsSendArgs);
     }
+  }
+  const threadReplyReceiptPrompt = extractLastMatchingUserTurn(
+    input,
+    QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
+  )?.text;
+  const threadReplyReceiptMatch = threadReplyReceiptPrompt
+    ? QA_THREAD_REPLY_RECEIPT_PROMPT_RE.exec(threadReplyReceiptPrompt)
+    : null;
+  if (threadReplyReceiptPrompt && threadReplyReceiptMatch) {
+    const marker =
+      extractExactMarkerDirective(threadReplyReceiptPrompt) ??
+      extractExactReplyDirective(threadReplyReceiptPrompt) ??
+      "QA-THREAD-RECEIPT-OK";
+    const divergentFinal = /divergent final:\s*`([^`]+)`/iu
+      .exec(threadReplyReceiptPrompt)?.[1]
+      ?.trim();
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "thread-reply",
+        channelId: threadReplyReceiptMatch[1],
+        threadId: threadReplyReceiptMatch[2],
+        message: marker,
+      });
+    }
+    return buildAssistantEvents(divergentFinal || marker);
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
@@ -2345,17 +2395,47 @@ async function buildResponsesPayload(
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    return buildAssistantEvents(buildAssistantText(input, body));
+  }
+  const forkCompletion = readForkedContextCompletion(input);
   if (
-    canCallSessionsSpawn &&
-    /forked subagent context qa check/i.test(prompt) &&
-    !hasCompletedToolOutput
+    /forked subagent context qa check/i.test(splitMockConversationContext(prompt).current) ||
+    forkCompletion
   ) {
-    return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Report the visible code from the requester transcript.",
-      label: "qa-fork-context",
-      mode: "run",
-      context: "fork",
-    });
+    if (forkCompletion) {
+      // Completion must be delivered by the parent, not synthesized from its
+      // kickoff or spawn receipt. Never replay the inherited spawn instruction.
+      if (completedToolName === "message") {
+        return buildAssistantEvents("NO_REPLY");
+      }
+      return hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode
+        ? buildToolCallEventsWithArgs("message", {
+            action: "send",
+            message: forkCompletion,
+            final: true,
+          })
+        : buildAssistantEvents(forkCompletion);
+    }
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Report the visible code from the requester transcript.",
+        label: "qa-fork-context",
+        mode: "run",
+        context: "fork",
+      });
+    }
+    if (
+      hasCompletedToolOutput &&
+      canCallSessionsYield &&
+      !hasToolErrorOutput(toolJson, toolOutput)
+    ) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the forked child to recover the visible code.",
+      });
+    }
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -2508,6 +2588,7 @@ export async function startQaMockOpenAiServer(params?: {
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
     };
     scenarioStates.set(key, state);
@@ -2697,6 +2778,12 @@ export async function startQaMockOpenAiServer(params?: {
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
+    const repeatedRequestRecovery =
+      QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);
+    if (repeatedRequestRecovery) {
+      scenarioState.repeatedRequestRecoveryAttempts += 1;
+    }
     return {
       events,
       model,
@@ -2713,9 +2800,13 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
-      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
-        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
+      ...(repeatedRequestRecovery
+        ? {
+            responsePauseMs:
+              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+                ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
+                : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
+          }
         : {}),
     };
   };

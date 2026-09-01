@@ -48,6 +48,10 @@ export const HookMappingSchema = z
     sessionMode: z.union([z.literal("isolated"), z.literal("persistent")]).optional(),
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
+    forEach: z
+      .string()
+      .regex(/^[^.[\]]+$/, "forEach must be a top-level payload key")
+      .optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
     // Keep this open-ended so runtime channel plugins (for example feishu) can be

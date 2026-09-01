@@ -37,6 +37,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           refreshOnRead: true,
         }
       : {}),
+    onChanged: () => context?.broadcast("chat.metadata.changed", {}, { dropIfSlow: true }),
     log: params.log,
   });
   const refreshLogged = () => {
@@ -67,6 +68,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "catalog-published") {
+          invalidateForSubordinateChange();
+          return;
+        }
         preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
           preparedModelRuntimeAvailable = false;

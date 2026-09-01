@@ -38,6 +38,7 @@ export function renderPanelRefreshStatus(params: {
   status: PanelRefreshStatus;
   errorMessage?: string;
   onRetry: () => void;
+  retryDisabled?: boolean;
   className?: string;
 }): TemplateResult | typeof nothing {
   const { status } = params;
@@ -60,7 +61,9 @@ export function renderPanelRefreshStatus(params: {
         <span>${error}</span>
         ${status.stale ? html`<br /><strong>${t("common.staleData")}</strong>` : nothing}
       </span>
-      <button class="btn btn--sm" @click=${params.onRetry}>${t("common.retry")}</button>
+      <button class="btn btn--sm" ?disabled=${params.retryDisabled} @click=${params.onRetry}>
+        ${t("common.retry")}
+      </button>
     </div>
   `;
 }

@@ -5,6 +5,7 @@ import {
   peekPreExecutionBlockedToolCall,
 } from "./agent-tools.before-tool-call.state.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { buildToolEffectReceipt } from "./tool-effect-receipt.js";
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -34,6 +35,7 @@ export function createToolTerminalObserver(
         })
       : (observation.nativeMutation ??
         buildToolMutationState(observation.toolName, executedArguments));
+    const replaySafe = observation.replaySafe ?? mutation.replaySafe;
     let lastToolError: ToolErrorSummary | undefined;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
@@ -53,7 +55,13 @@ export function createToolTerminalObserver(
       ...(lastToolError ? { lastToolError } : {}),
       executionStarted,
       ...(executedArguments ? { executedArguments } : {}),
-      sideEffectEvidence: executionStarted && !mutation.replaySafe,
+      sideEffectEvidence: executionStarted && !replaySafe,
+      effectReceipt: buildToolEffectReceipt({
+        executionStarted,
+        mutatingAction: mutation.mutatingAction,
+        replaySafe,
+        outcome: observation.outcome,
+      }),
     };
   };
 }

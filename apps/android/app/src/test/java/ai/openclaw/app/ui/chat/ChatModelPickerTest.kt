@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.GatewayModelUnavailableReason
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -49,16 +50,70 @@ class ChatModelPickerTest {
     assertFalse(thinkingSupportedForSelection(selectedModelRef = "openai/plain", catalog = catalog))
   }
 
+  @Test
+  fun unavailableReasonRequiresEveryMatchingRouteToBePermanentlyUnavailable() {
+    val missing = model(id = "chat", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.MissingAuth)
+    val failed = missing.copy(unavailableReason = GatewayModelUnavailableReason.AuthFailed)
+    val cooling = missing.copy(unavailableReason = GatewayModelUnavailableReason.Cooldown)
+
+    assertEquals(GatewayModelUnavailableReason.MissingAuth, selectedChatModelSendUnavailableReason("synthetic/chat", listOf(missing)))
+    assertEquals(GatewayModelUnavailableReason.AuthFailed, selectedChatModelSendUnavailableReason("SYNTHETIC/CHAT", listOf(missing, failed)))
+    assertEquals(GatewayModelUnavailableReason.Cooldown, selectedChatModelUnavailableReason("synthetic/chat", listOf(failed, cooling)))
+    assertEquals(null, selectedChatModelSendUnavailableReason("synthetic/chat", listOf(failed, cooling)))
+    assertEquals(null, selectedChatModelUnavailableReason("synthetic/chat", listOf(missing, missing.copy(available = true))))
+    assertEquals(null, selectedChatModelUnavailableReason("synthetic/chat", listOf(missing, missing.copy(unavailableReason = null))))
+    assertEquals(null, selectedChatModelUnavailableReason("synthetic/unknown", listOf(missing)))
+  }
+
+  @Test
+  fun pickerRoutesAuthFailuresToProvidersAndDisablesOtherUnavailableRows() {
+    assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(model(id = "ready", provider = "synthetic")))
+    assertEquals(
+      ChatModelPickerAction.OpenProviders,
+      chatModelPickerAction(model(id = "missing", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.MissingAuth)),
+    )
+    assertEquals(
+      ChatModelPickerAction.Disabled,
+      chatModelPickerAction(model(id = "cooling", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.Cooldown)),
+    )
+    assertEquals(ChatModelPickerAction.Disabled, chatModelPickerAction(model(id = "unknown", provider = "synthetic", available = false)))
+  }
+
+  @Test
+  fun permanentAuthGateFailsOpenWhenGatewayIsNotReady() {
+    val missing = model(id = "chat", provider = "synthetic", available = false, reason = GatewayModelUnavailableReason.MissingAuth)
+
+    assertEquals(
+      GatewayModelUnavailableReason.MissingAuth,
+      selectedChatModelSendBlockingReason(gatewayReady = true, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+    )
+    assertEquals(
+      null,
+      selectedChatModelSendBlockingReason(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+    )
+    assertTrue(chatModelSendBlocked(gatewayReady = true, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
+    assertFalse(chatModelSendBlocked(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
+    assertEquals(
+      null,
+      chatModelUnavailableText(
+        selectedChatModelSendBlockingReason(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
+      ),
+    )
+  }
+
   private fun model(
     id: String,
     provider: String,
     supportsReasoning: Boolean = false,
+    available: Boolean? = true,
+    reason: GatewayModelUnavailableReason? = null,
   ): GatewayModelSummary =
     GatewayModelSummary(
       id = id,
       name = id.substringAfterLast('/'),
       provider = provider,
-      available = true,
+      available = available,
+      unavailableReason = reason,
       supportsVision = false,
       supportsAudio = false,
       supportsVideo = false,

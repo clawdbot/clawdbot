@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
@@ -122,10 +121,6 @@ function configuredReefIdentityBinding(cfg: OpenClawConfig): ConfiguredReefIdent
   };
 }
 
-function hasRetiredReefPolicyConfig(value: unknown): boolean {
-  return isRecord(value) && ["dmPolicy", "allowFrom"].some((key) => Object.hasOwn(value, key));
-}
-
 function inspectLegacyReefFriends(cfg: OpenClawConfig) {
   const reef = cfg.channels?.reef;
   if (!isRecord(reef) || !Object.hasOwn(reef, "friends")) {
@@ -151,40 +146,7 @@ function inspectLegacyReefFriends(cfg: OpenClawConfig) {
   return { config, friends, rejected, total: rawFriends ? Object.keys(rawFriends).length : 0 };
 }
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "reef"],
-    message:
-      'channels.reef dmPolicy/allowFrom are legacy; run "openclaw doctor --fix" to remove them. Peer trust is SQLite-backed.',
-    match: hasRetiredReefPolicyConfig,
-  },
-];
-
-export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
-  config: OpenClawConfig;
-  changes: string[];
-} {
-  const reef = cfg.channels?.reef;
-  if (!isRecord(reef) || !hasRetiredReefPolicyConfig(reef)) {
-    return { config: cfg, changes: [] };
-  }
-  const next = structuredClone(cfg);
-  const nextReef = next.channels?.reef;
-  if (!isRecord(nextReef)) {
-    return { config: cfg, changes: [] };
-  }
-  const changes: string[] = [];
-  for (const key of ["dmPolicy", "allowFrom"] as const) {
-    if (Object.hasOwn(nextReef, key)) {
-      delete nextReef[key];
-      changes.push(`Removed retired Reef ${key} field.`);
-    }
-  }
-  return {
-    config: next,
-    changes,
-  };
-}
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {

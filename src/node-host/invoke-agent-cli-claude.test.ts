@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostClient } from "./client.js";
 import { decodeClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
@@ -11,6 +15,7 @@ import { handleInvoke, type NodeInvokeRequestPayload } from "./invoke.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -212,122 +217,154 @@ describe("Claude CLI node command", () => {
     });
   });
 
-  it("consults the system.run approval surface with a prompt-free command", async () => {
-    const executable = await executableScript("process.exit(0);");
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[] };
-        sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
-        sendExecFinishedEvent: (params: unknown) => Promise<void>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
-        await options.sendNodeEvent(client(calls), "exec.denied", {});
-        await options.sendExecFinishedEvent({});
-        await options.sendInvokeResult({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
-        });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p", "--resume", "session-1"],
-        systemPrompt: "private prompt",
-        idleTimeoutMs: 1_000,
-        timeoutMs: 2_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
-
-    expect(handleSystemRun).toHaveBeenCalledOnce();
-    expect(calls.some((call) => call.method === "node.event")).toBe(false);
-    expect(JSON.stringify(calls)).not.toContain("private prompt");
-    const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
-      ok?: boolean;
-      payloadJSON?: string;
-    };
-    expect(response.ok).toBe(true);
-    expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
-      approvalRequired: true,
+  it.each([
+    { name: "unconfigured", config: {}, security: "full", ask: "off" },
+    {
+      name: "explicit ask",
+      config: { tools: { exec: { mode: "ask" } } },
       security: "allowlist",
       ask: "on-miss",
-      systemRunPlan: {
-        argv: [executable, "-p", "--resume", "session-1"],
-      },
-    });
-  });
+    },
+  ] as const)(
+    "consults the system.run approval surface with a prompt-free command ($name)",
+    async ({ config, security, ask }) => {
+      setRuntimeConfigSnapshot(config);
+      const executable = await executableScript("process.exit(0);");
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn(
+        async (options: {
+          params: { command: string[] };
+          sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
+          sendExecFinishedEvent: (params: unknown) => Promise<void>;
+          sendInvokeResult: (result: unknown) => Promise<void>;
+        }) => {
+          expect(options.params.command).toEqual([executable, "-p", "--resume", "session-1"]);
+          await options.sendNodeEvent(client(calls), "exec.denied", {});
+          await options.sendExecFinishedEvent({});
+          await options.sendInvokeResult({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+          });
+        },
+      );
+      await handleInvoke(
+        frame({
+          argv: ["-p", "--resume", "session-1"],
+          systemPrompt: "private prompt",
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      );
 
-  it("converts forwarded OAuth into a child-only descriptor after approval", async () => {
-    const executable = await executableScript(`
+      expect(handleSystemRun).toHaveBeenCalledOnce();
+      expect(calls.some((call) => call.method === "node.event")).toBe(false);
+      expect(JSON.stringify(calls)).not.toContain("private prompt");
+      const response = calls.find((call) => call.method === "node.invoke.result")?.params as {
+        ok?: boolean;
+        payloadJSON?: string;
+      };
+      expect(response.ok).toBe(true);
+      expect(JSON.parse(response.payloadJSON ?? "{}")).toMatchObject({
+        approvalRequired: true,
+        security,
+        ask,
+        systemRunPlan: {
+          argv: [executable, "-p", "--resume", "session-1"],
+        },
+      });
+    },
+  );
+
+  it.each([
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
+    { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "" },
+    { rawEnv: "ANTHROPIC_API_KEY", value: "" },
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: " \t " },
+    { rawEnv: "ANTHROPIC_API_KEY", value: " \t " },
+  ])(
+    "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
+    async ({ rawEnv, value }) => {
+      const executable = await executableScript(`
 const fs = require("node:fs");
-const secret = fs.readFileSync(3, "utf8");
+const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR ?? process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR;
+const secret = descriptor ? fs.readFileSync(Number(descriptor), "utf8") : "native-login";
 process.stdout.write(JSON.stringify({
   type: "result",
   result: secret,
-  descriptor: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR,
-  rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN"),
+  descriptor: descriptor ?? null,
+  rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN") || Object.hasOwn(process.env, "ANTHROPIC_API_KEY"),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
 }) + "\\n");`);
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
-        runCommand: (
-          argv: string[],
-          cwd: string | undefined,
-          env: Record<string, string> | undefined,
-          timeoutMs: number | undefined,
-        ) => Promise<unknown>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        await options.runCommand(
-          options.params.command,
-          undefined,
-          {
-            ...process.env,
-            ...options.params.env,
-            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-          } as Record<string, string>,
-          options.params.timeoutMs,
-        );
-        await options.sendInvokeResult({ ok: true });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p"],
-        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-oauth" },
-        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        idleTimeoutMs: 1_000,
-        timeoutMs: 5_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn(
+        async (options: {
+          params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
+          runCommand: (
+            argv: string[],
+            cwd: string | undefined,
+            env: Record<string, string> | undefined,
+            timeoutMs: number | undefined,
+          ) => Promise<unknown>;
+          sendInvokeResult: (result: unknown) => Promise<void>;
+        }) => {
+          await options.runCommand(
+            options.params.command,
+            undefined,
+            {
+              ...process.env,
+              ...options.params.env,
+              CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+              CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
+              CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
+            } as Record<string, string>,
+            options.params.timeoutMs,
+          );
+          await options.sendInvokeResult({ ok: true });
+        },
+      );
+      await handleInvoke(
+        frame({
+          argv: ["-p"],
+          env: { [rawEnv]: value },
+          clearEnv: [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+            "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+          ],
+          idleTimeoutMs: 1_000,
+          timeoutMs: 5_000,
+        }),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      );
 
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
-    expect(progress).toContain('"result":"selected-node-oauth"');
-    expect(progress).toContain('"descriptor":"3"');
-    expect(progress).toContain('"rawPresent":false');
-    expect(progress).toContain('"scrubPresent":false');
-    expect(calls).toContainEqual({
-      method: "node.invoke.result",
-      params: expect.objectContaining({
-        ok: true,
-        payloadJSON: expect.stringContaining('"exitCode":0'),
-      }),
-    });
-  });
+      const progress = calls
+        .filter((call) => call.method === "node.invoke.progress")
+        .map((call) => (call.params as { chunk: string }).chunk)
+        .join("");
+      expect(JSON.parse(progress)).toMatchObject({
+        result: value.trim() || "native-login",
+        descriptor: value.trim() ? "3" : null,
+      });
+      expect(progress).toContain('"rawPresent":false');
+      expect(progress).toContain('"scrubPresent":false');
+      expect(calls).toContainEqual({
+        method: "node.invoke.result",
+        params: expect.objectContaining({
+          ok: true,
+          payloadJSON: expect.stringContaining('"exitCode":0'),
+        }),
+      });
+    },
+  );
 
   it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
     const executable = await executableScript(`

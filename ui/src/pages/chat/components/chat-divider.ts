@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { toolIcons } from "../../../components/icons-tools.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
@@ -75,6 +76,13 @@ export function renderChatDivider(
 }
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+  const body = item.text
+    ? html`
+        <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
+          ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
+        </div>
+      `
+    : nothing;
   return html`
     <div
       class="chat-notice ${item.tone === "danger" ? "chat-notice--danger callout danger" : ""}"
@@ -83,13 +91,14 @@ export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
       role=${item.tone === "danger" ? "alert" : nothing}
     >
       ${item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
-      ${item.text
+      ${item.collapsedBody && item.text
         ? html`
-            <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
-              ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
-            </div>
+            <details class="chat-notice__collapse">
+              <summary class="chat-notice__toggle">${t("chat.systemNotice.showContent")}</summary>
+              ${body}
+            </details>
           `
-        : nothing}
+        : body}
     </div>
   `;
 }

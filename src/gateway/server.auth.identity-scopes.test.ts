@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +6,8 @@ import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/ty
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -32,9 +32,18 @@ const TRUSTED_PROXY_HEADERS = {
   "x-forwarded-proto": "https",
   "x-forwarded-user": "admin@example.com",
 };
+const NARROW_SCOPES = ["operator.read", "operator.write", "operator.talk"];
+const UPGRADE_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.questions",
+  "operator.pairing",
+];
 
 function deviceIdentityPath(label: string): string {
-  return path.join(os.tmpdir(), `openclaw-${label}-${randomUUID()}.sqlite`);
+  return path.join(tempDirs.make("openclaw-identity-scopes-"), `${label}.sqlite`);
 }
 
 async function configureGatewayAuth(
@@ -70,11 +79,36 @@ describe("gateway identity scope grants", () => {
       assignedRole: "maintainer",
       expectedScopes: ["operator.read", "operator.write", "operator.admin"],
     },
+    {
+      label: "admin-only without identity grants",
+      assignedRole: "admin-only",
+      identityScopes: [],
+      deviceScopes: NARROW_SCOPES,
+      expectedScopes: NARROW_SCOPES,
+    },
+    {
+      label: "write-only with broader identity grants",
+      assignedRole: "write-only",
+      identityScopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.talk.secrets",
+      ] satisfies OperatorScope[],
+      deviceScopes: NARROW_SCOPES,
+      expectedScopes: NARROW_SCOPES,
+    },
+    {
+      label: "empty",
+      assignedRole: "denied",
+      deviceScopes: NARROW_SCOPES,
+      expectedScopes: [],
+    },
   ])("applies the $label role ceiling after device and identity grants", async (scenario) => {
+    const identityScopes: OperatorScope[] = scenario.identityScopes ?? ["operator.admin"];
     await configureGatewayAuth(
       {
         mode: "trusted-proxy",
-        identityScopes: { "admin@example.com": ["operator.admin"] },
+        identityScopes: { "admin@example.com": identityScopes },
         trustedProxy: {
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
@@ -95,12 +129,23 @@ describe("gateway identity scope grants", () => {
               agents: "*",
               scopes: ["operator.read", "operator.write", "operator.admin"],
             },
+            "admin-only": {
+              sessions: { others: "write" },
+              agents: "*",
+              scopes: ["operator.admin"],
+            },
+            "write-only": {
+              sessions: { others: "write" },
+              agents: "*",
+              scopes: ["operator.write"],
+            },
+            denied: { sessions: { others: "none" }, agents: [], scopes: [] },
           },
         },
       },
     );
+    const profile = ensureProfileForEmail("admin@example.com");
     if (scenario.assignedRole) {
-      const profile = ensureProfileForEmail("admin@example.com");
       setUserProfileRole(profile.id, scenario.assignedRole);
     }
 
@@ -110,12 +155,13 @@ describe("gateway identity scope grants", () => {
         const connected = await connectReq(ws, {
           skipDefaultAuth: true,
           prePairDevice: true,
-          scopes: ["operator.read", "operator.write"],
+          scopes: scenario.deviceScopes ?? ["operator.read", "operator.write"],
           client: CONTROL_UI_CLIENT,
           deviceIdentityPath: deviceIdentityPath(`identity-role-${scenario.label}`),
           browserOrigin: BROWSER_ORIGIN,
         });
         expect(connected.ok).toBe(true);
+        expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
         expect(responseScopes(connected)).toEqual(scenario.expectedScopes);
         expect((connected.payload as { auth?: { deviceToken?: string } }).auth?.deviceToken).toBe(
           undefined,
@@ -135,8 +181,53 @@ describe("gateway identity scope grants", () => {
             },
           });
         }
+        if (scenario.assignedRole === "admin-only") {
+          const admin = await openWs(port, TRUSTED_PROXY_HEADERS);
+          try {
+            const adminConnected = await connectReq(admin, {
+              skipDefaultAuth: true,
+              prePairDevice: true,
+              scopes: ["operator.admin"],
+              client: CONTROL_UI_CLIENT,
+              deviceIdentityPath: deviceIdentityPath("scope-upgrade-approver"),
+              browserOrigin: BROWSER_ORIGIN,
+            });
+            expect(adminConnected.ok).toBe(true);
+            expect(
+              (adminConnected.payload as { auth?: { deviceToken?: string } }).auth?.deviceToken,
+            ).toBeUndefined();
+            const registration = await rpcReq<{ requestId: string }>(
+              ws,
+              "device.scopes.requestUpgrade",
+              {
+                scopes: UPGRADE_SCOPES,
+              },
+            );
+            expect(registration.ok).toBe(true);
+            const requestId = registration.payload?.requestId;
+            expect(requestId).toBeTypeOf("string");
+            expect((await rpcReq(admin, "device.pair.approve", { requestId })).ok).toBe(true);
+            const result = await rpcReq<{ status: string; scopes: string[]; deviceToken: string }>(
+              ws,
+              "device.scopes.waitUpgrade",
+              { requestId },
+            );
+            expect(result).toMatchObject({
+              ok: true,
+              payload: {
+                status: "approved",
+                scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted(),
+              },
+            });
+            expect(result.payload?.deviceToken).toBeTypeOf("string");
+            expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+          } finally {
+            admin.close();
+          }
+        }
       } finally {
         ws.close();
+        invalidateOperatorRolePolicy(profile.id);
       }
     });
   });

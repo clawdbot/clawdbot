@@ -16,6 +16,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageManifest,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallErrorCode,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
@@ -388,6 +389,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   let targetDir = params.targetDir;
@@ -423,6 +425,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     });
   }
 
+  let artifactConsentFailure: { error: unknown } | undefined;
   const packageInstallParams = {
     sourceDir: params.sourceDir,
     targetDir,
@@ -436,10 +439,23 @@ export async function installPluginDirectoryIntoExtensions(params: {
     afterCopy: params.afterCopy,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
-      if (!postInstallResult) {
-        return { ok: true as const };
+      if (postInstallResult) {
+        return postInstallResult;
       }
-      return postInstallResult;
+      try {
+        // Consent must bind to the final staged bytes, never their mutable source tree.
+        await params.onBeforePluginArtifactCommit?.({
+          pluginId: params.pluginId,
+          ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+          stagedArtifactDir: installedDir,
+          mode: params.mode,
+        });
+      } catch (error) {
+        // installPackageDir converts hook failures into results; retain the typed rejection.
+        artifactConsentFailure = { error };
+        throw error;
+      }
+      return { ok: true as const };
     },
   };
   const installRes = await runtime.installPackageDir(
@@ -448,6 +464,9 @@ export async function installPluginDirectoryIntoExtensions(params: {
       : packageInstallParams,
   );
   if (!installRes.ok) {
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
     return installRes;
   }
 

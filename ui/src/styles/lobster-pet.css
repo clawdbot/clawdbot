@@ -83,7 +83,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-/* ---- Rare palette variants (weights + lore in lobster-pet.ts) ---- */
+/* ---- Rare palette variants (lobster-pet-palettes.ts + lobster-pet-lore.ts) ---- */
 
 /* Ghost/albino: pale translucent shell, icy glints. */
 .lobster-pet--palette-ghost {
@@ -555,7 +555,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
+/* Split two-tone: the right body half (drawn in lobster-pet-look.ts) plus the
    right claw and antenna wear the second shell color. */
 .lobster-pet--palette-split {
   --lob-shell2: #46536b;

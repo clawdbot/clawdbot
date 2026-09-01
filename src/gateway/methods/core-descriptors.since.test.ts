@@ -82,8 +82,14 @@ const TRAIN_2026_7_METHODS = [
 
 const CURRENT_TRAIN_METHODS = [
   "diagnostics.lanes",
+  "plugins.inspect",
   "device.pair.setupStatus",
+  "openclaw.setup.activate.start",
+  "exec.approval.grants.list",
+  "exec.approval.grants.revoke",
   "sessions.patchMany",
+  "sessions.goal.update",
+  "sessions.goal.clear",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",
@@ -102,6 +108,8 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "push.web.preferences.get",
+  "push.web.preferences.set",
   "users.setRole",
   "desktop.observe",
   "desktop.launch",
@@ -121,6 +129,7 @@ const CURRENT_TRAIN_METHODS = [
   "tools.github.authorize.start",
   "tools.github.authorize.poll",
   "tools.github.authorize.cancel",
+  "session.members.listEvidence",
 ] as const;
 
 describe("core gateway method release trains", () => {

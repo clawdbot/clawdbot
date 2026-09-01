@@ -11,6 +11,7 @@ import { filterConsolidationCandidates } from "./dreaming-consolidation-candidat
 import type { SubagentSurface } from "./dreaming-narrative.js";
 import { extractAssistantText } from "./dreaming-shared.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
 import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,
@@ -21,7 +22,6 @@ import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const CONSOLIDATION_TIMEOUT_MS = 60_000;
 const CONSOLIDATION_MESSAGE_LIMIT = 5;
-const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const CONSOLIDATION_SYSTEM_PROMPT = [
   "Revise the supplied MEMORY.md using only the supplied candidates as new evidence.",
@@ -369,30 +369,6 @@ function validateConsolidatedMemory(params: {
   return null;
 }
 
-function diffHighlights(previous: string, next: string): string[] {
-  const previousLines = new Set(
-    previous
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
-  const nextLines = new Set(
-    next
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
-  const highlights = [
-    ...[...nextLines]
-      .filter((line) => !previousLines.has(line))
-      .map((line) => `+ ${truncateUtf16Safe(line, 180)}`),
-    ...[...previousLines]
-      .filter((line) => !nextLines.has(line))
-      .map((line) => `- ${truncateUtf16Safe(line, 180)}`),
-  ];
-  return highlights.slice(0, 8);
-}
-
 export function applyMemoryConsolidationPlan(params: {
   existingMemory: string;
   plan: MemoryConsolidationPlan;
@@ -412,11 +388,7 @@ export function applyMemoryConsolidationPlan(params: {
   }
   const lines = params.existingMemory.replace(/\r\n/gu, "\n").split("\n");
   for (const operation of params.plan.operations) {
-    if (
-      lines.some((line) =>
-        line.includes(`<!-- ${PROMOTION_MARKER_PREFIX}${operation.candidateKey} -->`),
-      )
-    ) {
+    if (lines.some((line) => line.includes(buildPromotionMarker(operation.candidateKey)))) {
       return null;
     }
     const latestEntries = extractMemoryEntries(lines.join("\n"));
@@ -474,7 +446,7 @@ export function applyMemoryConsolidationPlan(params: {
     if (operation.lineageKey) {
       additions.push(`<!-- openclaw-memory-lineage:${operation.lineageKey} -->`);
     }
-    additions.push(`<!-- ${PROMOTION_MARKER_PREFIX}${operation.candidateKey} -->`);
+    additions.push(buildPromotionMarker(operation.candidateKey));
     if (!appendedEntries.has(operation.resultEntry)) {
       additions.push(operation.resultEntry);
       appendedEntries.add(operation.resultEntry);
@@ -496,7 +468,15 @@ export function applyMemoryConsolidationPlan(params: {
     merged: params.plan.operations.filter((operation) => operation.action === "merged").length,
     superseded: params.plan.operations.filter((operation) => operation.action === "superseded")
       .length,
-    highlights: diffHighlights(params.existingMemory, content),
+    // Each excerpt uses its replacement's unioned origins so the ordinary scrubber can erase it.
+    highlights: params.plan.operations
+      .flatMap(({ candidateKey, resultEntry, priorEntries }) =>
+        [`+ ${resultEntry}`, ...priorEntries.map((entry) => `- ${entry}`)].map(
+          (line) =>
+            `${buildPromotionMarker(candidateKey)}\n- \`${truncateUtf16Safe(line, 180).replaceAll("`", "'")}\``,
+        ),
+      )
+      .slice(0, 8),
   };
 }
 
@@ -628,6 +608,7 @@ async function runConsolidationGroup(params: {
       disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-consolidation:${params.sessionKey}`,
       lightContext: true,
       deliver: false,

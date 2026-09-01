@@ -22,7 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -169,8 +169,7 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
-/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
-export async function invokeGatewayTool(params: {
+type InvokeGatewayToolParams = {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;
   messageChannel?: string;
@@ -178,6 +177,8 @@ export async function invokeGatewayTool(params: {
   agentTo?: string;
   agentThreadId?: string;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  /** Host-minted authority from the calling connection; never derived from wire params. */
+  operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
   operatorScopes?: readonly string[];
   senderIsOwner?: boolean;
   clientCaps?: string[];
@@ -185,7 +186,11 @@ export async function invokeGatewayTool(params: {
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
-}): Promise<ToolsInvokeOutcome> {
+};
+
+async function invokeGatewayToolWithSignal(
+  params: InvokeGatewayToolParams & { signal: AbortSignal },
+): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -245,11 +250,15 @@ export async function invokeGatewayTool(params: {
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
+  // The calling connection already resolved its authority at connect (shared-secret
+  // owners mint system authority there). Carry that exact fact forward instead of
+  // re-deriving it from scopes, or role boundaries deny the caller's own dispatch.
+  const operatorRoleActor =
+    params.operatorRoleActor ??
+    (params.senderIsOwner && !authenticatedUserProfile ? { kind: "system" as const } : undefined);
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(params.senderIsOwner && !authenticatedUserProfile
-      ? { operatorRoleActor: { kind: "system" as const } }
-      : {}),
+    ...(operatorRoleActor ? { operatorRoleActor } : {}),
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
@@ -455,5 +464,20 @@ export async function invokeGatewayTool(params: {
       toolName,
       error: { type: "tool_error", message: "tool execution failed" },
     };
+  }
+}
+
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
+export async function invokeGatewayTool(
+  params: InvokeGatewayToolParams,
+): Promise<ToolsInvokeOutcome> {
+  const requestAbort = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, requestAbort.signal])
+    : requestAbort.signal;
+  try {
+    return await invokeGatewayToolWithSignal({ ...params, signal });
+  } finally {
+    requestAbort.abort();
   }
 }

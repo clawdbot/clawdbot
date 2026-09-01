@@ -14,6 +14,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
   renderSettingsEmpty,
@@ -27,7 +28,6 @@ import {
   normalizeAgentLabel,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
@@ -267,13 +267,19 @@ export function renderAgents(props: AgentsProps) {
               : nothing}
             ${selectedAgent
               ? html`
-                  <button
-                    type="button"
-                    class="btn btn--sm btn--ghost"
-                    @click=${() => void copyToClipboard(selectedAgent.id)}
-                  >
-                    ${t("agents.copyId")}
-                  </button>
+                  ${keyed(
+                    selectedAgent.id,
+                    html`
+                      <button
+                        type="button"
+                        class="btn btn--sm btn--ghost"
+                        @click=${(event: Event) =>
+                          void handleCopyButton(event, selectedAgent.id, t("agents.copyId"))}
+                      >
+                        <span data-copy-label>${t("agents.copyId")}</span>
+                      </button>
+                    `,
+                  )}
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"

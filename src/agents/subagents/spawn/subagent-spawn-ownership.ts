@@ -12,7 +12,6 @@ import {
 
 type SubagentSpawnOwnership = {
   controllerSessionKey: string;
-  threadBindingRequesterSessionKey: string;
   completionRequesterSessionKey: string;
   completionRequesterDisplayKey: string;
 };
@@ -48,7 +47,6 @@ export function resolveSubagentSpawnOwnership(params: {
 
   return {
     controllerSessionKey,
-    threadBindingRequesterSessionKey: controllerSessionKey,
     completionRequesterSessionKey,
     completionRequesterDisplayKey,
   };

@@ -41,6 +41,8 @@ type OpenClawStateLeaseOptions = {
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
+  /** Renew this exact owner synchronously before another blocking phase. */
+  renew?(): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
   assertOwned(): void;
   /** Verify ownership using the caller's active write transaction. */
@@ -546,6 +548,21 @@ export async function withOpenClawStateLease<T>(
     }
     verifyLeaseOwnership({ ...identity, transaction: database });
   };
+  const renewOperation = () => {
+    if (leaseLost.signal.aborted) {
+      throw leaseLost.signal.reason;
+    }
+    if (validated.signal?.aborted) {
+      throw abortError(validated.signal, "operation", validated.leaseLabel);
+    }
+    confirmedExpiresAt = renew({
+      ...identity,
+      database: validated.database,
+      operationLabel: validated.operationLabel,
+      leaseMs: validated.leaseMs,
+    });
+    scheduleExpiry();
+  };
 
   try {
     let result: T;
@@ -555,6 +572,7 @@ export async function withOpenClawStateLease<T>(
       assertOperationOwned();
       result = await run({
         signal: operationSignal,
+        renew: renewOperation,
         assertOwned: assertOperationOwned,
         assertOwnedInTransaction: assertOperationOwnedInTransaction,
       });

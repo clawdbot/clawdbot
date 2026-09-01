@@ -126,6 +126,7 @@ export async function inspectGatewayRestartWithSnapshot(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
   portUsage: PortUsage;
   expectedVersion?: string;
+  expectedBuildId?: string;
   includeUnknownListenersAsStale?: boolean;
 }) {
   const service = makeGatewayService(params.runtime);
@@ -136,6 +137,7 @@ export async function inspectGatewayRestartWithSnapshot(params: {
     port: 18789,
     probeHosts: ["127.0.0.1"],
     ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
+    ...(params.expectedBuildId === undefined ? {} : { expectedBuildId: params.expectedBuildId }),
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
       : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),

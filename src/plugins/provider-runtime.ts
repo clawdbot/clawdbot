@@ -19,9 +19,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  normalizeProviderModelIdWithManifest,
+  type ManifestModelIdNormalizationSource,
+} from "./manifest-model-id-normalization.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
@@ -41,12 +43,14 @@ import {
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   resolveCatalogHookProviderPluginIds,
-  resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForProviderRef,
   resolveProviderRefOwnership,
@@ -58,7 +62,6 @@ import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
-  ProviderExternalAuthProfile,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderCacheTtlEligibilityContext,
@@ -66,7 +69,6 @@ import type {
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
   ProviderFetchUsageSnapshotContext,
-  ProviderFailoverErrorContext,
   ProviderNormalizeToolSchemasContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeModelIdContext,
@@ -78,7 +80,6 @@ import type {
   ProviderPrepareDynamicModelContext,
   ProviderPreferRuntimeResolvedModelContext,
   ProviderPlugin,
-  ProviderResolveExternalAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderResolveConfigApiKeyContext,
   ProviderSanitizeReplayHistoryContext,
@@ -379,7 +380,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  plugins?: ManifestModelIdNormalizationSource;
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);
@@ -458,23 +459,6 @@ export function normalizeProviderConfigWithPlugin(params: {
   const matchedPlugin = resolveProviderRuntimePlugin(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
   return normalizedMatched && hasConfigChange(normalizedMatched) ? normalizedMatched : undefined;
-}
-
-export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderNormalizeConfigContext;
-  allowRuntimePluginLoad?: boolean;
-}): ModelProviderConfig | undefined {
-  if (params.allowRuntimePluginLoad === false) {
-    return undefined;
-  }
-  return (
-    resolveProviderRuntimePlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
-    undefined
-  );
 }
 
 export function resolveProviderConfigApiKeyWithPlugin(params: {
@@ -739,55 +723,7 @@ export function listProviderUsagePluginDescriptors(params: {
   return [...descriptors.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-export function classifyProviderFailoverSignalWithPlugin(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}) {
-  const plugins = resolveProviderPluginsForScopedHook(params);
-  for (const plugin of plugins) {
-    if (plugin.matchesContextOverflowError?.(params.context)) {
-      return "context_overflow";
-    }
-    const reason = plugin.classifyFailoverReason?.(params.context);
-    if (reason) {
-      return reason;
-    }
-  }
-  return undefined;
-}
-
-function resolveProviderPluginsForScopedHook(params: {
-  provider?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderFailoverErrorContext;
-}): ProviderPlugin[] {
-  if (!params.provider) {
-    return resolveProviderPluginsForHooks(params);
-  }
-  const plugin = resolveProviderHookPlugin({ ...params, provider: params.provider });
-  if (plugin) {
-    return [plugin];
-  }
-  if (hasStructuredFailoverDescriptor(params.context)) {
-    return [];
-  }
-  // Custom provider ids may only name their canonical API in config, and the
-  // legacy message classifier only has the runtime id here. Preserve its old
-  // broad hook scan for descriptor-free messages, but do not let unrelated
-  // hooks override structured HTTP/auth signals.
-  return resolveProviderPluginsForHooks(params);
-}
-
-function hasStructuredFailoverDescriptor(context: ProviderFailoverErrorContext): boolean {
-  return (
-    context.status !== undefined || context.code !== undefined || context.errorType !== undefined
-  );
-}
+export { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 
 export function formatProviderAuthProfileApiKeyWithPlugin(params: {
   provider: string;
@@ -892,6 +828,29 @@ export function resolveProviderModernModelRef(params: {
   return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
 }
 
+/** Returns provider-owned profile ids retired from generic credential resolution. */
+export function resolveProviderDeprecatedAuthProfileIds(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): readonly string[] {
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  return (
+    resolveProviderPolicySurface(params.provider, {
+      manifestRegistry: metadataSnapshot?.manifestRegistry,
+    })?.deprecatedProfileIds ??
+    resolveLoadedProviderRuntimePlugin(params)?.deprecatedProfileIds ??
+    []
+  );
+}
+
 export function buildProviderMissingAuthMessageWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -991,54 +950,7 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   return undefined;
 }
 
-export function resolveExternalAuthProfilesWithPlugins(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: ProviderResolveExternalAuthProfilesContext;
-}): ProviderExternalAuthProfile[] {
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const env = params.env ?? process.env;
-  const config = params.config ?? {};
-  const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    env,
-    ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
-    ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
-  });
-  const { manifestRegistry } =
-    currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });
-  // A lifecycle-owned manifest is authoritative: no external-auth contracts means
-  // no provider registry discovery or runtime activation is needed for this overlay.
-  if (
-    currentMetadataSnapshot &&
-    !manifestRegistry.plugins.some((plugin) => plugin.contracts?.externalAuthProviders?.length)
-  ) {
-    return [];
-  }
-  const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
-    config: params.config,
-    workspaceDir,
-    env,
-    manifestRegistry,
-  });
-  if (externalAuthPluginIds.length === 0) {
-    return [];
-  }
-  const matches: ProviderExternalAuthProfile[] = [];
-  for (const plugin of resolveProviderPluginsForHooks({
-    ...params,
-    workspaceDir,
-    env,
-    onlyPluginIds: externalAuthPluginIds,
-  })) {
-    const profiles = plugin.resolveExternalAuthProfiles?.(params.context);
-    if (!profiles || profiles.length === 0) {
-      continue;
-    }
-    matches.push(...profiles);
-  }
-  return matches;
-}
+export { resolveExternalAuthProfilesWithPlugins } from "./provider-external-auth.js";
 
 export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {
   provider: string;

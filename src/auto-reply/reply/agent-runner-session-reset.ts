@@ -57,7 +57,6 @@ export async function resetReplyRunSession(params: {
   activeSessionEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
-  messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
   onNewSession: (newSessionId: string, nextSessionFile: string) => void;
@@ -106,6 +105,7 @@ export async function resetReplyRunSession(params: {
       ? undefined
       : createSessionDiffBaselineCaptureClaim(),
     compactionCount: 0,
+    transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
   };
   clearAllCliSessions(nextEntry);

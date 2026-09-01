@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
-import { createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
@@ -21,8 +21,17 @@ export function resolveCliSessionId(reusableCliSession: CliReusableSession): str
 function shouldRetryFreshCliSessionAfterFailover(params: {
   error: FailoverError;
   hasHistoryPrompt: boolean;
+  recoveryPolicy?: "replace-binding" | "invalidated-only";
 }): boolean {
   if (!params.hasHistoryPrompt) {
+    return false;
+  }
+  // Some CLIs can safely replace a resumable conversation after transport or
+  // format failures. Backends that cannot must positively prove invalidation.
+  if (
+    params.recoveryPolicy === "invalidated-only" &&
+    !isCliSessionInvalidatingFailoverReason(params.error.reason)
+  ) {
     return false;
   }
   switch (params.error.reason) {
@@ -47,14 +56,6 @@ function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean
   return error.reason === "timeout" && error.code === "cli_no_output_timeout";
 }
 
-function isUnsupportedCliResumeAtError(error: unknown, resumeAtArg: string): boolean {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes(resumeAtArg.toLowerCase()) &&
-    /\b(?:unknown|unexpected|unrecognized)\b|\bnot\s+recognized\b/.test(message)
-  );
-}
-
 export async function runCliRecovery<TAttempt>(params: {
   context: PreparedCliRunContext;
   executeAttempt: (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => Promise<TAttempt>;
@@ -70,6 +71,14 @@ export async function runCliRecovery<TAttempt>(params: {
   const reusableCliSessionId = resolveCliSessionId(context.reusableCliSession);
   const resumeCheckpointId = runParams.cliSessionBinding?.resumeCheckpointId;
   let retryableSessionId = reusableCliSessionId;
+  const failTerminal = async (error: unknown): Promise<never> => {
+    // Record only after every eligible recovery path is exhausted.
+    cliBackendLog.warn(
+      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessage(error)}`,
+    );
+    await params.onTerminalFailure(error);
+    throw error;
+  };
   try {
     return await params.finishAttempt(
       await params.executeAttempt(
@@ -90,24 +99,6 @@ export async function runCliRecovery<TAttempt>(params: {
       return deliveredFailure;
     }
     let recoveryError = err;
-    if (
-      runParams.forkCliSessionOnResume &&
-      resumeCheckpointId &&
-      context.preparedBackend.backend.resumeAtArg &&
-      isUnsupportedCliResumeAtError(err, context.preparedBackend.backend.resumeAtArg)
-    ) {
-      recoveryError = createCliFailoverError(
-        "CLI backend cannot resume from the stored checkpoint.",
-        "session_expired",
-        {
-          provider: runParams.provider,
-          model: context.modelId,
-          sessionId: runParams.sessionId,
-          lane: runParams.lane,
-        },
-        { cause: err },
-      );
-    }
     if (isFailoverError(recoveryError)) {
       if (
         !runParams.forkCliSessionOnResume &&
@@ -150,12 +141,10 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
-          recoveryError = isUnsupportedCliResumeAtError(
-            forkError,
-            context.preparedBackend.backend.resumeAtArg,
-          )
-            ? err
-            : forkError;
+          recoveryError =
+            isFailoverError(forkError) && forkError.code === "cli_resume_at_unsupported"
+              ? err
+              : forkError;
         }
       }
       if (
@@ -163,6 +152,7 @@ export async function runCliRecovery<TAttempt>(params: {
         shouldRetryFreshCliSessionAfterFailover({
           error: recoveryError,
           hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          recoveryPolicy: context.preparedBackend.backend.freshSessionRecovery,
         }) &&
         retryableSessionId &&
         runParams.sessionKey
@@ -196,12 +186,10 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredRetryFailure) {
             return deliveredRetryFailure;
           }
-          await params.onTerminalFailure(retryErr);
-          throw retryErr;
+          return await failTerminal(retryErr);
         }
       }
     }
-    await params.onTerminalFailure(recoveryError);
-    throw recoveryError;
+    return await failTerminal(recoveryError);
   }
 }

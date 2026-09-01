@@ -1,10 +1,15 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session owner assignment mocked Gateway E2E",
@@ -12,7 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 const sessionKey = "agent:main:owner-outcome";
 const proofPhase = process.env.OPENCLAW_OWNER_ASSIGNMENT_PROOF_PHASE;
-const proofDir = path.resolve(".artifacts/control-ui-e2e/session-owner-assignment");
+let proofDir: string;
+beforeEach(() => {
+  if (proofPhase) {
+    proofDir = createControlUiE2eArtifactDir("session-owner-assignment");
+  }
+});
 
 function sessionsListResponse() {
   return {
@@ -75,7 +85,6 @@ async function captureProof(page: Page, surface: string): Promise<void> {
   if (!proofPhase) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -90,6 +99,45 @@ async function chooseAssignToMe(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it("themes the assignee submenu with the active palette", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        await page.addInitScript(
+          ({ gatewayUrl }) => {
+            localStorage.setItem(
+              `openclaw.control.settings.v1:${gatewayUrl}`,
+              JSON.stringify({ gatewayUrl, theme: "dash", themeMode: "dark" }),
+            );
+          },
+          { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl) },
+        );
+        await installOwnerGateway(page);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
+
+        const row = page.locator(`[data-session-key="${sessionKey}"]`);
+        await row.hover();
+        await row
+          .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
+          .click();
+        const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
+        await assignTo.hover();
+        await assignTo
+          .locator('wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]')
+          .waitFor();
+
+        const paint = await readThemedPopupPaint(assignTo, "submenu");
+        await captureProof(page, "assignee-submenu");
+        expect(paint.actual).toEqual(paint.expected);
+      },
+    );
+  });
+
   it("keeps a rejected header owner assignment visible", async () => {
     await suite.withPage(
       {

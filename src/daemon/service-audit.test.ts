@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
+  needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
@@ -20,6 +21,13 @@ const execSystemctlUser = vi.hoisted(() =>
     ) => Promise<{ stdout: string; stderr: string; code: number }>
   >(),
 );
+
+const resolveBunRuntimeInfo = vi.hoisted(() => vi.fn());
+
+vi.mock("./runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-paths.js")>()),
+  resolveBunRuntimeInfo,
+}));
 
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
@@ -123,9 +131,22 @@ describe("auditGatewayServiceConfig", () => {
   beforeEach(() => {
     execSystemctlUser.mockReset();
     execSystemctlUser.mockResolvedValue({ stdout: "", stderr: "systemd unavailable", code: 1 });
+    resolveBunRuntimeInfo.mockReset();
+    resolveBunRuntimeInfo.mockResolvedValue({
+      version: "1.4.0",
+      sqliteVersion: "3.51.3",
+      nodeSharedSqlite: false,
+      status: "supported",
+    });
   });
 
-  it("flags bun runtime", async () => {
+  it("flags Bun runtimes without WAL-safe SQLite", async () => {
+    resolveBunRuntimeInfo.mockResolvedValue({
+      version: "1.4.0",
+      sqliteVersion: "3.51.2",
+      nodeSharedSqlite: false,
+      status: "unsupported",
+    });
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",
@@ -137,7 +158,44 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
     expect(
       audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("runtime state requires node:sqlite");
+    ).toContain("Bun 1.4+ with WAL-reset-safe node:sqlite is required");
+  });
+
+  it("accepts Bun 1.4 with WAL-safe node:sqlite", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
+  });
+
+  it("reports a failed Bun probe without recommending runtime migration", async () => {
+    resolveBunRuntimeInfo.mockResolvedValue({
+      status: "probe-failed",
+      error: new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES"),
+    });
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/bun", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed,
+        detail: expect.stringContaining("/opt/bun (cwd /root): EACCES"),
+      }),
+    );
+    expect(needsNodeRuntimeMigration(audit.issues)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
   it("flags version-managed node paths", async () => {
@@ -740,6 +798,7 @@ describe("auditGatewayServiceConfig", () => {
     );
     expect(issue?.detail).toContain("OPENROUTER_API_KEY");
     expect(issue?.detail).toContain("TAVILY_API_KEY");
+    expect(issue?.environmentKeys).toEqual(["OPENROUTER_API_KEY", "TAVILY_API_KEY"]);
   });
 
   it("flags inline managed values expected by the current install plan for old services", async () => {
@@ -796,6 +855,7 @@ describe("auditGatewayServiceConfig", () => {
     expect(issue?.detail).toContain("HTTP_PROXY");
     expect(issue?.detail).toContain("HTTPS_PROXY");
     expect(issue?.detail).toContain("NO_PROXY");
+    expect(issue?.environmentKeys).toEqual(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]);
   });
 
   it("flags lowercase inline proxy environment values using portable key names", async () => {
@@ -809,6 +869,7 @@ describe("auditGatewayServiceConfig", () => {
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded,
     );
     expect(issue?.detail).toContain("HTTPS_PROXY");
+    expect(issue?.environmentKeys).toEqual(["https_proxy"]);
   });
 
   it("does not flag proxy values loaded only from EnvironmentFile", async () => {

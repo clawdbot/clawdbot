@@ -4,11 +4,11 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
-import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -17,20 +17,6 @@ const suite = createControlUiE2eSuite({
   name: "Control UI session dashboard stitch",
   startServerBeforeBrowser: true,
 });
-
-const cardboardProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-cardboard",
-);
-const workboardPinProofDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-pin");
-const workboardPinFailureProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-pin-failure",
-);
-const pluginWidgetsProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-plugin-widgets",
-);
 
 const sessionKey = "agent:main:dashboard";
 const boardSnapshot = {
@@ -268,7 +254,7 @@ suite.define(() => {
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(workboardPinProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
     }
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -321,7 +307,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
@@ -362,7 +348,7 @@ suite.define(() => {
         .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       await previewBubble.screenshot({
-        path: path.join(workboardPinProofDir, "01-pin-hover.png"),
+        path: path.join(path.join(suite.artifactDir, "workboard-pin"), "01-pin-hover.png"),
       });
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
@@ -377,7 +363,9 @@ suite.define(() => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     if (recordProof) {
-      await previewBubble.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+      await previewBubble.screenshot({
+        path: path.join(path.join(suite.artifactDir, "workboard-pin"), "02-pinned.png"),
+      });
     }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
@@ -418,14 +406,14 @@ suite.define(() => {
   it("shows a bounded visible outcome when a Canvas dashboard pin fails", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(workboardPinFailureProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-pin-failure"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
         ? {
             recordVideo: {
-              dir: workboardPinFailureProofDir,
+              dir: path.join(suite.artifactDir, "workboard-pin-failure"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -476,7 +464,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const pin = preview.getByRole("button", { name: "Pin to dashboard" });
@@ -488,10 +476,16 @@ suite.define(() => {
     await toast.waitFor();
     expect(await toast.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await pin.isEnabled()).toBe(true);
-    expect(await pin.getAttribute("title")).toBe("Could not pin to dashboard. Try again.");
+    await page.mouse.move(0, 0);
+    await pin.hover();
+    const hint = page.locator("wa-tooltip[open]");
+    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
-      await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });
+      await page.screenshot({
+        path: path.join(path.join(suite.artifactDir, "workboard-pin-failure"), "pin-failed.png"),
+      });
     }
     await context.close();
   });
@@ -546,7 +540,7 @@ suite.define(() => {
     });
     await showDashboard(page);
 
-    await page.goto(`${suite.server.baseUrl}dashboard`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
@@ -568,12 +562,17 @@ suite.define(() => {
   it("renders and updates active Workboard plugin widgets", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(pluginWidgetsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-plugin-widgets"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: pluginWidgetsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-plugin-widgets"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -625,7 +624,7 @@ suite.define(() => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
       await cardWidget.waitFor();
@@ -637,7 +636,10 @@ suite.define(() => {
       );
       if (recordProof) {
         await page.screenshot({
-          path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "01-plugin-widgets-ready.png",
+          ),
         });
       }
 
@@ -724,14 +726,22 @@ suite.define(() => {
         .toBe("2 Running");
       if (recordProof) {
         await page.screenshot({
-          path: path.join(pluginWidgetsProofDir, "02-plugin-widgets-running.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "02-plugin-widgets-running.png",
+          ),
         });
       }
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(pluginWidgetsProofDir, "workboard-plugin-widgets.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "workboard-plugin-widgets.webm",
+          ),
+        );
       }
     }
   });
@@ -764,27 +774,9 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         controlUiWidgetKinds: widgetKinds,
         featureMethods: methods,
+        operatorScopes: ["operator.read"],
+        sessionKey,
         methodResponses: {
-          connect: {
-            type: "hello-ok",
-            protocol: PROTOCOL_VERSION,
-            server: { connId: "read-only-dashboard-widget", version: "e2e" },
-            auth: {
-              deviceToken: "e2e-read-only-dashboard-device-token",
-              role: "operator",
-              scopes: ["operator.read"],
-            },
-            features: { capabilities: [], events: [], methods },
-            controlUiWidgetKinds: widgetKinds,
-            snapshot: {
-              sessionDefaults: {
-                defaultAgentId: "main",
-                mainKey: "main",
-                mainSessionKey: "main",
-                scope: "agent",
-              },
-            },
-          },
           "board.get": pluginWidgetBoardSnapshot,
           "workboard.cards.list": {
             cards: [card],
@@ -794,7 +786,7 @@ suite.define(() => {
       });
       await showDashboard(page);
 
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
       await cardWidget.waitFor();
       await expect.poll(() => cardWidget.textContent()).toContain(card.title);
@@ -811,12 +803,17 @@ suite.define(() => {
   it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(cardboardProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-cardboard"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: cardboardProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-cardboard"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -854,14 +851,19 @@ suite.define(() => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const chip = page.locator(".board-session-surface__workboard-chip");
       await chip.waitFor();
       await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
       await expect.poll(() => chip.textContent()).toContain("Running");
       expect(await chip.getAttribute("href")).toBe("/workboard?board=platform");
       if (recordProof) {
-        await page.screenshot({ path: path.join(cardboardProofDir, "01-dashboard-card-chip.png") });
+        await page.screenshot({
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "01-dashboard-card-chip.png",
+          ),
+        });
       }
 
       const completedCard = { ...card, status: "done", updatedAt: 3 };
@@ -912,7 +914,10 @@ suite.define(() => {
       await cardDashboard.locator("openclaw-board-view").waitFor();
       if (recordProof) {
         await page.screenshot({
-          path: path.join(cardboardProofDir, "02-workboard-card-dashboard.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "02-workboard-card-dashboard.png",
+          ),
         });
       }
 
@@ -930,7 +935,12 @@ suite.define(() => {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(cardboardProofDir, "workboard-cardboard.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "workboard-cardboard.webm",
+          ),
+        );
       }
     }
   });
@@ -984,7 +994,7 @@ suite.define(() => {
         });
         await showDashboard(page);
 
-        await page.goto(`${suite.server.baseUrl}dashboard`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);

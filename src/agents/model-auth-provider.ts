@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
+  resolveProviderDeprecatedAuthProfileIds,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
@@ -37,6 +38,18 @@ import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
+
+function assertAuthProfileNotRetired(params: {
+  profileId: string;
+  deprecatedProfileIds: ReadonlySet<string>;
+}): void {
+  if (!params.deprecatedProfileIds.has(params.profileId)) {
+    return;
+  }
+  throw new Error(
+    `Auth profile "${params.profileId}" is retired. Run ${formatCliCommand("openclaw doctor --fix")}.`,
+  );
+}
 
 function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
@@ -96,6 +109,11 @@ export async function resolveApiKeyForProviderCore(params: {
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  let deprecatedProfileIds: ReadonlySet<string> | undefined;
+  const getDeprecatedProfileIds = () =>
+    (deprecatedProfileIds ??= new Set(
+      resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
+    ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   // Pending credential files own this agent's auth route until Doctor commits
   // and archives them; do not fall through to env/config credentials.
@@ -123,6 +141,10 @@ export async function resolveApiKeyForProviderCore(params: {
       return awsSdkProfileAuth;
     }
     const store = getScopedStore(profileId);
+    assertAuthProfileNotRetired({
+      profileId,
+      deprecatedProfileIds: getDeprecatedProfileIds(),
+    });
     const configuredProfileType = store.profiles[profileId]?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
@@ -269,6 +291,17 @@ export async function resolveApiKeyForProviderCore(params: {
   // Matched profile references are terminal so bad bindings cannot silently
   // fall through to a different credential or to the profile id as bearer text.
   const providerEntryStore = getScopedStore();
+  const providerEntryReference = authConfig.resolveProviderEntryApiKeyProfileReference({
+    cfg,
+    provider,
+    store: providerEntryStore,
+  });
+  if ("profileId" in providerEntryReference) {
+    assertAuthProfileNotRetired({
+      profileId: providerEntryReference.profileId,
+      deprecatedProfileIds: getDeprecatedProfileIds(),
+    });
+  }
   const providerEntryBinding = await authConfig.resolveProviderEntryApiKeyBinding({
     cfg,
     provider,
@@ -375,7 +408,23 @@ export async function resolveApiKeyForProviderCore(params: {
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
-    let candidateMode: ResolvedProviderAuth["mode"] | undefined;
+    const candidateType = store.profiles[candidate]?.type;
+    const candidateMode = candidateType
+      ? authConfig.profileTypeToAuthMode(candidateType)
+      : undefined;
+    if (
+      candidateMode &&
+      !isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        mode: candidateMode,
+      })
+    ) {
+      continue;
+    }
+    if (getDeprecatedProfileIds().has(candidate)) {
+      continue;
+    }
     try {
       const awsSdkProfileAuth = authConfig.resolveConfiguredAwsSdkProfileAuth({
         cfg,
@@ -384,18 +433,6 @@ export async function resolveApiKeyForProviderCore(params: {
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
-      }
-      const candidateType = store.profiles[candidate]?.type;
-      candidateMode = candidateType ? authConfig.profileTypeToAuthMode(candidateType) : undefined;
-      if (
-        candidateMode &&
-        !isAuthModeAllowedForModel({
-          provider,
-          modelApi: params.modelApi,
-          mode: candidateMode,
-        })
-      ) {
-        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,

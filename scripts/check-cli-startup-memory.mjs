@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Measures CLI startup memory with an isolated home and RSS hook.
+// Measures CLI startup memory with an isolated home and an in-process bench entry.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -17,7 +17,7 @@ const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
   DEFAULT_COMMAND_TIMEOUT_MS,
 );
 let tmpHome = null;
-let rssHookPath = null;
+let benchEntryPath = null;
 const PASS = "pass";
 const FAIL = "fail";
 function readPositiveIntEnv(name, fallback, env = process.env) {
@@ -226,8 +226,8 @@ function buildBenchEnv(homeDir = tmpHome) {
   return env;
 }
 function runCaseSample(testCase, sampleIndex, params = {}) {
-  if (!rssHookPath) {
-    throw new Error("RSS hook path is not initialized");
+  if (!benchEntryPath) {
+    throw new Error("bench entry path is not initialized");
   }
   if (!tmpHome) {
     throw new Error("temporary home is not initialized");
@@ -237,18 +237,14 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
   const env = buildBenchEnv(sampleHome);
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-  const result = spawn(
-    process.execPath,
-    ["--import", nodeImportSpecifierForPath(rssHookPath), ...testCase.args],
-    {
-      cwd: repoRoot,
-      env,
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-      timeout: timeoutMs,
-      killSignal: "SIGKILL",
-    },
-  );
+  const result = spawn(process.execPath, [benchEntryPath, ...testCase.args.slice(1)], {
+    cwd: repoRoot,
+    env,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
   const stderr = String(result.stderr ?? "");
   const stdout = String(result.stdout ?? "");
   const maxRssMb = parseMaxRssMb(stderr);
@@ -372,14 +368,24 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   }
   const options = parseArgs(argv);
   tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
-  rssHookPath = path.join(tmpHome, "measure-rss.mjs");
+  benchEntryPath = path.join(tmpHome, "bench-entry.mjs");
+  // Run the real launcher in-process so peak RSS is self-reported at exit
+  // without --import/--require flags: the entry declines its dist ESM resolve
+  // fast path when preload hooks may be registered, so an injected hook would
+  // measure a slower non-default resolution configuration instead of what a
+  // plain `node openclaw.mjs ...` invocation pays.
+  const launcherPath = path.join(repoRoot, "openclaw.mjs");
   writeFileSync(
-    rssHookPath,
+    benchEntryPath,
     [
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
       `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
       "});",
+      `const launcherPath = ${JSON.stringify(launcherPath)};`,
+      "// The launcher and entry expect argv[1] to be the launcher path itself.",
+      "process.argv[1] = launcherPath;",
+      `await import(${JSON.stringify(nodeImportSpecifierForPath(launcherPath))});`,
       "",
     ].join("\n"),
     "utf8",
@@ -394,7 +400,7 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
     if (tmpHome) {
       rmSync(tmpHome, { recursive: true, force: true });
       tmpHome = null;
-      rssHookPath = null;
+      benchEntryPath = null;
     }
   }
   const failure = results.find((result) => result.status !== "pass");

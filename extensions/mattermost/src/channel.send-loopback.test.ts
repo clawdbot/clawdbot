@@ -2,10 +2,10 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { mattermostPlugin } from "./channel.js";
 import { deliverMattermostReplyPayload } from "./mattermost/reply-delivery.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { setMattermostRuntime } from "./runtime.js";
 
 const CHANNEL_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
