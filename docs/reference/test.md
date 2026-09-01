@@ -163,6 +163,17 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+When a one-shot routed run targets only explicit test-file paths, each selected
+Vitest invocation must discover at least one test file. Excluding every selected
+file fails even when the lane normally permits empty runs. To allow that outcome
+intentionally, use `pnpm test <test-file-path> -- --passWithNoTests`. Use
+`--passWithNoTests=false` to require nonempty discovery explicitly. Broader
+selectors and source-derived selections retain their lane defaults.
+
+An explicit `--config` run through `scripts/run-vitest.mjs` keeps its stricter
+named-file policy and does not permit empty named-file runs. Plugin
+`--allow-no-tests` and `--allow-empty-after-exclude` controls are unchanged.
+
 Codex and other linked/sparse worktrees can run local tests and checks. When the
 dependency install is ready, use the normal commands above. If pnpm would
 reconcile a shared install, use the direct Node harnesses to bypass that
