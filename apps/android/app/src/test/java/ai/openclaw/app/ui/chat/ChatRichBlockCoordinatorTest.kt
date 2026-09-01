@@ -5,7 +5,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class ChatMathRendererTest {
+class ChatRichBlockCoordinatorTest {
   @Test
   fun queuePreservesOrderAndDeduplicatesMatchingJobs() {
     val harness = RenderHarness()
@@ -18,10 +18,10 @@ class ChatMathRendererTest {
     harness.coordinator.render(second) { result -> results.add("c:${result.value()}") }
 
     assertEquals(listOf(first), harness.backend.requests)
-    harness.backend.complete(ChatMathRenderResult.Success("one"))
+    harness.backend.complete(ChatRichBlockResult.Success("one"))
     assertEquals(listOf(first, second), harness.backend.requests)
     assertEquals(listOf("a:one", "b:one"), results)
-    harness.backend.complete(ChatMathRenderResult.Success("two"))
+    harness.backend.complete(ChatRichBlockResult.Success("two"))
     assertEquals(listOf("a:one", "b:one", "c:two"), results)
   }
 
@@ -42,7 +42,7 @@ class ChatMathRendererTest {
     val recolored = first.copy(textColor = 0xffffffff.toInt())
 
     harness.coordinator.render(first) {}
-    harness.backend.complete(ChatMathRenderResult.Success("first"))
+    harness.backend.complete(ChatRichBlockResult.Success("first"))
     harness.coordinator.render(recolored) {}
 
     assertEquals(first.key, recolored.key)
@@ -53,14 +53,14 @@ class ChatMathRendererTest {
   fun negativeResultsAreCachedWithoutAnotherBackendJob() {
     val harness = RenderHarness()
     val request = request("bad")
-    val results = mutableListOf<ChatMathRenderResult<String>>()
+    val results = mutableListOf<ChatRichBlockResult<String>>()
 
     harness.coordinator.render(request, results::add)
-    harness.backend.complete(ChatMathRenderResult.Failure)
+    harness.backend.complete(ChatRichBlockResult.Failure)
     harness.coordinator.render(request, results::add)
 
     assertEquals(1, harness.backend.requests.size)
-    assertEquals(listOf(ChatMathRenderResult.Failure, ChatMathRenderResult.Failure), results)
+    assertEquals(listOf(ChatRichBlockResult.Failure, ChatRichBlockResult.Failure), results)
   }
 
   @Test
@@ -69,7 +69,7 @@ class ChatMathRendererTest {
     val request = request("retry")
 
     harness.coordinator.render(request) {}
-    harness.backend.complete(ChatMathRenderResult.TransientFailure)
+    harness.backend.complete(ChatRichBlockResult.TransientFailure)
     harness.coordinator.render(request) {}
 
     assertEquals(listOf(request, request), harness.backend.requests)
@@ -85,7 +85,7 @@ class ChatMathRendererTest {
     harness.coordinator.render(first) {}
     harness.coordinator.render(canceled) {}.cancel()
     harness.coordinator.render(last) {}
-    harness.backend.complete(ChatMathRenderResult.Success("one"))
+    harness.backend.complete(ChatRichBlockResult.Success("one"))
 
     assertEquals(listOf(first, last), harness.backend.requests)
   }
@@ -93,7 +93,7 @@ class ChatMathRendererTest {
   @Test
   fun timeoutFailsCurrentJobAndAdvancesQueue() {
     val harness = RenderHarness()
-    val results = mutableListOf<ChatMathRenderResult<String>>()
+    val results = mutableListOf<ChatRichBlockResult<String>>()
     val first = request("first")
     val second = request("second")
 
@@ -101,43 +101,80 @@ class ChatMathRendererTest {
     harness.coordinator.render(second, results::add)
     harness.scheduler.fire()
 
-    assertEquals(listOf(ChatMathRenderResult.TransientFailure), results)
+    assertEquals(listOf(ChatRichBlockResult.TransientFailure), results)
     assertEquals(listOf(first, second), harness.backend.requests)
+    assertEquals(listOf("render:first", "reset", "render:second"), harness.backend.events)
   }
 
   @Test
   fun staleCompletionAfterTimeoutCannotCompleteRetry() {
     val harness = RenderHarness()
-    val firstResults = mutableListOf<ChatMathRenderResult<String>>()
-    val retryResults = mutableListOf<ChatMathRenderResult<String>>()
+    val firstResults = mutableListOf<ChatRichBlockResult<String>>()
+    val retryResults = mutableListOf<ChatRichBlockResult<String>>()
     val request = request("retry")
 
     harness.coordinator.render(request, firstResults::add)
     val staleCompletion = harness.backend.completions.removeAt(0)
     harness.scheduler.fire()
     harness.coordinator.render(request, retryResults::add)
-    staleCompletion(ChatMathRenderResult.Success("stale"))
+    staleCompletion(ChatRichBlockResult.Success("stale"))
 
-    assertEquals(listOf(ChatMathRenderResult.TransientFailure), firstResults)
-    assertEquals(emptyList<ChatMathRenderResult<String>>(), retryResults)
-    harness.backend.complete(ChatMathRenderResult.Success("fresh"))
-    assertEquals(listOf(ChatMathRenderResult.Success("fresh")), retryResults)
+    assertEquals(listOf(ChatRichBlockResult.TransientFailure), firstResults)
+    assertEquals(emptyList<ChatRichBlockResult<String>>(), retryResults)
+    harness.backend.complete(ChatRichBlockResult.Success("fresh"))
+    assertEquals(listOf(ChatRichBlockResult.Success("fresh")), retryResults)
   }
 
   @Test
   fun parsesStructuredRenderCompletionMessages() {
     assertEquals(
-      ChatMathRenderMessage(
+      ChatRichBlockRenderMessage(
         id = "7",
         widthCssPx = 12.5,
         heightCssPx = 8.0,
         success = true,
+        svg = null,
       ),
-      parseChatMathRenderMessage(
+      parseChatRichBlockRenderMessage(
         """{"id":"7","widthCssPx":12.5,"heightCssPx":8,"success":true}""",
+        ChatRichBlockKind.Math,
       ),
     )
-    assertNull(parseChatMathRenderMessage("""{"id":"7"}"""))
+    assertNull(parseChatRichBlockRenderMessage("""{"id":"7"}""", ChatRichBlockKind.Math))
+  }
+
+  @Test
+  fun diagramCompletionRequiresBoundedSvgButErrorsDoNotRequireDimensions() {
+    val valid = """{"id":"8","success":true,"widthCssPx":240,"heightCssPx":100,"svg":"<svg/>"}"""
+    assertEquals("<svg/>", parseChatRichBlockRenderMessage(valid, ChatRichBlockKind.Mermaid)?.svg)
+    val withoutSvg = """{"id":"8","success":true,"widthCssPx":240,"heightCssPx":100}"""
+    assertNull(parseChatRichBlockRenderMessage(withoutSvg, ChatRichBlockKind.Mermaid))
+    assertNull(parseChatRichBlockRenderMessage(valid.replace("<svg/>", "x".repeat(1_000_001)), ChatRichBlockKind.Mermaid))
+    assertEquals(
+      false,
+      parseChatRichBlockRenderMessage("""{"id":"8","success":false,"error":"Invalid diagram"}""", ChatRichBlockKind.Mermaid)?.success,
+    )
+  }
+
+  @Test
+  fun cancelingQueuedWorkFreesCapacityWithoutDroppingAdmittedJobs() {
+    val harness = RenderHarness()
+    val outcomes = mutableListOf<ChatRichBlockResult<String>>()
+    harness.coordinator.render(request("active"), outcomes::add)
+    val subscriptions = (0 until 100).map { harness.coordinator.render(request("queued-$it"), outcomes::add) }
+    val rejected = outcomes.size
+    org.junit.Assert.assertTrue(rejected > 0)
+    org.junit.Assert.assertTrue(outcomes.all { it == ChatRichBlockResult.TransientFailure })
+    subscriptions.first().cancel()
+    harness.coordinator.render(request("replacement"), outcomes::add)
+    assertEquals(rejected, outcomes.size)
+    harness.backend.complete(ChatRichBlockResult.Success("active"))
+    assertEquals(
+      "queued-1",
+      harness.backend.requests
+        .last()
+        .source,
+    )
   }
 
   @Test
@@ -155,53 +192,54 @@ class ChatMathRendererTest {
     val backend = FakeBackend()
     val cache = FakeCache()
     val scheduler = FakeScheduler()
-    val coordinator = ChatMathRenderCoordinator(backend, cache, scheduler)
+    val coordinator = ChatRichBlockCoordinator(backend, cache, scheduler)
   }
 
-  private class FakeBackend : ChatMathRenderBackend<String> {
-    val requests = mutableListOf<ChatMathRenderRequest>()
-    val completions = mutableListOf<(ChatMathRenderResult<String>) -> Unit>()
+  private class FakeBackend : ChatRichBlockBackend<String> {
+    val requests = mutableListOf<ChatRichBlockRequest>()
+    val completions = mutableListOf<(ChatRichBlockResult<String>) -> Unit>()
+    val events = mutableListOf<String>()
+
+    override fun reset() {
+      events += "reset"
+    }
 
     override fun render(
-      request: ChatMathRenderRequest,
-      completion: (ChatMathRenderResult<String>) -> Unit,
+      request: ChatRichBlockRequest,
+      completion: (ChatRichBlockResult<String>) -> Unit,
     ) {
       requests.add(request)
+      events += "render:${request.source}"
       completions.add(completion)
     }
 
-    fun complete(result: ChatMathRenderResult<String>) {
+    fun complete(result: ChatRichBlockResult<String>) {
       completions.removeAt(0).invoke(result)
     }
   }
 
-  private class FakeCache : ChatMathRenderCache<String> {
-    private val entries = mutableMapOf<ChatMathRenderRequest, ChatMathCacheEntry<String>>()
+  private class FakeCache : ChatRichBlockCache<String> {
+    private val entries = mutableMapOf<ChatRichBlockRequest, ChatRichBlockResult<String>>()
 
-    override fun get(request: ChatMathRenderRequest): ChatMathCacheEntry<String> = entries[request] ?: ChatMathCacheEntry.Missing
+    override fun get(request: ChatRichBlockRequest): ChatRichBlockResult<String>? = entries[request]
 
     override fun put(
-      request: ChatMathRenderRequest,
-      result: ChatMathRenderResult<String>,
+      request: ChatRichBlockRequest,
+      result: ChatRichBlockResult<String>,
     ) {
-      entries[request] =
-        when (result) {
-          is ChatMathRenderResult.Success -> ChatMathCacheEntry.Success(result.value)
-          ChatMathRenderResult.Failure -> ChatMathCacheEntry.Failure
-          ChatMathRenderResult.TransientFailure -> ChatMathCacheEntry.Missing
-        }
+      if (result != ChatRichBlockResult.TransientFailure) entries[request] = result
     }
   }
 
-  private class FakeScheduler : ChatMathTimeoutScheduler {
+  private class FakeScheduler : ChatRenderTimeoutScheduler {
     private var action: (() -> Unit)? = null
 
     override fun schedule(
       delayMs: Long,
       action: () -> Unit,
-    ): ChatMathTimeout {
+    ): ChatRenderCancellation {
       this.action = action
-      return ChatMathTimeout { if (this.action === action) this.action = null }
+      return ChatRenderCancellation { if (this.action === action) this.action = null }
     }
 
     fun fire() {
@@ -211,11 +249,11 @@ class ChatMathRendererTest {
     }
   }
 
-  private fun ChatMathRenderResult<String>.value(): String =
+  private fun ChatRichBlockResult<String>.value(): String =
     when (this) {
-      is ChatMathRenderResult.Success -> value
-      ChatMathRenderResult.Failure -> "failure"
-      ChatMathRenderResult.TransientFailure -> "transient failure"
+      is ChatRichBlockResult.Success -> value
+      ChatRichBlockResult.Failure -> "failure"
+      ChatRichBlockResult.TransientFailure -> "transient failure"
     }
 
   private fun request(

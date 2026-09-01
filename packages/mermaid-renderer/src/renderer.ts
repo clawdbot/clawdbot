@@ -1,9 +1,8 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
 import type { MermaidConfig } from "mermaid";
-import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url";
-import frameScriptUrl from "./markdown-mermaid-frame.runtime.js?url&no-inline";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
+import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url&no-inline";
+import frameScriptUrl from "./frame.js?url&no-inline";
 
 export type MermaidTheme = {
   background: string;
@@ -288,7 +287,17 @@ function createMermaidFrame(): MermaidFrame {
     "position:fixed;left:-10000px;top:0;width:1024px;height:768px;border:0;visibility:hidden;pointer-events:none";
   const scripts = [mermaidScriptUrl, frameScriptUrl].map((url) => new URL(url, location.href).href);
   const policy = `default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
-  frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${escapeMarkdownHtml(policy)}">${scripts.map((url) => `<script src="${escapeMarkdownHtml(url)}"></script>`).join("")}</head><body></body></html>`;
+  const page = document.implementation.createHTMLDocument("");
+  const meta = page.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = policy;
+  page.head.append(meta);
+  for (const url of scripts) {
+    const script = page.createElement("script");
+    script.src = url;
+    page.head.append(script);
+  }
+  frame.srcdoc = `<!doctype html>${page.documentElement.outerHTML}`;
   timeout = window.setTimeout(
     () => instance.dispose(new Error("Mermaid renderer could not be loaded.")),
     RENDER_TIMEOUT_MS,

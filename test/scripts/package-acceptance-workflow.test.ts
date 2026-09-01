@@ -8806,7 +8806,20 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
     const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
+    const androidJob = workflowJob(ANDROID_RELEASE_WORKFLOW, "publish_signed_android_apk");
+    const setupNode = workflowStep(androidJob, "Setup Node environment");
+    const setupNodeAction = parse(
+      readFileSync(".github/actions/setup-node-env/action.yml", "utf8"),
+    );
+    const androidSteps = androidJob.steps ?? [];
 
+    expect(setupNode.uses).toBe("./.github/actions/setup-node-env");
+    expect(setupNode.with?.["install-deps"] ?? setupNodeAction.inputs["install-deps"].default).toBe(
+      "true",
+    );
+    expect(androidSteps.indexOf(setupNode)).toBeLessThan(
+      androidSteps.indexOf(workflowStep(androidJob, "Create apps-signing read token")),
+    );
     expect(androidWorkflow).toContain("environment: android-release");
     expect(androidWorkflow).toContain(
       "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
