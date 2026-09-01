@@ -1015,8 +1015,12 @@ describe("release candidate checklist", () => {
     const api = (tag: unknown = tagRef, branches: unknown = []) => ({
       token: "",
       fetchImpl: vi.fn(async (url: string) => {
-        if (url.includes(`/repos/${repo}/git/ref/tags/`)) return jsonResponse(tag);
-        if (url.includes(`/repos/${repo}/git/matching-refs/heads/`)) return jsonResponse(branches);
+        if (url.includes(`/repos/${repo}/git/ref/tags/`)) {
+          return jsonResponse(tag);
+        }
+        if (url.includes(`/repos/${repo}/git/matching-refs/heads/`)) {
+          return jsonResponse(branches);
+        }
         throw new Error(`unexpected request: ${url}`);
       }),
     });
@@ -1152,7 +1156,7 @@ describe("release candidate checklist", () => {
 
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
-      "--skip-dispatch requires --full-release-run and --npm-preflight-run",
+      "--skip-dispatch requires --full-release-run",
     );
   });
 

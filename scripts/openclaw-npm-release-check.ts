@@ -13,6 +13,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
+import { isRecord } from "./lib/record-shared.mjs";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
@@ -518,13 +519,10 @@ function runNpmCommand(args: string[]): string {
   });
 }
 
-type NpmPackFileEntry = {
-  path?: string;
-};
-
-type NpmPackResult = {
+export type NpmPackResult = {
   filename?: string;
-  files?: NpmPackFileEntry[];
+  files?: { path: string }[];
+  unpackedSize?: number;
 };
 
 type ExecFailure = Error & {
@@ -574,11 +572,19 @@ export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      const entries = resolveNpmJsonEntries(parsed).filter(
-        (entry): entry is NpmPackResult =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      );
-      if (entries.length > 0) {
+      const entries = resolveNpmJsonEntries(parsed);
+      if (
+        entries.length > 0 &&
+        entries.every(
+          (entry): entry is NpmPackResult =>
+            isRecord(entry) &&
+            (entry.filename === undefined || typeof entry.filename === "string") &&
+            (entry.unpackedSize === undefined || typeof entry.unpackedSize === "number") &&
+            (entry.files === undefined ||
+              (Array.isArray(entry.files) &&
+                entry.files.every((file) => isRecord(file) && typeof file.path === "string"))),
+        )
+      ) {
         return entries;
       }
     } catch {

@@ -860,6 +860,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/ios-lifecycle-workflow.test.ts",
         "test/scripts/macos-native-test-launch.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-release.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
@@ -888,8 +889,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/frv.test.ts",
         "test/scripts/full-release-artifact-contract.test.ts",
         "test/scripts/full-release-validation-continuation-workflow.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-release.test.ts",
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-tooling-identity.test.ts",
         "test/scripts/validate-full-release-validation-evidence.test.ts",
       ],
     );
@@ -1028,12 +1031,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
-        "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
-        "test/scripts/package-source-preflight.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
-        "test/scripts/release-check.test.ts",
-        "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
   });
@@ -1044,6 +1044,7 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "src/dockerfile.test.ts",
         "test/scripts/docker-channel-promote.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
@@ -1055,6 +1056,7 @@ describe("scripts/test-projects changed-target routing", () => {
       workflowPath: ".github/workflows/openclaw-release-publish.yml",
       targets: [
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
@@ -1081,6 +1083,19 @@ describe("scripts/test-projects changed-target routing", () => {
       expectChangedTargets([workflowPath], targets);
     },
   );
+
+  it("selects OCI publication proof for read-only Docker preparation changes", () => {
+    const plan = resolveChangedTestTargetPlan([".github/workflows/docker-release-prepare.yml"]);
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual(
+      expect.arrayContaining([
+        "src/dockerfile.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ]),
+    );
+  });
 
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [

@@ -181,6 +181,9 @@ jobs:
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      release_tag: ${{ steps.release_inputs.outputs.release_tag }}
+      npm_dist_tag: ${{ steps.release_inputs.outputs.npm_dist_tag }}
+      release_candidate_branch: ${{ steps.release_inputs.outputs.release_candidate_branch }}
       trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
@@ -205,6 +208,7 @@ jobs:
             scripts/github/validate-release-suite-filters.sh
             scripts/full-release-candidate-contract.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/lib/release-version.mjs
             scripts/lib/record-shared.mjs
             scripts/lib/canonical-json.mjs
             scripts/lib/upgrade-survivor-policy.mjs
@@ -383,6 +387,9 @@ jobs:
           fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
             printf 'target_version=%s\n' "$target_version" >> "$GITHUB_OUTPUT"
+            release_tag="v$target_version"
+            if [[ "$context_ref" == v* ]]; then release_tag="$context_ref"; fi
+            printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           fi
           extended_stable_line=""
           release_version_pattern=""
@@ -448,6 +455,20 @@ jobs:
               fi
             fi
           fi
+
+          TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { classifyReleaseTrain, parseReleaseVersion } from './workflow/scripts/lib/release-version.mjs';
+          const version = parseReleaseVersion(process.env.TARGET_VERSION);
+          if (!version) throw new Error('Invalid release package version.');
+          const train = classifyReleaseTrain(version);
+          if (train === 'unsupported-extended-stable-correction') {
+            throw new Error('Extended-stable releases do not allow correction suffixes.');
+          }
+          const distTag = train === 'stable' ? 'beta' : train;
+          const branch = train === 'extended-stable' ? `extended-stable/${version.year}.${version.month}.33` : '';
+          appendFileSync(process.env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\n`);
+          NODE
 
           # Qualification scope is a resolved fact, shared by dispatch and evidence.
           coverage_policy=""
@@ -769,10 +790,70 @@ jobs:
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
 
+  prepare_npm_package:
+    name: Prepare release npm artifacts
+    needs: resolve_target
+    if: ${{ github.run_attempt == 1 && needs.resolve_target.result == 'success' && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/openclaw-npm-preflight.yml
+    with:
+      tag: ${{ needs.resolve_target.outputs.sha }}
+      preflight_only: true
+      preflight_phase: prepare
+      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+
+  check_npm_source:
+    name: Check release npm source
+    needs: resolve_target
+    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/openclaw-npm-preflight.yml
+    with:
+      tag: ${{ needs.resolve_target.outputs.sha }}
+      preflight_only: true
+      preflight_phase: source
+      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+
+  qualify_npm_package:
+    name: Qualify release npm artifacts
+    needs: [resolve_target, prepare_npm_package, check_npm_source]
+    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' && needs.check_npm_source.result == 'success' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/openclaw-npm-preflight.yml
+    with:
+      tag: ${{ needs.resolve_target.outputs.sha }}
+      preflight_only: true
+      preflight_phase: verify
+      prepared_bundle_json: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
+      source_check_json: ${{ needs.check_npm_source.outputs.source_check_json }}
+      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+
+  prepare_docker_release:
+    name: Prepare release Docker artifacts
+    needs: resolve_target
+    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: ./.github/workflows/docker-release-prepare.yml
+    with:
+      tag: ${{ needs.resolve_target.outputs.release_tag }}
+      release_sha: ${{ needs.resolve_target.outputs.sha }}
+
   candidate_acquisition:
     name: Acquire full release candidate
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_npm_package]
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
     permissions:
       actions: read
       contents: read
@@ -783,6 +864,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.sha }}
       request_json: ${{ needs.resolve_target.outputs.candidate_request_json }}
       request_sha256: ${{ needs.resolve_target.outputs.candidate_request_sha256 }}
+      prepared_npm_bundle_json: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
 
   normal_ci:
     name: Run normal full CI
@@ -1735,6 +1817,10 @@ jobs:
         resolve_target,
         evidence_reuse,
         docker_runtime_assets_preflight,
+        prepare_npm_package,
+        check_npm_source,
+        qualify_npm_package,
+        prepare_docker_release,
         candidate_acquisition,
         normal_ci,
         plugin_prerelease_independent,
@@ -1751,6 +1837,29 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Require qualified publication artifacts
+        if: inputs.rerun_group == 'all'
+        env:
+          NPM_PREPARE_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFY_RESULT: ${{ needs.qualify_npm_package.result }}
+          DOCKER_PREPARE_RESULT: ${{ needs.prepare_docker_release.result }}
+          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+        run: |
+          set -euo pipefail
+          [[ "$NPM_PREPARE_RESULT" == "success" && "$NPM_QUALIFY_RESULT" == "success" &&
+            -n "$QUALIFIED_NPM_BUNDLE_JSON" ]] || {
+              echo "Release package qualification and Docker preparation must both succeed." >&2
+              exit 1
+            }
+          if [[ "$TARGET_VERSION" != *-alpha.* ]]; then
+            [[ "$DOCKER_PREPARE_RESULT" == "success" && "$PREPARED_DOCKER_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "Release Docker preparation must succeed." >&2
+              exit 1
+            }
+          fi
+
       - name: Checkout release state verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1937,6 +2046,11 @@ jobs:
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}
+          PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
+          PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
+          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1972,6 +2086,11 @@ jobs:
             --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
+            --argjson npmPreflight "${QUALIFIED_NPM_BUNDLE_JSON:-null}" \
+            --arg dockerRunId "$PREPARED_DOCKER_RUN_ID" \
+            --arg dockerRunAttempt "$PREPARED_DOCKER_RUN_ATTEMPT" \
+            --arg dockerArtifactName "$PREPARED_DOCKER_ARTIFACT_NAME" \
+            --arg dockerManifestSha256 "$PREPARED_DOCKER_MANIFEST_SHA256" \
             '$plan[0] as $plan
             | $drain[0] as $drain
             | ($drain.children | with_entries(.value = {
@@ -1998,6 +2117,15 @@ jobs:
                 targetRef: $targetRef,
                 targetSha: $plan.targetSha,
                 candidateBinding: $plan.candidate,
+                publicationArtifacts: {
+                  npmPreflight: $npmPreflight,
+                  docker: (if $dockerManifestSha256 == "" then null else {
+                    preparedRunId: $dockerRunId,
+                    preparedRunAttempt: $dockerRunAttempt,
+                    preparedArtifactName: $dockerArtifactName,
+                    preparedManifestSha256: $dockerManifestSha256
+                  } end)
+                },
                 childEvidence: $childEvidence,
                 executionPlanSha256: $plan.sha256,
                 sourceParentRunAttempt: ($plan.parentRunAttempt | tonumber)

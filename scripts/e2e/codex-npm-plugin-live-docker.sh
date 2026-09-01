@@ -323,7 +323,7 @@ openclaw_e2e_enable_openclaw_cli_timeout
 if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
   registry_port_file=/tmp/openclaw-codex-plugin-registry.port
   rm -f "$registry_port_file"
-  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}}" \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
       "$registry_port_file" \
       "$CODEX_PLUGIN_REGISTRY_PACKAGE" \
