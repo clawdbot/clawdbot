@@ -5,6 +5,7 @@ import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -37,7 +38,7 @@ function inventorySummary(
   loading: boolean,
 ): string {
   if (loading && groups.length === 0) {
-    return t("common.loading");
+    return "";
   }
   const connected = groups.filter((group) => group.primary.connected).length;
   const parts = [
@@ -89,7 +90,9 @@ export function renderDeviceInventory(props: DevicesProps) {
   const deviceRows = html`
     ${gatewayPresence ? renderPresenceRow({ kind: "gateway", entry: gatewayPresence }) : nothing}
     ${empty
-      ? renderSettingsEmpty(loading ? t("common.loading") : t("devices.inventory.empty"))
+      ? loading
+        ? renderSettingsLoadingSkeleton()
+        : renderSettingsEmpty(t("devices.inventory.empty"))
       : groups.map((group) => renderInventoryGroup(group, props))}
   `;
   return html`

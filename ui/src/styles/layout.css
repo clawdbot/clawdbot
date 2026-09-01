@@ -532,6 +532,29 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   line-height: 1.45;
 }
 
+.settings-sidebar__loading {
+  padding: 10px 12px;
+}
+
+.settings-sidebar__loading-rows {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-sidebar__loading-row {
+  display: block;
+  width: 82%;
+  height: 12px;
+}
+
+.settings-sidebar__loading-row:nth-child(3n + 2) {
+  width: 68%;
+}
+
+.settings-sidebar__loading-row:nth-child(3n) {
+  width: 74%;
+}
+
 .settings-sidebar__group {
   display: flex;
   flex-direction: column;
