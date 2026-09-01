@@ -4231,7 +4231,7 @@ NODE
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
-            ".github/workflows/vitest-cache-warm.yml",
+            ".github/workflows/release-npm-cache-warm.yml",
           ]).toContain(file);
           const workflow = parse(readFileSync(file, "utf8"));
           const owner = Object.values(workflow.jobs).find((candidate) =>
@@ -5694,7 +5694,13 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("publishes a portable release npm seed without hooks or push-time downloads", () => {
-    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmer = parse(readFileSync(".github/workflows/release-npm-cache-warm.yml", "utf8"));
+    expect(warmer.on).not.toHaveProperty("push");
+    expect(warmer.on).toHaveProperty("schedule");
+    expect(warmer.on).toHaveProperty("workflow_dispatch");
+    expect(warmer.concurrency.group).not.toBe(
+      parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8")).concurrency.group,
+    );
     const seed = warmer.jobs["warm-release-npm"];
     for (const repository of ["openclaw/openclaw", "example/fork"]) {
       for (const eventName of [
