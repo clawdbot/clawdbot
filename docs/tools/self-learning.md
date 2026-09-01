@@ -297,6 +297,10 @@ result pending regardless of autonomous mode.
 | `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                        |
 | `skills.workshop.allowSymlinkTargetWrites` | `false`  | Allows apply through explicitly trusted workspace skill symlinks. Capture itself does not widen the trusted target list. |
 
+Changes under `skills.workshop` other than `autonomous.mode` require a Gateway
+restart. The config CLI says so explicitly; use `openclaw gateway restart --safe`
+when automatic reload is disabled.
+
 See [Skills config](/tools/skills-config#workshop-skills-workshop) for ranges and
 the complete `skills.*` schema.
 

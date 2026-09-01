@@ -48,6 +48,7 @@ import {
 } from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
+  archiveSkillProposal,
   inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
@@ -1177,6 +1178,13 @@ export function registerSkillsCli(program: Command) {
       "Quarantined",
       quarantineSkillProposal,
     ],
+    [
+      "archive",
+      "Archive a quarantined skill proposal while retaining its evidence",
+      "Reason for archival or expiry",
+      "Archived",
+      archiveSkillProposal,
+    ],
   ] as const) {
     workshop
       .command(name)
@@ -1195,10 +1203,10 @@ export function registerSkillsCli(program: Command) {
             command,
             async ({ agentId, workspaceDir }) => {
               const reviewed =
-                name === "reject"
+                name === "reject" || name === "archive"
                   ? await inspectSkillProposal(proposalId, { agentId, workspaceDir })
                   : undefined;
-              if (name === "reject" && !reviewed) {
+              if ((name === "reject" || name === "archive") && !reviewed) {
                 throw new Error(`Skill proposal not found: ${proposalId}`);
               }
               return action({

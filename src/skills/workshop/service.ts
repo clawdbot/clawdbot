@@ -28,6 +28,7 @@ import {
   normalizeProposalOrigin,
 } from "./service-propose.js";
 import { readRequiredProposal } from "./service-query.js";
+import { commitQuarantinedSkillProposalTransition } from "./store-sqlite-transition.js";
 import {
   hashSkillProposalContent,
   readSkillProposalRecord,
@@ -225,6 +226,91 @@ export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
   return await markProposal(input, "quarantined");
+}
+
+/**
+ * Move a quarantined proposal into the retained terminal state.
+ *
+ * The proposal record, event history, and evidence bundle stay in place. This
+ * is deliberately a lifecycle transition rather than a filesystem cleanup so
+ * operators can still list and inspect the archived evidence.
+ */
+export async function archiveSkillProposal(
+  input: SkillProposalActionInput,
+): Promise<SkillProposalRecord> {
+  const scope = {
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    workspaceDir: input.workspaceDir,
+  };
+  const initial = await readSkillProposalRecord(
+    input.proposalId,
+    proposalStoreOptions(input.env),
+    scope,
+    input.config ? { config: input.config } : undefined,
+  );
+  if (!initial) {
+    throw new Error(`Skill proposal not found: ${input.proposalId}`);
+  }
+  const result = await withSkillProposalTargetLock(
+    initial,
+    async () => {
+      const current = await readSkillProposalRecord(
+        input.proposalId,
+        proposalStoreOptions(input.env),
+        scope,
+        { reconcile: false },
+      );
+      if (!current) {
+        throw new Error(`Skill proposal not found: ${input.proposalId}`);
+      }
+      if (current.status !== "quarantined") {
+        throw new Error(
+          `Only quarantined proposals can be archived. Current status: ${current.status}.`,
+        );
+      }
+      assertExpectedRevisionHash(hashSkillProposalRevision(current), input.expectedRevisionHash);
+      const now = new Date().toISOString();
+      const archiveReason = normalizeOptionalString(input.reason);
+      const record: SkillProposalRecord = {
+        ...current,
+        status: "stale",
+        updatedAt: now,
+        staleAt: now,
+      };
+      const proposedEvent = createSkillProposalEvent({
+        record,
+        type: "stale",
+        actor: input.eventActor,
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+        payload: {
+          archiveReason: archiveReason ?? "archived",
+          quarantineReason: current.statusReason ?? null,
+        },
+        occurredAt: now,
+      });
+      const commit = commitQuarantinedSkillProposalTransition({
+        expected: current,
+        record,
+        event: proposedEvent,
+        store: proposalStoreOptions(input.env),
+        operationLabel: "skill-workshop.proposal.archive",
+      });
+      if (commit.state === "conflict") {
+        throw new Error("Skill proposal changed before archive commit.");
+      }
+      return { record, event: commit.event };
+    },
+    proposalStoreOptions(input.env),
+  );
+  if (result.event) {
+    await dispatchSkillProposalChanged({
+      event: result.event,
+      record: result.record,
+      workspaceDir: input.workspaceDir,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+    });
+  }
+  return result.record;
 }
 
 export async function applySkillProposal(

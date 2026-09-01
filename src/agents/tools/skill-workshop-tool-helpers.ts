@@ -5,6 +5,7 @@ import {
 } from "../../skills/workshop/frontmatter.js";
 import { prepareSkillProposalDraft } from "../../skills/workshop/proposal-draft.js";
 import {
+  archiveSkillProposal,
   inspectSkillProposal,
   resolvePendingSkillProposal,
 } from "../../skills/workshop/service.js";
@@ -46,6 +47,27 @@ export function assertAutonomousSkillSize(
 
 export function skillWorkshopAgentEventActor(agentId?: string) {
   return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
+}
+
+export async function executeSkillWorkshopArchive(params: {
+  workspaceDir: string;
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  toolParams: Record<string, unknown>;
+}) {
+  const archived = await archiveSkillProposal({
+    workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
+    eventActor: skillWorkshopAgentEventActor(params.agentId),
+    env: params.env,
+    proposalId: readLifecycleProposalIdParam(params.toolParams),
+    expectedRevisionHash: readToolStringParam(params.toolParams, "expected_revision_hash"),
+    correlationId: readToolStringParam(params.toolParams, "correlation_id"),
+    reason: readToolStringParam(params.toolParams, "reason"),
+  });
+  return actionResult(archived, {
+    contentText: `Archived skill proposal ${archived.id}; evidence retained.`,
+  });
 }
 
 export function proposalReviewPhase(

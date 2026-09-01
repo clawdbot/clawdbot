@@ -26,14 +26,19 @@ export type PendingSkillProposalTransitionCommit =
   | { state: "committed"; event: SkillProposalEvent }
   | { state: "conflict"; current?: SkillProposalRecord };
 
-export function commitPendingSkillProposalTransition(params: {
+type SkillProposalTransitionParams = {
   expected: SkillProposalRecord;
+  expectedStatus: "pending" | "quarantined";
   record: SkillProposalRecord;
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
   operationLabel: string;
   invalidateRollback?: boolean;
-}): PendingSkillProposalTransitionCommit {
+};
+
+function commitSkillProposalTransition(
+  params: SkillProposalTransitionParams,
+): PendingSkillProposalTransitionCommit {
   ensureSkillWorkshopSchema(params.store);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -49,7 +54,7 @@ export function commitPendingSkillProposalTransition(params: {
       if (
         !current ||
         !currentRecord ||
-        currentRecord.status !== "pending" ||
+        currentRecord.status !== params.expectedStatus ||
         current.record_json !== JSON.stringify(params.expected)
       ) {
         return {
@@ -74,6 +79,27 @@ export function commitPendingSkillProposalTransition(params: {
     databaseOptions(params.store),
     { operationLabel: params.operationLabel },
   );
+}
+
+export function commitPendingSkillProposalTransition(params: {
+  expected: SkillProposalRecord;
+  record: SkillProposalRecord;
+  event: NewSkillProposalEvent;
+  store?: SkillWorkshopStoreOptions;
+  operationLabel: string;
+  invalidateRollback?: boolean;
+}): PendingSkillProposalTransitionCommit {
+  return commitSkillProposalTransition({ ...params, expectedStatus: "pending" });
+}
+
+export function commitQuarantinedSkillProposalTransition(params: {
+  expected: SkillProposalRecord;
+  record: SkillProposalRecord;
+  event: NewSkillProposalEvent;
+  store?: SkillWorkshopStoreOptions;
+  operationLabel: string;
+}): PendingSkillProposalTransitionCommit {
+  return commitSkillProposalTransition({ ...params, expectedStatus: "quarantined" });
 }
 
 export function readCommittedSkillProposalTransition(params: {

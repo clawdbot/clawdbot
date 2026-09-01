@@ -475,6 +475,23 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    "skills.workshop.maxPending",
+    "skills.workshop.maxSkillBytes",
+    "skills.workshop.approvalPolicy",
+    "skills.workshop.allowSymlinkTargetWrites",
+  ])("requires a gateway restart when %s changes", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: true,
+      restartReasons: [path],
+      hotReasons: [],
+      noopPaths: [],
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it.each([
     { path: "agents.entries", restartHeartbeat: true },
     { path: "agents.ownership", restartHeartbeat: false },
     { path: "agents.defaults.sessionStore", restartHeartbeat: false },

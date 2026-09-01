@@ -140,6 +140,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["reconcile-skill-review-jobs"],
   },
+  // Workshop tool instances capture these values when their run is constructed.
+  // Never claim a file-only Workshop edit is active in the running Gateway.
+  // The longer autonomous.mode rule above remains hot-reloadable.
+  { prefix: "skills.workshop", kind: "restart" },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
   // startup; disposing MCP runtimes cannot move or create that HTTP server.

@@ -20,13 +20,19 @@ const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set([
   "apply",
   "reject",
   "quarantine",
+  "archive",
   "restore_collection",
 ]);
 // Codex dynamic tools have a 90s watchdog. Approval RPCs reserve another 10s
 // for Gateway cleanup, leaving 10s for proposal lookup and tool-call overhead.
 const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
-type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine" | "restore_collection";
+type SkillWorkshopLifecycleAction =
+  | "apply"
+  | "reject"
+  | "quarantine"
+  | "archive"
+  | "restore_collection";
 
 // Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
@@ -62,6 +68,13 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
       description:
         "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
       severity: "warning",
+    };
+  }
+  if (action === "archive") {
+    return {
+      title: "Archive quarantined skill proposal",
+      description: "Archive a quarantined proposal while retaining its evidence.",
+      severity: "info",
     };
   }
   return {
@@ -164,10 +177,11 @@ function lifecycleApprovalTimeoutReason(params: {
     ].join(" ");
   }
   const proposal = params.proposalId ? `Proposal ${params.proposalId}` : "the proposal";
+  const unchangedState = params.action === "archive" ? "quarantined" : "pending";
   return [
     "The Skill Workshop approval request expired without a decision.",
-    `This lifecycle call left ${proposal} unchanged and pending; check its current status in case another operator acted on it.`,
-    "Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine <id>`.",
+    `This lifecycle call left ${proposal} unchanged and ${unchangedState}; check its current status in case another operator acted on it.`,
+    "Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine|archive <id>`.",
     "Do not retry this tool call in a loop.",
   ].join(" ");
 }

@@ -19,8 +19,10 @@ import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
   applySkillProposal,
+  archiveSkillProposal,
   getSkillProposalRunProgress,
   inspectSkillProposal,
+  listSkillProposalEvents,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -1055,6 +1057,48 @@ describe("skill workshop proposals", () => {
         reason: "already applied",
       }),
     ).rejects.toThrow("Only pending proposals can be rejected");
+  });
+
+  it("archives a quarantined proposal as stale while retaining its evidence bundle", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Archived Draft",
+      description: "Superseded quarantined proposal",
+      content: "# Archived draft\n",
+    });
+    await quarantineSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      reason: "newer revision is active",
+    });
+
+    const archived = await archiveSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      reason: "expired after 30 days",
+    });
+
+    expect(archived).toMatchObject({
+      status: "stale",
+      statusReason: "newer revision is active",
+    });
+    expect(archived.staleAt).toBeTruthy();
+    const inspected = await inspectSkillProposal(proposal.record.id);
+    expect(inspected?.record.status).toBe("stale");
+    expect(inspected?.content).toContain("Archived draft");
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.at(-1),
+    ).toMatchObject({
+      type: "stale",
+      payload: {
+        archiveReason: "expired after 30 days",
+        quarantineReason: "newer revision is active",
+      },
+    });
+    await expect(
+      archiveSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("Only quarantined proposals can be archived");
   });
 
   it("reconciles a create apply interrupted after the live skill write", async () => {
