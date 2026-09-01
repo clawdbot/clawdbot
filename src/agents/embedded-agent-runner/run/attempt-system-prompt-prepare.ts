@@ -324,9 +324,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       const runtime = resolveSandboxRuntimeStatus({
         cfg: attempt.config,
         agentId:
-          params.sandboxSessionKey === (attempt.sessionKey?.trim() || attempt.sessionId)
+          attempt.sandboxAgentId ??
+          (params.sandboxSessionKey === (attempt.sessionKey?.trim() || attempt.sessionId)
             ? params.sessionAgentId
-            : undefined,
+            : undefined),
         sessionKey: params.sandboxSessionKey,
       });
       return { mode: runtime.mode, sandboxed: runtime.sandboxed };

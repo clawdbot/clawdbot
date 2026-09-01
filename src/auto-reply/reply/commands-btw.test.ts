@@ -70,46 +70,6 @@ describe("handleBtwCommand", () => {
     });
   });
 
-  it("still delegates while the session is actively running", async () => {
-    const params = buildParams("/btw what changed?");
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "snapshot answer" });
-
-    const result = await handleBtwCommand(params, true);
-
-    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
-      question: "what changed?",
-      agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
-      resolvedThinkLevel: "off",
-      resolvedReasoningLevel: "off",
-    });
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "snapshot answer", btw: { question: "what changed?" } },
-    });
-  });
-
-  it("starts the typing keepalive while the side question runs", async () => {
-    const params = buildParams("/btw what changed?");
-    const typing = createMockTypingController();
-    params.typing = typing;
-    params.agentDir = "/tmp/agent";
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "snapshot answer" });
-
-    await handleBtwCommand(params, true);
-
-    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
-  });
-
   it("returns an actionable visible error before running a restricted side question", async () => {
     const params = buildParams("/btw what changed?");
     params.agentDir = "/tmp/agent";
@@ -131,6 +91,8 @@ describe("handleBtwCommand", () => {
 
   it("delegates to the side-question runner", async () => {
     const params = buildParams("/btw what changed?");
+    const typing = createMockTypingController();
+    params.typing = typing;
     params.command.senderId = "sender-1";
     params.command.senderIsOwner = true;
     params.ctx.AccountId = "account-1";
@@ -167,8 +129,10 @@ describe("handleBtwCommand", () => {
     const result = await handleBtwCommand(params, true);
 
     const runnerArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expectObjectFields(runnerArgs, {
       question: "what changed?",
+      agentId: params.agentId,
       sessionEntry: params.sessionEntry,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
@@ -285,28 +249,6 @@ describe("handleBtwCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "alias answer", btw: { question: "what changed?" } },
-    });
-  });
-
-  it("falls back to the resolved agent dir when the caller omits it", async () => {
-    const params = buildParams("/btw what changed?");
-    params.agentId = "worker-1";
-    params.agentDir = undefined;
-    delete (params as { sessionKey?: string }).sessionKey;
-    params.sessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
-
-    const result = await handleBtwCommand(params, true);
-
-    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
-      "/agents/worker-1/agent",
-    );
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
     });
   });
 

@@ -17,7 +17,6 @@ import {
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
-import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
 import { resolveInternalRealtimeVoiceGatewayRelayLaunchError } from "../../talk/provider-internal.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
 import type {
@@ -64,38 +63,15 @@ export function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: stri
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   configuredInstructions?: string;
-  sessionKey?: unknown;
-  /** Relay sessions bind their agent lazily; injecting a guessed profile would mix agents. */
-  requireSessionKeyForProfile?: boolean;
+  sessionKey: string;
   warn: (message: string) => void;
-}): Promise<{ agentId: string; instructions: string; requestedSessionKey?: string }> {
-  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-  const defaultAgentId = resolveTalkTargetAgentId(params.config);
-  // Older clients can prefetch without a key. Client-owned creates bind to the
-  // default agent immediately, so its workspace profile stays consistent there.
-  const agentId =
-    params.agentId ??
-    (requestedSessionKey
-      ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
-      : defaultAgentId);
-  const bootstrapContext =
-    params.requireSessionKeyForProfile && !requestedSessionKey
-      ? undefined
-      : await resolveRealtimeBootstrapContextInstructions({
-          agentId,
-          config: params.config,
-          sessionKey: requestedSessionKey,
-          warn: params.warn,
-        });
-  return {
-    agentId,
-    instructions: [params.configuredInstructions, bootstrapContext]
-      .filter((entry): entry is string => Boolean(entry?.trim()))
-      .join("\n\n"),
-    ...(requestedSessionKey ? { requestedSessionKey } : {}),
-  };
+}): Promise<string> {
+  const bootstrapContext = await resolveRealtimeBootstrapContextInstructions(params);
+  return [params.configuredInstructions, bootstrapContext]
+    .filter((entry): entry is string => Boolean(entry?.trim()))
+    .join("\n\n");
 }
 
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
   const authStorage = {

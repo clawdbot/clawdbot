@@ -220,11 +220,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokensFresh = totalTokens !== undefined;
       next.totalTokensVersion =
         totalTokens !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined;
-    } else if (
-      typeof entry.totalTokens === "number" &&
-      Number.isFinite(entry.totalTokens) &&
-      entry.totalTokens > 0
-    ) {
+    } else {
+      // Empty-session zero is no longer current after a turn without usage.
       next.totalTokensFresh = false;
       next.totalTokensVersion = undefined;
     }

@@ -57,6 +57,7 @@ type BundledHealthCheckSelection = {
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly includeAllChecks?: boolean;
+  readonly updateReadiness?: "post-plugin";
 };
 
 type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
@@ -71,6 +72,11 @@ function loadMemoryCoreHealthApi(): BundledHealthApi {
 export function resolveBundledHealthCheckPluginStateMode(
   selection: BundledHealthCheckSelection,
 ): BundledHealthCheckPluginStateMode {
+  if (selection.updateReadiness !== undefined) {
+    // Update gates may inspect plugin-owned persistent state. Keep every phase on a private
+    // snapshot so a future tagged check cannot accidentally mutate the live pre-restart owner.
+    return "isolated";
+  }
   if (
     selection.includeAllChecks !== true &&
     (selection.onlyIds === undefined || selection.onlyIds.length === 0)

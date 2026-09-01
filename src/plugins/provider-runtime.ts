@@ -19,8 +19,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { providerUsageLabel } from "../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  normalizeProviderModelIdWithManifest,
+  type ManifestModelIdNormalizationSource,
+} from "./manifest-model-id-normalization.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
@@ -377,7 +380,7 @@ export function normalizeProviderModelIdWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  plugins?: ManifestModelIdNormalizationSource;
   context: ProviderNormalizeModelIdContext;
 }): string | undefined {
   const plugin = resolveProviderHookPlugin(params);

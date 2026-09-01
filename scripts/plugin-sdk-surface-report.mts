@@ -329,7 +329,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4353,
+      // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      4359,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -435,7 +437,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2591,
+      // +1: shared approval expiry formatter for native channel prompts.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      2594,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

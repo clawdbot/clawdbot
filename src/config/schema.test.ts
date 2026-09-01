@@ -802,11 +802,30 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
+  it("keeps merged plugin schema fragments independent of manifest metadata", () => {
+    const value = { type: "string" };
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "independent-schema",
+          configSchema: { type: "object", properties: { value } },
+        },
+      ],
+    });
+    value.type = "number";
+    expect(
+      lookupConfigSchema(result, "plugins.entries.independent-schema.config.value")?.schema.type,
+    ).toBe("string");
+  });
+
   it("derives tags for security, network, storage, tools, and performance paths", () => {
     const tagged = applyDerivedTags({
       "gateway.auth.token": {},
       "proxy.tls.caFile": {},
       "tools.web.fetch.timeoutSeconds": {},
+      "SESSION.SHARING.peer": {
+        tags: [" Custom ", "AUTH", "security", "custom", "unknown"],
+      },
     });
     expect(tagged["gateway.auth.token"]?.tags).toEqual(
       expect.arrayContaining(["security", "auth"]),
@@ -817,6 +836,15 @@ describe("config schema", () => {
     expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
       expect.arrayContaining(["tools", "performance"]),
     );
+    expect(tagged["SESSION.SHARING.peer"]?.tags).toEqual([
+      "security",
+      "auth",
+      "access",
+      "privacy",
+      "storage",
+      "custom",
+      "unknown",
+    ]);
   });
 
   it("only derives the advanced tag from an explicit advanced hint", () => {
@@ -1281,6 +1309,150 @@ describe("config schema", () => {
     expect(hints["custom.visibleCount"]?.advanced).toBe(false);
     expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
+
+  it.each([
+    [
+      "leading wildcard specificity",
+      [
+        ["custom.*.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier leading wildcard",
+      [
+        ["*.item.value", true],
+        ["custom.item.*", false],
+      ],
+      "custom.item.value",
+      true,
+    ],
+    [
+      "earlier rooted wildcard",
+      [
+        ["custom.item.*", false],
+        ["*.item.value", true],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "exact before wildcard",
+      [
+        ["custom.item.*", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "last exact alias",
+      [
+        ["custom..item.value", true],
+        ["custom.item.value", false],
+      ],
+      "custom.item.value",
+      false,
+    ],
+    [
+      "first array alias",
+      [
+        ["custom.items[]", true],
+        ["custom.items.*", false],
+      ],
+      "custom.items.*",
+      true,
+    ],
+    [
+      "first wildcard alias",
+      [
+        ["custom.items.*", false],
+        ["custom.items[]", true],
+      ],
+      "custom.items.*",
+      false,
+    ],
+  ] as const)("preserves tier precedence for %s", (_name, entries, target, expected) => {
+    const hints = applyResolvedConfigTierHints(
+      {
+        type: "object",
+        properties: {
+          custom: {
+            type: "object",
+            properties: {
+              item: { type: "object", properties: { value: { type: "string" } } },
+              items: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      Object.fromEntries(entries.map(([key, advanced]) => [key, { advanced }])),
+    );
+    expect(hints[target]?.advanced).toBe(expected);
+  });
+
+  it.each(["anyOf", "oneOf", "allOf"])(
+    "resolves numeric %s branches before inheriting child tiers",
+    (composition) => {
+      const branches = [
+        { type: "object", properties: { child: { type: "string" } } },
+        { type: "integer" },
+      ];
+      for (const variants of [branches, branches.toReversed()]) {
+        const hints = applyResolvedConfigTierHints(
+          {
+            type: "object",
+            properties: {
+              custom: {
+                type: "object",
+                properties: { choice: { [composition]: variants } },
+              },
+            },
+          },
+          { custom: { advanced: false } },
+        );
+        expect(hints["custom.choice"]?.advanced).toBe(true);
+        expect(hints["custom.choice.child"]?.advanced).toBe(true);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "ranks generated numeric wildcards with authored tiers (explicit common=%s)",
+    (explicitCommon) => {
+      const hints = applyResolvedConfigTierHints(
+        {
+          type: "object",
+          properties: {
+            custom: {
+              type: "object",
+              properties: {
+                group: {
+                  type: "object",
+                  properties: {
+                    item: {
+                      type: "object",
+                      properties: { value: { type: "string" } },
+                      additionalProperties: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          custom: { advanced: false },
+          "custom.*.*.value": { advanced: false },
+          ...(explicitCommon ? { "custom.group.item.value": { advanced: false } } : {}),
+        },
+      );
+      expect(hints["custom.group.item.*"]?.advanced).toBe(true);
+      expect(hints["custom.group.item.value"]?.advanced).toBe(!explicitCommon);
+    },
+  );
 
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");

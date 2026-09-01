@@ -27,6 +27,7 @@ import {
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ openai/test-model request failed.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -110,7 +111,7 @@ describe("buildEmbeddedRunPayloads", () => {
         text:
           agentId === "worker"
             ? expect.stringContaining('Tool "browser" blocked by sandbox tool policy')
-            : "LLM request failed.",
+            : REDACTED_TEST_MODEL_FAILURE_TEXT,
         isError: true,
       },
     ]);
@@ -226,7 +227,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
@@ -247,7 +248,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider error details");
@@ -275,7 +276,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
@@ -540,7 +541,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");

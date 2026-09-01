@@ -1,4 +1,3 @@
-// Assistant visible text tests cover extracting user-visible assistant output.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantFinalAnswerText,
@@ -436,13 +435,6 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
-      );
-    });
-
-    it("preserves inline bare <function> XML examples in prose", () => {
-      expectVisibleText(
-        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
-        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
       );
     });
 

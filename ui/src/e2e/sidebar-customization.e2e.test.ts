@@ -21,12 +21,6 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-customization",
-);
 
 async function trimmedTextContents(locator: Locator): Promise<string[]> {
   return (await locator.allTextContents()).map((text) => text.trim());
@@ -69,11 +63,11 @@ async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
   });
 }
 
@@ -81,10 +75,10 @@ async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
   await sidebar.screenshot({
     animations: "disabled",
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
   });
 }
 
@@ -161,17 +155,23 @@ suite.define(() => {
       expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
+        await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
         await recovery.scrollIntoViewIfNeeded();
         for (const theme of ["light", "dark"] as const) {
           await setThemeMode(page, theme);
           await page.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-context.png`,
+            ),
           });
           await recovery.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-rows.png`,
+            ),
           });
         }
       }
@@ -188,12 +188,15 @@ suite.define(() => {
 
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
-        ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1300 } }
+        ? {
+            dir: path.join(path.join(suite.artifactDir, "sidebar-customization"), "video"),
+            size: { height: 900, width: 1300 },
+          }
         : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -436,7 +439,10 @@ suite.define(() => {
         .toContain("No matching settings.");
       if (captureUiProofEnabled) {
         await writeFile(
-          path.join(uiProofArtifactDir, "settings-search-accessibility.yml"),
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-accessibility.yml",
+          ),
           await settingsSidebar.ariaSnapshot(),
           "utf8",
         );
@@ -672,7 +678,12 @@ suite.define(() => {
     } finally {
       await context.close();
       if (video) {
-        await video.saveAs(path.join(uiProofArtifactDir, "settings-search-flow.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-flow.webm",
+          ),
+        );
       }
     }
   });

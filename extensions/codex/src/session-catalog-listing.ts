@@ -47,7 +47,6 @@ import {
 import {
   codexNodeTerminalCapability,
   createCodexTerminalNodeHostCommand,
-  requireCatalogEligibleThread,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -377,7 +376,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         const request = bindRequest(paramsJSON);
         const action = readNodeTranscriptParams(request.params);
         try {
-          await requireCatalogEligibleThread(request.control, action.threadId);
+          await request.control.requireEligibleThread(action.threadId);
           const page = parseTranscriptPage(
             await request.control.listTurnPage({
               threadId: action.threadId,
@@ -451,7 +450,7 @@ export async function readCodexSessionTranscript(params: {
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    await requireCatalogEligibleThread(params.control, params.threadId);
+    await params.control.requireEligibleThread(params.threadId);
     const listParams = {
       threadId: params.threadId,
       limit: params.limit,

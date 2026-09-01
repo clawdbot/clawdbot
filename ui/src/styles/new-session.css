@@ -1113,14 +1113,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   cursor: default;
 }
 
-/* The trailing actions already own the stable right edge on /new. Collapse the
-   empty effort slot while loading unless the open model menu needs its anchor. */
-.new-session-page__composer
-  .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
-  .chat-controls__effort-picker--reserved {
-  display: none;
-}
-
 /* Phones (and short landscape): match the chat thread's mobile inset, and
    anchor menus to the trigger row instead of their trigger — a near
    viewport-wide panel under a non-leftmost trigger would otherwise run past

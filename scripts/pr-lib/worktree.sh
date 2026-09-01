@@ -59,48 +59,46 @@ refuse_review_transition() {
   return 1
 }
 
+# Foreground pipelines join Git readers and propagate failures through pipefail;
+# process substitutions can outlive a successful guard and discard reader failures.
 require_no_foreign_untracked() {
   local pr="$1"
-  local foreign=()
   local file
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*) ;;
-      *) foreign+=("$file") ;;
-    esac
-  done < <(git ls-files --others --exclude-standard -z)
-  [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+  git ls-files --others --exclude-standard -z |
+    while IFS= read -r -d '' file; do
+      case "$file" in .local|.local/*) continue ;; esac
+      refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+      return 1
+    done
 }
 
 require_no_ignored_transition_paths() {
   local pr="$1"
   local source="$2"
   local target="$3"
-  local file ignored
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*)
-        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
-        return 1
-        ;;
-    esac
-  done < <(git diff --name-only --no-renames -z "$source" "$target")
+  local file
+  git diff --name-only --no-renames -z "$source" "$target" |
+    while IFS= read -r -d '' file; do
+      case "$file" in
+        .local|.local/*)
+          refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+          return 1
+          ;;
+      esac
+    done || return 1
 
   # Ask Git about every transition path at once. Per-path ignored-file scans
   # become prohibitively slow when a PR is far behind main.
-  if IFS= read -r -d '' ignored < <(
-    git check-ignore -z --stdin < <(git diff --name-only --no-renames -z "$source" "$target") |
-      while IFS= read -r -d '' candidate; do
-        # check-ignore also reports matching paths that do not exist. Only an
-        # existing ignored entry can be overwritten by the transition.
-        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
-          printf '%s\0' "$candidate"
-        fi
-      done
-  ); then
-    refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
-    return 1
-  fi
+  git diff --name-only --no-renames -z "$source" "$target" |
+    { git check-ignore -z --stdin || [ "$?" -eq 1 ]; } |
+    while IFS= read -r -d '' file; do
+      # check-ignore also reports paths that do not exist. Only an existing
+      # ignored entry can be overwritten by the transition.
+      if [ -e "$file" ] || [ -L "$file" ]; then
+        refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
+        return 1
+      fi
+    done
 }
 
 validate_review_transition_state() {
@@ -120,12 +118,13 @@ validate_review_transition_state() {
 
   # A path changed from source is owned only when its index mode and blob match target.
   local file
-  while IFS= read -r -d '' file; do
-    if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
-      refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
-      return 1
-    fi
-  done < <(git diff --cached --name-only --no-renames -z "$source")
+  git diff --cached --name-only --no-renames -z "$source" |
+    while IFS= read -r -d '' file; do
+      if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
+        refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
+        return 1
+      fi
+    done
 }
 
 write_review_transition_journal() {
@@ -227,13 +226,18 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_main() {
-  local root source git_dir
+  local root source git_dir refspec=refs/heads/main
+  local options=(--no-tags --refmap=)
+  if [ -n "${1:-}" ]; then
+    refspec="+$refspec:$1"
+    options+=(--no-write-fetch-head)
+  fi
   root=$(repo_root) || return 1
   source=$(git -C "$root" remote get-url origin) || return 1
   git_dir=$(git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
-  git -C "$root" --git-dir="$git_dir" fetch --no-tags --refmap= "$source" \
-    +refs/heads/main:refs/remotes/origin/main
+  # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
+  git -C "$root" --git-dir="$git_dir" fetch "${options[@]}" "$source" "$refspec"
 }
 
 refresh_main_snapshot() {
@@ -285,10 +289,10 @@ enter_worktree() {
     fi
     # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
     # Initialize fully before the next network wait so interruption is retryable.
-    # This shared main ref is only a seed, never the operation's snapshot.
+    # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
     PR_MAIN_SHA=""
-    fetch_canonical_main || return 1
-    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" refs/remotes/origin/main || return 1
+    fetch_canonical_main "refs/heads/temp/pr-$pr" || return 1
+    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" "refs/heads/temp/pr-$pr" || return 1
     resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
     resolved_dir="$resolved_parent/pr-$pr"
     initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1

@@ -1,8 +1,8 @@
 // Real-browser proof for inline and context-menu chat message actions.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +16,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("chat-message-actions");
+  }
+});
 
 // Neutral filler line repeated to push the fixture past the transport
 // preview limit without embedding stale implementation narrative; the
@@ -153,9 +158,6 @@ describeControlUiE2e("Control UI chat message actions", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
     }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });

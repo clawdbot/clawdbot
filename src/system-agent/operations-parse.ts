@@ -52,12 +52,17 @@ export type SystemAgentCommandDeps = {
     path?: string;
     value?: string;
     cliOptions: ConfigSetOptions;
+    beforePersistentApply?: () => void;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
+  runPluginUninstall?: (
+    pluginId: string,
+    runtime: RuntimeEnv,
+    options?: { beforePersistentApply?: () => void },
+  ) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
   runTui?: (opts: {

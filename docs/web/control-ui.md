@@ -14,11 +14,11 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only companion thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
+While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
 
-The companion answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. The companion uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
+Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
 
-Highlighting text in a chat message offers **More details**, which asks the companion immediately, and **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
+Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
@@ -129,11 +129,12 @@ preparation and follow-ups during a run, remain visible with a waiting notice
 until their own turn starts. Inputs accepted through `sessions_send` or the
 Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
-the input stays readable with its recorded disposition and is never resent
-automatically. Copy it into the composer to start a new attempt. **Earlier
-accepted inputs** pages through retained inputs; **Latest accepted inputs**
-returns to the newest page. Long accepted input uses the normal full-message
-reader without becoming a transcript reply, fork, or rewind target.
+the message stays readable with its recorded disposition and is never resent
+automatically. Copy it into the composer to start a new attempt. **Show earlier
+messages** pages through messages that are still waiting or were stopped before
+processing; **Show latest messages** returns to the newest page. A long message
+uses the normal full-message reader without becoming a transcript reply, fork,
+or rewind target.
 
 Browser drafts and unsent messages remain in the local queue. Once the Gateway
 accepts an ordinary browser message, it owns the approved input in durable
@@ -185,7 +186,9 @@ When your connection is bound to an authenticated Gateway profile, theme, theme 
 
 ## OpenClaw system care
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Toggle it from anywhere with the lobster button in the sidebar footer or the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
+
+If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
 
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 
@@ -196,6 +199,12 @@ For Gateway setup, say `configure gateway` to choose the port, bind address, tok
 Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+
+## Home dock
+
+Use the **Home** button in the sidebar footer to open the selected agent's main conversation alongside your current page. Home and Ask OpenClaw share the dock. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
+
+Home can include a bounded, quoted work-context reference with your message. That reference belongs to the page's agent and session, not merely the Home conversation receiving it, and stays current when session titles or visible files change. It is reference data, not permission to access another conversation; you can remove it before sending.
 
 ## Manage plugins
 
@@ -324,7 +333,7 @@ Once the session is created, chat opens immediately. Remote startup uses the sam
 
 If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. A disconnect hides the retained content until the same credential scope is verified again, but does not release its first-turn hold: later input stays in the composer instead of entering the ordinary offline queue. Sessions without an unresolved initial turn keep normal offline queuing.
 
-If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** only looks for the original user message in available history. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. An exact matching user-message receipt resolves the retained submission without implying that the run has finished. Otherwise, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
+If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** looks for the original user message or an exact Gateway receipt showing that the input was retained or consumed. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. A matching receipt clears the browser startup hold without implying that the run has finished. Retained inputs keep their Gateway-owned status, including interrupted or cancelled inputs, without another optimistic message. Without a receipt, the prompt and attachments remain accessible and normal sending stays disabled. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
 
 When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. Restoring paused or unconfirmed recovery does not itself request deletion.
 
@@ -591,6 +600,8 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+Session dashboards and the Background tasks rail follow the selected conversation's agent, including when multiple agents each use a `global` session. Split panes keep their owners separate; panes showing the same agent and conversation share dashboard updates.
+
 Automatic session titles describe the topic or intended task in your first message.
 They are generated separately from the agent's work, so a title is not a completion
 status or a report of tool access. Existing titles and manual names are left
@@ -607,7 +618,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails and provides Open, Download, and Copy actions for the full image.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
-    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first.
+    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
@@ -634,6 +645,7 @@ Chat error banners, including cloud runner failures, show short messages in full
     - The active split pane drives the sidebar selection and URL. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane, including its header with the close control.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
+    - On the New Session page, press **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere to create and start the draft in a background session without leaving the page. The selected local, cloud-profile, or paired-device placement is preserved. With the **Modifier+Enter** send preference, use **Cmd/Ctrl+Shift+Enter** for background start; Cmd/Ctrl+Enter remains ordinary submit. Explicit Draft visibility keeps its create-only behavior. A completion notice offers to open the new session.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - Chat and New Session block sending when the Gateway reports missing provider credentials or a confirmed authentication failure. Missing credentials point to **Model Setup**; authentication failures ask you to review the credential or sign-in. Temporary credential cooldowns and unknown model availability do not block sending or show an authentication banner; run errors remain visible in the transcript. Unavailable model choices stay disabled in the picker.
@@ -673,6 +685,31 @@ Chat error banners, including cloud runner failures, show short messages in full
 
   </Accordion>
 </AccordionGroup>
+
+### Mermaid diagrams
+
+Use a `mermaid` fenced code block in chat. The Control UI renders it as a diagram
+automatically:
+
+````markdown
+```mermaid
+flowchart LR
+  Gateway --> Worker
+  Worker --> State
+```
+````
+
+Open the **Diagram options** menu in the top-right corner to switch between the
+diagram and source or choose **Expand diagram** for the image viewer with zoom.
+The copy button appears on hover or keyboard focus and stays visible on touch
+screens. It copies the original Mermaid text.
+Diagram colors and fonts follow the current UI theme.
+
+An unfinished streaming fence stays readable as code. Rendering starts when the
+closing fence arrives or the response finishes. Invalid or overly complex
+diagrams keep their source visible with an error; correct the syntax or simplify
+the diagram. Diagram source cannot run scripts or click handlers, load external
+images, or add custom CSS to the Control UI.
 
 ## Connection loss and reconnect
 
@@ -959,6 +996,15 @@ pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
+
+For a standalone preview with synthetic data, use:
+
+```bash
+pnpm dev:ui:mock -- --port 19321
+```
+
+The mock preview selects its own origin for Gateway resources, including
+avatars, so those requests stay on the preview server.
 
 ## Blank Control UI page
 

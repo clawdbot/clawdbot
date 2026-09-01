@@ -106,7 +106,6 @@ function runProjectionsUnchanged(
 export function readRunProjections(state: ChatState, sessionKey: string, agentId?: string) {
   return getChatSessionProjection(
     state,
-    state.chatMessages,
     readChatSessionProjectionScope(state, {
       sessionKey,
       ...(agentId ? { agentId } : {}),

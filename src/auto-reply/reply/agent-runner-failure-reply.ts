@@ -7,6 +7,7 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -16,6 +17,7 @@ import {
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -35,6 +37,7 @@ import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recove
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -50,21 +53,25 @@ import type { ReplyPayload } from "../types.js";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const described = describeFailoverError(error);
-  const classification = described.reason
-    ? ({ kind: "reason", reason: described.reason } as const)
-    : null;
+  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
+  const reason =
+    described.reason ??
+    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
+  const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
     code: described.code,
     provider: described.provider,
+    model: described.model,
+    status,
     authMode: described.authMode,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
-        status: described.status,
+        status,
         message: described.rawError ?? message,
       }),
-      status: described.status,
+      status,
       technicalMessage: message,
     }),
   };
@@ -289,6 +296,9 @@ export function buildExternalRunFailureReply(
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
+    // Curated facet copy carries recovery guidance (quota/billing ambiguity,
+    // /new for conversation-state, config fix for model_not_found); the
+    // classified summary below is the fallback for facts without a facet.
     return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
   }
   const authError = isProviderAuthError(error) ? error : undefined;
@@ -307,6 +317,12 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
+  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  if (classifiedFailure) {
+    return { text: classifiedFailure, isGenericRunnerFailure: false };
+  }
+  // Only unclassified thrown text reaches this branch. Verbose mode is the
+  // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
     text: options?.includeDetails
       ? formatForwardedExternalRunFailureText(normalizedMessage)

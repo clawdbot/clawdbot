@@ -40,6 +40,10 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
@@ -4030,82 +4034,126 @@ test("sessions.create does not parent the main session to itself", async () => {
   expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
 });
 
-test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [
-    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-  ];
-  const resolveCreateSession = vi.fn(() => ({
-    model: "anthropic/claude-opus-4-8",
-    agentRuntime: "claude-cli",
-  }));
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession,
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
-  });
-  setActivePluginRegistry(registry);
-
-  try {
-    const created = await directSessionReq<{
-      entry?: {
-        providerOverride?: string;
-        modelOverride?: string;
-        agentRuntimeOverride?: string;
-        modelSelectionLocked?: boolean;
-        pluginOwnerId?: string;
-      };
-      key?: string;
-    }>("sessions.create", { agentId: "main", catalogId: "claude" });
-
-    expect(created.ok).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-8",
-      agentRuntimeOverride: "claude-cli",
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-    });
-    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
-
-    const patched = await directSessionReq("sessions.patch", {
-      key: created.payload?.key,
-      agentId: "main",
+test.each(["cli", "enabled", "disabled"] as const)(
+  "sessions.create resolves a catalog target server-side with a %s harness",
+  async (harness) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: { primary: "anthropic/claude-opus-4-8" },
+      models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "missing-harness" } } },
+    };
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
+      { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+    ];
+    const agentRuntime = harness === "cli" ? "claude-cli" : "fixture-harness";
+    let fixture: ReturnType<typeof createColdPluginFixture> | undefined;
+    if (harness !== "cli") {
+      const rootDir = await fs.mkdtemp(path.join(dir, "catalog-harness-"));
+      fixture = createColdPluginFixture({
+        rootDir,
+        pluginId: "fixture-harness",
+        manifest: { activation: { onAgentHarnesses: ["fixture-harness"] } },
+      });
+      const { writeConfigFile } = await getGatewayConfigModule();
+      await writeConfigFile({
+        plugins: {
+          load: { paths: [rootDir] },
+          entries: { "fixture-harness": { enabled: harness === "enabled" } },
+        },
+      });
+    }
+    const resolveCreateSession = vi.fn(() => ({
       model: "anthropic/claude-opus-4-8",
+      agentRuntime,
+    }));
+    const registry = createEmptyPluginRegistry();
+    if (harness === "cli") {
+      registry.cliBackends.push({
+        pluginId: "anthropic",
+        source: "test",
+        backend: {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: false,
+        },
+      });
+    }
+    registry.sessionCatalogs.push({
+      pluginId: "anthropic",
+      source: "test",
+      provider: {
+        id: "claude",
+        label: "Claude Code",
+        resolveCreateSession,
+        list: vi.fn(async () => []),
+        read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+      },
     });
-    expect(patched.ok).toBe(false);
-    expect(patched.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "Model selection is locked for this session.",
-    });
+    setActivePluginRegistry(registry);
 
-    const deleted = await directSessionReq("sessions.delete", {
-      key: created.payload?.key,
-      agentId: "main",
-      deleteTranscript: false,
-    });
-    expect(deleted.ok).toBe(true);
-    expect(
-      loadSessionEntry({
+    try {
+      const created = await directSessionReq<{
+        entry?: {
+          providerOverride?: string;
+          modelOverride?: string;
+          agentRuntimeOverride?: string;
+          modelSelectionLocked?: boolean;
+          pluginOwnerId?: string;
+        };
+        key?: string;
+      }>("sessions.create", { agentId: "main", catalogId: "claude" });
+
+      if (fixture) {
+        expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+      }
+      if (harness === "disabled") {
+        expect(created.ok).toBe(false);
+        expect(created.error?.message).toContain('requires agent harness "fixture-harness"');
+        expect(created.payload).toBeUndefined();
+        return;
+      }
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.entry).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-8",
+        agentRuntimeOverride: agentRuntime,
+        modelSelectionLocked: true,
+        pluginOwnerId: "anthropic",
+      });
+      expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
+
+      const patched = await directSessionReq("sessions.patch", {
+        key: created.payload?.key,
         agentId: "main",
-        sessionKey: created.payload?.key ?? "",
-        storePath,
-      }),
-    ).toBeUndefined();
-  } finally {
-    testState.agentConfig = undefined;
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  }
-});
+        model: "anthropic/claude-opus-4-8",
+      });
+      expect(patched.ok).toBe(false);
+      expect(patched.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "Model selection is locked for this session.",
+      });
+
+      const deleted = await directSessionReq("sessions.delete", {
+        key: created.payload?.key,
+        agentId: "main",
+        deleteTranscript: false,
+      });
+      expect(deleted.ok).toBe(true);
+      expect(
+        loadSessionEntry({
+          agentId: "main",
+          sessionKey: created.payload?.key ?? "",
+          storePath,
+        }),
+      ).toBeUndefined();
+    } finally {
+      testState.agentConfig = undefined;
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+  },
+);
 
 test("sessions.create rejects a caller-supplied key for a catalog target", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -4214,6 +4262,16 @@ test("sessions.create bypasses main-session reset for a catalog target", async (
     },
   });
   const registry = createEmptyPluginRegistry();
+  registry.cliBackends.push({
+    pluginId: "anthropic",
+    source: "test",
+    backend: {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+  });
   registry.sessionCatalogs.push({
     pluginId: "anthropic",
     source: "test",

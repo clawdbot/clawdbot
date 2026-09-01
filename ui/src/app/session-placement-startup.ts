@@ -6,8 +6,8 @@ import {
   sessionPlacementRecoveryExactStorageKey,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
 export type ApplicationPlacementStartupStatus = {
   readonly sessionKey: string;
@@ -37,7 +37,7 @@ type PlacementStartupInput = {
 export type ApplicationPlacementStartupDependencies = {
   gateway: ApplicationGateway;
   sessions: SessionCapability;
-  initialUserMessage: ApplicationInitialUserMessageHandoff;
+  chatSubmissions: ApplicationChatSubmissions;
 };
 
 type PlacementStartupRecoveryAccess = Pick<

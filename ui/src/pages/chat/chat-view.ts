@@ -189,8 +189,6 @@ export function renderChat(props: ChatProps) {
         : undefined,
       onRetryQueuedMessage: props.connected && canCompose ? props.onQueueRetry : undefined,
       onDiscardQueuedMessage: props.onQueueRemove,
-      onCompanionQuestion:
-        props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
       onCompanionPrefill:
         props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
@@ -314,13 +312,10 @@ export function renderChat(props: ChatProps) {
                 <div class="chat-main__conversation">
                   ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
                   ${pendingInputs &&
-                  (pendingInputs.page.total > 0 || pendingInputs.before !== undefined)
+                  (pendingInputs.error ||
+                    pendingInputs.page.nextBefore !== undefined ||
+                    pendingInputs.before !== undefined)
                     ? html`<div class="chat-history-error chat-history-error--inline" role="status">
-                        <span
-                          >${t("chat.pendingInputs.count", {
-                            count: String(pendingInputs.page.total),
-                          })}</span
-                        >
                         ${pendingInputs.error ? html`<span>${pendingInputs.error}</span>` : nothing}
                         ${pendingInputs.page.nextBefore !== undefined
                           ? html`<button

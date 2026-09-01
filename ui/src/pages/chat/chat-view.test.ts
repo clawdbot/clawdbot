@@ -39,6 +39,8 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -558,6 +560,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
     modelOverrides: state.sessions.state.modelOverrides,
+    modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
@@ -1549,6 +1552,31 @@ describe("chat history pagination", () => {
     } finally {
       addEventListener.mockRestore();
     }
+  });
+});
+
+describe("retained input navigation", () => {
+  it("does not show an inventory banner for a single retained message", () => {
+    const historyState = makeChatHost({
+      sessionKey: "agent:main:retained-input",
+      currentSessionId: "retained-input-session",
+    });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "retained-input",
+          runId: "retained-run",
+          acceptedAt: 100,
+          state: "interrupted",
+          message: { role: "user", content: "Retained message", timestamp: 100 },
+        },
+      ],
+    });
+
+    const container = renderChatView({ historyState });
+
+    expect(container.querySelector(".chat-history-error--inline")).toBeNull();
   });
 });
 
@@ -3874,6 +3902,90 @@ describe("chat voice controls", () => {
     dismiss!.click();
 
     expect(onDismissRealtimeTalkError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat composer render invalidation", () => {
+  it("keeps steady ordinary edits and direction changes local", () => {
+    const container = document.createElement("div");
+    let draft = "a";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let props = createChatProps({
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+    });
+    const onRequestUpdate = vi.fn(() => {
+      props = { ...props, draft, getDraft: () => draft };
+      render(renderChat(props), container);
+    });
+    props = { ...props, onRequestUpdate };
+    render(renderChat(props), container);
+
+    const textarea = getComposerTextarea(container);
+    onRequestUpdate.mockClear();
+    vi.mocked(chatThread.buildCachedChatItems).mockClear();
+
+    textarea.value = "ab";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    textarea.value = "abc";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(draft).toBe("abc");
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
+
+    textarea.value = "مرحبا";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(chatThread.buildCachedChatItems).not.toHaveBeenCalled();
+    expect(textarea.dir).toBe("rtl");
+
+    render(renderChat(props), container);
+    expect(getComposerTextarea(container).dir).toBe("rtl");
+  });
+
+  it("invalidates when offline slash eligibility changes", () => {
+    const container = document.createElement("div");
+    let draft = "queue this offline";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let props = createChatProps({
+      connected: false,
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+    });
+    const onRequestUpdate = vi.fn(() => {
+      props = { ...props, draft, getDraft: () => draft };
+      render(renderChat(props), container);
+    });
+    props = { ...props, onRequestUpdate };
+    render(renderChat(props), container);
+
+    const sendButton = () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]');
+    expect(sendButton()?.disabled).toBe(false);
+    onRequestUpdate.mockClear();
+
+    let textarea = getComposerTextarea(container);
+    textarea.value = "/status";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).toHaveBeenCalled();
+    expect(sendButton()?.disabled).toBe(true);
+    onRequestUpdate.mockClear();
+
+    textarea = getComposerTextarea(container);
+    textarea.value = "queue this instead";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(onRequestUpdate).toHaveBeenCalled();
+    expect(sendButton()?.disabled).toBe(false);
   });
 });
 
@@ -6844,6 +6956,36 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it.each([
+    { target: "session", label: "Selection target: This session only" },
+    { target: "agent", label: "Selection target: This agent's default" },
+    { target: "global", label: "Selection target: Global default" },
+  ] as const)(
+    "discloses the $target write target before pointer selection",
+    ({ target, label }) => {
+      const { state } = createOpenAiHeaderState();
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        label,
+      );
+      const modelOption = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      ).find((button) => button.getAttribute("aria-selected") === "false");
+      modelOption?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+    },
+  );
+
   it("renders and applies selectable context windows inside the model picker", () => {
     const { state } = createChatHeaderState({
       model: "claude-fable-5",
@@ -7069,6 +7211,40 @@ describe("chat model controls", () => {
     container.remove();
   });
 
+  it.each([
+    { target: "agent", targetLabel: "Selection target: This agent's default" },
+    { target: "global", targetLabel: "Selection target: Global default" },
+  ] as const)(
+    "keeps a pinned reset session-only while model rows write to the $target target",
+    ({ target, targetLabel }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.4",
+        modelOverrideSource: "user",
+        modelProvider: "openai",
+        models: createOpenAiModelCatalog(),
+      });
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        targetLabel,
+      );
+      expect(container.querySelector("[data-chat-model-pin-provenance]")?.textContent).toContain(
+        "Only for this session",
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-model-reset]")?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    },
+  );
+
   // Settings can move the agent default onto — and back off — a session's pinned
   // model. Provenance must survive both moves, and the default row must stay a live
   // way to clear the pin while the two values coincide.
@@ -7252,7 +7428,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "agent",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const providerHeadings = Array.from(
@@ -7270,6 +7449,9 @@ describe("chat model controls", () => {
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
+    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+      "Selection target: This agent's default",
+    );
     search!.value = "anth";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
@@ -7338,7 +7520,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "global",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");

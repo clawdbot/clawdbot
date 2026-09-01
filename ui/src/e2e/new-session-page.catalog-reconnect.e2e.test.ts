@@ -18,12 +18,6 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const cliAgentsProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cli-agents-picker",
-);
 
 function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
   return Boolean(
@@ -119,14 +113,19 @@ suite.define(() => {
 
   it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -183,7 +182,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "picker-group.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "picker-group.png"),
         });
       }
 
@@ -202,7 +201,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "catalog-target.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "catalog-target.png"),
         });
       }
     } finally {
@@ -271,14 +270,19 @@ suite.define(() => {
 
   it("creates a worktree, starts the catalog session, and opens its terminal", async () => {
     if (captureCliAgentsProof) {
-      await mkdir(cliAgentsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureCliAgentsProof
-        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cli-agents-picker"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -393,7 +397,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cliAgentsProofDir, "terminal-split.png"),
+          path: path.join(path.join(suite.artifactDir, "cli-agents-picker"), "terminal-split.png"),
         });
       }
 

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
@@ -14,15 +14,15 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
-  admitInitialUserMessageHandoff,
+  admitChatSubmission,
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
-import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
+import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 async function loadHistoryWithBrowserTimers(state: TestState): Promise<void> {
   const globalWithWindow = globalThis as typeof globalThis & {
@@ -95,15 +95,16 @@ describe("chat history in-flight assistant recovery", () => {
         request: vi.fn().mockResolvedValue(history),
       } as unknown as GatewayBrowserClient;
       if (method === "chat.startup") {
-        state.initialUserMessage = createInitialUserMessageHandoff();
-        prepareInitialUserMessageHandoff(
-          state.initialUserMessage,
-          state.sessionKey,
-          { text: "Inspect the unavailable project", createdAt: 1 },
-          state.client,
-          { runId: "run-first" },
+        state.chatSubmissions = createChatSubmissions();
+        state.chatSubmissions.retain(
+          buildInitialChatSubmission(
+            state.sessionKey,
+            { text: "Inspect the unavailable project", createdAt: 1 },
+            state.client,
+            "run-first",
+          ),
         );
-        admitInitialUserMessageHandoff(state, state.sessionKey);
+        admitChatSubmission(state);
       }
 
       await loadChatHistory(state, { startup: method === "chat.startup" });
@@ -821,7 +822,7 @@ describe("chat history in-flight assistant recovery", () => {
     const loadPromise = loadChatHistory(state);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const projection = getChatSessionProjection(state);
-    setChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
+    publishChatSessionProjection(state, { ...projection, runs: { ...projection.runs } });
     resolveHistory(history);
     await loadPromise;
 

@@ -166,6 +166,8 @@ describe("upgrade survivor config recipe command resolution", () => {
 
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+    expect(gateway.reload).toEqual({ mode: "off" });
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
     expect(steps.at(-1)?.id).toBe("validate");
@@ -175,6 +177,53 @@ describe("upgrade survivor config recipe command resolution", () => {
     expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
       resolveScenarioConfigSteps("configured-plugin-installs"),
     );
+  });
+
+  it.each([
+    { version: "2026.3.13", legacy: true },
+    { version: "2026.7.1-2", legacy: true },
+    { version: "2026.8.1-beta.1", legacy: true },
+    { version: "2026.8.1-beta.2", legacy: false },
+    { version: "2026.8.1", legacy: false },
+    { version: null, legacy: false },
+  ])("authors one version-correct recovery roster for $version", ({ version, legacy }) => {
+    const steps = resolveUpgradeSurvivorConfigStepsForBaseline("recovery-cleanup", version);
+    const agentSteps = steps.filter(
+      (step) =>
+        step.argv[0] === "config" && step.argv[1] === "set" && step.argv[2]?.startsWith("agents"),
+    );
+    expect(agentSteps).toHaveLength(1);
+    expect(agentSteps[0]?.argv.slice(0, 3)).toEqual(["config", "set", "agents"]);
+    const agents = JSON.parse(agentSteps[0]?.argv[3] ?? "{}");
+    const ids = legacy
+      ? agents.list.map((agent: { id: string }) => agent.id)
+      : Object.keys(agents.entries);
+    expect(ids).toEqual(["main", "ops", "recovery-clean", "recovery-protected"]);
+    const ops = legacy
+      ? agents.list.find((agent: { id: string }) => agent.id === "ops")
+      : agents.entries.ops;
+    expect(ops.fastModeDefault).toBe(version === "2026.3.13" ? undefined : true);
+    expect(agents.defaults.heartbeat.every).toBe("0m");
+    if (legacy) {
+      expect(agents.ownership).toBeUndefined();
+      expect(agents.list.filter((agent: { default?: boolean }) => agent.default)).toEqual([
+        expect.objectContaining({ id: "main" }),
+      ]);
+    } else {
+      expect(agents.ownership).toBe("explicit");
+      expect(AgentsSchema.safeParse(agents).success).toBe(true);
+    }
+    const baseStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (step) => step.id === "agents",
+    );
+    const baseAgents = JSON.parse(baseStep?.argv[3] ?? "{}");
+    expect(
+      legacy
+        ? baseAgents.list.map((agent: { id: string }) => agent.id)
+        : Object.keys(baseAgents.entries),
+    ).toEqual(["main", "ops"]);
+    expect(steps.find((step) => step.id === "channels-whatsapp")).toBeDefined();
+    expect(steps.at(-1)?.id).toBe("validate");
   });
 
   it("removes unsupported scenario config for older baselines", () => {

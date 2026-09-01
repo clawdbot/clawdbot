@@ -8,13 +8,30 @@ import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+// Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
+vi.mock("../../../plugins/providers.runtime.js", () => {
+  const rejectProviderDiscovery = () => {
+    throw new Error("Prompt fixture unexpectedly discovered provider runtime");
+  };
+  return {
+    isPluginProvidersLoadInFlight: rejectProviderDiscovery,
+    resolvePluginProvidersCore: rejectProviderDiscovery,
+  };
+});
+
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
+let providerRuntime: typeof import("../../../plugins/providers.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
   ({ prepareEmbeddedAttemptSystemPrompt } = await import("./attempt-system-prompt-prepare.js"));
+  providerRuntime = await import("../../../plugins/providers.runtime.js");
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 const baseProviderTransform = {
@@ -107,6 +124,7 @@ describe("buildAttemptSystemPrompt", () => {
   ])(
     "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
     async (testCase) => {
+      const providerDiscovery = vi.spyOn(providerRuntime, "resolvePluginProvidersCore");
       const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
       const config = {
         agents: {
@@ -117,17 +135,18 @@ describe("buildAttemptSystemPrompt", () => {
           ],
         },
       };
+      const attempt = {
+        config,
+        agentId: "marketing",
+        sessionId: "global-system-prompt",
+        sessionKey: "global",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
+        workspaceDir,
+      };
       const result = await prepareEmbeddedAttemptSystemPrompt({
-        attempt: {
-          config,
-          agentId: "marketing",
-          sessionId: "global-system-prompt",
-          sessionKey: "global",
-          provider: "openai",
-          modelId: "gpt-5.5",
-          model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
-          workspaceDir,
-        } as never,
+        attempt: attempt as never,
         bootstrap: {
           ...buildBootstrapBudgetState({ config, agentId: "marketing", files: [] }),
           workspaceNotes: [],
@@ -139,7 +158,9 @@ describe("buildAttemptSystemPrompt", () => {
         effectiveCwd: workspaceDir,
         effectiveTools: [],
         effectiveWorkspace: workspaceDir,
-        getProviderRuntimeHandle: () => ({ provider: "openai" }),
+        // Attempt setup binds even an absent provider plugin to the selected model.
+        // Omitting that binding makes this policy test rediscover runtime plugins.
+        getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
         isRawModelRun: true,
         markStage: vi.fn(),
         modelToolsEnabled: false,
@@ -155,6 +176,7 @@ describe("buildAttemptSystemPrompt", () => {
         mode: testCase.mode,
         sandboxed: testCase.sandboxed,
       });
+      expect(providerDiscovery).not.toHaveBeenCalled();
     },
   );
   it("replaces an intermediate permission prompt after later changes", async () => {

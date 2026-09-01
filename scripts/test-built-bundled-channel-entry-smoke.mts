@@ -55,18 +55,13 @@ function packageRootLooksInstalled(root: string) {
   return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
 }
 
-function smokeInInstalledLayoutIfNeeded() {
-  if (process.env[installedLayoutEnv] === "1" || packageRootLooksInstalled(packageRoot)) {
-    return;
-  }
-
+function smokeInInstalledLayout() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
   const nodeModulesRoot = path.join(tempRoot, "node_modules");
   const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
-  fs.mkdirSync(nodeModulesRoot, { recursive: true });
-  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
-
   try {
+    fs.mkdirSync(nodeModulesRoot, { recursive: true });
+    fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
     const result = spawnSync(
       process.execPath,
       [
@@ -80,13 +75,16 @@ function smokeInInstalledLayoutIfNeeded() {
         stdio: "inherit",
       },
     );
-    process.exit(result.status ?? 1);
+    return result.status ?? 1;
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-smokeInInstalledLayoutIfNeeded();
+if (process.env[installedLayoutEnv] !== "1" && !packageRootLooksInstalled(packageRoot)) {
+  // Let the layout owner's finally run before terminating this process.
+  process.exit(smokeInInstalledLayout());
+}
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {
   const imported: unknown = await import(pathToFileURL(absolutePath).href);

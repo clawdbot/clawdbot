@@ -39,6 +39,42 @@ export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern
   return null;
 }
 
+export function splitMockConversationContext(text: string) {
+  // The Codex harness projects history and the new request into one user item.
+  // Quoted history must not dispatch a task or completion as the current request.
+  const projection =
+    /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
+      text,
+    );
+  return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+}
+
+export function extractMockSubagentContext(input: ResponsesInputItem[]) {
+  const turn = extractLastMatchingUserTurn(input, /[\s\S]/);
+  if (!turn) {
+    return undefined;
+  }
+  const { current, history } = splitMockConversationContext(turn.text);
+  const task =
+    /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(
+      current,
+    )?.[1];
+  if (!task) {
+    return undefined;
+  }
+  const inheritedUserTexts = extractAllUserTexts(input.slice(0, turn.index)).filter(
+    (text) => !isInternalRuntimeContextCarrierText(text),
+  );
+  for (const match of history.matchAll(
+    /(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g,
+  )) {
+    if (match[1]) {
+      inheritedUserTexts.push(match[1]);
+    }
+  }
+  return { task, inheritedUserTexts };
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>

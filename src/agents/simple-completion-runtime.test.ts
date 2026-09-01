@@ -1,5 +1,6 @@
 // Simple completion runtime tests cover model resolution, provider auth, and
 // one-shot completion wiring before requests reach the shared LLM stream path.
+import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
@@ -39,7 +40,7 @@ vi.mock("../plugins/runtime/generation-scope.js", () => ({
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: () => {
-    const apiRegistry = {};
+    const apiRegistry = createApiRegistry();
     return {
       apiRegistry,
       llmRuntime: {
@@ -122,6 +123,7 @@ beforeEach(() => {
     model: {
       provider: "anthropic",
       id: "claude-opus-4-6",
+      api: "anthropic-messages",
     },
     authStorage: {
       setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -324,6 +326,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "amazon-bedrock",
         id: "anthropic.claude-sonnet-4-6",
+        api: "bedrock-converse-stream",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -357,6 +360,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -398,6 +402,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -434,7 +439,7 @@ describe("prepareSimpleCompletionModel", () => {
       label: "model-auth:github-copilot",
     });
     hoisted.resolveModelMock.mockReturnValueOnce({
-      model: { provider: "github-copilot", id: "gpt-4.1" },
+      model: { provider: "github-copilot", id: "gpt-4.1", api: "openai-completions" },
       authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
       modelRegistry: {},
     });
@@ -464,6 +469,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "github-copilot",
         id: "gpt-4.1",
+        api: "openai-completions",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -563,6 +569,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "amazon-bedrock-mantle",
         id: "anthropic.claude-opus-4-7",
+        api: "anthropic-messages",
         baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
       },
       authStorage: {
@@ -623,6 +630,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "ollama",
         id: "llama3.2:latest",
+        api: "ollama",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -666,6 +674,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "anthropic",
         id: "claude-opus-4-6",
+        api: "anthropic-messages",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -702,6 +711,7 @@ describe("prepareSimpleCompletionModel", () => {
       model: {
         provider: "mistral",
         id: "mistral-medium-3-5",
+        api: "mistral-conversations",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,

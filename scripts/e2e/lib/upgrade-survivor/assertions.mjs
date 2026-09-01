@@ -26,6 +26,7 @@ const SCENARIOS = new Set([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 

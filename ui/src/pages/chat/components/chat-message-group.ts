@@ -185,12 +185,10 @@ export function renderActivityGroup(
     return nothing;
   }
   const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+    group.messages.flatMap((item) => extractToolCardsCached(item.message)),
   );
   const latestGroup = groups[groups.length - 1] ?? firstGroup;
-  const latestCards = latestGroup.messages.flatMap((item) =>
-    extractToolCardsCached(item.message, item.key),
-  );
+  const latestCards = latestGroup.messages.flatMap((item) => extractToolCardsCached(item.message));
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -311,7 +309,7 @@ function isActivityMessageGroup(group: MessageGroup): boolean {
   if (normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
-  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
     group.messages.length > 1 ||
     cards.length > 1 ||

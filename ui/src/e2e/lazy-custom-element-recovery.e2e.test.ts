@@ -1,11 +1,11 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import {
   buildControlUiFocusPath,
   type ControlUiFocusBuildTarget,
 } from "@openclaw/session-url-contract";
 import type { Page, Route, Video } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -17,9 +17,20 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/lazy-custom-element-recovery");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("lazy-custom-element-recovery");
+  }
+});
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let railProofDir: string | undefined;
+beforeEach(() => {
+  railProofDir = railProofDirParent
+    ? createControlUiE2eArtifactDir("lazy-custom-element-recovery", railProofDirParent)
+    : undefined;
+});
 const nativeTitlebarChunk = /\/assets\/macos-titlebar-controls\.runtime-[^/?]+\.js(?:\?.*)?$/u;
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -193,7 +204,6 @@ suite.define(() => {
           const error = await expectRealChunkFailure(page, "command palette");
           await expect.poll(failure.headCount).toBe(1);
           if (captureUiProof) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-before.png") });
           }
 
@@ -274,9 +284,6 @@ suite.define(() => {
   }
 
   it("restores the command-palette action after a real stale-chunk reload", async () => {
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -365,7 +372,6 @@ suite.define(() => {
             .poll(() => page.locator(".shell").getAttribute("class"))
             .toContain("shell--nav-collapsed");
           if (railProofDir) {
-            await mkdir(railProofDir, { recursive: true });
             await page.screenshot({ path: path.join(railProofDir, "native-titlebar-loading.png") });
           }
 
@@ -437,7 +443,6 @@ suite.define(() => {
         await expect.poll(failure.headCount).toBe(1);
         expect(failure.chunkRequestCount()).toBe(1);
         if (railProofDir) {
-          await mkdir(railProofDir, { recursive: true });
           await page.screenshot({
             path: path.join(railProofDir, `${testCase.proofName}-failed.png`),
           });

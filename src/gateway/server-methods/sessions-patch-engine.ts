@@ -41,9 +41,11 @@ import {
 import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
 import {
   createCommitGuard,
+  invalidSessionPatchOutcome,
   sessionChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
 import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
 import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
 import type {
@@ -199,6 +201,12 @@ async function executeSessionPatchMutations(params: {
     // its public identity fields so closures can never reach hooks or entries.
     const { commitGuard: _commitGuard, ...identity } = input;
     const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
+    const expectationError =
+      sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
+    if (expectationError) {
+      outcomes[index] = invalidSessionPatchOutcome(expectationError);
+      continue;
+    }
     let initialPlacementPatchError: string | undefined;
     try {
       initialPlacementPatchError = resolveSessionWorkerPlacementPatchError({
@@ -379,12 +387,18 @@ async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push({ ok: false, error: ownershipError });
                           continue;
                         }
+                        // Compare tool policy only inside the serialized writer snapshot. A
+                        // preflight comparison can stale behind another queued restriction.
                         const expectedSessionChanged =
                           (target.fullPatch.expectedSessionId !== undefined &&
                             existingEntry?.sessionId !== target.fullPatch.expectedSessionId) ||
                           (target.fullPatch.expectedLifecycleRevision !== undefined &&
                             existingEntry?.lifecycleRevision !==
-                              target.fullPatch.expectedLifecycleRevision);
+                              target.fullPatch.expectedLifecycleRevision) ||
+                          sessionPatchExpectations.sessionPatchExpectationsChanged(
+                            existingEntry,
+                            target.fullPatch,
+                          );
                         const lifecycleEntryRemoved =
                           target.initialEntry !== undefined && existingEntry === undefined;
                         const archiveTargetChanged =
@@ -664,17 +678,7 @@ export async function executeSessionPatch(params: {
   patch: SessionsPatchParams;
   sessionMutationAuthorization?: SessionMutationAuthorization;
 }): Promise<{ ok: false; error: ErrorShape } | { ok: true; result: SessionsPatchResult }> {
-  const target = {
-    key: params.patch.key,
-    ...(params.patch.agentId ? { agentId: params.patch.agentId } : {}),
-    ...(params.patch.expectedSessionId !== undefined
-      ? { expectedSessionId: params.patch.expectedSessionId }
-      : {}),
-    ...(params.patch.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
-      : {}),
-    expectedMarkedUnreadAt: params.patch.expectedMarkedUnreadAt,
-  };
+  const target = sessionPatchExpectations.sessionPatchTargetIdentity(params.patch);
   const executed = await executeSessionPatchMutations({
     client: params.client,
     context: params.context,
@@ -700,12 +704,10 @@ export async function executeSessionPatch(params: {
   return {
     ok: true,
     result: await projectSessionPatchResult({
-      canonicalKey: prepared.canonicalKey,
+      ...prepared,
       cfg: executed.cfg,
       entry: outcome.entry,
       modelCatalogByAgent: executed.modelCatalogByAgent,
-      storePath: prepared.storePath,
-      targetAgentId: prepared.targetAgentId,
     }),
   };
 }

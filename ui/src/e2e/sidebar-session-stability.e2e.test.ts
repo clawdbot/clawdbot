@@ -9,7 +9,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
-  uiProofArtifactDir,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -50,7 +49,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -72,7 +71,7 @@ suite.define(() => {
       const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
       await expect.poll(visibleKeys, { timeout: 10_000 }).toEqual(expectedVisibleKeys);
       await expect.poll(() => childToggle.getAttribute("aria-expanded")).toBe("true");
-      await captureUiProof(page, "sidebar-session-stability-running.png");
+      await captureUiProof(suite, page, "sidebar-session-stability-running.png");
 
       await gateway.emitGatewayEvent("agent", {
         data: { name: "bash" },
@@ -123,11 +122,11 @@ suite.define(() => {
         .toBe(controlUiSessionPath(nextSessionKey));
       await expect.poll(() => childToggle.getAttribute("aria-expanded")).toBe("true");
       await expect.poll(visibleKeys).toEqual(expectedVisibleKeys);
-      await captureUiProof(page, "sidebar-session-stability-completed.png");
+      await captureUiProof(suite, page, "sidebar-session-stability-completed.png");
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, "sidebar-session-stability.webm"));
+        await proofVideo.saveAs(path.join(suite.artifactDir, "sidebar-session-stability.webm"));
       }
     }
   });

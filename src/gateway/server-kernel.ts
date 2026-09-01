@@ -120,7 +120,11 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 }
 
 /** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
-export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
+export async function createGatewayKernel(
+  port = 18789,
+  opts: GatewayServerOptions = {},
+  options: { deferEarlyRuntime?: boolean } = {},
+) {
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
@@ -133,51 +137,63 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
     });
-    const runtime = await prepareGatewayKernelState({
-      bootstrap,
-      port,
-      opts,
-      log,
-      logChannels,
-      logHooks,
-      logPlugins,
-      gatewayRuntime,
-      resolveChannelRuntime: getChannelRuntime,
-      loadWorkerEnvironmentStartupModule,
-      loadWorkerPlacementStartupModule,
-    });
+    const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
+      prepareGatewayKernelState({
+        bootstrap,
+        port,
+        opts,
+        log,
+        logChannels,
+        logHooks,
+        logPlugins,
+        gatewayRuntime,
+        resolveChannelRuntime: getChannelRuntime,
+        loadWorkerEnvironmentStartupModule,
+        loadWorkerPlacementStartupModule,
+      }),
+    );
     // An in-place update may replace every hashed chunk before SIGTERM arrives.
     // Resolve and retain the complete shutdown graph while the install is healthy.
     const shutdownRuntime = await runtime.startupTrace.measure(
       "gateway.shutdown-runtime-import",
       async () => (await loadGatewayShutdownModule()).prepareGatewayShutdownRuntime(),
     );
-    lifecycleRuntime = await prepareGatewayLifecycle({
-      runtime,
-      releasePluginMetadata,
-      port,
-      log,
-      logCron,
-      diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-      shutdownRuntime,
-    });
+    const preparedLifecycleRuntime = await runtime.startupTrace.measure("gateway.lifecycle", () =>
+      prepareGatewayLifecycle({
+        runtime,
+        releasePluginMetadata,
+        port,
+        log,
+        logCron,
+        diagnosticsEnabled: bootstrap.diagnosticsEnabled,
+        shutdownRuntime,
+      }),
+    );
+    lifecycleRuntime = preparedLifecycleRuntime;
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
     }
-    const coreRuntime = await startGatewayCoreRuntime({
-      lifecycleRuntime,
-      port,
-      log,
-      logDiscovery,
-      logHealth,
-      logChannels,
-      loadGatewayStartupEarlyModule,
-      loadGatewayPluginBootstrapModule,
-      loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
-    });
-    return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
+    const coreRuntime = await runtime.startupTrace.measure("gateway.core-runtime", () =>
+      startGatewayCoreRuntime({
+        lifecycleRuntime: preparedLifecycleRuntime,
+        port,
+        log,
+        logDiscovery,
+        logHealth,
+        logChannels,
+        loadGatewayStartupEarlyModule,
+        loadGatewayPluginBootstrapModule,
+        loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot,
+        readPreparedGatewayModelCatalog,
+      }),
+    );
+    if (!options.deferEarlyRuntime) {
+      await coreRuntime.startEarlyRuntime();
+    }
+    return await runtime.startupTrace.measure("gateway.request-runtime", () =>
+      prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth }),
+    );
   } catch (error) {
     try {
       if (lifecycleRuntime) {

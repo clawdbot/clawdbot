@@ -196,19 +196,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(tokenA).not.toBe(tokenB);
   });
 
-  it("injects the current model identity into the runtime prompt", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: {
-        agentId: "main",
-        model: "openai/gpt-5.5",
-      },
-    });
+  it.each(["full", "minimal", "none"] as const)(
+    "keeps model identity guidance conditional in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        runtimeInfo: {
+          agentId: "main",
+          model: "openai/gpt-5.5",
+        },
+      });
 
-    expect(prompt).toContain(
-      "Current model identity: openai/gpt-5.5. Model question: answer this current-run value.",
-    );
-  });
+      expect(prompt).toContain(
+        "Current model identity: openai/gpt-5.5. If asked what model you are, answer with this value for the current run.",
+      );
+    },
+  );
 
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
@@ -676,15 +680,15 @@ describe("buildAgentSystemPrompt", () => {
       promptMode: "minimal",
     });
 
-    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(defaultPrompt).not.toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("read-only Side chat");
     expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
     expect(webchatWithoutSpawn).not.toContain("sessions_spawn");
-    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Side Chat");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {

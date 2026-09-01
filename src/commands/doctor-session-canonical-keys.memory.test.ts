@@ -83,6 +83,10 @@ describe("canonical SQLite session repair memory", () => {
       bundle: true,
       entryPoints: [fileURLToPath(canonicalMemoryTestSupportModuleUrl)],
       format: "esm",
+      // Keep generated source overhead out of the entry-data heap budget;
+      // preserve function/class names used by runtime dispatch and diagnostics.
+      minify: true,
+      keepNames: true,
       outfile: childPath,
       packages: "external",
       platform: "node",

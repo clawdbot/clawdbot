@@ -11,7 +11,11 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  publishChatSessionProjection,
+  publishChatSessionProjectionMessages,
+} from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   visibleAssistantStreamParts,
@@ -210,11 +214,11 @@ function projectChatMessageEvent(
     | { type: "messagePersisted"; message: unknown },
 ): void {
   const scope = { sessionKey: state.sessionKey };
-  const projection = reduceSessionProjection(
-    getChatSessionProjection(state, state.chatMessages, scope),
-    { ...event, scope },
-  );
-  setChatSessionProjection(state, projection);
+  const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+    ...event,
+    scope,
+  });
+  publishChatSessionProjection(state, projection);
   state.chatMessages = [...projection.messages];
 }
 
@@ -904,9 +908,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, event)).toBe("final");
 
     expect(state.chatMessages).toEqual([expected]);
-    expect(
-      getChatSessionProjection(state, state.chatMessages, { sessionKey: "main" }).runs[runId],
-    ).toMatchObject({
+    expect(getChatSessionProjection(state, { sessionKey: "main" }).runs[runId]).toMatchObject({
       status: "completed",
       acceptedFinalMessageIdentities: [expect.any(String)],
     });
@@ -925,12 +927,15 @@ describe("handleChatGatewayEvent", () => {
     state.chatStreamSegments = [{ text: "Retained commentary", ts: 122, toolCallId: "call-1" }];
     state.knownAgentRunIds = new Set([runId]);
     const scope = { sessionKey: state.sessionKey };
-    const projection = reduceSessionProjection(
-      getChatSessionProjection(state, state.chatMessages, scope),
-      { type: "runTerminal", runId, status: "completed", message: final, scope },
-    );
-    setChatSessionProjection(state, projection);
-    state.chatMessages = [final];
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: final,
+      scope,
+    });
+    publishChatSessionProjection(state, projection);
+    publishChatSessionProjectionMessages(state, [final], { scope });
 
     expect(
       handleChatGatewayEvent(state, {
@@ -1185,10 +1190,9 @@ describe("handleChatGatewayEvent", () => {
           }),
         ).toBe(event.state);
 
-        expect(
-          getChatSessionProjection(state, state.chatMessages, { sessionKey: "main" }).runs["run-1"]
-            ?.status,
-        ).toBe(projectionStatus);
+        expect(getChatSessionProjection(state, { sessionKey: "main" }).runs["run-1"]?.status).toBe(
+          projectionStatus,
+        );
         expect(state.sessionsResult.sessions[0]).toMatchObject({
           activeRunIds: [],
           hasActiveRun: false,

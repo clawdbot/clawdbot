@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import { build, type InlineConfig } from "vite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { build, createLogger, type InlineConfig } from "vite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAssetManifest } from "../../../src/gateway/control-ui-asset-manifest.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 
@@ -13,6 +14,16 @@ describe("Control UI Vite build", () => {
   let root: string;
   let outDir: string;
   let config: InlineConfig;
+  const info = vi.fn<(message: string) => void>();
+
+  function captureLogs(level: "info" | "silent") {
+    info.mockReset();
+    config.logLevel = level;
+    config.customLogger = createLogger(level, {
+      allowClearScreen: false,
+      console: { ...console, log: info, error: vi.fn() },
+    });
+  }
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
@@ -24,6 +35,7 @@ describe("Control UI Vite build", () => {
       publicDir: false,
       logLevel: "silent",
     };
+    captureLogs("silent");
     await fs.writeFile(
       path.join(root, "index.html"),
       '<button>Load</button><script type="module" src="./main.js"></script>',
@@ -43,10 +55,12 @@ describe("Control UI Vite build", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
 
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
+    captureLogs("info");
     await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');
 
     const result = build(config);
@@ -54,10 +68,80 @@ describe("Control UI Vite build", () => {
     await expect(result).rejects.toThrow(/Could not resolve.*missing-module\.js/u);
     await expect(result).rejects.not.toThrow(/ENOENT|asset-manifest/u);
     await expect(fs.stat(outDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(info.mock.calls.flat().join("\n")).not.toMatch(/precompression complete|built in/u);
+  });
+
+  it("reports completed compression work before build completion at a bounded cadence", async () => {
+    captureLogs("info");
+    let clockMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clockMs);
+    const writeFileSync = fsSync.writeFileSync;
+    vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
+      writeFileSync(file, ...args);
+      if (String(file).endsWith(".br") || String(file).endsWith(".gz")) {
+        clockMs += 2_500;
+      }
+    });
+    const activity: Array<{ message: string; elapsed: number; assets: number; sidecars: number }> =
+      [];
+    info.mockImplementation((message: string) => {
+      if (!message.includes("Control UI precompression")) {
+        return;
+      }
+      const emitted = fsSync.readdirSync(path.join(outDir, "assets"));
+      activity.push({
+        message,
+        elapsed: clockMs,
+        assets: emitted.filter(
+          (name) => name.endsWith(".br") && emitted.includes(name.replace(/\.br$/u, ".gz")),
+        ).length,
+        sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
+      });
+      // The logger observes real disk writes while build() is still finalizing.
+      expect(fsSync.existsSync(path.join(outDir, "asset-manifest.json"))).toBe(false);
+    });
+    config.plugins = [
+      ...(config.plugins ?? []),
+      {
+        name: "compression-progress-fixture",
+        generateBundle() {
+          for (let index = 0; index < 4; index++) {
+            this.emitFile({
+              type: "asset",
+              fileName: `assets/extra-${index}.txt`,
+              source: "fixture",
+            });
+          }
+        },
+      },
+    ];
+
+    await build(config);
+
+    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    const completed = emitted.filter((name) => name.endsWith(".gz")).length;
+    expect(completed).toBeGreaterThan(4);
+    expect(
+      activity.map(({ elapsed, assets, sidecars }) => ({ elapsed, assets, sidecars })),
+    ).toEqual([
+      ...Array.from({ length: Math.floor(completed / 2) + 1 }, (_, index) => ({
+        elapsed: index * 10_000,
+        assets: index * 2,
+        sidecars: index * 4,
+      })),
+      { elapsed: completed * 5_000, assets: completed, sidecars: completed * 2 },
+    ]);
+    expect(activity[0]?.message).toMatch(/starting/u);
+    for (const entry of activity.slice(1)) {
+      expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
+    }
+    expect(activity.at(-1)?.message).toContain("precompression complete");
+    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).resolves.toBeDefined();
   });
 
   it("inventories final emitted bytes and compressed variants, excluding source maps", async () => {
     await build(config);
+    expect(info).not.toHaveBeenCalled();
 
     const manifest: ControlUiAssetManifest = JSON.parse(
       await fs.readFile(path.join(outDir, "asset-manifest.json"), "utf8"),
@@ -101,6 +185,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("preserves an output write failure without finalizing the build", async () => {
+    captureLogs("info");
     await fs.mkdir(outDir);
     await fs.writeFile(path.join(outDir, "blocked"), "output obstruction");
     config.build = { ...config.build, emptyOutDir: false, assetsDir: "blocked" };
@@ -109,9 +194,33 @@ describe("Control UI Vite build", () => {
 
     await expect(result).rejects.toThrow(/blocked/u);
     await expect(result).rejects.not.toThrow(/scandir|asset-manifest/u);
+    expect(info.mock.calls.flat().join("\n")).not.toMatch(/precompression complete|built in/u);
     expect(await fs.readFile(path.join(outDir, "blocked"), "utf8")).toBe("output obstruction");
     for (const file of ["asset-manifest.json", "sw.js"]) {
       await expect(fs.stat(path.join(outDir, file))).rejects.toMatchObject({ code: "ENOENT" });
     }
+  });
+
+  it("does not count an asset or report completion when its second sidecar write fails", async () => {
+    captureLogs("info");
+    const writeFileSync = fsSync.writeFileSync;
+    vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
+      if (String(file).endsWith(".gz")) {
+        throw new Error("synthetic gzip write failure");
+      }
+      writeFileSync(file, ...args);
+    });
+
+    await expect(build(config)).rejects.toThrow("synthetic gzip write failure");
+
+    const output = info.mock.calls.flat().join("\n");
+    expect(output).toContain("Control UI precompression: starting");
+    expect(output).not.toMatch(/\d+ assets|precompression complete|built in/u);
+    const emitted = await fs.readdir(path.join(outDir, "assets"));
+    expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
+    expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
+    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });

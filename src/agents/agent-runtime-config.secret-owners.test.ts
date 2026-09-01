@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQueuedReplyExecutionConfig } from "../auto-reply/reply/agent-runner-utils.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
+import { getTtsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import * as configIo from "../config/io.js";
 import {
   cloneConfigWithResolutionFacts,
@@ -14,7 +16,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
-import { setPathCreateStrict } from "../secrets/path-utils.js";
+import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import * as secretResolver from "../secrets/resolve.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
 import {
@@ -480,6 +482,49 @@ describe("agent execution respects prepared secret owners", () => {
       resolveAgentRuntimeConfig(runtime, { runtimeTargetsChannelSecrets: true }),
     ).rejects.toThrow("channels.telegram.accounts.cold.botToken is unresolved");
   });
+
+  it.each([
+    ["global", "agent"],
+    ["agent", "agent"],
+    ["global", "tts"],
+    ["agent", "tts"],
+  ] as const)(
+    "resolves a persona-only %s SecretRef for local %s commands",
+    async (scope, command) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const keyPath = [
+        ...(scope === "agent" ? ["agents", "entries", "reader", "tts"] : ["tts"]),
+        "personas",
+        "reader.uk",
+        "providers",
+        "mock",
+        "apiKey",
+      ];
+      const ref = { source: "env", provider: "default", id: "TEST_TTS_PERSONA_ONLY_KEY" } as const;
+      setPathCreateStrict(config, keyPath, ref);
+      setRuntimeConfigSnapshot(config, config);
+      vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
+        new Error("fixture has no source file"),
+      );
+      callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+      vi.stubEnv("TEST_TTS_PERSONA_ONLY_KEY", "persona-only-fixture-key");
+
+      const resolved =
+        command === "agent"
+          ? await resolveAgentRuntimeConfig(runtime)
+          : (
+              await resolveCommandConfigWithSecrets({
+                config,
+                commandName: "infer tts convert",
+                targetIds: getTtsCommandSecretTargetIds(),
+                runtime,
+              })
+            ).resolvedConfig;
+
+      expect(getPath(resolved, keyPath)).toBe("persona-only-fixture-key");
+      expect(getPath(config, keyPath)).toEqual(ref);
+    },
+  );
 
   it("does not resolve unrelated channel, plugin, or Gateway refs for standalone nondelivery", async () => {
     const config = providerConfig();

@@ -24,7 +24,7 @@ import {
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
   setChatRunOwner,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
@@ -255,13 +255,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   const projectedRun =
     payload.runId && payload.state !== "status"
       ? reduceSessionProjectionRunEvent(
-          getChatSessionProjection(state, state.chatMessages, scope),
+          getChatSessionProjection(state, scope),
           normalizedFinalMessage ? { ...payload, message: normalizedFinalMessage } : payload,
           scope,
         )
       : null;
   if (projectedRun) {
-    setChatSessionProjection(state, projectedRun.projection);
+    publishChatSessionProjection(state, projectedRun.projection);
   }
   const terminalRunId = payload.runId ?? state.chatRunId;
   const reconcileOwnedTerminalRun = () => {
@@ -452,7 +452,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream();
+        publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
       }
     }
     reconcileOwnedTerminalRun();
@@ -475,7 +475,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         terminalRunId,
       );
     } else {
-      state.chatMessages = materializeVisibleStream();
+      publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
     }
     if (payload.errorMessage?.trim()) {
       setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
@@ -515,7 +515,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream({ includeCurrent: true });
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleStream({ includeCurrent: true }),
+          { scope },
+        );
         const materialized = state.chatMessages.findLast(
           (message) => transcriptRunId(message) === terminalRunId,
         );

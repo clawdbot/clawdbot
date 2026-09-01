@@ -26,6 +26,7 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
       ["secrets", "/settings/secrets", "", ""],

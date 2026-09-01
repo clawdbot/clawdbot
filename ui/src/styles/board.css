@@ -127,12 +127,22 @@ openclaw-board-view {
 }
 
 .board-grid {
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   grid-auto-rows: 56px;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   min-width: 0;
   position: relative;
+}
+
+@container (max-width: 560px) {
+  /* Keep desktop sizes canonical; only placement changes on narrow boards.
+     CSS order preserves the keyed frame nodes when persisted order changes. */
+  .board-widget {
+    grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
+    order: var(--board-widget-order);
+  }
 }
 
 .board-grid__append-zone {

@@ -1,12 +1,14 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
@@ -39,6 +41,9 @@ const MAX_BURST_HOST_UPDATES = 180;
 // frame callback. The queue guarantees this for every stream-driven update;
 // only rare timer-driven strays (poll controllers) fall outside frames.
 const FRAME_SCHEDULED_MIN_RATIO = 0.9;
+// Unrelated page timers can contribute one host update after the probe resets;
+// ordinary characters must not invalidate the pane themselves.
+const MAX_STEADY_COMPOSER_HOST_UPDATES = 1;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
@@ -92,18 +97,15 @@ type ScopedWindow = Window & {
   };
 };
 
-const metricsArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "stream-runtime-budgets",
-);
+let metricsArtifactDir: string;
+beforeEach(() => {
+  metricsArtifactDir = createControlUiE2eArtifactDir("stream-runtime-budgets");
+});
 
 async function recordBudgetMetrics(
   testName: string,
   metrics: Record<string, number>,
 ): Promise<void> {
-  await mkdir(metricsArtifactDir, { recursive: true });
   await appendFile(
     path.join(metricsArtifactDir, "metrics.jsonl"),
     `${JSON.stringify({ testName, metrics, recordedAt: new Date().toISOString() })}\n`,
@@ -608,6 +610,52 @@ suite.define(() => {
           loadMs,
           heapUsedBytes: Math.round(heapUsedBytes),
         });
+      },
+    );
+  });
+
+  it("keeps steady-state composer edits local to a long transcript", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
+
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
+        await composer.fill("seed");
+        await page.getByRole("button", { name: "Send message" }).waitFor();
+        // The first saved draft notifies presence subscribers. Drain that transition
+        // before measuring edits to an already-present draft.
+        await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
+        await installRenderProbe(page);
+        await resetRenderProbe(page);
+
+        const suffix = " ordinary typing without commands";
+        await composer.pressSequentially(suffix);
+        await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
+        expect(await composer.inputValue()).toBe(`seed${suffix}`);
+        const probe = await readRenderProbe(page);
+
+        expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
+
+        const send = page.locator(".chat-send-btn--send");
+        await composer.fill("");
+        await expect.poll(() => send.isDisabled()).toBe(true);
+
+        await composer.fill("new draft");
+        await expect.poll(() => send.isDisabled()).toBe(false);
+
+        await composer.fill("مرحبا");
+        await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
       },
     );
   });

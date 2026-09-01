@@ -59,6 +59,30 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("skips claiming hooks when admitted session settings are restrictive", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "unsafe" });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "embedded reply" }));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "embedded reply" });
+    expect(result.queuedFinal).toBe(true);
+  });
+
   it("silently short-circuits when hook returns handled without text", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();

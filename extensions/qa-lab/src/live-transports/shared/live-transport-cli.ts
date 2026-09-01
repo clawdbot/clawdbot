@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { parseQaCliPositiveIntegerOption } from "../../cli-options.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
+import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 
 export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
   concurrency?: number;
@@ -29,7 +30,9 @@ type LiveTransportQaCommanderOptions = {
   credentialRole?: string;
 };
 
-export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
+export type LiveTransportQaCliRegistration = Omit<QaRunnerCliRegistration, "adapterFactory"> & {
+  adapterFactory?: QaTransportAdapterFactory;
+};
 
 type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
@@ -47,7 +50,7 @@ type LiveTransportQaCliRegistrationOptions = {
   allowFailuresHelp?: string;
   scenarioHelp: string;
   sutAccountHelp: string;
-  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
+  adapterFactory?: QaTransportAdapterFactory;
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
@@ -167,11 +170,15 @@ export function createLiveTransportQaAdapterFactory(params: {
   id: string;
   isolatesInstances?: boolean;
   supportsModuleFlows?: true;
+  prepareSelectedScenarios?: QaTransportAdapterFactory["prepareSelectedScenarios"];
 }): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
   return {
     id: params.id,
     isolatesInstances: params.isolatesInstances,
     supportsModuleFlows: params.supportsModuleFlows,
+    ...(params.prepareSelectedScenarios
+      ? { prepareSelectedScenarios: params.prepareSelectedScenarios }
+      : {}),
     matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
     create: params.create,
   };

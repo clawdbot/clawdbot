@@ -1,13 +1,12 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
   handleMarkdownCodeBlockClick,
-  initializeMarkdownCodeBlocks,
+  markdownCodeBlocks,
 } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
@@ -401,11 +400,7 @@ export function renderSidebarPanel(
   return html`
     <div
       class=${fillHost ? "sidebar-panel-host--fill" : ""}
-      ${ref((element) => {
-        if (element instanceof HTMLElement) {
-          initializeMarkdownCodeBlocks(element);
-        }
-      })}
+      ${markdownCodeBlocks()}
       @click=${props.onClick}
       @keydown=${props.onKeydown}
     >

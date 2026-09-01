@@ -1,6 +1,12 @@
 // Verifies harness ownership, payload availability, and run-owned registry lookup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as installedManifests from "../../plugins/manifest-registry-installed.js";
+import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   createAgentRuntimeMetadataPluginIdScope,
@@ -303,6 +309,47 @@ describe("harness runtime plugins", () => {
       }
     },
   );
+
+  it("reuses prepared memory aliases while applying current activation policy", () => {
+    const config: OpenClawConfig = { plugins: { slots: { memory: "fixture-memory" } } };
+    const snapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([
+        { id: "fixture-memory", channels: [], providers: ["memory-alias"] },
+      ]),
+    });
+    snapshot.index.plugins = [
+      {
+        ...installedProviderRecord("fixture-memory"),
+        origin: "config",
+        rootDir: "/fake/fixture-memory",
+        manifestPath: "/fake/fixture-memory/openclaw.plugin.json",
+        manifestHash: "fixture",
+        enabled: true,
+        enabledByDefault: true,
+        startup: { sidecar: false, memory: true, agentHarnesses: [] },
+      },
+    ];
+    const metadataSnapshot = restorePluginMetadataSnapshot(snapshot);
+    const rebuildManifests = vi
+      .spyOn(installedManifests, "loadPluginManifestRegistryForInstalledIndex")
+      .mockReturnValue(metadataSnapshot.manifestRegistry);
+    try {
+      for (const enabled of [true, false, true]) {
+        config.plugins!.entries = { "memory-alias": { enabled } };
+        const plan = resolveAgentRuntimePluginLoadPlan({
+          config,
+          metadataSnapshot,
+          workspaceDir: "/tmp/agent-workspace",
+          selections: [],
+        });
+        expect(plan.pluginIds ?? []).toEqual(enabled ? ["fixture-memory"] : []);
+      }
+      expect(rebuildManifests).not.toHaveBeenCalled();
+    } finally {
+      rebuildManifests.mockRestore();
+    }
+  });
 
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({

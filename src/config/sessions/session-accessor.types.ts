@@ -834,15 +834,6 @@ export type RestoreSessionFromCompactionCheckpointParams = {
   storePath: string;
 };
 
-export type TemporarySessionMappingPreservationResult<T> = {
-  /** Result returned by the operation while the temporary mapping may exist. */
-  result: T;
-  /** Snapshot failure; callers may continue when temporary cleanup is best-effort. */
-  snapshotFailure?: string;
-  /** Restore/delete failure for the original temporary mapping state. */
-  restoreFailure?: string;
-};
-
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
   existingEntry?: SessionEntry;

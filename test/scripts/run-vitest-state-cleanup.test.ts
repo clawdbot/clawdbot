@@ -267,19 +267,34 @@ export default {
         `
 const { subscribe } = require("node:diagnostics_channel");
 const fs = require("node:fs");
+const isVitestFork = arg => typeof arg === "string" && arg.replaceAll("\\\\", "/").endsWith("/vitest/dist/workers/forks.js");
+if (isVitestFork(process.argv[1]) && process.send) {
+  const send = process.send;
+  process.send = function(message, ...args) {
+    if (message?.__vitest_worker_response__ === true && message.type === "stopped" && message.willExit === true) {
+      const callbackIndex = args.length - 1;
+      const callback = args[callbackIndex];
+      args[callbackIndex] = function(...callbackArgs) {
+        // The patched transport exits in this callback. Stop after its response
+        // flushes, before that exit can race the parent's message observation.
+        if (!callbackArgs[0]) process.kill(process.pid, "SIGSTOP");
+        return callback.apply(this, callbackArgs);
+      };
+    }
+    return send.call(this, message, ...args);
+  };
+}
 subscribe("child_process", ({ process: child }) => {
   let selected = false;
-  let paused = false;
+  let acknowledged = false;
   child.once("spawn", () => {
-    selected = child.spawnargs.some(arg => arg.replaceAll("\\\\", "/").endsWith("/vitest/dist/workers/forks.js"));
+    selected = child.spawnargs.some(isVitestFork);
   });
   child.on("message", message => {
-    if (!selected || paused || message?.__vitest_worker_response__ !== true || message.type !== "stopped") return;
-    // No I/O before the signal: even logging can let native exit profiling finish.
-    paused = child.kill("SIGSTOP");
+    if (selected && message?.__vitest_worker_response__ === true && message.type === "stopped") acknowledged = true;
   });
   child.once("exit", (code, signal) => {
-    if (selected) fs.writeFileSync(${JSON.stringify(pauseReceipt)}, JSON.stringify({ paused, code, signal }));
+    if (selected) fs.writeFileSync(${JSON.stringify(pauseReceipt)}, JSON.stringify({ acknowledged, code, signal }));
   });
 });
 `,
@@ -342,7 +357,7 @@ process.exitCode = await runVitestBatch({ config: ${JSON.stringify(configPath)},
       }
       if (pauseAfterAck) {
         expect(JSON.parse(fs.readFileSync(pauseReceipt, "utf8"))).toEqual({
-          paused: true,
+          acknowledged: true,
           code: null,
           signal: "SIGKILL",
         });

@@ -96,23 +96,29 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "shared_image_archive_sha256",
 ]);
 
+const PACKAGE_UPDATE_CHUNKS = [
+  "package-update-openai",
+  "package-update-onboarding",
+  "package-update-migrations",
+  "package-update-self-upgrade",
+];
+
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
-    dockerE2eChunks: ["package-update-openai", "package-update-core"],
+    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
     liveModelProviders: ["openai"],
   },
   {
     profile: "beta",
-    dockerE2eChunks: ["package-update-openai", "package-update-core"],
+    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
     liveModelProviders: ["openai"],
   },
   {
     profile: "stable",
     dockerE2eChunks: [
       "core",
-      "package-update-openai",
-      "package-update-core",
+      ...PACKAGE_UPDATE_CHUNKS,
       "plugins-runtime-plugins",
       "plugins-runtime-services",
       "plugins-runtime-install-a",
@@ -130,8 +136,7 @@ const PROFILE_EXPECTATIONS = [
     profile: "full",
     dockerE2eChunks: [
       "core",
-      "package-update-openai",
-      "package-update-core",
+      ...PACKAGE_UPDATE_CHUNKS,
       "plugins-runtime-plugins",
       "plugins-runtime-services",
       "plugins-runtime-install-a",
@@ -437,7 +442,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       releaseProfile: "stable",
     });
 
-    expect(plan.dockerE2e.count).toBe(13);
+    expect(plan.dockerE2e.count).toBe(15);
     expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
       "anthropic",
       "google",

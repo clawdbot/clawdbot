@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
@@ -112,7 +112,7 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
   agentDir: string;
   workspaceDir: string;
 }): Promise<ThinkLevel> {
-  return resolveThinkingDefaultWithRuntimeCatalog({
+  return resolveThinkingDefaultWithRuntimeCatalogCore({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,

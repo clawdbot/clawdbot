@@ -1,5 +1,5 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { describeFailoverError } from "../../agents/failover-error.js";
+import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -102,7 +102,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (phase === "error") {
       data.error =
-        renderFailoverCodeUserCopy(describeFailoverError(resultOrError).code) ??
+        renderFailoverCodeUserCopy(getFailoverErrorCode(resultOrError)) ??
         formatErrorMessage(resultOrError);
       Object.assign(data, terminationFields);
     } else {

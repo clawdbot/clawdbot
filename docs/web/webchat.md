@@ -51,8 +51,10 @@ must not predict it from history length or treat `status: "started"` as persiste
 The Control UI replaces its provisional source with accepted custody, then with
 the canonical row. Retained initial attachment bytes may enrich that exact row
 without recreating a pending bubble on later snapshots or pane remounts.
-Submission identity stays separate from the execution run, so two intentionally
-identical sends remain two inputs.
+Once custody, a consumption record, or a committed user-message receipt retires
+a local source, replayed terminal events cannot bring it back, even when its row
+is absent from a later history page. Submission identity stays separate from the
+execution run, so two intentionally identical sends remain two inputs.
 
 WebChat has two separate data paths:
 

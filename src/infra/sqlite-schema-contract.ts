@@ -439,7 +439,10 @@ function collectSqliteTableContract(
     name: trigger.name,
     sql: normalizeSchemaSql(trigger.sql),
   }));
-  const normalizedTableSql = normalizeSchemaSql(table.sql);
+  // This literal prefix cannot become CREATE VIRTUAL TABLE after normalization.
+  const normalizedTableSql = table.sql?.startsWith("CREATE TABLE ")
+    ? null
+    : normalizeSchemaSql(table.sql);
   const isVirtualTable =
     normalizedTableSql !== null && /^CREATE VIRTUAL TABLE /iu.test(normalizedTableSql);
 

@@ -263,12 +263,19 @@ describe("applyMigrationSkillSelection", () => {
       plan([
         skillItem({ id: "skill:alpha", name: "alpha" }),
         skillItem({ id: "skill:beta", name: "beta" }),
+        {
+          id: "config:skill:alpha",
+          kind: "config",
+          action: "merge",
+          status: "planned",
+          details: { path: ["skills", "entries", "alpha"], value: { enabled: false } },
+        },
       ]),
       new Set(),
     );
 
-    expectSummaryFields(selected.summary, { planned: 0, skipped: 2 });
-    expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped"]);
+    expectSummaryFields(selected.summary, { planned: 0, skipped: 3 });
+    expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped", "skipped"]);
   });
 
   it("defaults interactive selection to planned skills only", () => {

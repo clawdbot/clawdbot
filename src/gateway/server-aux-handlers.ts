@@ -106,11 +106,7 @@ export function createGatewayAuxHandlers(
       onLifecycle: params.onApprovalLifecycle,
       // Timeout expiry is gateway-clock truth: publish the terminal like a
       // resolve so reviewer surfaces need not infer it from their own clocks.
-      // system-agent approvals have no forwarder/push route to notify.
       onExpired: (record, liveRecord) => {
-        if (approvalKind === "system-agent") {
-          return;
-        }
         const publication = { kind: approvalKind, record, liveRecord };
         publishAuthorityClosure(publication as PendingAuthorityPublication);
       },
@@ -211,7 +207,9 @@ export function createGatewayAuxHandlers(
       forwarder: execApprovalForwarder,
       ...(publication.kind === "exec"
         ? { iosPushDelivery: execApprovalIosPushDelivery }
-        : { pluginIosPushDelivery: pluginApprovalIosPushDelivery }),
+        : publication.kind === "plugin"
+          ? { pluginIosPushDelivery: pluginApprovalIosPushDelivery }
+          : {}),
     }).catch((error: unknown) => {
       context.logGateway?.error?.(
         `${publication.kind} approvals: authority-close publication failed: ${String(error)}`,
@@ -248,6 +246,19 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: authority-close settlement failed: ${String(error)}`);
       }
+      try {
+        cancelAgentRuntimeBoundApprovals({
+          authority,
+          reason: approvalReason,
+          manager: systemAgentApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "system-agent", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(
+          `system-agent approvals: authority-close settlement failed: ${String(error)}`,
+        );
+      }
       questionManager.cancelClosedAuthorities();
       if (!approvalReason) {
         params.onAgentRunAuthorityClosed?.(authority);
@@ -276,6 +287,18 @@ export function createGatewayAuxHandlers(
       } catch (error) {
         params.log.error?.(`plugin approvals: worker-claim settlement failed: ${String(error)}`);
       }
+      try {
+        cancelWorkerTurnClaimBoundApprovals({
+          claim,
+          manager: systemAgentApprovalManager,
+          publish: (record, liveRecord) =>
+            publishAuthorityClosure({ kind: "system-agent", record, liveRecord }),
+        });
+      } catch (error) {
+        params.log.error?.(
+          `system-agent approvals: worker-claim settlement failed: ${String(error)}`,
+        );
+      }
       questionManager.cancelClosedAuthorities();
     },
   );
@@ -299,7 +322,9 @@ export function createGatewayAuxHandlers(
         forwarder: execApprovalForwarder,
         ...(kind === "exec"
           ? { iosPushDelivery: execApprovalIosPushDelivery }
-          : { pluginIosPushDelivery: pluginApprovalIosPushDelivery }),
+          : kind === "plugin"
+            ? { pluginIosPushDelivery: pluginApprovalIosPushDelivery }
+            : {}),
       }).catch((error: unknown) => {
         context.logGateway?.error?.(
           `${kind} approvals: run-abort publication failed: ${String(error)}`,
@@ -307,11 +332,23 @@ export function createGatewayAuxHandlers(
       });
     };
     if (typeof target === "string") {
-      return cancelUnboundRunApprovals({
-        runId: target,
-        manager: execApprovalManager,
-        publish: (record, liveRecord) => publish("exec", record, liveRecord),
-      });
+      return (
+        cancelUnboundRunApprovals({
+          runId: target,
+          manager: execApprovalManager,
+          publish: (record, liveRecord) => publish("exec", record, liveRecord),
+        }) +
+        cancelUnboundRunApprovals({
+          runId: target,
+          manager: pluginApprovalManager,
+          publish: (record, liveRecord) => publish("plugin", record, liveRecord),
+        }) +
+        cancelUnboundRunApprovals({
+          runId: target,
+          manager: systemAgentApprovalManager,
+          publish: (record, liveRecord) => publish("system-agent", record, liveRecord),
+        })
+      );
     }
     return (
       cancelAgentRuntimeBoundApprovals({
@@ -325,6 +362,12 @@ export function createGatewayAuxHandlers(
         reason: "permission-change",
         manager: pluginApprovalManager,
         publish: (record, liveRecord) => publish("plugin", record, liveRecord),
+      }) +
+      cancelAgentRuntimeBoundApprovals({
+        authority: target,
+        reason: "permission-change",
+        manager: systemAgentApprovalManager,
+        publish: (record, liveRecord) => publish("system-agent", record, liveRecord),
       })
     );
   };

@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "../../llm/types.js";
 import { isReplayUnsafeAssistantError } from "../../llm/utils/retry.js";
-import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   classifyFailoverSignal,
   isAuthErrorMessage,
@@ -8,14 +8,17 @@ import {
   isRateLimitErrorMessage,
 } from "../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import { extractFailoverSignalDetails } from "../failover/signal-details.js";
 import type { FailoverReason, FailoverSignal } from "../failover/signal.js";
 export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
+  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage);
   return {
-    status: extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     code: msg.errorCode,
     errorType: msg.errorType,
     message: msg.errorMessage?.trim() || undefined,
@@ -25,7 +28,7 @@ export function buildAssistantFailoverSignal(
 }
 export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
-  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
     return null;

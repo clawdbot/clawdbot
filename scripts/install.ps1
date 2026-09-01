@@ -847,7 +847,7 @@ function Install-PortableGit {
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
         $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
@@ -999,13 +999,17 @@ function Invoke-CommandFromWindowsSafeDirectory {
 
     $safeDir = if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { Get-WindowsCommandSafeDirectory } else { $WorkingDirectory }
     $pushedLocation = $false
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
         if (-not [string]::IsNullOrWhiteSpace($safeDir)) {
             Push-Location -LiteralPath $safeDir
             $pushedLocation = $true
         }
+        # Windows PowerShell 5.1 treats native stderr warnings as PowerShell errors.
+        $ErrorActionPreference = "Continue"
         & $CommandPath @Arguments
     } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         if ($pushedLocation) {
             Pop-Location
         }

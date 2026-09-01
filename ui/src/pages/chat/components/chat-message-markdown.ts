@@ -7,7 +7,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import {
@@ -333,13 +333,17 @@ function renderMarkdownText(
   duplicateSuffix?: DuplicateSuffix,
   streamKey?: string,
 ) {
-  const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
-    : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
-  const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
-  return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(content)}</div>
-  `;
+  const parts: [string, string] = isStreaming
+    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
+    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
+  if (duplicateSuffix) {
+    const terminalPart = parts[1].trim() ? 1 : 0;
+    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+  }
+  // Separate Lit parts preserve completed code controls and diagrams while the
+  // streaming tail changes; the Markdown splitter still owns container boundaries.
+  const content = parts.map((part) => unsafeHTML(part));
+  return html` <div class="chat-text" dir="${detectTextDirection(markdown)}">${content}</div> `;
 }
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {

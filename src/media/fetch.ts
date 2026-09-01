@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
+  type GuardedFetchOptions,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -78,6 +79,8 @@ type FetchDispatcherAttempt = {
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  /** Final synchronous check repeated for every media attempt and redirect. */
+  beforeRequest?: GuardedFetchOptions["beforeRequest"];
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
@@ -297,6 +300,7 @@ async function fetchGuardedMediaResponse(
   const {
     url,
     fetchImpl,
+    beforeRequest,
     requestInit,
     maxRedirects,
     requireHttps,
@@ -330,6 +334,7 @@ async function fetchGuardedMediaResponse(
         : withStrictGuardedFetchMode)({
         url,
         fetchImpl,
+        ...(beforeRequest ? { beforeRequest } : {}),
         init: requestInit,
         maxRedirects,
         ...(requireHttps !== undefined ? { requireHttps } : {}),

@@ -16,14 +16,7 @@ import {
   type DocxMarkdownChunk,
   type DocxMarkdownImage,
 } from "./docx-markdown.js";
-import {
-  cleanBlocksForDescendant,
-  insertTableRow,
-  insertTableColumn,
-  deleteTableRows,
-  deleteTableColumns,
-  mergeTableCells,
-} from "./docx-table-ops.js";
+import { cleanBlocksForDescendant, patchTable } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
 import { resolveDocxUploadInput } from "./docx-upload-input.js";
 import {
@@ -1386,43 +1379,11 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 case "color_text":
                   return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
                 case "insert_table_row":
-                  return json(await insertTableRow(client, p.doc_token, p.block_id, p.row_index));
                 case "insert_table_column":
-                  return json(
-                    await insertTableColumn(client, p.doc_token, p.block_id, p.column_index),
-                  );
                 case "delete_table_rows":
-                  return json(
-                    await deleteTableRows(
-                      client,
-                      p.doc_token,
-                      p.block_id,
-                      p.row_start,
-                      p.row_count,
-                    ),
-                  );
                 case "delete_table_columns":
-                  return json(
-                    await deleteTableColumns(
-                      client,
-                      p.doc_token,
-                      p.block_id,
-                      p.column_start,
-                      p.column_count,
-                    ),
-                  );
                 case "merge_table_cells":
-                  return json(
-                    await mergeTableCells(
-                      client,
-                      p.doc_token,
-                      p.block_id,
-                      p.row_start,
-                      p.row_end,
-                      p.column_start,
-                      p.column_end,
-                    ),
-                  );
+                  return json(await patchTable(client, p));
                 default:
                   return json({ error: "Unknown action" });
               }

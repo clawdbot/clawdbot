@@ -99,6 +99,7 @@ type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  githubProfileDir?: string;
   pathPrepend?: string[];
   requestedEnv?: Record<string, string>;
   pty: boolean;
@@ -1501,6 +1502,7 @@ export async function processGatewayAllowlist(
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
               env: params.env,
+              githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
               containerWorkdir: null,
@@ -1540,7 +1542,7 @@ export async function processGatewayAllowlist(
           // Suspension must observe one side of this handoff at every instant.
           markBackgrounded(run.session);
           return { status: "started" as const, run };
-        });
+        }, "exec-host:approval");
       } catch (error) {
         if (
           error instanceof GatewayDrainingError ||

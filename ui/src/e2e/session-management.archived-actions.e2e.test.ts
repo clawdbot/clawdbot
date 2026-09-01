@@ -12,7 +12,6 @@ import {
   installMockGateway,
   requireRecord,
   sessionsListResponse,
-  uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -26,9 +25,7 @@ suite.define(() => {
     it(`keeps archived transcript actions inert on ${viewport.label}`, async () => {
       const context = await suite.browser.newContext({
         locale: "en-US",
-        recordVideo: captureUiProofEnabled
-          ? { dir: uiProofArtifactDir, size: viewport }
-          : undefined,
+        recordVideo: captureUiProofEnabled ? { dir: suite.artifactDir, size: viewport } : undefined,
         serviceWorkers: "block",
         viewport,
       });
@@ -192,7 +189,7 @@ suite.define(() => {
               ),
           ).toBe(true);
         }
-        await captureUiProof(page, `archived-actions-${viewport.label}.png`);
+        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`);
         expect(
           await page.evaluate(() => {
             const portal = document.querySelector<HTMLElement>(".chat-reply-context-menu");
@@ -231,7 +228,7 @@ suite.define(() => {
         await context.close();
         if (proofVideo) {
           await proofVideo.saveAs(
-            path.join(uiProofArtifactDir, `archived-actions-${viewport.label}.webm`),
+            path.join(suite.artifactDir, `archived-actions-${viewport.label}.webm`),
           );
         }
       }

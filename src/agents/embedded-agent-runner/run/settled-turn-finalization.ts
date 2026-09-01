@@ -19,21 +19,20 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import {
   resolveRuntimeModelAttempt,
   runEmbeddedSettledTurnFinalizationWithBackend,
 } from "./backend.js";
+import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import {
-  copyAttemptDeliveryState,
-  resolveSettledTurnFinalizationRequest,
-} from "./terminal-resolution.js";
+import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
@@ -404,11 +403,14 @@ function buildSettledToolFallbackAttemptResult(input: {
   runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
   transcriptIdempotencyKey?: string;
 }): EmbeddedRunAttemptWithReceiptEvidence {
+  // Command-only harnesses retain assistant identity in the settled tool batch,
+  // even when neither visible-assistant field exists.
   const sourceAssistant =
     input.sourceAttempt.currentAttemptAssistant ??
     input.sourceAttempt.lastAssistant ??
     input.settledAttempt.currentAttemptAssistant ??
-    input.settledAttempt.lastAssistant;
+    input.settledAttempt.lastAssistant ??
+    resolveSettledToolBatchEvidence(input.settledAttempt).assistant;
   if (!sourceAssistant) {
     throw new Error("Settled-turn fallback has no assistant identity");
   }

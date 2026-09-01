@@ -109,7 +109,7 @@ suite.define(() => {
             };
           })
           .toEqual({ horizontal: true, vertical: true });
-        await captureUiProof(page, `group-defaults-folder-picker-${viewport.name}.png`);
+        await captureUiProof(suite, page, `group-defaults-folder-picker-${viewport.name}.png`);
       }
       await folderPicker.getByRole("button", { name: "Use this folder" }).click();
       await page.setViewportSize({ height: 900, width: 1280 });
@@ -221,7 +221,11 @@ suite.define(() => {
         await expect
           .poll(() => environment.getAttribute("data-session-group-environment"))
           .not.toBe("checking");
-        await captureUiProof(page, `group-defaults-${groupCwd ? "folder" : "workspace"}.png`);
+        await captureUiProof(
+          suite,
+          page,
+          `group-defaults-${groupCwd ? "folder" : "workspace"}.png`,
+        );
         await expect.poll(() => environment.textContent()).toContain("Couldn't verify Git");
         const save = dialog.getByRole("button", { name: "Save" });
         await expect.poll(() => save.isDisabled()).toBe(true);

@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { performance } from "node:perf_hooks";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -97,6 +98,7 @@ async function waitForHealthyGatewayChild(
 
 export async function runGatewayLoop(params: {
   start: (params?: {
+    processStartedAt?: number;
     startupStartedAt?: number;
     requestHotReloadRecovery?: GatewayRestartEmitter;
   }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
@@ -115,6 +117,7 @@ export async function runGatewayLoop(params: {
     process.title = "openclaw-gateway";
   }
   let startupStartedAt: number;
+  const processStartedAt = performance.timeOrigin;
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
   // SIGTERM-with-intent, restart iteration hook, stability bundle writer)
@@ -1042,6 +1045,7 @@ export async function runGatewayLoop(params: {
         startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         const startedServer = await params.start({
+          ...(isRestartIteration ? {} : { processStartedAt }),
           startupStartedAt,
           requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
         });

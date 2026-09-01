@@ -63,7 +63,7 @@ import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-gran
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
-import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
+import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -1318,7 +1318,9 @@ async function runNonStreamingChatSend(params: {
     context: params.context,
   };
   if (params.runtimeToolsAllow) {
-    await handleChatSendWithRuntimeTools(handlerOptions, params.runtimeToolsAllow);
+    await handleTrustedInternalChatSend(handlerOptions, undefined, {
+      toolsAllow: params.runtimeToolsAllow,
+    });
   } else {
     await handler(handlerOptions);
   }
@@ -4349,6 +4351,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ([, payload]) => (payload as { state?: unknown })?.state === "final",
     );
     expect(finalBroadcasts).toStrictEqual([]);
+  });
+
+  it("labels additional returned agent errors instead of flattening them", async () => {
+    await createTranscriptFixture("openclaw-chat-send-multiple-agent-errors-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      { kind: "final", payload: { text: "Primary execution failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+      { kind: "final", payload: { text: "Workspace recovery failed", isError: true } },
+    ];
+    const { send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-multiple-agent-errors",
+      message: "run on the worker",
+    });
+
+    expect(broadcast).toMatchObject({
+      state: "error",
+      errorMessage: "Primary execution failed\n\nAdditional error: Workspace recovery failed",
+    });
   });
 
   it.each([

@@ -126,6 +126,36 @@ export function findErrorProperty<T>(
   );
 }
 
+export function readDirectErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits probing code; its value remains unknown.
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  // SAFETY: Optional chaining handles absent details; only string codes are accepted.
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  // SAFETY: The object guard permits probing status; its type is checked below.
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
+    return undefined;
+  }
+  const trimmed = status.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function getFailoverErrorCode(err: unknown): string | undefined {
+  // A typed failure owns its code, including absence; only raw errors search causes.
+  return isFailoverError(err) ? err.code : findErrorProperty(err, readDirectErrorCode);
+}
+
 export function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message || undefined;

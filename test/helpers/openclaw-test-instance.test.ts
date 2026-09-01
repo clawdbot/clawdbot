@@ -1,4 +1,5 @@
 // OpenClaw test instance tests cover spawned test instance lifecycle.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
@@ -190,6 +191,14 @@ const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWA
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
+if (kind === "cli") {
+  process.stderr.write("cli diagnostic\\n");
+  if (argv[0] === "wait") {
+    setInterval(() => {}, 1_000);
+    await new Promise(() => {});
+  }
+  process.exit(Number(argv[0]));
+}
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
@@ -284,6 +293,61 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
+  it.each([
+    { mode: "0", prepare: false },
+    { mode: "7", prepare: false },
+    { mode: "wait", prepare: false },
+    { mode: "0", prepare: true },
+  ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
+    const control = prepare ? await createGatewayControl() : undefined;
+    await control?.release();
+    const preparation = control ? { url: control.url, holdPreparation: true } : undefined;
+    const { instance, readAttempts } = await createFakeGateway("cli", 1_000, 1_500, preparation);
+    const scope = new AsyncLocalStorage<boolean>();
+    const timers = new Map<number, NodeJS.Timeout>();
+    const hook = createHook({
+      init(id, type, _trigger, resource) {
+        if (type === "Timeout" && scope.getStore()) {
+          // Node's Timeout async resource is the cancellable timer handle.
+          timers.set(id, resource as NodeJS.Timeout);
+        }
+      },
+      destroy(id) {
+        timers.delete(id);
+      },
+    });
+    hook.enable();
+    try {
+      const timeoutMs = mode === "wait" ? 1_000 : 30_000;
+      const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
+      if (mode === "wait") {
+        await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
+      } else {
+        await expect(command).resolves.toEqual({
+          code: Number(mode),
+          signal: null,
+          stdout: "fake gateway attempt 1\n",
+          stderr: "cli diagnostic\n",
+        });
+      }
+      const attempts = await readAttempts();
+      expect(attempts).toHaveLength(1);
+      expect(isProcessAlive(attempts[0]!.pid)).toBe(false);
+      // Deliver Node's queued destroy hooks; elapsed wall time is not the oracle.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(timers.size, "completed CLI invocation retained a deadline").toBe(0);
+    } finally {
+      hook.disable();
+      scope.disable();
+      // Retain the failing assertion while releasing only this invocation's timers.
+      for (const timer of timers.values()) {
+        clearTimeout(timer);
+      }
+    }
+  });
+
   it("joins concurrent starts until the real readiness response arrives", async () => {
     const control = await createGatewayControl();
     const { instance } = await createFakeGateway("held-ready", 1_000, 1_500, control);

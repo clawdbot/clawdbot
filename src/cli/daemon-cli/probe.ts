@@ -12,15 +12,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
-type GatewayStatusProbeKind = "connect" | "read";
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
 const CONNECT_ERROR_DETAIL_CODE_VALUES: ReadonlySet<string> = new Set(
   Object.values(ConnectErrorDetailCodes),
 );
-
-async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
-  return await probeGatewayModuleLoader.load();
-}
 
 function resolveProbeFailureMessage(result: {
   error?: string | null;
@@ -65,7 +60,7 @@ export async function probeGatewayStatus(opts: {
   allowRpcConfigCredentials?: boolean;
   configPath?: string;
 }) {
-  const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
+  const kind = opts.requireRpc ? "read" : "connect";
   let auth: GatewayProbeAuthSummary | undefined;
   let server: GatewayProbeServerSummary | undefined;
   let gatewayReached = false;
@@ -84,7 +79,7 @@ export async function probeGatewayStatus(opts: {
               "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
             );
           }
-          const { resolveProbeAuthSummary } = await loadProbeGatewayModule();
+          const { resolveProbeAuthSummary } = await probeGatewayModuleLoader.load();
           const { callGateway } = await import("../../gateway/call.js");
           await callGateway({
             url: opts.url,
@@ -110,7 +105,7 @@ export async function probeGatewayStatus(opts: {
           });
           return { ok: true as const, auth, server };
         }
-        const { probeGateway } = await loadProbeGatewayModule();
+        const { probeGateway } = await probeGatewayModuleLoader.load();
         return await probeGateway({
           url: opts.url,
           ...(opts.config ? { config: opts.config } : {}),

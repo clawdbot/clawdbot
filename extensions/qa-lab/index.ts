@@ -3,7 +3,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 // Keep plugin registration independent of private QA transports, which packaged runtimes omit.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
-import { registerQaLabCli } from "./src/cli.js";
 import { createQaLabWebSearchProvider } from "./src/qa-web-search-provider.js";
 import { createStaticSshWorkerProvider } from "./src/static-ssh-worker-provider.js";
 
@@ -47,6 +46,7 @@ export default definePluginEntry({
     api.registerWebSearchProvider(createQaLabWebSearchProvider());
     api.registerCli(
       async ({ program }) => {
+        const { registerQaLabCli } = await import("./src/cli.js");
         registerQaLabCli(program);
       },
       {

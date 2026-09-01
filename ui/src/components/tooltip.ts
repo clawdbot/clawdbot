@@ -1,5 +1,5 @@
 // Control UI adapter for Web Awesome tooltips. OpenClaw keeps its terse
-// wrapper API; Web Awesome owns popup positioning, rendering, and dismissal.
+// wrapper API and manual dismissal; Web Awesome owns positioning and rendering.
 import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { css, html } from "lit";
@@ -95,6 +95,21 @@ class TooltipProvider extends OpenClawLitElement {
 
 class Tooltip extends OpenClawLitElement {
   private static readonly activeByDocument = new WeakMap<Document, Tooltip>();
+
+  static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
+    if (event.key !== "Escape" || event.defaultPrevented) {
+      return false;
+    }
+    const active = Tooltip.activeByDocument.get(ownerDocument);
+    if (!active) {
+      return false;
+    }
+    // Block native dialog cancellation and later listeners on this capture target.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    active.close();
+    return true;
+  };
 
   static closeForProvider(provider: TooltipProvider) {
     const active = Tooltip.activeByDocument.get(provider.ownerDocument);
@@ -435,10 +450,15 @@ class Tooltip extends OpenClawLitElement {
     this.setAttribute("open", "");
     this.ownerDocument.addEventListener("pointerdown", this.handleDocumentDismiss, true);
     this.ownerDocument.addEventListener("focusin", this.handleDocumentDismiss, true);
+    this.ownerDocument.defaultView?.addEventListener("keydown", this.handleWindowKeyDown, true);
   }
 
-  // Web Awesome owns Escape/top-layer ordering; wa-hide releases our pin and
-  // provider state without letting the same Escape dismiss an underlying dialog.
+  // Manual WA tooltips have no Escape handler. Capture before dialogs/default
+  // actions; earlier capture owners use the same consumer before handling keys.
+  private readonly handleWindowKeyDown = (event: KeyboardEvent) => {
+    Tooltip.consumeEscape(event, this.ownerDocument);
+  };
+
   private readonly handleDocumentDismiss = (event: Event) => {
     if (!event.composedPath().some((target) => target === this || target === this.triggerElement)) {
       this.close();
@@ -454,6 +474,7 @@ class Tooltip extends OpenClawLitElement {
     this.removeAttribute("open");
     this.ownerDocument.removeEventListener("pointerdown", this.handleDocumentDismiss, true);
     this.ownerDocument.removeEventListener("focusin", this.handleDocumentDismiss, true);
+    this.ownerDocument.defaultView?.removeEventListener("keydown", this.handleWindowKeyDown, true);
     this.clearTimers();
     if (this.webAwesomeTooltip?.open) {
       this.webAwesomeTooltip.open = false;
@@ -634,6 +655,8 @@ class Tooltip extends OpenClawLitElement {
     `;
   }
 }
+
+export const consumeTooltipEscape = Tooltip.consumeEscape;
 
 if (!customElements.get("openclaw-tooltip-provider")) {
   customElements.define("openclaw-tooltip-provider", TooltipProvider);
