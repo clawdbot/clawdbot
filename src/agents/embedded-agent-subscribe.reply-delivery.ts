@@ -337,6 +337,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       autoDeliveryMediaUrls.length === 0
         ? withToolMedia
         : markReplyPayloadForSourceSuppressionDelivery({
+            text: undefined,
             mediaUrls: autoDeliveryMediaUrls,
             mediaUrl: autoDeliveryMediaUrls[0],
             attachments: autoDeliveryMediaUrls.map(
@@ -344,6 +345,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             ),
             audioAsVoice: pendingToolMedia?.audioAsVoice || undefined,
             trustedLocalMedia: true,
+            isReasoning: false,
           });
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     const taggedPayload =

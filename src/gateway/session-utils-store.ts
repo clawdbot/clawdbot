@@ -24,14 +24,11 @@ import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-ex
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import {
-  resolveAgentMainSessionKey,
-  type SessionEntry,
-  type SessionScope,
-} from "../config/sessions.js";
+import { resolveAgentMainSessionKey, type SessionScope } from "../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
 import { loadExecApprovals } from "../infra/exec-approvals-store.js";
@@ -169,7 +166,7 @@ function loadSessionEntryWithMode(
   }
   const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
-  const entry =
+  const entry: SessionEntry | undefined =
     readOnly && opts?.clone !== false && canonicalMatch?.entry
       ? structuredClone(canonicalMatch.entry)
       : canonicalMatch?.entry;
