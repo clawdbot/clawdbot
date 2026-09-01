@@ -20,12 +20,6 @@ import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName } from "./add-mutators.js";
 
-type OnboardChannelsModule = typeof import("../onboard-channels.js");
-
-async function loadOnboardChannels(): Promise<OnboardChannelsModule> {
-  return await import("../onboard-channels.js");
-}
-
 type InitialWizardChannelTarget =
   | { kind: "omitted" }
   | { kind: "resolved"; channel: ChannelChoice }
@@ -94,7 +88,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   const { cfg, baseHash, runtime, prompter } = params;
   const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
     import("../agents.config.js"),
-    loadOnboardChannels(),
+    import("../onboard-channels.js"),
   ]);
   const channelSetup = onboardChannels.createChannelSetupTransaction({
     runtime,

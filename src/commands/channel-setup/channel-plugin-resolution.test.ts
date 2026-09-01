@@ -387,4 +387,56 @@ describe("resolveInstallableChannelPlugin", () => {
       expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
     );
   });
+
+  it.each([true, false])(
+    "preserves the installation result and workspace when installed=%s",
+    async (installed) => {
+      const cfg = { plugins: { enabled: true } };
+      const entry = createCatalogEntry({ id: "demo", pluginId: "demo", origin: "bundled" });
+      const plugin = createPlugin("demo");
+      const pluginId = installed ? "installed-demo" : "demo";
+      const nextCfg = installed ? { plugins: { allow: [pluginId] } } : cfg;
+      mocks.listChannelPluginCatalogEntries.mockReturnValue([entry]);
+      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(
+        ({ cfg: loadedCfg }) => ({
+          channels: installed && loadedCfg === nextCfg ? [{ plugin }] : [],
+          channelSetups: [],
+        }),
+      );
+      mocks.ensureChannelSetupPluginInstalled.mockResolvedValueOnce({
+        cfg: nextCfg,
+        installed,
+        pluginId,
+        status: installed ? "installed" : "skipped",
+      });
+
+      const result = await resolveInstallableChannelPlugin({
+        cfg,
+        runtime: {} as never,
+        rawChannel: "demo",
+      });
+
+      expect(result).toEqual({
+        cfg: nextCfg,
+        channelId: "demo",
+        plugin: installed ? plugin : undefined,
+        catalogEntry: { ...entry, pluginId },
+        configChanged: installed,
+        pluginInstalled: installed,
+        supportsRequestedCapability: installed ? true : undefined,
+      });
+      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledTimes(1);
+      expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg, entry, workspaceDir: "/tmp/workspace" }),
+      );
+      expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(
+        installed ? 2 : 1,
+      );
+      if (installed) {
+        expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenLastCalledWith(
+          expect.objectContaining({ cfg: nextCfg, pluginId, workspaceDir: "/tmp/workspace" }),
+        );
+      }
+    },
+  );
 });
