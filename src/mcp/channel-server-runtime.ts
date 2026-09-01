@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
@@ -44,14 +44,20 @@ export async function createChannelMcpRuntime(
   });
   bridge.setServer(server);
 
-  server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
-    await bridge.handleClaudePermissionRequest({
-      requestId: params.request_id,
-      toolName: params.tool_name,
-      description: params.description,
-      inputPreview: params.input_preview,
-    });
-  });
+  // v2 custom-method form: method string plus a params schema; the handler
+  // receives the parsed params directly (the method literal is dispatch-only).
+  server.server.setNotificationHandler(
+    "notifications/claude/channel/permission_request",
+    { params: ClaudePermissionRequestSchema.shape.params },
+    async (params) => {
+      await bridge.handleClaudePermissionRequest({
+        requestId: params.request_id,
+        toolName: params.tool_name,
+        description: params.description,
+        inputPreview: params.input_preview,
+      });
+    },
+  );
   registerChannelMcpTools(server, bridge);
 
   return {

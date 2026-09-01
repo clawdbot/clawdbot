@@ -27,8 +27,8 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 async function writeProbeServer(serverPath: string) {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   await fs.writeFile(
     serverPath,
     `#!/usr/bin/env node
@@ -36,11 +36,11 @@ import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
 import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 
 const server = new McpServer({ name: "agent-bundle-mcp-tools-probe", version: "1.0.0" });
-const probeTool = server.tool("docker_probe", "Docker OpenClaw MCP tool availability probe", async () => ({
+const probeTool = server.registerTool("docker_probe", { description: "Docker OpenClaw MCP tool availability probe" }, async () => ({
   content: [{ type: "text", text: "agent-bundle-mcp-tools-ok" }],
 }));
 probeTool.update({ _meta: { ui: { resourceUri: ${JSON.stringify(APP_URI)} } } });
-const companionTool = server.tool("app_companion", "MCP App-only companion", async () => ({
+const companionTool = server.registerTool("app_companion", { description: "MCP App-only companion" }, async () => ({
   content: [{ type: "text", text: "companion-called" }],
 }));
 companionTool.update({ _meta: { ui: { visibility: ["app"] } } });

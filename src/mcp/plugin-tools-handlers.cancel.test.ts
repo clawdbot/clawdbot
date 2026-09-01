@@ -1,6 +1,5 @@
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 // Plugin MCP cancellation tests cover cancellation of in-flight plugin tool calls.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -53,9 +52,12 @@ describe("plugin tools MCP cancellation", () => {
 
     try {
       const controller = new AbortController();
-      const callPromise = client.callTool({ name: "probe_cancel", arguments: {} }, undefined, {
-        signal: controller.signal,
-      });
+      const callPromise = client.callTool(
+        { name: "probe_cancel", arguments: {} },
+        {
+          signal: controller.signal,
+        },
+      );
       const signal = await observedSignal;
 
       expect(signal).toBeInstanceOf(AbortSignal);

@@ -60,7 +60,7 @@ import {
 } from "./invoke-agent-cli-claude-handler.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
-import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
+import { boundMcpToolResultPayload, mcpToolErrorMessage } from "./invoke-mcp-result.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -1038,7 +1038,21 @@ async function handleMcpToolsCall(
       timeoutMs: frame.timeoutMs ?? undefined,
       ...(signal ? { signal } : {}),
     });
-    await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
+    if (result.isError) {
+      await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
+      return;
+    }
+    await sendMcpPayloadResult(
+      client,
+      frame,
+      boundMcpToolResultPayload({
+        content: result.content,
+        // v2 types structuredContent as unknown; only forward record payloads.
+        ...(isRecord(result.structuredContent)
+          ? { structuredContent: result.structuredContent }
+          : {}),
+      }),
+    );
   } catch (error) {
     if (error instanceof NodeHostMcpError) {
       await sendErrorResult(client, frame, error.code, error.message);

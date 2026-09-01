@@ -17,7 +17,7 @@ const bridgeState = vi.hoisted(() => ({
   handleClaudePermissionRequest: vi.fn(async (_payload: unknown) => {}),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/server/stdio", () => ({
   StdioServerTransport: class MockStdioServerTransport {
     onclose?: () => void;
 
@@ -27,7 +27,7 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
+vi.mock("@modelcontextprotocol/server", () => ({
   McpServer: class MockMcpServer {
     server = {
       setNotificationHandler: vi.fn(),
@@ -73,7 +73,8 @@ vi.mock("./channel-bridge.js", () => ({
 }));
 
 vi.mock("./channel-shared.js", () => ({
-  ClaudePermissionRequestSchema: {},
+  // v2 handler registration dereferences the schema's params shape.
+  ClaudePermissionRequestSchema: { shape: { params: {} } },
 }));
 
 vi.mock("./channel-tools.js", () => ({

@@ -1,5 +1,6 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
+import type { ListToolsResult } from "@modelcontextprotocol/client";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,8 +24,17 @@ function createClient(params: {
   return {
     onclose: undefined as (() => void) | undefined,
     connect: vi.fn(params.connect ?? (async () => {})),
-    request: vi.fn(async (request: { method: "tools/list"; params?: { cursor?: string } }) =>
-      params.list ? await params.list(request.params) : { tools: params.tools?.() ?? [] },
+    request: vi.fn(
+      async (request: {
+        method: "tools/list";
+        params?: { cursor?: string };
+      }): Promise<ListToolsResult> => {
+        if (params.list) {
+          const result = await params.list(request.params);
+          return result as ListToolsResult;
+        }
+        return { tools: params.tools?.() ?? [] } as ListToolsResult;
+      },
     ),
     callTool: vi.fn(call),
     close: vi.fn(async () => {}),
@@ -79,8 +89,7 @@ describe("node host MCP live lifecycle", () => {
     const starting = startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
+        createClient: (_serverName) => {
           return client;
         },
         // This test deliberately holds both list calls; request timeout is not its contract.
@@ -173,8 +182,7 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
+        createClient: (_serverName) => {
           return client;
         },
         resolveTransport: () => stdioTransport,
@@ -235,8 +243,7 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
+        createClient: (_serverName) => {
           return client;
         },
         resolveTransport: () => stdioTransport,
@@ -296,8 +303,7 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
+        createClient: (_serverName) => {
           return client;
         },
         resolveTransport: () => stdioTransport,
@@ -350,8 +356,7 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
+        createClient: (_serverName) => {
           return client;
         },
         resolveTransport: () => stdioTransport,
@@ -396,10 +401,9 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { docs: { command: "docs" } },
       {
-        createClient: (_serverName, options) => {
+        createClient: (_serverName) => {
           generation += 1;
           if (generation === 1) {
-            notifyToolsChanged = options.onToolsChanged;
             return stale;
           }
           return fresh;
@@ -444,13 +448,12 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { failed: { command: "failed" }, healthy: { command: "healthy" } },
       {
-        createClient: (serverName, options) => {
+        createClient: (serverName) => {
           if (serverName === "healthy") {
             return healthy;
           }
           failedGeneration += 1;
           if (failedGeneration === 1) {
-            notifyToolsChanged = options.onToolsChanged;
             return failed;
           }
           return reconnectFailure;
@@ -662,9 +665,8 @@ describe("node host MCP live lifecycle", () => {
     const manager = await startNodeHostMcpManager(
       { crowded: { command: "crowded" }, sibling: { command: "sibling" } },
       {
-        createClient: (serverName, options) => {
+        createClient: (serverName) => {
           if (serverName === "crowded") {
-            notifyToolsChanged = options.onToolsChanged;
             return crowded;
           }
           return sibling;

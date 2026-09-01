@@ -1,4 +1,4 @@
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { createChannelMcpRuntime } from "./channel-server-runtime.js";
 
 /**

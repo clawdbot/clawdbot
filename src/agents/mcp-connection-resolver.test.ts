@@ -1,8 +1,8 @@
 /** Unit tests for requester-scoped MCP connection resolver helpers. */
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
@@ -41,7 +41,7 @@ type AuthenticatedMcpProofEndpoint = {
   authorization: string;
   path: string;
   server: McpServer;
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
   requests: number;
   unauthorizedRequests: number;
   streamedResponses: number;
@@ -54,7 +54,7 @@ async function startAuthenticatedMcpProofServer() {
 
   const addEndpoint = async (owner: string, authorization: string) => {
     const server = new McpServer({ name: `openclaw-${owner}-proof`, version: "1.0.0" });
-    const transport = new StreamableHTTPServerTransport({
+    const transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
     });
     const endpoint: AuthenticatedMcpProofEndpoint = {

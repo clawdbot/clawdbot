@@ -1,9 +1,9 @@
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
   JsonSchemaValidator,
   jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
+} from "@modelcontextprotocol/server";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { Compile } from "typebox/compile";
 import { toErrorObject } from "../infra/errors.js";

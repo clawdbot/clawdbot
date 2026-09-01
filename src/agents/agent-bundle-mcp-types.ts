@@ -3,7 +3,7 @@ import type {
   CallToolResult,
   ListResourceTemplatesResult,
   ListToolsResult,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";

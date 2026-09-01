@@ -1,15 +1,17 @@
 // Canonical MCP OAuth session state. Legacy JSON import belongs to doctor only.
 import type { DatabaseSync } from "node:sqlite";
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import type {
+  OAuthDiscoveryState,
+  OAuthClientInformationMixed,
+  OAuthTokens,
+} from "@modelcontextprotocol/client";
 import {
   OAuthClientInformationSchema,
   OAuthMetadataSchema,
   OAuthProtectedResourceMetadataSchema,
   OAuthTokensSchema,
   OpenIdProviderDiscoveryMetadataSchema,
-  type OAuthClientInformationMixed,
-  type OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,

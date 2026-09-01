@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { parseErrorResponse } from "@modelcontextprotocol/client";
+import type { FetchLike } from "@modelcontextprotocol/client";
 /**
  * Regression coverage for MCP HTTP fetch wrappers.
  * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.

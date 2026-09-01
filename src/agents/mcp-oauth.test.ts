@@ -184,7 +184,7 @@ function authorizationCode(authorizationUrl: string): string {
   return code;
 }
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+vi.mock("@modelcontextprotocol/client", () => ({
   auth: authMock,
 }));
 

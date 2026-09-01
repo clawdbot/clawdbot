@@ -1,6 +1,8 @@
 import { consume } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+// The ext-apps bridge speaks the v1 SDK protocol, so this boundary keeps the
+// v1 types (ui retains @modelcontextprotocol/sdk until ext-apps supports v2).
 import {
   type CallToolResult,
   type ListToolsRequest,

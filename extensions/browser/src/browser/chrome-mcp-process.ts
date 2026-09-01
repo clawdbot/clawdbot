@@ -1,7 +1,7 @@
 // Tracks and terminates the exact subprocess tree owned by a Chrome MCP session.
 import fs from "node:fs/promises";
 import { setTimeout as sleepTimeout } from "node:timers/promises";
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toErrorObject } from "../infra/errors.js";
