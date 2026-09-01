@@ -128,6 +128,7 @@ export type WorkboardUiState = {
   detailCardId: string | null;
   detailCommentBody: string;
   busyCardIds: Set<string>;
+  pendingCardRemovalIds: Set<string>;
   draggedCardId: string | null;
   capturingSessionKeys: Set<string>;
 };

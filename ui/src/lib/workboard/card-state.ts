@@ -48,6 +48,11 @@ export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   const next = state.cards.filter((existing) => existing.id !== card.id);
   next.push(card);
   state.cards = next.toSorted((left, right) => left.position - right.position);
+  // A concurrent response can carry stale links; keep pending deletions out of
+  // the projection until their Gateway requests settle.
+  for (const pendingCardId of state.pendingCardRemovalIds) {
+    state.cards = removeCardAndReferences(state.cards, pendingCardId);
+  }
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {

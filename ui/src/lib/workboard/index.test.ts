@@ -3637,6 +3637,46 @@ describe("workboard controller", () => {
 
     deletion.resolve({ deleted: true });
     await pending;
+    expect(state.pendingCardRemovalIds).toEqual(new Set());
+  });
+
+  it("keeps pending dependency cleanup across a concurrent child write", async () => {
+    const deletion = createDeferred<unknown>();
+    const parent = makeCard({ id: "parent-1", title: "Parent", status: "done" });
+    const child = makeCard({
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+    const movedChild = { ...child, status: "blocked" as const, position: 3000 };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.delete") {
+        return deletion.promise;
+      }
+      if (method === "workboard.cards.move") {
+        return { card: movedChild };
+      }
+      return {};
+    });
+    state.cards = [parent, child];
+
+    const pending = deleteCard(client, parent.id);
+    await moveCard(client, {
+      cardId: child.id,
+      status: movedChild.status,
+      position: movedChild.position,
+    });
+
+    expect(state.cards).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ id: child.id, status: movedChild.status });
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
+    expect(state.pendingCardRemovalIds).toEqual(new Set([parent.id]));
+
+    deletion.resolve({ deleted: true });
+    await pending;
+    expect(state.cards[0]?.metadata?.links).toBeUndefined();
   });
 
   it("restores a rejected delete without overwriting a concurrent card write", async () => {
@@ -3650,19 +3690,27 @@ describe("workboard controller", () => {
       },
     });
     const sibling = makeCard({ id: "sibling-1", title: "Sibling" });
+    const movedChild = { ...child, status: "blocked" as const, position: 3000 };
     const movedSibling = { ...sibling, status: "blocked" as const, position: 2000 };
-    const client = createClient((method) => {
+    const client = createClient((method, params) => {
       if (method === "workboard.cards.delete") {
         return deletion.promise;
       }
       if (method === "workboard.cards.move") {
-        return { card: movedSibling };
+        return {
+          card: (params as { id?: string }).id === child.id ? movedChild : movedSibling,
+        };
       }
       return {};
     });
     state.cards = [parent, child, sibling];
 
     const pending = deleteCard(client, parent.id);
+    await moveCard(client, {
+      cardId: child.id,
+      status: movedChild.status,
+      position: movedChild.position,
+    });
     await moveCard(client, {
       cardId: sibling.id,
       status: "blocked",
@@ -3675,9 +3723,10 @@ describe("workboard controller", () => {
     expect(state.error).toBe("gateway refused delete");
     expect(state.cards).toHaveLength(3);
     expect(state.cards.find((card) => card.id === parent.id)).toEqual(parent);
-    expect(state.cards.find((card) => card.id === child.id)?.metadata?.links).toEqual(
-      child.metadata?.links,
-    );
+    expect(state.cards.find((card) => card.id === child.id)).toEqual({
+      ...movedChild,
+      metadata: child.metadata,
+    });
     expect(state.cards.find((card) => card.id === sibling.id)).toEqual(movedSibling);
   });
 
