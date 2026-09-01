@@ -3286,10 +3286,15 @@ a:is(
 .sidebar-agent-card__name-text {
   min-width: 0;
   overflow: hidden;
-  padding-right: 8px;
+  padding-inline-end: 8px;
   -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
   mask-image: linear-gradient(to right, black 0, black calc(100% - 8px), transparent 100%);
   white-space: nowrap;
+}
+
+:root[dir="rtl"] .sidebar-agent-card__name-text {
+  -webkit-mask-image: linear-gradient(to left, black 0, black calc(100% - 8px), transparent 100%);
+  mask-image: linear-gradient(to left, black 0, black calc(100% - 8px), transparent 100%);
 }
 
 .sidebar-agent-card__chevron {

@@ -252,6 +252,7 @@ suite.define(() => {
       );
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
       const sidebarBrand = sidebar.locator(".sidebar-brand");
+      const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
       await expect.poll(() => sidebarBrand.count()).toBe(1);
       await expect
         .poll(async () => {
@@ -265,6 +266,14 @@ suite.define(() => {
           return Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
         })
         .toBe(4);
+      await expect
+        .poll(() =>
+          agentName.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [style.paddingLeft, style.paddingRight, style.maskImage];
+          }),
+        )
+        .toEqual(["0px", "8px", expect.stringContaining("to right")]);
       await page.evaluate(() => {
         document.documentElement.dir = "rtl";
       });
@@ -280,6 +289,14 @@ suite.define(() => {
           return Math.round(actionsBox.x - brandBox.x);
         })
         .toBe(0);
+      await expect
+        .poll(() =>
+          agentName.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [style.paddingLeft, style.paddingRight, style.maskImage];
+          }),
+        )
+        .toEqual(["8px", "0px", expect.stringContaining("to left")]);
       await page.evaluate(() => {
         document.documentElement.dir = "ltr";
       });
