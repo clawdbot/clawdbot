@@ -366,9 +366,7 @@ suite.define(() => {
         name: "Open session menu: Research notes",
         exact: true,
       });
-      await researchRow
-        .getByRole("button", { name: "Pin session: Research notes", exact: true })
-        .waitFor();
+      await researchRow.getByRole("button", { name: "Pin session", exact: true }).waitFor();
       await followUpRow
         .getByRole("button", { name: "Open session menu: Follow-up work", exact: true })
         .waitFor();

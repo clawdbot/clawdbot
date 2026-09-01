@@ -62,7 +62,7 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.patch");
       await row.hover();
-      await row.getByRole("button", { name: "Pin session: Pin me" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
 
       // The Gateway response is still held, so this can only come from the
       // optimistic snapshot write in the mutation owner.
@@ -153,13 +153,13 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.patch");
       await row.hover();
-      await row.getByRole("button", { name: "Pin session: Pin me" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
       await expect.poll(() => zoneEntry.count()).toBe(1);
 
       await gateway.deferNext("sessions.patch");
       const pinnedRow = zoneEntry.locator(".sidebar-recent-session");
       await pinnedRow.hover();
-      await pinnedRow.getByRole("button", { name: "Unpin session: Pin me" }).click();
+      await pinnedRow.getByRole("button", { name: "Unpin session" }).click();
       await expect.poll(() => row.count()).toBe(1);
       await expect.poll(() => zoneEntry.count()).toBe(0);
 
