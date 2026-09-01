@@ -530,11 +530,14 @@ describe("perplexity web search provider", () => {
     const fallbackEnvVar = "fallbackEnvVar" in entry ? entry.fallbackEnvVar : undefined;
     await withEnvAsync(
       {
-        [perplexityApiKeyEnv]: undefined,
-        [openRouterApiKeyEnv]: undefined,
-        ...(fallbackEnvVar
-          ? { [fallbackEnvVar]: source === "env" ? key : directPerplexityApiKey }
-          : {}),
+        [perplexityApiKeyEnv]:
+          fallbackEnvVar === perplexityApiKeyEnv && source === "env"
+            ? key
+            : "pplx-ambient-distractor",
+        [openRouterApiKeyEnv]:
+          fallbackEnvVar === openRouterApiKeyEnv && source === "env"
+            ? key
+            : "sk-or-ambient-distractor",
       },
       async () => {
         const provider = createPerplexityWebSearchProvider();
