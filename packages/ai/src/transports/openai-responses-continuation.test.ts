@@ -147,113 +147,169 @@ describe("OpenAI Responses continuation", () => {
     );
   });
 
-  it("does not treat two different unsafe-integer arguments as equal (lossless comparison)", () => {
-    // Number.MAX_SAFE_INTEGER + 1 and + 2 both round to the same double
-    // under plain JSON.parse; a lossless comparator must still tell them
-    // apart so a genuinely changed argument is never mistaken for a
-    // re-serialization whitespace difference.
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: "call_original_abc",
-      name: "exec",
-      arguments: '{"n":9007199254740993}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [toolCall] as never,
-    };
-    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740994}' };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: "call_original_abc",
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, replayedToolCall, toolResult] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+  it.each([
+    [
+      "unsafe integer round-trip",
+      '{"n":9007199254740993}',
+      '{"n":"9007199254740993"}',
+      "continued",
+    ],
+    [
+      "negative unsafe round-trip",
+      '{"n":-9007199254740993}',
+      '{"n":"-9007199254740993"}',
+      "continued",
+    ],
+    [
+      "provider whitespace in nested arguments",
+      '{ "b": {"n":9007199254740993,"a":true},"a":[1] }',
+      '{"b":{"n":"9007199254740993","a":true},"a":[1]}',
+      "continued",
+    ],
+    [
+      "reordered keys remain conservative",
+      '{"b":{"n":9007199254740993,"a":true},"a":[1]}',
+      '{"a":[1],"b":{"a":true,"n":"9007199254740993"}}',
       "history_changed",
-    );
-  });
-
-  it("treats a cached number-typed unsafe integer as equal to its own replayed string-typed round-trip", () => {
-    // Real shape, confirmed live against a real tool-calling round: the
-    // cached side is the raw provider text (a bare, unsafe-integer number),
-    // but AssistantMessage.arguments already stores every unsafe integer as
-    // a string (parseJsonObjectPreservingUnsafeIntegers,
-    // transport-stream-shared.ts, precision-preserving), so the *unmodified*
-    // replay of this exact same historical tool call always re-serializes it
-    // back as a same-digits JSON string. This is the client's own necessary
-    // representation of the same value, not a real argument change -- an
-    // earlier revision of this fix (a distinguishing tag on the cached side
-    // only) treated this as a genuine change, permanently breaking
-    // continuation for the very next round of any real tool call carrying an
-    // out-of-range integer.
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: "call_original_abc",
-      name: "exec",
-      arguments: '{"n":9007199254740993}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [toolCall] as never,
-    };
-    const replayedToolCall = { ...toolCall, arguments: '{"n":"9007199254740993"}' };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: "call_original_abc",
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, replayedToolCall, toolResult] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+    ],
+    [
+      "positive binary64 collision",
+      '{"n":9007199254740992}',
+      '{"n":9007199254740993}',
+      "history_changed",
+    ],
+    [
+      "negative binary64 collision",
+      '{"n":-9007199254740992}',
+      '{"n":-9007199254740993}',
+      "history_changed",
+    ],
+    [
+      "edited preserved integer",
+      '{"n":9007199254740993}',
+      '{"n":"9007199254740992"}',
+      "history_changed",
+    ],
+    [
+      "provider string changed to bare unsafe integer",
+      '{"n":"9007199254740992"}',
+      '{"n":9007199254740992}',
+      "history_changed",
+    ],
+    [
+      "admitted integer string changed to Number",
+      '{"n":9007199254740992}',
+      '{"n":9007199254740992}',
+      "history_changed",
+    ],
+    ["safe integer versus string", '{"n":42}', '{"n":"42"}', "history_changed"],
+    [
+      "safe boundary versus string",
+      '{"n":9007199254740991}',
+      '{"n":"9007199254740991"}',
+      "history_changed",
+    ],
+    [
+      "quoted digits and escapes",
+      '{"text":"\\\"9007199254740993\\\"","n":9007199254740993}',
+      '{"text":"\\\"9007199254740993\\\"","n":"9007199254740993"}',
       "continued",
-    );
-  });
-
-  it("treats a whitespace-only re-serialization of the same unsafe integer as equal", () => {
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: "call_original_abc",
-      name: "exec",
-      arguments: '{"n":9007199254740993}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [toolCall] as never,
-    };
-    const replayedToolCall = { ...toolCall, arguments: '{"n": 9007199254740993}' };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: "call_original_abc",
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, replayedToolCall, toolResult] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
+    ],
+    ["unchanged incomplete JSON", '{"n":', '{"n":', "continued"],
+    ["changed incomplete JSON", '{"n":', '{"n": }', "history_changed"],
+    [
+      "invalid leading zero",
+      '{"n":09007199254740993}',
+      '{"n":"9007199254740993"}',
+      "history_changed",
+    ],
+    ["non-object array", "[42]", "[42.0]", "history_changed"],
+    ["non-object null", "null", " null ", "history_changed"],
+    ["safe fraction", '{"n":4.20}', '{"n":4.2}', "continued"],
+    ["safe exponent", '{"n":4.2e1}', '{"n":42}', "continued"],
+    ["safe exponent versus string", '{"n":4.2e1}', '{"n":"42"}', "history_changed"],
+    [
+      "unsafe exponent follows terminal Number serialization",
+      '{"n":1e16}',
+      '{"n":10000000000000000}',
       "continued",
-    );
+    ],
+    [
+      "unsafe fraction follows terminal Number serialization",
+      '{"n":10000000000000000.0}',
+      '{"n":10000000000000000}',
+      "continued",
+    ],
+  ] as const)(
+    "compares admitted provider tool arguments: %s",
+    (_name, rawArguments, replayedArguments, expectedStatus) => {
+      const state = continuationState();
+      const call = {
+        type: "function_call" as const,
+        id: "fc_1",
+        status: "completed" as const,
+        call_id: "call_1",
+        name: "record_value",
+        arguments: rawArguments,
+      };
+      state.lastResponseItems = [call];
+      const output = {
+        type: "function_call_output" as const,
+        call_id: "call_1",
+        output: "recorded",
+      };
+      const request = {
+        ...state.lastRequest,
+        input: [
+          ...(state.lastRequest.input ?? []),
+          { ...call, arguments: replayedArguments },
+          output,
+        ],
+      };
+      const before = structuredClone({ state, request });
+      const resolved = resolveResponsesContinuationRequest(state, request);
+      expect(resolved.continuationStatus).toBe(expectedStatus);
+      if (expectedStatus === "continued") {
+        expect(resolved.request).toMatchObject({ previous_response_id: "resp_1", input: [output] });
+      } else {
+        expect(resolved.request).toBe(request);
+      }
+      expect({ state, request }).toEqual(before);
+    },
+  );
+
+  it.each([
+    ['{"n":9007199254740992}', '{"n":"9007199254740992"}', "history_changed"],
+    ['{"n":"9007199254740992"}', '{"n":9007199254740992}', "history_changed"],
+    ['{"n":9007199254740992}', '{"n":9007199254740993}', "history_changed"],
+    ['{"n":9007199254740992}', '{"n":9007199254740992}', "continued"],
+  ] as const)("keeps already-sent arguments strict: %s -> %s", (sent, current, expectedStatus) => {
+    const state = continuationState();
+    const call = {
+      type: "function_call" as const,
+      call_id: "sent_call",
+      name: "record_value",
+      arguments: sent,
+    };
+    const output = {
+      type: "function_call_output" as const,
+      call_id: "sent_call",
+      output: "recorded",
+    };
+    state.lastRequest.input = [...(state.lastRequest.input ?? []), call, output];
+    const request = nextRequest();
+    const [user, ...next] = request.input ?? [];
+    if (!user) {
+      throw new Error("Expected the fixture's first user message");
+    }
+    request.input = [user, { ...call, arguments: current }, output, ...next];
+    const before = structuredClone({ state, request });
+    const resolved = resolveResponsesContinuationRequest(state, request);
+    expect(resolved.continuationStatus).toBe(expectedStatus);
+    if (expectedStatus === "history_changed") {
+      expect(resolved.request).toBe(request);
+    }
+    expect({ state, request }).toEqual(before);
   });
 
   it("ignores turn correlation headers but isolates explicit authorization", () => {

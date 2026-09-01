@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
-import { quoteUnsafeIntegerLiterals } from "./json-unsafe-integers.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { sha256Hex } from "./transport-utils.js";
 
 const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
@@ -35,14 +35,7 @@ function jsonValuesEqual(left: object, right: object): boolean {
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  // `instructions` (like `input`) carries the system prompt for every
-  // non-Codex Responses request now, rebuilt fresh from live runtime state
-  // on every attempt -- see resolveOpenAIResponsesInstructions in
-  // openai-responses-params-internal.ts. It is sent on the wire on every
-  // request regardless of continuation status (spread from the original
-  // request below), so excluding it here loses no freshness; comparing it
-  // would just move the same false-positive rejection this module already
-  // guards against in `input` into `request_changed` instead.
+  // Instructions are rebuilt and sent on every request; exclude them from history matching.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
@@ -60,48 +53,7 @@ function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesCo
   return { ...rest, metadata };
 }
 
-// A function_call's `arguments` is a JSON-encoded string, not a nested
-// object -- jsonValuesEqual only normalizes key order at the *parsed* level,
-// so two byte-different-but-semantically-identical encodings (e.g. a
-// re-`JSON.stringify` picking up different whitespace) would otherwise read
-// as a real content change. Round-trip through parse/stringify so only the
-// actual argument values are compared; leave non-JSON strings untouched.
-// quoteUnsafeIntegerLiterals runs first: plain JSON.parse silently rounds any
-// integer literal past Number.MAX_SAFE_INTEGER, so two genuinely DIFFERENT
-// unsafe integers could otherwise parse to the same JS number and wrongly
-// compare equal, sending a stale delta instead of the real changed argument.
-//
-// No distinguishing tag: an earlier revision quoted unsafe integers with a
-// tag to also catch a stringified unsafe integer colliding with a genuine
-// same-digits JSON string -- but on the *cached* side this compares against,
-// `arguments` is the raw provider text (a bare number), while the *replayed*
-// side is rebuilt from AssistantMessage.arguments, which
-// parseJsonObjectPreservingUnsafeIntegers (transport-stream-shared.ts)
-// already stores as a string for every unsafe integer, precision-preserving.
-// So a real, unmodified tool-calling round *always* replays an unsafe
-// integer as a same-digits string against a cached bare number -- tagging
-// only the cached side made every real large-integer tool call permanently
-// ineligible for continuation on its very next round (confirmed live: an
-// actual tool call with a real out-of-range integer, replayed unmodified,
-// still landed as history_changed). Plain (untagged) quoting can't tell a
-// converted integer apart from a genuine same-digit string either, but that
-// is not the risk here: both sides of this comparison replay the *same*
-// historical tool call, and the client-side "unsafe integers become
-// strings" convention already applies uniformly to how that call is cached
-// and replayed -- there is no independent second call in this comparison
-// for a same-digit string to collide with.
-function normalizeFunctionCallArguments(value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(JSON.parse(quoteUnsafeIntegerLiterals(value)));
-  } catch {
-    return value;
-  }
-}
-
-function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
+function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse = false): unknown[] {
   return input.map((item) => {
     if (!isRecord(item)) {
       return item;
@@ -113,8 +65,10 @@ function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
       return item;
     }
     const { id: _id, status: _status, ...stableItem } = item;
-    if (item.type === "function_call" && "arguments" in stableItem) {
-      stableItem.arguments = normalizeFunctionCallArguments(stableItem.arguments);
+    if (fromResponse && item.type === "function_call") {
+      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
+      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
+      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
     }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
@@ -157,7 +111,7 @@ export function resolveResponsesContinuationRequest(
     ) ||
     !jsonValuesEqual(
       normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-      normalizeAssistantReplayInput(continuation.lastResponseItems),
+      normalizeAssistantReplayInput(continuation.lastResponseItems, true),
     )
   ) {
     return { request, continuationStatus: "history_changed" };
