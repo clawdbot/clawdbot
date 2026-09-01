@@ -119,11 +119,19 @@ function snapshotSqliteFamily(databasePath: string): Array<{ path: string; sha25
 }
 
 function restoreEnv(values: typeof originalEnv): void {
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+  if (values.HOME === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = values.HOME;
+  }
+  if (values.OPENCLAW_CONFIG_PATH === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = values.OPENCLAW_CONFIG_PATH;
+  }
+  if (values.OPENCLAW_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = values.OPENCLAW_STATE_DIR;
   }
 }
