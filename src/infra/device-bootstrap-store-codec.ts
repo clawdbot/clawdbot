@@ -79,10 +79,8 @@ function optional<K extends string, V>(key: K, value: V | null): { [P in K]?: V 
   return value === null ? {} : ({ [key]: value } as { [P in K]: V });
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON fields are typed by their receiving record property.
-function fromJsonColumn<T>(value: string | null): T | undefined {
-  // SAFETY: callers select T from the typed SQLite column's owning record field.
-  return value === null ? undefined : (JSON.parse(value) as T);
+function fromJsonColumn(value: string | null): unknown {
+  return value === null ? undefined : JSON.parse(value);
 }
 
 function toBootstrapRow(
@@ -107,9 +105,9 @@ function toBootstrapRow(
 }
 
 export function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
-  const pendingState = decodePendingBootstrapState(
-    fromJsonColumn<unknown>(row.pending_profile_json),
-  );
+  const profile = fromJsonColumn(row.profile_json);
+  const redeemedProfile = fromJsonColumn(row.redeemed_profile_json);
+  const pendingState = decodePendingBootstrapState(fromJsonColumn(row.pending_profile_json));
   return {
     token: row.token,
     ...optional("setupId", row.setup_id),
@@ -118,12 +116,13 @@ export function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTok
     ...optional("publicKey", row.public_key),
     ...optional(
       "profile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["profile"]>(row.profile_json) ?? null,
+      profile === undefined ? null : normalizeDeviceBootstrapProfile(asRecord(profile)),
     ),
     ...optional(
       "redeemedProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["redeemedProfile"]>(row.redeemed_profile_json) ??
-        null,
+      redeemedProfile === undefined
+        ? null
+        : normalizeDeviceBootstrapProfile(asRecord(redeemedProfile)),
     ),
     ...pendingState,
     issuedAtMs: row.issued_at_ms,
