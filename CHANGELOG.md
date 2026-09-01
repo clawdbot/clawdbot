@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway session diffs:** share concurrent empty-tree Git preparation within each repository, avoiding duplicate subprocesses during simultaneous session starts while keeping later reads fresh.
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
 
 - **macOS AI setup:** show confirmed capability-review cancellation and retry guidance directly instead of a misleading Gateway failure headline. (#134573)
