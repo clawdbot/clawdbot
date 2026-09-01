@@ -83,6 +83,23 @@ function ensureMemoryHostDir(dir: string): string {
 
 export { ensureMemoryHostDir as ensureDir };
 
+/**
+ * Enumeration policy for workspace memory files: skip missing and non-regular
+ * paths (a symlinked USER.md), matching walkDirectory's `symlinks: "skip"` and
+ * the extraPaths symlink skip; a throw here aborts the agent's whole sync.
+ */
+async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats | null> {
+  try {
+    const stat = await fs.lstat(absPath);
+    return stat.isFile() ? stat : null;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
@@ -215,20 +232,11 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await statRegularFile(absPath);
-      if (stat.missing) {
-        return;
-      }
-      if (!absPath.endsWith(".md")) {
-        return;
-      }
-      result.push(absPath);
-    } catch (error) {
-      if (!isFileMissingError(error)) {
-        throw error;
-      }
+    const stat = await statEnumerableMemoryFile(absPath);
+    if (!stat || !absPath.endsWith(".md")) {
+      return;
     }
+    result.push(absPath);
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -308,11 +316,12 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const regularFile = await statRegularFile(absPath);
-  if (regularFile.missing) {
+  // Skip, don't throw: null reads as "not indexable" when resolving sources, and
+  // as a changed snapshot (typed retry) at the write-time hash revalidation gate.
+  const stat = await statEnumerableMemoryFile(absPath);
+  if (!stat) {
     return null;
   }
-  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
