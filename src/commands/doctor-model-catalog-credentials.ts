@@ -53,18 +53,14 @@ function credentialMatches(
   );
 }
 
-function matchesProviderSecretRef(
+function matchesProviderEnvRefMarker(
   cfg: OpenClawConfig,
   provider: string,
   value: string,
-  authoredProviderConfig: boolean,
 ): boolean {
   const ref = resolveProviderConfigSecretInput(cfg, provider).ref;
-  if (!ref || (ref.source !== "env" && !authoredProviderConfig)) {
+  if (ref?.source !== "env") {
     return false;
-  }
-  if (authoredProviderConfig) {
-    return true;
   }
   // Generated env markers are provider-scoped. Treating every uppercase value
   // as a marker would discard valid literal credentials.
@@ -77,7 +73,7 @@ function findProviderSecretRefProfileIds(store: AuthProfileStore, cfg: OpenClawC
   return Object.entries(store.profiles).flatMap(([profileId, credential]) => {
     return credential.type === "api_key" &&
       credential.key &&
-      matchesProviderSecretRef(cfg, credential.provider, credential.key, false)
+      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key)
       ? [profileId]
       : [];
   });
@@ -88,7 +84,6 @@ function collectCredentials(
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
   cfg?: OpenClawConfig,
-  authoredProviderConfig = false,
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -101,7 +96,8 @@ function collectCredentials(
     const credential = { provider, key };
     if (
       !key.trim() ||
-      (cfg && matchesProviderSecretRef(cfg, provider, key, authoredProviderConfig)) ||
+      // An authored SecretRef owns this provider; generated catalog copies are never fallbacks.
+      (cfg && resolveProviderConfigSecretInput(cfg, provider).ref) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -317,7 +313,6 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     mainStore,
     childStores,
     params.cfg,
-    true,
   );
   const catalogCredentials = catalogs.map((catalog, index) =>
     uniqueCredentials(

@@ -171,6 +171,22 @@ describe("doctor model catalog credential migration", () => {
     expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual({ version: 1, profiles: {} });
   });
 
+  it("does not copy a stale generated credential over an explicit provider SecretRef", async () => {
+    const state = createState();
+    const cfg: OpenClawConfig = {
+      models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
+    };
+    fs.writeFileSync(
+      path.join(state.agentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("stale-provider-key") } }, null, 2)}\n`,
+    );
+
+    await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
+      { detected: 0, migrated: 0, removed: 0, warnings: [] },
+    );
+    expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
+  });
+
   it("never overwrites an occupied default profile while preserving the catalog key", async () => {
     const state = createState();
     const { agentDir } = state;
