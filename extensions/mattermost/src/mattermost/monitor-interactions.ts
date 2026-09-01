@@ -1,6 +1,11 @@
 // Mattermost plugin module registers interactive callback transport handling.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createMattermostInteractionHandler } from "./interactions.js";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { parseMattermostQuestionContext } from "../normalize.js";
+import {
+  createMattermostInteractionHandler,
+  type MattermostInteractionResponse,
+} from "./interactions.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
 import {
   buildMattermostButtonInteractionMessageSid,
@@ -14,6 +19,57 @@ import type { ReplyPayload } from "./runtime-api.js";
 import { registerPluginHttpRoute } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
+/**
+ * Answer an ask_user question from the button its own prompt offered.
+ *
+ * The Gateway owns the answer, so this consumes the click instead of letting it
+ * fall through to the synthetic `[Button click: ...]` message the generic path
+ * sends; that message would reach the agent as prose while the question stayed
+ * open.
+ */
+type MattermostInteractionDispatch = NonNullable<
+  Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
+>;
+
+export function createMattermostQuestionInteractionHandler(
+  monitor: MattermostMonitorContext,
+): MattermostInteractionDispatch {
+  const { account, cfg, runtime } = monitor;
+  return async (interaction) => {
+    const selection = parseMattermostQuestionContext(interaction.context);
+    if (!selection) {
+      return null;
+    }
+    let ephemeral_text: string;
+    try {
+      const result = await questionGatewayRuntime.resolveOption({
+        cfg,
+        questionId: selection.questionId,
+        optionIndex: selection.optionIndex,
+        senderId: interaction.payload.user_id,
+        clientDisplayName: `Mattermost question (${account.accountId})`,
+      });
+      ephemeral_text =
+        result.status === "answered" ? "Answer submitted." : "This question was already answered.";
+    } catch (err) {
+      runtime.error?.(`mattermost question interaction failed: ${String(err)}`);
+      ephemeral_text = "Could not submit this answer.";
+    }
+    const response: MattermostInteractionResponse = {
+      update: {
+        message: interaction.post.message ?? "",
+        props: {
+          attachments: [
+            { text: `✓ **${interaction.actionName}** selected by @${interaction.userName}` },
+          ],
+        },
+      },
+      ephemeral_text,
+    };
+    return response;
+  };
+}
+
 export function registerMattermostInteractions(params: {
   monitor: MattermostMonitorContext;
   interactionPath: string;
@@ -23,6 +79,7 @@ export function registerMattermostInteractions(params: {
   const { monitor } = params;
   const { account, botUserId, cfg, client, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo } = resources;
+  const handleQuestionInteraction = createMattermostQuestionInteractionHandler(monitor);
   return registerPluginHttpRoute({
     path: params.interactionPath,
     fallbackPath: "/mattermost/interactions/default",
@@ -34,7 +91,9 @@ export function registerMattermostInteractions(params: {
       allowedSourceIps: params.allowedSourceIps,
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
-      handleInteraction: params.handleModelPickerInteraction,
+      handleInteraction: async (interaction) =>
+        (await handleQuestionInteraction(interaction)) ??
+        (await params.handleModelPickerInteraction(interaction)),
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
