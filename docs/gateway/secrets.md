@@ -113,7 +113,9 @@ One object shape everywhere:
 { source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
 ```
 
-Each source has an effective default provider alias: `secrets.defaults.env` for env refs and `secrets.defaults.store` for store refs, falling back to the built-in `default` alias when unset. A ref whose `provider` equals that source's effective default is implicit: a matching same-source `secrets.providers` entry takes precedence when one exists, and otherwise the ref resolves through the built-in reader with no entry required. A ref that names any other alias (including an explicit `default` when the default has been overridden to a different alias) must match a registered `secrets.providers` entry with the same `source`, or resolution fails.
+`env` and `store` refs have an implicit provider at their source's effective default alias: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. A matching same-source `secrets.providers` entry takes precedence; otherwise, the ref uses the built-in reader without a provider entry.
+
+Other aliases and all `file`/`exec` refs require a registered `secrets.providers` entry with the same `source`. Changing a source's default does not rewrite explicit refs: a ref that still names `default` after an override must match a registered same-source provider, or resolution fails.
 
 <Tabs>
   <Tab title="env">
