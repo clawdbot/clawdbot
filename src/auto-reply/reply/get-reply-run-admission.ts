@@ -562,12 +562,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
     (queueOwnerRelease !== undefined ||
-      (isRoomEvent && isActive) ||
-      resolvedQueue.mode === "steer" ||
-      resolvedQueue.mode === "followup" ||
-      resolvedQueue.mode === "collect");
+      (!visibleTurnPreemptsHeartbeat &&
+        ((isRoomEvent && isActive) ||
+          resolvedQueue.mode === "steer" ||
+          resolvedQueue.mode === "followup" ||
+          resolvedQueue.mode === "collect")));
   const activeRunQueueAction = resolveActiveRunQueueAction({
     queueAdmissionState,
     isActive,

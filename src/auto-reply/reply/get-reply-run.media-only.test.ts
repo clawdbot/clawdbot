@@ -2366,10 +2366,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it.each(["collect", "interrupt"] as const)(
-    "queues in %s mode behind admitted recovery before its reply operation is registered",
-    async (mode) => {
+  it.each([
+    ["collect", false],
+    ["interrupt", false],
+    ["steer", true],
+  ] as const)(
+    "queues in %s mode behind admitted recovery when heartbeat preemption is %s",
+    async (mode, preemptsHeartbeat) => {
       const queueSettings = await import("./queue/settings-runtime.js");
+      const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
       const storePath = "/tmp/recovery-admission-sessions.json";
       const recoveryAdmission = await beginSessionWorkAdmission({
         scope: storePath,
@@ -2378,6 +2383,14 @@ describe("runPreparedReply media-only handling", () => {
         assertAllowed: () => {},
       });
       vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode });
+      if (preemptsHeartbeat) {
+        vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+          "session-embedded-heartbeat",
+        );
+        vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
+          "drained",
+        );
+      }
 
       try {
         await expect(
@@ -2395,6 +2408,12 @@ describe("runPreparedReply media-only handling", () => {
         expect(call.followupRun.queueOwnerRelease).toBeInstanceOf(Promise);
       } finally {
         recoveryAdmission.release();
+        vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+          undefined,
+        );
+        vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
+          "not-heartbeat",
+        );
       }
     },
   );
