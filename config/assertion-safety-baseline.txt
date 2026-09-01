@@ -4036,7 +4036,6 @@ ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	7
 ui/src/pages/chat/components/chat-pane-header.ts	2
-ui/src/pages/chat/components/chat-question-card.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-rail.ts	4
 ui/src/pages/chat/components/chat-session-sharing.ts	1

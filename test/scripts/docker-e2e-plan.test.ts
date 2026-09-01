@@ -658,16 +658,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-        imageKind: "bare",
-        live: false,
-        name: "update-channel-switch",
-        resources: ["docker", "npm"],
-        stateScenario: "update-stable",
-        timeoutMs: 1_800_000,
-        weight: 3,
-      },
-      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
         imageKind: "bare",
         live: false,
@@ -678,13 +668,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 2,
       },
       {
-        command: trustedUpgradeSurvivorCommand(),
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
         imageKind: "bare",
         live: false,
-        name: "upgrade-survivor",
+        name: "update-channel-switch",
         resources: ["docker", "npm"],
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 1_200_000,
+        stateScenario: "update-stable",
+        timeoutMs: 1_800_000,
         weight: 3,
       },
       {
@@ -698,6 +688,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: ["docker", "npm"],
         stateScenario: "upgrade-survivor",
         timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command: trustedUpgradeSurvivorCommand(),
+        imageKind: "bare",
+        live: false,
+        name: "upgrade-survivor",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_200_000,
         weight: 3,
       },
       {
@@ -830,6 +830,27 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(missing).toStrictEqual([]);
   });
 
+  it.each(["minimum", "beta", "stable", "full"] as const)(
+    "partitions package/update core across three jobs without losing or duplicating %s proof",
+    (releaseProfile) => {
+      const options = { profile: RELEASE_PATH_PROFILE, releaseProfile };
+      const aggregate = planFor({ ...options, releaseChunk: "package-update-core" });
+      const partitions = [
+        "package-update-onboarding",
+        "package-update-migrations",
+        "package-update-self-upgrade",
+      ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
+      const lanes = partitions.flatMap((partition) => partition.lanes);
+
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
+      expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
+      const complete = planFor({ ...options, planReleaseAll: true });
+      const packageNames = new Set(lanes.map((lane) => lane.name));
+      expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
+    },
+  );
+
   it("keeps legacy release chunk names as aggregate aliases", () => {
     const packageUpdate = planFor({
       includeOpenWebUI: true,
@@ -863,10 +884,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "npm-onboard-discord-channel-agent",
       "npm-onboard-slack-channel-agent",
       "doctor-switch",
-      "update-channel-switch",
       "skill-install",
-      "upgrade-survivor",
+      "update-channel-switch",
       "published-upgrade-survivor",
+      "upgrade-survivor",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([

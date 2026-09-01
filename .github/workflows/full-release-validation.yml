@@ -176,7 +176,8 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: ubuntu-24.04
+    # Hosted admission delays compound along this serial release path.
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -547,7 +548,7 @@ jobs:
     name: Check for reusable validation evidence
     needs: [resolve_target]
     if: inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}

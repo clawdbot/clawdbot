@@ -4847,19 +4847,31 @@ server.listen(0, "127.0.0.1", () => {
     const releaseChecks = parse(
       readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
     );
-    const repoE2e = releaseChecks.jobs.validate_repo_e2e;
-    expect(repoE2e.env).toMatchObject({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
-    });
-    expect(repoE2e["timeout-minutes"]).toBe(90);
-    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 6 });
-    const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
+    const repoE2eWorkflow = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const pipelines = [
+      releaseChecks.jobs.validate_repo_e2e_gateway,
+      releaseChecks.jobs.validate_repo_e2e_runtime,
+    ];
+    const repoE2eRows = pipelines.flatMap((pipeline) => JSON.parse(pipeline.with.suites)) as Array<{
       name: string;
       command: string;
       target_script?: string;
     }>;
+    expect(pipelines.map((pipeline) => pipeline.with.build_profile)).toEqual([
+      "full",
+      "ciArtifacts",
+    ]);
+    for (const pipeline of pipelines) {
+      // Each profile starts independently; a slow/full declaration build cannot hold up UI readers.
+      expect(pipeline.needs).toBe("validate_selected_ref");
+      expect(pipeline.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+      expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
+      expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
+      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+      );
+    }
     expect(repoE2eRows.map((row) => row.command)).toEqual([
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:ui:e2e --shard=${index + 1}/4`),
@@ -4869,34 +4881,45 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2eRows.find((row) => row.name === "Agent plugin Gateway")).toMatchObject({
       target_script: "test:e2e:agent-plugin-gateway",
     });
+    expect(repoE2eWorkflow.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const producer = repoE2eWorkflow.jobs.build;
+    const repoE2e = repoE2eWorkflow.jobs.test;
+    expect(repoE2e.needs).toBe("build");
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
-    expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+    expect(repoE2e["timeout-minutes"]).toBe(90);
+    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
     expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    const producerSteps = producer.steps as WorkflowStep[];
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "full) pnpm build",
+    );
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "ciArtifacts) pnpm build:ci-artifacts",
+    );
+    expect(producerSteps.find((step) => step.uses === UPLOAD_ARTIFACT_V7)?.with?.name).toContain(
+      "${{ github.run_attempt }}",
+    );
     const repoE2eSteps = repoE2e.steps as WorkflowStep[];
     expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
-      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      "${{ inputs.ref }}",
     );
-    const build = repoE2eSteps.find((step) => step.name === "Build dist for repo E2E");
-    for (const row of repoE2eRows) {
-      const command = build?.run?.startsWith("${{")
-        ? evaluateWorkflowExpression(build.run, {
-            eventName: "workflow_dispatch",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: row,
-          })
-        : build?.run;
-      // Gateway shards include packed-package type consumers; UI and the
-      // standalone agent-plugin proof need runtime and canonical SDK artifacts.
-      expect(command, row.name).toBe(
-        row.command.startsWith("pnpm test:e2e:gateway ") ? "pnpm build" : "pnpm build:ci-artifacts",
-      );
-    }
+    expect(repoE2eSteps.find((step) => step.uses === DOWNLOAD_ARTIFACT_V8)?.with).toMatchObject({
+      "artifact-ids": "${{ needs.build.outputs.artifact_id }}",
+      "run-id": "${{ needs.build.outputs.artifact_run_id }}",
+      "github-token": "${{ github.token }}",
+    });
+    expect(repoE2eSteps.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    const restoreIndex = repoE2eSteps.findIndex((step) => step.name === "Restore repo E2E build");
     const sandboxSetupIndex = repoE2eSteps.findIndex(
-      (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
+      (step) => step.run === "scripts/sandbox-setup.sh",
     );
     const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
-    expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(sandboxSetupIndex).toBeGreaterThan(restoreIndex);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
       env: {
@@ -7041,20 +7064,23 @@ server.listen(0, "127.0.0.1", () => {
         ".github/workflows/ci-check-testbox.yml",
         "1",
         "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        undefined,
       ],
     ] as const;
 
-    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef, goVersion] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
@@ -7077,6 +7103,7 @@ server.listen(0, "127.0.0.1", () => {
       }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
       expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
+      expect(prepareStep?.with?.["go-version"], workflowPath).toBe(goVersion);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
@@ -7087,7 +7114,34 @@ server.listen(0, "127.0.0.1", () => {
     }
 
     const action = parse(readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
-    const run = action.runs.steps[0].run as string;
+    expect(action.inputs["go-version"]).toMatchObject({ required: false });
+    const setupGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.uses === SETUP_GO_V6),
+      "Testbox Go setup",
+    );
+    expect(setupGo).toMatchObject({
+      if: "inputs.go-version != ''",
+      with: {
+        cache: false,
+        "go-version": "${{ inputs.go-version }}",
+      },
+    });
+    const exposeGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Expose Go tools"),
+      "Testbox Go exposure",
+    );
+    expect(exposeGo.if).toBe("inputs.go-version != ''");
+    expect(exposeGo.run).toContain('test "$(go env GOVERSION)" = "go${TESTBOX_GO_VERSION}"');
+    expect(exposeGo.run).toContain('go_root="$(go env GOROOT)"');
+    expect(exposeGo.run).toContain("for tool in go gofmt; do");
+    expect(exposeGo.run).toContain('"/usr/local/bin/$tool"');
+    const prepare = expectDefined(
+      action.runs.steps.find(
+        (step: WorkflowStep) => step.name === "Pin Testbox base and Node tools",
+      ),
+      "Testbox base preparation",
+    );
+    const run = prepare.run as string;
     expect(run).toContain('base_ref="${TESTBOX_BASE_REF:-HEAD}"');
     expect(run).toContain('git rev-parse --verify "${base_ref}^{commit}"');
     expect(run).toContain('git update-ref refs/remotes/origin/main "$base_sha"');

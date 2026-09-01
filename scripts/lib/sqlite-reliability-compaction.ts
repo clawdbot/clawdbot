@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
 import {
   assertSameCompactionPayload,
+  formatReliabilityStderr,
   type CompactionPayloadProof,
   type ReliabilityReport,
   type ReliabilityStateProof,
@@ -60,11 +61,6 @@ function workerArgs(target: CompactionTarget): string[] {
   throw new Error(`unsupported reliability target role: ${target.identity.role}`);
 }
 
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 async function waitForWorkerReady(params: {
   child: ChildProcess;
   readStderr: () => string;
@@ -74,7 +70,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite compaction worker did not become ready.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite compaction worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, 30_000);
@@ -96,7 +92,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -153,7 +149,7 @@ async function waitForActiveVacuum(params: {
     }
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
       throw new Error(
-        `SQLite compaction completed before interruption evidence was observed.${formatWorkerStderr(params.readStderr())}`,
+        `SQLite compaction completed before interruption evidence was observed.${formatReliabilityStderr(params.readStderr())}`,
       );
     }
     await delay(2);

@@ -844,6 +844,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
       ],
     );
   });

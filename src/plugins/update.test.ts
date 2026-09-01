@@ -877,6 +877,24 @@ describe("updateNpmInstalledPlugins", () => {
       childEnabled: false,
     },
     {
+      label: "asks for consent when an enabled legacy record lacks artifact acceptance",
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "defers missing artifact acceptance for a disabled legacy record",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "missing",
+      rejected: false,
+      ownerEnabled: false,
+      childEnabled: false,
+    },
+    {
       label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
       nextProviders: ["existing-child-provider"],
       review: "none",
@@ -1028,11 +1046,15 @@ describe("updateNpmInstalledPlugins", () => {
               spec: packageName,
               installPath: installedDir,
               ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
-              acceptedSurface: previousDeclared,
-              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
-              acceptedSurfaceAt: previousAcceptedAt,
-              ...(priorAcceptance !== "unanchored"
-                ? { acceptedSurfaceIntegrity: "sha512-previous" }
+              ...(priorAcceptance !== "missing"
+                ? {
+                    acceptedSurface: previousDeclared,
+                    acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+                    acceptedSurfaceAt: previousAcceptedAt,
+                    ...(priorAcceptance !== "unanchored"
+                      ? { acceptedSurfaceIntegrity: "sha512-previous" }
+                      : {}),
+                  }
                 : {}),
             },
           },
