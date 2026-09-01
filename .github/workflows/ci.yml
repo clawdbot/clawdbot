@@ -4557,32 +4557,41 @@ jobs:
               process.stdout.write(simulator.udid);
             '
           )"
-          derived_data_path="$RUNNER_TEMP/openclaw-watch-lifecycle"
-          xcodebuild \
-            -project apps/ios/OpenClaw.xcodeproj \
-            -scheme OpenClawWatchApp \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=${simulator_id}" \
-            -derivedDataPath "$derived_data_path" \
-            -parallel-testing-enabled NO \
-            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
-            CODE_SIGNING_ALLOWED=NO \
-            build-for-testing
+          # Reuse the Watch products already compiled by the generic iOS build.
+          # Resolve the selected target product from Xcode, not its DerivedData naming.
+          xcodebuild_args=(
+            -project apps/ios/OpenClaw.xcodeproj
+            -scheme OpenClawWatchApp
+            -configuration Debug
+            -destination "platform=watchOS Simulator,id=${simulator_id}"
+            CODE_SIGNING_ALLOWED=NO
+          )
+          test_args=(
+            -parallel-testing-enabled NO
+            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests
+          )
+          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
+          app_path="$(
+            xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
+              node --input-type=module -e '
+                import path from "node:path";
+                const chunks = [];
+                for await (const chunk of process.stdin) chunks.push(chunk);
+                const targets = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+                  .filter((target) => target.target === "OpenClawWatchApp");
+                if (targets.length !== 1) throw new Error("Expected one Watch app target from Xcode");
+                const { TARGET_BUILD_DIR, FULL_PRODUCT_NAME } = targets[0].buildSettings;
+                if (!path.isAbsolute(TARGET_BUILD_DIR) || !FULL_PRODUCT_NAME) {
+                  throw new Error("Expected an absolute Watch app product from Xcode");
+                }
+                process.stdout.write(path.join(TARGET_BUILD_DIR, FULL_PRODUCT_NAME));
+              '
+          )"
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
-          xcrun simctl install \
-            "$simulator_id" \
-            "$derived_data_path/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app"
-          xcodebuild \
-            -project apps/ios/OpenClaw.xcodeproj \
-            -scheme OpenClawWatchApp \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=${simulator_id}" \
-            -derivedDataPath "$derived_data_path" \
+          xcrun simctl install "$simulator_id" "$app_path"
+          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
-            -parallel-testing-enabled NO \
-            -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests \
-            CODE_SIGNING_ALLOWED=NO \
             test-without-building
 
       - name: Upload iOS lifecycle simulator evidence

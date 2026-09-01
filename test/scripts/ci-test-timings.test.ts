@@ -509,39 +509,9 @@ if (args[0] === "api" && args[1] === "--help") {
   );
 });
 
-describe("committed CI timing loader", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    vi.unstubAllEnvs();
-    vi.resetModules();
-  });
-
-  async function readTimings(contents: string | Error) {
-    vi.resetModules();
-    vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", undefined);
-    const original = fs.readFileSync;
-    const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      if ((file instanceof URL ? fileURLToPath(file) : file) === timingPath) {
-        if (contents instanceof Error) {
-          throw contents;
-        }
-        return contents;
-      }
-      return original(file, options);
-    });
-    syncBuiltinESMExports();
-    const loader = await import("../../scripts/lib/ci-test-timings.mts");
-    return { loader, read, timingPath };
-  }
-
-  const invalidFiles: Array<[string, string | Error]> = [
-    ["missing", new Error("ENOENT")],
-    ["unreadable", new Error("EACCES")],
-    ["truncated", '{"version":1'],
+describe("CI timing schema", () => {
+  const invalidTimings: Array<[string, string]> = [
     ["non-object root", "null"],
-    ["wrong version", JSON.stringify({ ...baseline, version: 2 })],
     ["unknown root key", JSON.stringify({ ...baseline, extra: 1 })],
     ["empty source", JSON.stringify({ ...baseline, source: "" })],
     ...["2026-02-29", "1900-02-29", "2026-04-31", "2026-8-22", "2026-08-22T00:00:00Z"].map(
@@ -595,26 +565,64 @@ describe("committed CI timing loader", () => {
     ["non-finite overhead", JSON.stringify(baseline).replace(":0.6", ":1e999")],
   ];
 
-  it.each(invalidFiles)("ignores the entire %s file without throwing", async (_name, contents) => {
-    const { loader } = await readTimings(contents);
-    expect(loader.readUiE2eFileTimings()).toEqual({ fileSeconds: {}, perFileOverheadSeconds: 0 });
-    expect(loader.readCompactGroupTimings("blacksmith")).toEqual({});
-    expect(loader.readCompactGroupTimings("github")).toEqual({});
+  it.each(invalidTimings)("rejects %s", (_name, contents) => {
+    expect(() => ciTestTimingsSchema.parse(JSON.parse(contents))).toThrow(
+      "Invalid CI test timings",
+    );
   });
 
-  it.each([0, 5])(
-    "accepts overhead boundary %s, safe integers and leap dates",
-    async (overhead) => {
-      const data = {
-        ...baseline,
-        updatedAt: "2000-02-29",
-        uiE2e: {
-          fileSeconds: { [measuredFile]: Number.MAX_SAFE_INTEGER },
-          perFileOverheadSeconds: overhead,
-        },
-      };
-      const { loader } = await readTimings(JSON.stringify(data));
-      expect(loader.readUiE2eFileTimings()).toEqual(data.uiE2e);
+  it.each([0, 5])("accepts overhead boundary %s, safe integers and leap dates", (overhead) => {
+    const data = {
+      ...baseline,
+      updatedAt: "2000-02-29",
+      uiE2e: {
+        fileSeconds: { [measuredFile]: Number.MAX_SAFE_INTEGER },
+        perFileOverheadSeconds: overhead,
+      },
+    };
+    expect(ciTestTimingsSchema.parse(data)).toEqual(data);
+  });
+});
+
+describe("committed CI timing loader", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function readTimings(contents: string | Error) {
+    vi.resetModules();
+    vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", undefined);
+    const original = fs.readFileSync;
+    const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if ((file instanceof URL ? fileURLToPath(file) : file) === timingPath) {
+        if (contents instanceof Error) {
+          throw contents;
+        }
+        return contents;
+      }
+      return original(file, options);
+    });
+    syncBuiltinESMExports();
+    const loader = await import("../../scripts/lib/ci-test-timings.mts");
+    return { loader, read, timingPath };
+  }
+
+  it.each([
+    ["missing", new Error("ENOENT")],
+    ["unreadable", new Error("EACCES")],
+    ["truncated", '{"version":1'],
+    ["wrong version", JSON.stringify({ ...baseline, version: 2 })],
+  ] satisfies Array<[string, string | Error]>)(
+    "ignores the entire %s file without throwing",
+    async (_name, contents) => {
+      const { loader } = await readTimings(contents);
+      expect(loader.readUiE2eFileTimings()).toEqual({ fileSeconds: {}, perFileOverheadSeconds: 0 });
+      expect(loader.readCompactGroupTimings("blacksmith")).toEqual({});
+      expect(loader.readCompactGroupTimings("github")).toEqual({});
     },
   );
 
