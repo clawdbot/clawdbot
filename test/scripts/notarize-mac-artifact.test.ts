@@ -365,6 +365,44 @@ describe("retained macOS notarization artifacts", () => {
     expect(JSON.parse(readFileSync(fixture.manifest, "utf8"))).toEqual(manifest);
   });
 
+  it("keeps incomplete checkpoints intact until terminal packaging success", () => {
+    const fixture = recoveryFixture();
+    const manifest = readFileSync(fixture.manifest, "utf8");
+    const artifact = readFileSync(fixture.archive);
+    expect(JSON.parse(manifest).completed).toBe(false);
+    const rejected = fixture.run("retire-completed");
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("incomplete");
+    expect(readFileSync(fixture.manifest, "utf8")).toBe(manifest);
+    expect(readFileSync(fixture.archive)).toEqual(artifact);
+  });
+
+  it("retains completion through seal and verify, then retires only the completed checkpoint", () => {
+    const fixture = recoveryFixture();
+    writeFileSync(path.join(fixture.root, "workflow-release.json"), "{}");
+    writeFileSync(path.join(fixture.root, "app.dmg"), "notarized dmg");
+    const completed = fixture.run("complete");
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(fixture.run("seal").status).toBe(0);
+    const verified = fixture.run("verify", sourceSha, version);
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout).completed).toBe(true);
+    expect(fixture.run("retire-completed").status).toBe(0);
+    expect(existsSync(fixture.root)).toBe(false);
+  });
+
+  it("refuses to retire a completed checkpoint whose artifact bytes changed", () => {
+    const fixture = recoveryFixture();
+    expect(fixture.run("complete").status).toBe(0);
+    const manifest = readFileSync(fixture.manifest, "utf8");
+    writeFileSync(fixture.archive, "changed after completion");
+    const rejected = fixture.run("retire-completed");
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("SHA-256 mismatch");
+    expect(readFileSync(fixture.manifest, "utf8")).toBe(manifest);
+    expect(readFileSync(fixture.archive, "utf8")).toBe("changed after completion");
+  });
+
   it.each(["artifact tamper", "source mismatch", "version mismatch", "manifest symlink"])(
     "rejects %s before restoring artifacts",
     (scenario) => {

@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -483,7 +484,7 @@ describe("package-mac-dist plist validation", () => {
   });
 
   it.runIf(process.platform === "darwin")(
-    "resumes a failed Apple wait after build products are gone",
+    "resumes without build products and allows the next fresh package after success",
     () => {
       const fixture = makeDistributionFixture("native");
       const app = path.join(fixture.root, "dist/OpenClaw.app");
@@ -552,7 +553,7 @@ fi
       const checkpoint = path.join(fixture.root, "dist/macos-notarization-recovery");
       expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
       expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
-      rmSync(path.join(fixture.root, "apps"), { recursive: true });
+      renameSync(path.join(fixture.root, "apps"), path.join(fixture.root, "saved-build-products"));
       writeFileSync(
         path.join(fixture.root, "scripts/package-mac-app.sh"),
         "#!/bin/bash\necho 'unexpected rebuild' >&2\nexit 97\n",
@@ -562,6 +563,15 @@ fi
       expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\n");
       expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(true);
       expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.dSYM.zip"))).toBe(true);
+      renameSync(path.join(fixture.root, "saved-build-products"), path.join(fixture.root, "apps"));
+      writeFileSync(
+        path.join(fixture.root, "scripts/package-mac-app.sh"),
+        "#!/bin/bash\ntouch fresh-build-started\n",
+      );
+      const fresh = fixture.run({ notarize: true });
+      expect(fresh.status, fresh.stderr).toBe(0);
+      expect(existsSync(path.join(fixture.root, "fresh-build-started"))).toBe(true);
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\nsubmit\n");
     },
   );
 

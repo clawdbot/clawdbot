@@ -39,8 +39,10 @@ if [[ "$#" -ne 0 ]]; then
   exit 1
 fi
 if [[ "$RESUME_NOTARIZATION" == "0" && -e "$RECOVERY_DIR" ]]; then
-  echo "Error: retained notarization checkpoint exists; use --resume-notarization or move it aside before a new build." >&2
-  exit 1
+  if ! python3 "$RECOVERY_HELPER" retire-completed "$RECOVERY_DIR"; then
+    echo "Error: unfinished or invalid notarization checkpoint; use --resume-notarization or inspect it before a new build." >&2
+    exit 1
+  fi
 fi
 
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
@@ -369,4 +371,10 @@ fi
 if [[ -n "$RESTORED_APP_DIR" ]]; then
   rm -rf "$ROOT_DIR/dist/OpenClaw.app"
   mv "$APP" "$ROOT_DIR/dist/OpenClaw.app"
+fi
+
+if [[ "$RECOVERY_READY" == "1" ]]; then
+  # Keep successful bytes available for workflow retention, then retire them
+  # only when the operator starts the next ordinary package build.
+  python3 "$RECOVERY_HELPER" complete "$RECOVERY_DIR"
 fi
