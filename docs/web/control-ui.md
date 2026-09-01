@@ -989,6 +989,8 @@ pnpm ui:build
 
 For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
 
+Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
+
 Optional absolute base (fixed asset URLs):
 
 ```bash
