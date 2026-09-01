@@ -93,12 +93,12 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
-  // metadata generation. Transfer its facts and restore only process-local behavior.
+  // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   const prepared = await prepareWorkspaceBuildGroup(
     [value.input],
     "live",
-    {},
+    { preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts },
     undefined,
     undefined,
     metadata,
@@ -114,6 +114,7 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     sourceConfigResolutionFacts: value.sourceConfigResolutionFacts,
     authStore: value.authStore,
     providerIds: value.providerIds,
+    preferBuiltPluginArtifacts: prepared.pluginGeneration.preferBuiltPluginArtifacts,
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
   });
   if (reconstructedFingerprint !== value.generationFingerprint) {

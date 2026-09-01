@@ -41,6 +41,20 @@ function sanitizeGitBackupDiagnostic(value: string): string {
   return value.replace(/:\/\/[^@\s]+@/gu, "://***@").slice(0, GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
 }
 
+function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: unknown): string {
+  if (process.platform === "win32") {
+    const detail =
+      cause instanceof Error && cause.message
+        ? ` ${sanitizeGitBackupDiagnostic(cause.message)}`
+        : "";
+    return (
+      `${detail} Remove non-user ACL grants from ${repositoryPath} or choose a private local directory. ` +
+      "Do not use a shared or synced folder for SQLite backups."
+    );
+  }
+  return `Fix its ownership and run chmod 700 ${repositoryPath}.`;
+}
+
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
@@ -77,7 +91,7 @@ export async function initializeGitBackupRepository(params: {
     await ensurePrivateSnapshotRepositoryRoot(repositoryPath);
   } catch (error) {
     throw new Error(
-      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. Fix its ownership and run chmod 700 ${repositoryPath}.`,
+      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. ${gitBackupRepositoryPrivacyRemediation(repositoryPath, error)}`,
       { cause: error },
     );
   }

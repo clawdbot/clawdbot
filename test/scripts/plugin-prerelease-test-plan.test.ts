@@ -1152,7 +1152,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
     for (const jobName of [
-      "resolve_target",
       "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",

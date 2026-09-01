@@ -113,7 +113,7 @@ function evaluateWorkflowExpression(
     cancelled?: boolean;
     dispatchId?: string;
     draft?: boolean;
-    eventName: "pull_request" | "push" | "workflow_dispatch";
+    eventName: "pull_request" | "push" | "workflow_dispatch" | "repository_dispatch" | "schedule";
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -292,6 +292,7 @@ function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
   nativeI18nCapabilities?: boolean;
+  macosNodeParts?: boolean;
   openClawKitTests?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
@@ -354,6 +355,7 @@ function runCiManifestFixture(options: {
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
+    const macosNodeParts = options.macosNodeParts ?? options.bundledPlanner;
     const packageScripts = options.bundledPlanner
       ? {
           ...(nativeI18nCapabilities
@@ -364,6 +366,9 @@ function runCiManifestFixture(options: {
               }
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
+          ...(macosNodeParts
+            ? Object.fromEntries([1, 2, 3].map((part) => [`test:macos:ci:${part}`, "true"]))
+            : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
         }
@@ -405,6 +410,7 @@ function runCiManifestFixture(options: {
                     requiresDist: false,
                     runner: "ubuntu-24.04",
                     shardName: "changed-extension-fallback-plan",
+                    predictedSeconds: 120,
                   }]
                 : [{
                   checkName: "changed-extension-fallback-plan",
@@ -412,6 +418,7 @@ function runCiManifestFixture(options: {
                   requiresDist: false,
                   runner: "ubuntu-24.04",
                   shardName: "changed-extension-fallback-plan",
+                  predictedSeconds: 120,
                   targets: ["extensions/codex/src/focused.test.ts"],
                 }]
               : [];
@@ -3105,6 +3112,51 @@ NODE
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
+  it.skipIf(process.platform === "win32").for(["blacksmith", "github", "hybrid"] as const)(
+    "executes each Mac partition once and keeps historical coverage on %s",
+    (runnerBackend) => {
+      const workflow = readCiWorkflow();
+      const job = workflow.jobs["macos-node"];
+      const runStep = job.steps.find((step: WorkflowStep) => step.name === "TS tests (macOS)");
+      const cwd = tempDirs.make("macos-partition-routing-");
+      const bin = path.join(cwd, "bin");
+      mkdirSync(bin);
+      writeFileSync(path.join(bin, "pnpm"), '#!/bin/sh\nprintf "selected=%s\\n" "$*"\n');
+      chmodSync(path.join(bin, "pnpm"), 0o755);
+      for (const partsSupported of [true, false]) {
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          eventName: "workflow_dispatch",
+          historicalCompatibility: !partsSupported,
+          macosNodeParts: partsSupported,
+          runnerBackend,
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix"),
+        ).include as Array<{ task: string }>;
+        expect(rows.map(({ task }) => task)).toEqual(
+          partsSupported ? ["test-1", "test-2", "test-3"] : ["test"],
+        );
+        const commands = rows.map(({ task }) => {
+          const result = runWorkflowShellScript(runStep.run, {
+            cwd,
+            env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, TASK: task },
+          });
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          return result.stdout.match(/^selected=(.*)$/m)?.[1];
+        });
+        expect(commands).toEqual(
+          partsSupported
+            ? ["test:macos:ci:1", "test:macos:ci:2", "test:macos:ci:3"]
+            : ["test:macos:ci"],
+        );
+      }
+      expect(job.strategy["max-parallel"]).toBe(3);
+      expect(runStep.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(2);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "bounds Windows project overlap to existing self-hosted capacity",
     () => {
@@ -4176,6 +4228,22 @@ NODE
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
+        if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
+          expect([
+            ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+            ".github/workflows/release-npm-cache-warm.yml",
+          ]).toContain(file);
+          const workflow = parse(readFileSync(file, "utf8"));
+          const owner = Object.values(workflow.jobs).find((candidate) =>
+            (candidate as { steps?: WorkflowStep[] }).steps?.some(
+              (entry) => entry.name === step.name,
+            ),
+          ) as { if?: string } | undefined;
+          const authority = `${owner?.if ?? ""} ${step.if ?? ""}`;
+          expect(authority).toContain("github.repository == 'openclaw/openclaw'");
+          expect(authority).toContain("github.event_name == 'workflow_dispatch'");
+          continue;
+        }
         const condition = String(step.if);
         expect(
           condition.includes(".outputs.cache-mode == 'read-write'") ||
@@ -4847,19 +4915,31 @@ server.listen(0, "127.0.0.1", () => {
     const releaseChecks = parse(
       readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
     );
-    const repoE2e = releaseChecks.jobs.validate_repo_e2e;
-    expect(repoE2e.env).toMatchObject({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
-    });
-    expect(repoE2e["timeout-minutes"]).toBe(90);
-    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 6 });
-    const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
+    const repoE2eWorkflow = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const pipelines = [
+      releaseChecks.jobs.validate_repo_e2e_gateway,
+      releaseChecks.jobs.validate_repo_e2e_runtime,
+    ];
+    const repoE2eRows = pipelines.flatMap((pipeline) => JSON.parse(pipeline.with.suites)) as Array<{
       name: string;
       command: string;
       target_script?: string;
     }>;
+    expect(pipelines.map((pipeline) => pipeline.with.build_profile)).toEqual([
+      "full",
+      "ciArtifacts",
+    ]);
+    for (const pipeline of pipelines) {
+      // Each profile starts independently; a slow/full declaration build cannot hold up UI readers.
+      expect(pipeline.needs).toBe("validate_selected_ref");
+      expect(pipeline.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+      expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
+      expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
+      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+      );
+    }
     expect(repoE2eRows.map((row) => row.command)).toEqual([
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:ui:e2e --shard=${index + 1}/4`),
@@ -4869,34 +4949,45 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2eRows.find((row) => row.name === "Agent plugin Gateway")).toMatchObject({
       target_script: "test:e2e:agent-plugin-gateway",
     });
+    expect(repoE2eWorkflow.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const producer = repoE2eWorkflow.jobs.build;
+    const repoE2e = repoE2eWorkflow.jobs.test;
+    expect(repoE2e.needs).toBe("build");
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
-    expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+    expect(repoE2e["timeout-minutes"]).toBe(90);
+    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
     expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    const producerSteps = producer.steps as WorkflowStep[];
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "full) pnpm build",
+    );
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "ciArtifacts) pnpm build:ci-artifacts",
+    );
+    expect(producerSteps.find((step) => step.uses === UPLOAD_ARTIFACT_V7)?.with?.name).toContain(
+      "${{ github.run_attempt }}",
+    );
     const repoE2eSteps = repoE2e.steps as WorkflowStep[];
     expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
-      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      "${{ inputs.ref }}",
     );
-    const build = repoE2eSteps.find((step) => step.name === "Build dist for repo E2E");
-    for (const row of repoE2eRows) {
-      const command = build?.run?.startsWith("${{")
-        ? evaluateWorkflowExpression(build.run, {
-            eventName: "workflow_dispatch",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: row,
-          })
-        : build?.run;
-      // Gateway shards include packed-package type consumers; UI and the
-      // standalone agent-plugin proof need runtime and canonical SDK artifacts.
-      expect(command, row.name).toBe(
-        row.command.startsWith("pnpm test:e2e:gateway ") ? "pnpm build" : "pnpm build:ci-artifacts",
-      );
-    }
+    expect(repoE2eSteps.find((step) => step.uses === DOWNLOAD_ARTIFACT_V8)?.with).toMatchObject({
+      "artifact-ids": "${{ needs.build.outputs.artifact_id }}",
+      "run-id": "${{ needs.build.outputs.artifact_run_id }}",
+      "github-token": "${{ github.token }}",
+    });
+    expect(repoE2eSteps.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    const restoreIndex = repoE2eSteps.findIndex((step) => step.name === "Restore repo E2E build");
     const sandboxSetupIndex = repoE2eSteps.findIndex(
-      (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
+      (step) => step.run === "scripts/sandbox-setup.sh",
     );
     const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
-    expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(sandboxSetupIndex).toBeGreaterThan(restoreIndex);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
       env: {
@@ -5600,6 +5691,54 @@ server.listen(0, "127.0.0.1", () => {
       path: "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}",
       key: "${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}",
     });
+  });
+
+  it("publishes a portable release npm seed without hooks or push-time downloads", () => {
+    const warmer = parse(readFileSync(".github/workflows/release-npm-cache-warm.yml", "utf8"));
+    expect(warmer.on).not.toHaveProperty("push");
+    expect(warmer.on).toHaveProperty("schedule");
+    expect(warmer.on).toHaveProperty("workflow_dispatch");
+    expect(warmer.concurrency.group).not.toBe(
+      parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8")).concurrency.group,
+    );
+    const seed = warmer.jobs["warm-release-npm"];
+    for (const repository of ["openclaw/openclaw", "example/fork"]) {
+      for (const eventName of [
+        "push",
+        "pull_request",
+        "repository_dispatch",
+        "schedule",
+        "workflow_dispatch",
+      ] as const) {
+        expect(evaluateWorkflowExpression(seed.if, { repository, eventName, runAttempt: 1 })).toBe(
+          repository === "openclaw/openclaw" &&
+            (eventName === "schedule" || eventName === "workflow_dispatch"),
+        );
+      }
+    }
+    expect(seed["runs-on"]).toBe("ubuntu-24.04");
+    const steps = seed.steps as WorkflowStep[];
+    const install = expectDefined(
+      steps.find((entry) => entry.run),
+      "npm seed install",
+    );
+    expect(install.run).toContain("openclaw@latest --ignore-scripts --omit=dev");
+    expect(install.env).toEqual({
+      NPM_CONFIG_CACHE: "${{ github.workspace }}/.cache/openclaw-cross-os-npm-cache",
+    });
+    const save = expectDefined(
+      steps.find((entry) => entry.uses?.startsWith("actions/cache/save@")),
+      "npm seed publication",
+    );
+    expect(save.with).toMatchObject({
+      path: ".cache/openclaw-cross-os-npm-cache/_cacache",
+      enableCrossOsArchive: true,
+    });
+    expect(save.with?.key).toMatch(/^openclaw-cross-os-npm-v1-seed-/u);
+    expect(save["continue-on-error"]).toBe(true);
+    expect(save.if ?? "").not.toMatch(/always\(|failure\(|cancelled\(/u);
+    expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(install));
+    expect(steps.some((entry) => entry.uses?.startsWith("actions/cache/restore@"))).toBe(false);
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -7041,20 +7180,23 @@ server.listen(0, "127.0.0.1", () => {
         ".github/workflows/ci-check-testbox.yml",
         "1",
         "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        undefined,
       ],
     ] as const;
 
-    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef, goVersion] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
@@ -7077,6 +7219,7 @@ server.listen(0, "127.0.0.1", () => {
       }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
       expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
+      expect(prepareStep?.with?.["go-version"], workflowPath).toBe(goVersion);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
@@ -7087,7 +7230,34 @@ server.listen(0, "127.0.0.1", () => {
     }
 
     const action = parse(readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
-    const run = action.runs.steps[0].run as string;
+    expect(action.inputs["go-version"]).toMatchObject({ required: false });
+    const setupGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.uses === SETUP_GO_V6),
+      "Testbox Go setup",
+    );
+    expect(setupGo).toMatchObject({
+      if: "inputs.go-version != ''",
+      with: {
+        cache: false,
+        "go-version": "${{ inputs.go-version }}",
+      },
+    });
+    const exposeGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Expose Go tools"),
+      "Testbox Go exposure",
+    );
+    expect(exposeGo.if).toBe("inputs.go-version != ''");
+    expect(exposeGo.run).toContain('test "$(go env GOVERSION)" = "go${TESTBOX_GO_VERSION}"');
+    expect(exposeGo.run).toContain('go_root="$(go env GOROOT)"');
+    expect(exposeGo.run).toContain("for tool in go gofmt; do");
+    expect(exposeGo.run).toContain('"/usr/local/bin/$tool"');
+    const prepare = expectDefined(
+      action.runs.steps.find(
+        (step: WorkflowStep) => step.name === "Pin Testbox base and Node tools",
+      ),
+      "Testbox base preparation",
+    );
+    const run = prepare.run as string;
     expect(run).toContain('base_ref="${TESTBOX_BASE_REF:-HEAD}"');
     expect(run).toContain('git rev-parse --verify "${base_ref}^{commit}"');
     expect(run).toContain('git update-ref refs/remotes/origin/main "$base_sha"');
@@ -8434,6 +8604,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       selectedJobs: ["macos-node", "macos-swift"],
     },
     {
+      label: "Mac artifact proof",
+      changedPath: "test/scripts/mac-elevation-artifact.test.ts",
+      selectedJobs: ["macos-node", "macos-swift"],
+    },
+    {
       label: "shared native",
       changedPath: "apps/shared/OpenClawKit/Sources/Foo.swift",
       selectedJobs: ["macos-node", "macos-swift", "ios-build", "android"],
@@ -8538,7 +8713,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         JSON.parse(expectDefined(manifest.outputs.macos_node_matrix, "Mac Node matrix")).include,
       ).toEqual(
         selectedJobs.includes("macos-node")
-          ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
+          ? legacyOutput
+            ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
+            : [1, 2, 3].map((part) => ({
+                check_name: `macos-node-${part}`,
+                runtime: "node",
+                task: `test-${part}`,
+              }))
           : [],
       );
       expect(
@@ -8594,6 +8775,35 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
     },
   );
+
+  it("admits slow compact and plugin fallback rows before shorter work", () => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["extensions/matrix/src/channel.ts"],
+      eventName: "pull_request",
+      nodeTestShards: [30, 240, 240].map((predictedSeconds, index) => ({
+        checkName: `compact-${index}`,
+        shardName: `compact-${index}`,
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        runner: "ubuntu-24.04",
+        requiresDist: false,
+        predictedSeconds,
+      })),
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "Node matrix"),
+    ).include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
+      "compact-1",
+      "compact-2",
+      "changed-extension-fallback-plan",
+      "compact-0",
+    ]);
+    expect(rows.map((row: { predicted_seconds: number }) => row.predicted_seconds)).toEqual([
+      240, 240, 120, 30,
+    ]);
+  });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const androidRun = readCiWorkflow().jobs.android.steps.find(

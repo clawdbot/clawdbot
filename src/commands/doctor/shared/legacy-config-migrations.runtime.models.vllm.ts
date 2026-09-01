@@ -6,6 +6,7 @@ import {
   hasInvalidThinkingFormat,
   hasStaleContextWindowValue,
 } from "./legacy-config-migrations.runtime.models.catalog.js";
+import { visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const QWEN_THINKING_FORMAT_KEYS = ["qwenThinkingFormat", "qwen_thinking_format"] as const;
 
@@ -109,11 +110,11 @@ function hasLegacyVllmQwenThinkingParams(params: unknown): boolean {
 }
 
 function hasLegacyVllmQwenThinkingAgentParams(agents: unknown): boolean {
-  const list = getRecord(agents)?.list;
-  if (!Array.isArray(list)) {
-    return false;
-  }
-  return list.some((agent) => hasLegacyVllmQwenThinkingParams(getRecord(agent)?.params));
+  let found = false;
+  visitAgentEntries({ agents }, (agent) => {
+    found ||= hasLegacyVllmQwenThinkingParams(agent.params);
+  });
+  return found;
 }
 
 export function findOrCreateVllmModelEntry(
@@ -231,19 +232,15 @@ export function combineVllmModelTargets(
   return targets;
 }
 
-export function collectVllmModelIdsFromAgentList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((agent) => {
-    const record = getRecord(agent);
-    return record
-      ? [
-          ...collectVllmModelIdsFromSelection(record.model),
-          ...collectVllmModelIdsFromAgentModelMap(record.models),
-        ]
-      : [];
+export function collectVllmModelIdsFromAgentRoster(raw: Record<string, unknown>): string[] {
+  const modelIds: string[] = [];
+  visitAgentEntries(raw, (agent) => {
+    modelIds.push(
+      ...collectVllmModelIdsFromSelection(agent.model),
+      ...collectVllmModelIdsFromAgentModelMap(agent.models),
+    );
   });
+  return modelIds;
 }
 
 function getOrCreateRecord(
@@ -384,7 +381,7 @@ export const LEGACY_VLLM_QWEN_DEFAULT_PARAMS_THINKING_FORMAT_RULE: LegacyConfigR
 export const LEGACY_VLLM_QWEN_AGENT_PARAMS_THINKING_FORMAT_RULE: LegacyConfigRule = {
   path: ["agents"],
   message:
-    'agents.list[].params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
+    'agents.entries.*.params.qwenThinkingFormat is legacy; run "openclaw doctor --fix" to move it to models.providers.vllm.models[].compat.thinkingFormat.',
   match: (value) => hasLegacyVllmQwenThinkingAgentParams(value),
 };
 

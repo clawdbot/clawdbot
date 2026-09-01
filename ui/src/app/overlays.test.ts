@@ -2,6 +2,7 @@
 // Control UI tests cover application-owned overlay races.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -60,6 +61,30 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method === "exec.approval.list" ? [] : {}),
+    );
+    const coordinator = {
+      reset: vi.fn(),
+      run: vi.fn(async (_key: string, task: () => Promise<unknown>) => {
+        await task();
+      }),
+      synchronize: vi.fn(),
+    } satisfies ConnectionBootstrapCoordinator;
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      connectionBootstrap: coordinator,
+    });
+
+    harness.update({ client: client(request), phase: "connected" });
+    await flushMicrotasks();
+
+    expect(coordinator.run).toHaveBeenCalledWith("approvals", expect.any(Function));
+    expect(coordinator.run).toHaveBeenCalledWith("update-status", expect.any(Function));
+    overlays.dispose();
+  });
+
   it("flags a terminal build rejection without requiring a hello", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);

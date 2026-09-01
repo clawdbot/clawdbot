@@ -7,10 +7,10 @@ import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
-  LEGACY_WORKSPACE_ATTESTATION_HEADER,
   LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
+  legacyWorkspaceSiblingAttestationMayExist,
   resolveLegacyWorkspaceSourcePaths,
 } from "../agents/workspace-legacy-state.js";
 import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
@@ -35,7 +35,6 @@ import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
   parseSource,
-  type ParsedSource,
   type SourceSnapshot,
 } from "./state-migrations.workspace-setup-store.js";
 import type {
@@ -157,39 +156,6 @@ function createLegacySource(
   return { ...params, rootDir, relativePath, sourcePath };
 }
 
-function siblingAttestationNeedsDoctor(filePath: string): boolean {
-  try {
-    const before = fs.lstatSync(filePath);
-    if (!before.isFile()) {
-      return false;
-    }
-    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
-    let fd: number;
-    try {
-      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-    } catch {
-      // An unreadable regular file could be an owned marker. Doctor must surface it.
-      return true;
-    }
-    try {
-      const opened = fs.fstatSync(fd);
-      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
-        return true;
-      }
-      const expected = Buffer.from(`${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`, "utf8");
-      const bytes = Buffer.alloc(expected.length);
-      const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
-      return read === expected.length && bytes.equals(expected);
-    } catch {
-      return true;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
-}
-
 function listOrphanAttestationSources(params: {
   stateDir: string;
   homedir: () => string;
@@ -285,7 +251,7 @@ function addLegacyWorkspaceSources(params: {
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
     if (
       !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
-      !siblingAttestationNeedsDoctor(sourcePath)
+      !legacyWorkspaceSiblingAttestationMayExist(sourcePath)
     ) {
       continue;
     }
@@ -446,7 +412,7 @@ async function cleanupReceiptSource(params: {
     return {
       changes: [],
       warnings: [
-        `Workspace state is in SQLite, but legacy cleanup failed: ${formatErrorMessage(error)}`,
+        `Workspace state is in SQLite, but legacy cleanup failed at ${params.source.sourcePath}: ${formatErrorMessage(error)}`,
       ],
     };
   }
@@ -508,32 +474,28 @@ async function migrateOneSource(params: {
     return { changes: [], warnings: [] };
   }
 
-  let snapshot: SourceSnapshot;
-  let parsed: ParsedSource | undefined;
-  let discardEmptyAttestation: boolean;
-  let claimedByThisRun = false;
+  let operation = `reading legacy workspace state at ${params.source.sourcePath}`;
+  let claimAttempted = false;
+  let imported: ReturnType<typeof importAndRecordReceipt> | undefined;
   try {
-    snapshot = await sourceClaim.read(!hasSource);
+    let snapshot = await sourceClaim.read(!hasSource);
     // Empty reserved hashed markers have no importable state. The runtime gate is
     // presence-only, so leaving them in place blocks agent turns forever.
     // Nonempty, linked, sibling, and unreadable sources stay fail-closed.
-    discardEmptyAttestation =
+    const discardEmptyAttestation =
       params.source.kind === "attestation" &&
       path.basename(path.dirname(params.source.sourcePath)) ===
         LEGACY_WORKSPACE_ATTESTATION_DIRNAME &&
       snapshot.size === 0;
-    if (!discardEmptyAttestation) {
-      parsed = parseSource(params.source, snapshot);
-    }
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
-    };
-  }
+    const parsed = discardEmptyAttestation ? undefined : parseSource(params.source, snapshot);
+    operation = discardEmptyAttestation
+      ? `discarding empty reserved workspace attestation at ${params.source.sourcePath}`
+      : "migrating legacy workspace state";
 
-  if (hasSource) {
-    try {
+    if (hasSource) {
+      // A failed claim may already have renamed the source; restore it on any
+      // pre-import failure, but retain committed imports for receipt-based retry.
+      claimAttempted = true;
       snapshot = await sourceClaim.claim({
         snapshot,
         beforeClaim: () => {
@@ -542,46 +504,19 @@ async function migrateOneSource(params: {
         },
         mismatchMessage: "legacy workspace source changed before Doctor could claim it",
       });
-      claimedByThisRun = true;
-    } catch (error) {
-      const restoreError = await sourceClaim.restore();
-      return {
-        changes: [],
-        warnings: [
-          `Failed ${discardEmptyAttestation ? `discarding empty reserved workspace attestation at ${params.source.sourcePath}` : "migrating legacy workspace state"}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
     }
-  }
 
-  let imported:
-    | { parsed: ParsedSource; receipt: ReturnType<typeof importAndRecordReceipt> }
-    | undefined;
-  if (parsed) {
-    try {
+    if (parsed) {
       assertConfiguredWorkspaceIdentity(params.source);
-      imported = {
+      imported = importAndRecordReceipt({
+        source: params.source,
+        snapshot,
         parsed,
-        receipt: importAndRecordReceipt({
-          source: params.source,
-          snapshot,
-          parsed,
-          env: params.env,
-          replaceRemovedReceipt: receipt?.removedSource === true,
-        }),
-      };
-    } catch (error) {
-      const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
-      return {
-        changes: [],
-        warnings: [
-          `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
+        env: params.env,
+        replaceRemovedReceipt: receipt?.removedSource === true,
+      });
     }
-  }
 
-  try {
     if (await sourceClaim.exists()) {
       throw new Error("legacy workspace source reappeared during import");
     }
@@ -592,22 +527,22 @@ async function migrateOneSource(params: {
     assertConfiguredWorkspaceIdentity(params.source);
     await sourceClaim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
     if (imported) {
-      markLegacyMigrationSourceRemoved(imported.receipt.sourceKey, params.env);
+      markLegacyMigrationSourceRemoved(imported.sourceKey, params.env);
     }
   } catch (error) {
-    if (discardEmptyAttestation) {
-      const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;
+    if (imported) {
       return {
         changes: [],
         warnings: [
-          `Failed discarding empty reserved workspace attestation at ${params.source.sourcePath}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+          `Workspace state is in SQLite, but legacy cleanup failed at ${params.source.sourcePath}: ${formatErrorMessage(error)}`,
         ],
       };
     }
+    const restoreError = claimAttempted ? await sourceClaim.restore() : null;
     return {
       changes: [],
       warnings: [
-        `Workspace state is in SQLite, but legacy cleanup failed: ${formatErrorMessage(error)}`,
+        `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
       ],
     };
   }
@@ -618,13 +553,10 @@ async function migrateOneSource(params: {
       warnings: [],
     };
   }
-  const label =
-    imported.parsed.kind === "setup" ? "workspace setup state" : "workspace attestation";
+  const label = params.source.kind === "setup" ? "workspace setup state" : "workspace attestation";
   return {
     changes: [
-      imported.receipt.imported
-        ? `Migrated ${label} to SQLite.`
-        : `Verified canonical SQLite ${label}.`,
+      imported.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
     ],
     warnings: [],
     notices: ["Removed retired workspace state after verified SQLite import."],

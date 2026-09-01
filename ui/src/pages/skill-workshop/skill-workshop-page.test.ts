@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { createSkillWorkshopRevisionAdmissions } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -109,7 +108,6 @@ function createContext(
       subscribe,
     },
     sessions: options?.sessions ?? { state: { result: null, loading: false } },
-    skillWorkshopRevisionAdmissions: createSkillWorkshopRevisionAdmissions(),
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     navigate: vi.fn(),
   } as unknown as ApplicationContext;

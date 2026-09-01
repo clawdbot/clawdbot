@@ -40,6 +40,25 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
 
+const ownersBySnapshot = new WeakMap<PreparedModelRuntimeSnapshot, PreparedModelRuntimeOwner>();
+
+export function resolvePreparedModelRuntimeOwnerBySnapshot(
+  snapshot: PreparedModelRuntimeSnapshot,
+): PreparedModelRuntimeOwner | undefined {
+  return ownersBySnapshot.get(snapshot);
+}
+
+function publishPreparedModelRuntimeOwnerSnapshot(
+  owner: PreparedModelRuntimeOwner,
+  snapshot: PreparedModelRuntimeSnapshot,
+): void {
+  if (owner.snapshot) {
+    ownersBySnapshot.delete(owner.snapshot);
+  }
+  owner.snapshot = snapshot;
+  ownersBySnapshot.set(snapshot, owner);
+}
+
 export type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLease,
@@ -61,7 +80,7 @@ export function prepareModelRuntimeOwner(
 ): PreparedModelRuntimeOwner {
   // Preparation precedes async discovery: auth may supersede the first build, or a new
   // preparation whose previous snapshot is still attached. Neither snapshot owns these facts.
-  return Object.assign(existing ?? { generation: 0, needsRefresh: true }, {
+  return Object.assign(existing ?? { generation: 0, needsRefresh: true, catalogStale: false }, {
     input,
     catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
     environmentFingerprint: effectiveEnvironmentFingerprint(input),
@@ -455,6 +474,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   buildTimeoutMs: number;
+  includeCredentialProviders?: boolean;
   isPublicationCurrent?: () => boolean;
   isBuildCurrent?: () => boolean;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
@@ -539,6 +559,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               catalogMode,
               params.onBuildStats,
               params.pluginMetadataSnapshot,
+              params.includeCredentialProviders,
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {
@@ -591,7 +612,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           result.snapshot,
           candidate.owner.input.config,
         );
-        candidate.owner.snapshot = snapshot;
+        publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, snapshot);
         results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
         candidate.owner.needsRefresh = false;
@@ -662,7 +683,7 @@ export async function publishModelRuntimeSnapshot(
         );
       }
       const snapshot = stampPreparedModelRuntimeSnapshotConfig(result.snapshot, owner.input.config);
-      owner.snapshot = snapshot;
+      publishPreparedModelRuntimeOwnerSnapshot(owner, snapshot);
       owner.pluginGeneration = result.pluginGeneration;
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;

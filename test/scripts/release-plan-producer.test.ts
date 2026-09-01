@@ -587,6 +587,58 @@ describe("release plan producer", () => {
     ]);
   });
 
+  it("ignores large runtime trees when collecting candidate metadata", () => {
+    const fixture = createFixtureRepo();
+    const params = sourceParams(fixture);
+    const expected = produceReleasePlan(params).inventory;
+    const git = (args: string[], input?: string) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw Test", "-c", "user.email=test@example.invalid", ...args],
+        { cwd: fixture.root, encoding: "utf8", input },
+      ).trim();
+    const blob = git(["hash-object", "-w", "--stdin"], "");
+    // Git objects reproduce the >1 MiB listing without creating thousands of files.
+    const runtimeTree = git(
+      ["mktree"],
+      Array.from(
+        { length: 6000 },
+        (_, index) => `100644 blob ${blob}\truntime-${index}-${"x".repeat(180)}.ts\n`,
+      ).join(""),
+    );
+    const pluginsTree = git(["mktree"], `040000 tree ${runtimeTree}\tnoise\n`);
+    const rootTree = git(
+      ["mktree"],
+      `${git(["ls-tree", fixture.candidateSha])}\n040000 tree ${pluginsTree}\textensions\n`,
+    );
+    const candidateSha = git([
+      "commit-tree",
+      rootTree,
+      "-p",
+      fixture.candidateSha,
+      "-m",
+      "runtime",
+    ]);
+    expect(produceReleasePlan({ ...params, candidateSha }).inventory).toEqual(expected);
+  });
+
+  it.each([
+    "package.json",
+    "packages/ai/package.json",
+    "extensions/linked/package.json",
+    "extensions/linked/README.md",
+  ])("rejects candidate metadata symlinks at %s", (path) => {
+    const fixture = createFixtureRepo();
+    const target = join(fixture.root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    rmSync(target, { force: true });
+    symlinkSync("must-not-be-read", target);
+    const candidateSha = commit(fixture.root, "linked metadata");
+    expect(() => produceReleasePlan({ ...sourceParams(fixture), candidateSha })).toThrow(
+      "candidate package inventory must not contain symbolic links",
+    );
+  });
+
   it("requires the final tag only for postpublish confidence", () => {
     const fixture = createFixtureRepo();
     expect(produceReleasePlan(sourceParams(fixture))).toMatchObject({

@@ -44,7 +44,7 @@ describe("renderSessionProgressCard", () => {
         expect(timestamp?.getAttribute("datetime")).toBe(
           new Date(progressCard.updatedAt).toISOString(),
         );
-        expect(timestamp?.textContent).toBe("Updated 2m ago");
+        expect(timestamp?.textContent).toBe(placement === "hovercard" ? "2m" : "Updated 2m ago");
         expect(timestamp?.getAttribute("aria-label")).toBe("Updated 2m ago");
         expect(timestamp?.getAttribute("title")).toBe(timestamp?.getAttribute("aria-label"));
         const accessibleCard =

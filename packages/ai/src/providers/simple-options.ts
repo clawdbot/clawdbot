@@ -37,7 +37,6 @@ export function buildBaseOptions(
     timeoutMs: options?.timeoutMs,
     firstEventTimeoutMs: firstEventOptions?.firstEventTimeoutMs,
     onFirstEventTimeout: firstEventOptions?.onFirstEventTimeout,
-    maxRetries: options?.maxRetries,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
   };

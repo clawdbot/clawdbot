@@ -214,6 +214,9 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
+    agentNotepad: "Agent Notepad",
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
@@ -2819,11 +2822,6 @@ export const en: TranslationMap = {
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
       action: "Connect an AI provider",
     },
-    connectionFailure: {
-      title: "Configured AI needs attention",
-      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
-      action: "Review connection",
-    },
     loading: "Checking this Gateway for available AI access…",
     testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",
@@ -5290,9 +5288,12 @@ export const en: TranslationMap = {
     togglePasswordVisibility: "Toggle password visibility",
     failure: {
       rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      profileUnavailable: {
+        title: "Profile verification unavailable",
+        stepRetry: "Retry shortly.",
+        stepAdmin:
+          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
       authRequired: {
         title: "Auth required",
         summary:
@@ -5971,6 +5972,8 @@ export const en: TranslationMap = {
     },
     questions: {
       other: "Type your own answer here",
+      answer: "Answer",
+      answerPlaceholder: "{label}",
       submit: "Submit",
       next: "Next",
       back: "Back",
@@ -6066,6 +6069,9 @@ export const en: TranslationMap = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       onlyForSession: "Only for this session",
+      selectionTargetSession: "Selection target: This session only",
+      selectionTargetAgent: "Selection target: This agent's default",
+      selectionTargetGlobal: "Selection target: Global default",
       useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",

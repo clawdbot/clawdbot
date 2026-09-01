@@ -29,6 +29,7 @@ import {
   renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsSection,
@@ -363,20 +364,20 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.ownProfile) {
       // users.self is the idempotent gateway-owned profile ensure path. Retrying
       // keeps profile ids and authenticated email linkage authoritative server-side.
-      const emptyState = this.identityLoading
-        ? t("profilePage.identity.loading")
-        : this.identityError
-          ? this.identityError
-          : html`<div class="profile-identity-empty">
-              <span>${t("profilePage.identity.notSet")}</span>
-              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
-                ${t("profilePage.identity.setIdentity")}
-              </button>
-            </div>`;
+      const emptyState = this.identityError
+        ? this.identityError
+        : html`<div class="profile-identity-empty">
+            <span>${t("profilePage.identity.notSet")}</span>
+            <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+              ${t("profilePage.identity.setIdentity")}
+            </button>
+          </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(emptyState),
+          this.identityLoading
+            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
+            : renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }

@@ -6,12 +6,14 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { handleInvoke } from "../node-host/invoke.js";
 import type { Deferred } from "../shared/deferred.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: rpc }));
@@ -107,6 +109,87 @@ beforeEach(async () => {
 afterEach(async () => {
   await state.cleanup();
 });
+
+it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
+  const environment = withEnv(
+    { GH_TOKEN: "gateway-token", GITHUB_TOKEN: "gateway-fallback", GATEWAY_ONLY: "private" },
+    () =>
+      resolvePreparedExecEnvironment({
+        execParams: { command: request.command },
+        host: "node",
+        defaultPathPrepend: [],
+        credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        localIdentityEnv: {
+          GH_CONFIG_DIR: "/gateway/managed-gh",
+          GIT_AUTHOR_NAME: "Gateway Author",
+        },
+        managedLocalIdentity: true,
+        warnings: [],
+      }),
+  );
+  await withEnvAsync(
+    {
+      GH_TOKEN: "node-token",
+      GITHUB_TOKEN: "node-fallback",
+      GH_CONFIG_DIR: "/node/native-gh",
+      GIT_AUTHOR_NAME: "Node Author",
+      GATEWAY_ONLY: undefined,
+    },
+    async () => {
+      const result = await executeNodeHostCommand({
+        ...request,
+        ...environment,
+        command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(JSON.stringify([process.env.GH_TOKEN, process.env.GITHUB_TOKEN, process.env.GH_CONFIG_DIR, process.env.GIT_AUTHOR_NAME, process.env.GATEWAY_ONLY]))'`,
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        aggregated: JSON.stringify([null, null, "/node/native-gh", "Node Author", null]),
+      });
+    },
+  );
+  expect(invokeCount).toBe(1);
+});
+
+it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
+  "rejects explicit %s overrides at both node boundaries even when empty",
+  async (key) => {
+    for (const value of ["", "explicit-token"]) {
+      for (const source of ["env", "pluginEnv"] as const) {
+        expect(() =>
+          resolvePreparedExecEnvironment({
+            execParams: {
+              command: request.command,
+              ...(source === "env" ? { env: { [key]: value } } : {}),
+            },
+            ...(source === "pluginEnv" ? { pluginEnv: { [key]: value } } : {}),
+            host: "node",
+            defaultPathPrepend: [],
+            credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+            managedLocalIdentity: true,
+            warnings: [],
+          }),
+        ).toThrow(`Environment variable '${key}' is forbidden`);
+      }
+      for (const command of ["system.run.prepare", "system.run"]) {
+        await expect(
+          rpc(
+            "node.invoke",
+            {},
+            {
+              command,
+              params: {
+                command: [process.execPath, "--version"],
+                security: "full",
+                ask: "off",
+                env: { [key]: value },
+              },
+            },
+          ),
+        ).rejects.toThrow(`blocked override keys: ${key}`);
+      }
+    }
+  },
+);
 
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(

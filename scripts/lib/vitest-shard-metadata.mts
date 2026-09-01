@@ -1,5 +1,13 @@
 // Dependency-free scheduling facts shared by native CI planning and local project runs.
 import { createHash } from "node:crypto";
+import type { VitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
+
+// Separate build steps in runs 33364762120/33364935118: runtime median 100s;
+// private-QA 104s. Test-group measurements exclude this once-per-job prerequisite.
+export const VITEST_PRETEST_BUILD_SECONDS: Record<VitestPretestBuildMode, number> = {
+  runtime: 100,
+  "private-qa": 104,
+};
 
 export type VitestShardTimingSpec = {
   config: string;

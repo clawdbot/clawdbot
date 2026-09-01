@@ -116,7 +116,110 @@ const responsiveViewports = [
   { width: 1440, height: 900 },
 ] as const;
 
+const standaloneHeaderCases = [
+  { route: "cron", subtitle: "Scheduled tasks and recurring agent runs." },
+  { route: "tasks", subtitle: "Background tasks: subagents, automation runs, CLI." },
+  { route: "usage", subtitle: "API usage and costs." },
+  {
+    route: "memory-import",
+    subtitle: "Bring Codex and Claude Code memory into an agent workspace.",
+  },
+] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
+
+function createCronLayoutMethodResponses() {
+  const jobs = [
+    {
+      id: "healthy",
+      configRevision: "healthy-revision",
+      name: "Healthy automation",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "healthy" },
+      state: { lastRunStatus: "ok" },
+    },
+    {
+      id: "failing",
+      configRevision: "failing-revision",
+      name: "Failing automation",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "failing" },
+      state: { lastRunStatus: "error" },
+    },
+  ];
+  return {
+    "cron.list": {
+      jobs,
+      snapshotRevision: "settings-layout",
+      total: jobs.length,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    },
+    "cron.runs": {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    },
+    "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
+  };
+}
+
 suite.define(() => {
+  it("aligns settings-style workspace headers with their content columns", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: createCronLayoutMethodResponses(),
+    });
+
+    try {
+      for (const { route, subtitle } of standaloneHeaderCases) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+
+        const header = page.locator(".content-header--settings").last();
+        const content = page.locator(".settings-page").last();
+        await Promise.all([header.waitFor(), content.waitFor()]);
+        await expect.poll(() => header.locator(".page-subtitle").textContent()).toContain(subtitle);
+        await expect
+          .poll(async () => {
+            const [headerBox, contentBox] = await Promise.all([
+              header.boundingBox(),
+              content.boundingBox(),
+            ]);
+            return headerBox && contentBox
+              ? {
+                  left: Math.round(headerBox.x - contentBox.x),
+                  width: Math.round(headerBox.width - contentBox.width),
+                }
+              : null;
+          })
+          .toEqual({ left: 0, width: 0 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("aligns every mobile settings page with the topbar content", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
@@ -287,6 +390,87 @@ suite.define(() => {
         ),
       }));
       expect(desktopInsets).toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps Automations search above one tab-and-action row", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 844, width: 390 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: createCronLayoutMethodResponses(),
+    });
+
+    try {
+      for (const viewport of responsiveViewports) {
+        await page.setViewportSize(viewport);
+        await page.goto(`${suite.server.baseUrl}automations`);
+        await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const primary = document.querySelector<HTMLElement>(".cron-toolbar__primary");
+              const filters = document.querySelector<HTMLElement>(".cron-toolbar__filters");
+              const actions = document.querySelector<HTMLElement>(".cron-toolbar__actions");
+              const table = document.querySelector<HTMLElement>(".cron-table");
+              const tabGroup = document.querySelector<HTMLElement>(".cron-list-hub-tabs");
+              if (!primary || !filters || !actions || !table || !tabGroup) {
+                return null;
+              }
+              const primaryBox = primary.getBoundingClientRect();
+              const filtersBox = filters.getBoundingClientRect();
+              const actionsBox = actions.getBoundingClientRect();
+              const tableBox = table.getBoundingClientRect();
+              const tabBox = tabGroup.getBoundingClientRect();
+              return {
+                actionsAboveTable: actionsBox.bottom <= tableBox.top,
+                actionsRightAligned: Math.abs(tableBox.right - actionsBox.right) <= 1,
+                actionsInlineWithTabs:
+                  Math.abs(
+                    actionsBox.top + actionsBox.height / 2 - (tabBox.top + tabBox.height / 2),
+                  ) <= 1,
+                filtersAbovePrimary: filtersBox.bottom <= primaryBox.top,
+                primaryContainsActions: primary.contains(actions),
+              };
+            }),
+          )
+          .toEqual({
+            actionsAboveTable: true,
+            actionsInlineWithTabs: true,
+            actionsRightAligned: true,
+            filtersAbovePrimary: true,
+            primaryContainsActions: true,
+          });
+
+        expect(
+          (await page.locator(".cron-list-hub-tabs wa-tab").allTextContents()).map((label) =>
+            label.trim(),
+          ),
+        ).toEqual(["All", "Active", "Paused", "Run history"]);
+        expect(await page.locator(".cron-toolbar__filters wa-radio-group").count()).toBe(0);
+        expect(await page.locator(".cron-stats").count()).toBe(0);
+        expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([
+          "Failing automation",
+          "Healthy automation",
+        ]);
+
+        if (proofEnabled) {
+          const proofDir = path.join(suite.artifactDir, "settings-layout-audit");
+          await mkdir(proofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(proofDir, `automations-toolbar-${viewport.width}.png`),
+          });
+        }
+      }
     } finally {
       await context.close();
     }

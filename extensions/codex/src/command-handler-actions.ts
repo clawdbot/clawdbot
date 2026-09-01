@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   MODEL_SELECTION_LOCKED_MESSAGE,
   resolvePersistedSessionRuntimeId,
@@ -12,8 +13,13 @@ import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerThreadBinding,
+} from "./app-server/session-binding.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
+import { assertCodexSupervisionThreadLineage } from "./app-server/thread-policy.js";
 import {
   canMutateCodexHost,
   CODEX_FULL_PERMISSIONS_AUTH_ERROR,
@@ -246,17 +252,25 @@ export async function handleNativeGoal(
   if (requestedStatus && args.length > 1) {
     return `Usage: /codex goal ${action}`;
   }
-  const response = await deps.codexControlRequest(
-    pluginConfig,
-    CODEX_CONTROL_METHODS.setThreadGoal,
-    {
-      threadId: binding.threadId,
-      ...(objective ? { objective } : {}),
-      // Upstream thread/goal/set creates or partially updates the native goal;
-      // omitted status and budget preserve Codex's canonical state.
-      ...(requestedStatus ? { status: requestedStatus } : {}),
-    },
-    goalRequestOptions,
+  const response = await deps.bindingStore.withLease(target.identity, () =>
+    deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      {
+        threadId: binding.threadId,
+        ...(objective ? { objective } : {}),
+        // Upstream thread/goal/set creates or partially updates the native goal;
+        // omitted status and budget preserve Codex's canonical state.
+        ...(requestedStatus ? { status: requestedStatus } : {}),
+      },
+      {
+        ...goalRequestOptions,
+        ...((isObjectiveUpdate || requestedStatus === "active") &&
+        connection.usesSupervisionConnection
+          ? { beforeRequest: supervisedCommandGuard(deps, target.identity, binding) }
+          : {}),
+      },
+    ),
   );
   return formatNativeGoal(response);
 }
@@ -497,16 +511,42 @@ export async function startThreadAction(
     authProfileId: binding.authProfileId,
     pluginConfig,
   });
-  await deps.codexControlRequest(
-    pluginConfig,
-    CODEX_CONTROL_METHODS.review,
-    { threadId: binding.threadId, target: { type: "uncommittedChanges" } },
-    {
-      agentDir: target.agentDir,
-      authProfileId: connection.clientAuthProfileId,
-      config: ctx.config,
-      ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
-    },
+  await deps.bindingStore.withLease(target.identity, () =>
+    deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.review,
+      { threadId: binding.threadId, target: { type: "uncommittedChanges" } },
+      {
+        agentDir: target.agentDir,
+        authProfileId: connection.clientAuthProfileId,
+        config: ctx.config,
+        ...(connection.usesSupervisionConnection
+          ? {
+              startOptions: connection.appServer.start,
+              beforeRequest: supervisedCommandGuard(deps, target.identity, binding),
+            }
+          : {}),
+      },
+    ),
   );
   return `Started Codex review for thread ${formatCodexDisplayText(binding.threadId)}.`;
+}
+
+function supervisedCommandGuard(
+  deps: CodexCommandDeps,
+  identity: CodexAppServerBindingIdentity,
+  binding: CodexAppServerThreadBinding,
+): NonNullable<CodexControlRequestOptions["beforeRequest"]> {
+  return async (_request, client, scope) => {
+    const { thread } = await client.request("thread/read", {
+      threadId: binding.threadId,
+      includeTurns: false,
+    });
+    scope.assertCurrent();
+    if (!isDeepStrictEqual(await deps.bindingStore.read(identity), binding)) {
+      throw new Error("Codex command binding changed before model execution");
+    }
+    scope.assertCurrent();
+    assertCodexSupervisionThreadLineage(binding, thread);
+  };
 }
