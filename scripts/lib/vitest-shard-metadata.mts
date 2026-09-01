@@ -205,8 +205,9 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   ["test/scripts/ci-git-owner.test.ts", 187],
-  // Successful hosted run 33388762505: retain the newer lifecycle measurements.
-  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 305],
+  // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
+  // spans; canonical push plans omit this tooling workload.
+  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 136],
   ["test/scripts/ci-linux-git.test.ts", 204],
   ["test/scripts/pr-merge-outcome.test.ts", 159],
   ["test/scripts/ci-workflow-guards.test.ts", 38],

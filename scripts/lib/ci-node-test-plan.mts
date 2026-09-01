@@ -200,13 +200,13 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
 // Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
-// admission caps. GitHub-hosted plans use direct hosted hints with 90s/107s
+// admission caps. GitHub-hosted plans use direct hosted hints with 94s/114s
 // packing caps. Hybrid keeps the expanded topology but packs its attempt-1
 // Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 107;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 94;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 114;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
