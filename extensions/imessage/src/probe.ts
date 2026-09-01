@@ -20,7 +20,6 @@ import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
   getCachedIMessagePrivateApiStatus,
-  isIMessageBridgeStalled,
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";
@@ -244,21 +243,6 @@ export async function probeIMessagePrivateApi(
     if (cached) {
       return cached;
     }
-  }
-  // A stall observed on a real RPC outranks whatever `status --json` claims.
-  // The wedge this guards against is precisely the one where imsg keeps
-  // reporting the bridge connected, so trusting the claim here would re-cache
-  // the same false positive that the eviction just cleared.
-  if (isIMessageBridgeStalled(key)) {
-    return {
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-      error:
-        "The imsg private API bridge stopped responding to RPC. Run `imsg launch` to re-inject " +
-        "the dylib, then `openclaw channels status --probe` to refresh capability detection.",
-    };
   }
   try {
     const result = await runCommandWithTimeout([expandIMessageUserPath(key), "status", "--json"], {
