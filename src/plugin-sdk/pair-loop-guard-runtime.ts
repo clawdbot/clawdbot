@@ -67,7 +67,7 @@ type PairLoopGuardEntry = {
 };
 
 type ConversationBurstEntry = {
-  events: Array<{ tsMs: number; senderId: string }>;
+  events: Array<{ tsMs: number; senderId: string; eventId?: string }>;
   cooldownStartedAtMs: number;
   cooldownUntilMs: number;
 };
@@ -285,6 +285,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     conversationId: string;
     senderId: string;
     receiverId: string;
+    eventId?: string;
     settings: PairLoopGuardSettings;
     nowMs: number;
   }): PairLoopGuardResult {
@@ -308,7 +309,17 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     entry.events = entry.events.filter(
       (event) => event.tsMs > nowMs - CONVERSATION_BURST_WINDOW_MS,
     );
-    entry.events.push({ tsMs: nowMs, senderId: paramsLocal.senderId });
+    const eventId = paramsLocal.eventId?.trim();
+    if (eventId && entry.events.some((event) => event.eventId === eventId)) {
+      return entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs
+        ? { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs }
+        : { suppressed: false };
+    }
+    entry.events.push({
+      tsMs: nowMs,
+      senderId: paramsLocal.senderId,
+      ...(eventId ? { eventId } : {}),
+    });
     if (entry.events.length > CONVERSATION_BURST_EVENT_CAP) {
       entry.events.splice(0, entry.events.length - CONVERSATION_BURST_EVENT_CAP);
     }

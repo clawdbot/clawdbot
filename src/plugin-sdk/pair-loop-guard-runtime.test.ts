@@ -347,6 +347,41 @@ describe("conversation burst budget", () => {
     ).toBe(true);
   });
 
+  it("deduplicates a replay even when its first delivery was pair-suppressed", () => {
+    const guard = createPairLoopGuard();
+    const settings = {
+      ...burstSettings,
+      maxEventsPerWindow: 1,
+      cooldownMs: 1_000,
+      maxConversationBotEvents: 4,
+    };
+    const strictBase = { ...base, settings };
+
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-0", eventId: "a", nowMs: 0 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-0", eventId: "b", nowMs: 1 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 1_001 });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-1", eventId: "c", nowMs: 2 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-1", eventId: "d", nowMs: 3 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 1_003 });
+
+    // The retry remains pair-suppressed, but must not consume a fifth burst slot.
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-1", eventId: "d", nowMs: 4 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 1_003 });
+
+    // At the pair cooldown boundary, the next distinct event starts the burst
+    // cooldown now. A duplicate burst record above would have started it at t=4.
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-2", eventId: "e", nowMs: 1_003 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 2_003 });
+  });
+
   it("lets slow multi-bot traffic drain out of the window", () => {
     const guard = createPairLoopGuard();
     // Three senders posting round-robin every 4 minutes: the 10-minute window
