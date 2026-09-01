@@ -20,6 +20,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
+import { visitAgentEntries } from "./legacy-config-record-shared.js";
 import {
   modelEntryWithRuntimePolicy,
   selectedCanonicalModelRefsForRuntimePolicy,
@@ -1445,14 +1446,13 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         );
       }
 
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, rawAgent] of agents.list.entries()) {
-        const agent = getRecord(rawAgent);
-        const legacy = getRecord(agent?.memorySearch);
-        if (!agent || !legacy) {
-          continue;
+      // Walk both roster shapes: a keyed `agents.entries` config carrying legacy
+      // per-agent memorySearch would otherwise never reach this migration, and
+      // the unmigrated key then fails canonical validation.
+      visitAgentEntries(raw, (agent, path) => {
+        const legacy = getRecord(agent.memorySearch);
+        if (!legacy) {
+          return;
         }
         const agentMemory = ensureRecord(agent, "memory");
         const existing = getRecord(agentMemory.search);
@@ -1462,10 +1462,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         delete agent.memorySearch;
         changes.push(
           existing
-            ? `Merged agents.list.${index}.memorySearch → agents.list.${index}.memory.search (kept explicit memory.search values).`
-            : `Moved agents.list.${index}.memorySearch → agents.list.${index}.memory.search.`,
+            ? `Merged ${path}.memorySearch → ${path}.memory.search (kept explicit memory.search values).`
+            : `Moved ${path}.memorySearch → ${path}.memory.search.`,
         );
-      }
+      });
     },
   }),
   defineLegacyConfigMigration({

@@ -349,6 +349,27 @@ describe("legacy MCP server config migrate", () => {
 });
 
 describe("legacy memory search config migrate", () => {
+  it("migrates per-agent memorySearch on a keyed roster", () => {
+    // Both roster shapes reach doctor: `agents.list` is the legacy array and
+    // `agents.entries` the keyed roster it converts into. Walking only the array
+    // left keyed configs unmigrated, and the surviving legacy key then failed
+    // canonical validation, so every per-agent override was lost.
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        entries: {
+          coach: {
+            memorySearch: { enabled: true, extraPaths: ["/w/coach/knowledge"] },
+          },
+        },
+      },
+    });
+
+    const coach = res.config?.agents?.entries?.coach as Record<string, any> | undefined;
+    expect(coach?.memory?.search?.extraPaths).toEqual(["/w/coach/knowledge"]);
+    expect(coach?.memorySearch).toBeUndefined();
+    expect(res.changes.join(" ")).toContain("agents.entries.coach.memorySearch");
+  });
+
   it("removes sidecar memory search index paths", () => {
     const res = migrateLegacyConfigForTest({
       memorySearch: {
@@ -1201,8 +1222,8 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
       "Moved legacy memorySearch defaults → memory.search.",
-      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
-      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      "Moved agents.list[0].memorySearch → agents.list[0].memory.search.",
+      "Moved agents.list[1].memorySearch → agents.list[1].memory.search.",
       'Moved memory.search.provider from legacy "auto" to "openai".',
       'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
     ]);

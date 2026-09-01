@@ -49,6 +49,36 @@ export function deleteRetiredPath(owner: unknown, path: readonly string[], index
 }
 
 /** Visit a channel root followed by its object-shaped accounts in config order. */
+/**
+ * Visit every agent config entry regardless of roster shape. Both shapes coexist
+ * during migration: `agents.list` is the legacy array, `agents.entries` the keyed
+ * roster it converts into. A migration that walks only one shape silently skips
+ * configs already stored in the other.
+ */
+export function visitAgentEntries(
+  raw: JsonRecord,
+  visitor: (entry: JsonRecord, path: string) => void,
+): void {
+  const agents = raw.agents;
+  if (!isRecord(agents)) {
+    return;
+  }
+  if (isRecord(agents.entries)) {
+    for (const [agentId, value] of Object.entries(agents.entries)) {
+      if (isRecord(value)) {
+        visitor(value, `agents.entries.${agentId}`);
+      }
+    }
+  }
+  if (Array.isArray(agents.list)) {
+    agents.list.forEach((value, index) => {
+      if (isRecord(value)) {
+        visitor(value, `agents.list[${index}]`);
+      }
+    });
+  }
+}
+
 export function visitChannelEntries(
   raw: JsonRecord,
   channelId: string,
