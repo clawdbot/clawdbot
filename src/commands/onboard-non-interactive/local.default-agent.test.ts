@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { OnboardOptions } from "../onboard-types.js";
 
 const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
@@ -76,6 +77,14 @@ const runtime = {
   exit: vi.fn(),
 } as unknown as RuntimeEnv;
 
+const localOptions = {
+  nonInteractive: true,
+  mode: "local",
+  skipHooks: true,
+  skipSkills: true,
+  skipHealth: true,
+} satisfies OnboardOptions;
+
 describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -120,13 +129,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
 
       await runNonInteractiveLocalSetup({
         opts: {
-          nonInteractive: true,
-          mode: "local",
+          ...localOptions,
           openaiApiKey: "openai-test-key",
           anthropicApiKey: "anthropic-test-key",
-          skipHooks: true,
-          skipSkills: true,
-          skipHealth: true,
           json,
         },
         runtime,
@@ -165,70 +170,22 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     },
   );
 
-  it("resolves provider auth in the requested first-agent workspace before creating state", async () => {
-    const workspace = "/tmp/requested-provider-workspace";
-    mocks.ensureOnboardingAgent.mockImplementationOnce(
-      async ({ config }: { config: OpenClawConfig }) => ({
-        config: {
-          ...config,
-          agents: {
-            ...config.agents,
-            entries: { main: { default: true, workspace } },
-          },
-        },
-        agentId: "main",
-        bootstrapPending: true,
-      }),
-    );
-
-    await runNonInteractiveLocalSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "local",
-        workspace,
-        authChoice: "demo-api-key",
-        skipHooks: true,
-        skipSkills: true,
-        skipHealth: true,
-      },
-      runtime,
-      baseConfig: {},
-      sourceConfigBeforeMigrations: {},
-    });
-
-    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          agents: expect.objectContaining({ defaults: expect.objectContaining({ workspace }) }),
-        }),
-        target: expect.objectContaining({ agentId: "main", workspaceDir: workspace }),
-      }),
-    );
-    expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
-    );
-    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ firstAgent: { name: "main" } }),
-    );
-    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      workspace,
-      runtime,
-      expect.objectContaining({ agentId: "main" }),
-    );
-    expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
-      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
-    );
-  });
-
   it.each([
-    { label: "fresh", agents: undefined, legacyState: false },
-    { label: "rosterless", agents: {}, legacyState: false },
-    { label: "empty keyed roster", agents: { entries: {} }, legacyState: false },
-    { label: "empty legacy roster", agents: { list: [] }, legacyState: false },
-    { label: "legacy workspace state", agents: {}, legacyState: true },
+    { label: "fresh unnamed", agents: undefined, legacyState: false, agentName: undefined },
+    { label: "fresh named", agents: undefined, legacyState: false, agentName: "robby" },
+    { label: "rosterless", agents: {}, legacyState: false, agentName: "robby" },
+    {
+      label: "empty keyed roster",
+      agents: { entries: {} },
+      legacyState: false,
+      agentName: "robby",
+    },
+    { label: "empty legacy roster", agents: { list: [] }, legacyState: false, agentName: "robby" },
+    { label: "legacy workspace state", agents: {}, legacyState: true, agentName: "robby" },
   ])(
-    "keeps named auth and provisioning on the requested owner with $label config",
-    async ({ agents, legacyState }) => {
+    "keeps auth and provisioning on the requested owner with $label config",
+    async ({ agents, legacyState, agentName }) => {
+      const agentId = agentName ?? "main";
       await withTempHome(async (rawHome) => {
         const home = await fs.realpath(rawHome);
         const workspace = path.join(home, "requested-workspace");
@@ -265,10 +222,15 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
               ...config,
               agents: {
                 ...config.agents,
-                entries: { robby: { name: "robby", workspace: expectedWorkspace } },
+                entries: {
+                  [agentId]: {
+                    ...(agentName ? { name: agentName } : { default: true }),
+                    workspace: expectedWorkspace,
+                  },
+                },
               },
             },
-            agentId: "robby",
+            agentId,
             bootstrapPending: true,
             createdAgent: true,
           }),
@@ -276,15 +238,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
 
         await runNonInteractiveSetup(
           {
-            nonInteractive: true,
-            mode: "local",
-            agentName: "robby",
+            ...localOptions,
+            ...(agentName ? { agentName, json: true } : {}),
             workspace,
             authChoice: "demo-api-key",
-            skipHooks: true,
-            skipSkills: true,
-            skipHealth: true,
-            json: true,
           },
           runtime,
         );
@@ -292,8 +249,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
           expect.objectContaining({
             target: {
-              agentId: "robby",
-              agentDir: path.join(home, ".openclaw", "agents", "robby", "agent"),
+              agentId,
+              agentDir: path.join(home, ".openclaw", "agents", agentId, "agent"),
               workspaceDir: expectedWorkspace,
             },
             nextConfig: expect.objectContaining({
@@ -309,14 +266,17 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
         expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
           expect.objectContaining({
-            firstAgent: { name: "robby" },
+            firstAgent: { name: agentId },
             workspace: expectedWorkspace,
           }),
         );
         expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
           expectedWorkspace,
           runtime,
-          expect.objectContaining({ agentId: "robby" }),
+          expect.objectContaining({ agentId }),
+        );
+        expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
+          mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
         );
         expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
           `${workspace}/main`,
@@ -415,15 +375,11 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
 
         const outcome = await runNonInteractiveSetup(
           {
-            nonInteractive: true,
-            mode: "local",
+            ...localOptions,
             agentName: "robby",
             workspace,
             authChoice: "demo-api-key",
             skipBootstrap: true,
-            skipHooks: true,
-            skipSkills: true,
-            skipHealth: true,
             installDaemon: false,
             json: true,
           },
@@ -462,13 +418,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
 
     await runNonInteractiveLocalSetup({
       opts: {
-        nonInteractive: true,
-        mode: "local",
+        ...localOptions,
         authChoice: "demo-api-key",
         gatewayPort: 70_000,
-        skipHooks: true,
-        skipSkills: true,
-        skipHealth: true,
       },
       runtime,
       baseConfig: {},
@@ -488,12 +440,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     await expect(
       runNonInteractiveLocalSetup({
         opts: {
-          nonInteractive: true,
-          mode: "local",
+          ...localOptions,
           authChoice: "skip",
-          skipHooks: true,
-          skipSkills: true,
-          skipHealth: true,
         },
         runtime,
         baseConfig: { agents: { entries: { ops: { default: true } } } },
@@ -554,14 +502,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
 
         await runNonInteractiveSetup(
           {
-            nonInteractive: true,
-            mode: "local",
+            ...localOptions,
             agentName: "robby",
             workspace: globalWorkspace,
             authChoice: "demo-api-key",
-            skipHooks: true,
-            skipSkills: true,
-            skipHealth: true,
             installDaemon: false,
             json: true,
           },

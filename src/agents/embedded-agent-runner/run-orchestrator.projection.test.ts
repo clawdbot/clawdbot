@@ -31,7 +31,7 @@ import {
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 const tempRoots = createTempDirTracker();
-const runAttempt = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
 let runEmbeddedAgent: ProductionRun;
 
@@ -198,8 +198,7 @@ describe("embedded retry transcript ownership", () => {
       let firstManager: EmbeddedRunAttemptParams["sessionManager"];
       const controller = new AbortController();
       runAttempt
-        .mockImplementationOnce(async (raw) => {
-          const attempt = raw as EmbeddedRunAttemptParams;
+        .mockImplementationOnce(async (attempt) => {
           firstManager = attempt.sessionManager;
           if (callerOwned) {
             expect(firstManager).toBeDefined();
@@ -232,8 +231,7 @@ describe("embedded retry transcript ownership", () => {
             itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
           });
         })
-        .mockImplementationOnce(async (raw) => {
-          const attempt = raw as EmbeddedRunAttemptParams;
+        .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
           expect(attempt.prompt).toContain("Continue from the current transcript");
           expect(attempt.suppressNextUserMessagePersistence).toBe(true);

@@ -188,16 +188,14 @@ describe("local setup fleet owner persistence", () => {
         expect(
           loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
         ).toMatchObject({ provider: "fixture" });
-        expect(
-          loadAuthProfileStoreWithoutExternalProfiles(
-            path.join(stateDir, "agents", "alpha", "agent"),
-          ).profiles[profileId],
-        ).toBeUndefined();
-        expect(
-          loadAuthProfileStoreWithoutExternalProfiles(
-            path.join(stateDir, "agents", "ignored", "agent"),
-          ).profiles[profileId],
-        ).toBeUndefined();
+        for (const nonOwner of ["alpha", "ignored"]) {
+          expect(
+            loadAuthProfileStoreWithoutExternalProfiles(
+              path.join(stateDir, "agents", nonOwner, "agent"),
+            ).profiles[profileId],
+            `credentials must not be stored for ${nonOwner}`,
+          ).toBeUndefined();
+        }
       }
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.error).toHaveBeenCalledWith(

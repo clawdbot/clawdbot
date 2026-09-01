@@ -31,7 +31,7 @@ import {
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 const tempRoots = createTempDirTracker();
-const runAttempt = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 const summaryStream = vi.fn();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
 let runEmbeddedAgent: ProductionRun;
@@ -150,6 +150,14 @@ async function createRun(agentId: string, sessionPersistence?: "durable" | "deta
     stateDir,
     database: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
   };
+}
+
+function successfulAttempt(sessionId: string, text = "Verified.") {
+  return makeEmbeddedRunnerAttempt({
+    sessionIdUsed: sessionId,
+    assistantTexts: [text],
+    lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] }),
+  });
 }
 
 function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
@@ -341,15 +349,7 @@ describe("embedded run detached session metadata", () => {
       });
       const before = loadSessionEntry(scope);
       if (outcome === "success") {
-        runAttempt.mockResolvedValue(
-          makeEmbeddedRunnerAttempt({
-            sessionIdUsed: params.sessionId,
-            assistantTexts: ["Verified."],
-            lastAssistant: buildEmbeddedRunnerAssistant({
-              content: [{ type: "text", text: "Verified." }],
-            }),
-          }),
-        );
+        runAttempt.mockResolvedValue(successfulAttempt(params.sessionId));
         await expect(runEmbeddedAgent(params)).resolves.toMatchObject({
           payloads: [{ text: "Verified." }],
         });
@@ -410,21 +410,14 @@ describe("embedded run detached session metadata", () => {
           timestamp: 1,
         });
       }
-      runAttempt.mockImplementationOnce(async (raw) => {
-        const attempt = raw as EmbeddedRunAttemptParams;
+      runAttempt.mockImplementationOnce(async (attempt) => {
         expect(
           await resolveExistingAttemptTranscriptState({
             ...attempt,
             agentId: "research",
           }),
         ).toEqual({ hasBootstrapTranscriptState: hasMessages });
-        return makeEmbeddedRunnerAttempt({
-          sessionIdUsed: params.sessionId,
-          assistantTexts: ["Verified."],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            content: [{ type: "text", text: "Verified." }],
-          }),
-        });
+        return successfulAttempt(params.sessionId);
       });
       await expect(runEmbeddedAgent(params)).resolves.toMatchObject({
         payloads: [{ text: "Verified." }],
@@ -522,8 +515,7 @@ describe("embedded run detached session metadata", () => {
             lastAssistant: buildEmbeddedRunnerAssistant({ usage: createMockUsage(150_000, 0) }),
           });
         })
-        .mockImplementationOnce(async (raw) => {
-          const attempt = raw as EmbeddedRunAttemptParams;
+        .mockImplementationOnce(async (attempt) => {
           expect(attempt.sessionManager).toBe(manager);
           expect(manager.getEntries()).toContainEqual(
             expect.objectContaining({
@@ -535,13 +527,7 @@ describe("embedded run detached session metadata", () => {
           expect(manager.buildSessionContext().messages).toContainEqual(
             expect.objectContaining({ role: "user", content: "What is the project called?" }),
           );
-          return makeEmbeddedRunnerAttempt({
-            sessionIdUsed: params.sessionId,
-            assistantTexts: ["Blue Heron."],
-            lastAssistant: buildEmbeddedRunnerAssistant({
-              content: [{ type: "text", text: "Blue Heron." }],
-            }),
-          });
+          return successfulAttempt(params.sessionId, "Blue Heron.");
         });
       try {
         const run = runEmbeddedAgent(params);
@@ -576,8 +562,8 @@ describe("embedded run detached session metadata", () => {
     const { params, stateDir } = await createRun("research", "detached");
     let firstManager: EmbeddedRunAttemptParams["sessionManager"];
     runAttempt
-      .mockImplementationOnce(async (raw) => {
-        firstManager = (raw as EmbeddedRunAttemptParams).sessionManager;
+      .mockImplementationOnce(async (attempt) => {
+        firstManager = attempt.sessionManager;
         expect(firstManager).toBeDefined();
         firstManager!.appendMessage({ role: "user", content: "retained history", timestamp: 1 });
         return makeEmbeddedRunnerAttempt({
@@ -589,8 +575,7 @@ describe("embedded run detached session metadata", () => {
           },
         });
       })
-      .mockImplementationOnce(async (raw) => {
-        const attempt = raw as EmbeddedRunAttemptParams;
+      .mockImplementationOnce(async (attempt) => {
         expect(attempt.sessionManager).toBe(firstManager);
         expect(attempt.sessionManager?.getEntries()).toContainEqual(
           expect.objectContaining({
@@ -598,13 +583,7 @@ describe("embedded run detached session metadata", () => {
             message: expect.objectContaining({ content: "retained history" }),
           }),
         );
-        return makeEmbeddedRunnerAttempt({
-          sessionIdUsed: params.sessionId,
-          assistantTexts: ["Verified."],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            content: [{ type: "text", text: "Verified." }],
-          }),
-        });
+        return successfulAttempt(params.sessionId);
       });
     await expect(runEmbeddedAgent({ ...params, sessionManager: undefined })).resolves.toMatchObject(
       { payloads: [{ text: "Verified." }] },
@@ -623,9 +602,7 @@ describe("embedded run detached session metadata", () => {
     async (harness, suppliedManager) => {
       const { params, stateDir } = await createRun("research", "detached");
       const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
-      runAttempt.mockImplementationOnce(async (raw) => {
-        // The fast transport fixture receives the production attempt dispatch payload.
-        const attempt = raw as EmbeddedRunAttemptParams;
+      runAttempt.mockImplementationOnce(async (attempt) => {
         const recorder = await prepareEmbeddedAttemptTrajectory({
           activeSession: { sessionId: attempt.sessionId },
           attempt,
@@ -636,13 +613,7 @@ describe("embedded run detached session metadata", () => {
           sessionAgentId: "research",
         });
         await recorder?.flush();
-        return makeEmbeddedRunnerAttempt({
-          sessionIdUsed: params.sessionId,
-          assistantTexts: ["Verified."],
-          lastAssistant: buildEmbeddedRunnerAssistant({
-            content: [{ type: "text", text: "Verified." }],
-          }),
-        });
+        return successfulAttempt(params.sessionId);
       });
       await expect(
         runEmbeddedAgent({

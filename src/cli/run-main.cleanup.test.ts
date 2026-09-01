@@ -4,6 +4,7 @@ import { once } from "node:events";
 import readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
 const dispatch = vi.hoisted(() => ({
@@ -175,6 +176,12 @@ afterEach(() => {
   }
 });
 
+function registerHarness(registry: PluginRegistry, harness: AgentHarness) {
+  runtime.withPluginRegistrationContext(registry, "fixture", () =>
+    registryApi.registerAgentHarness(harness),
+  );
+}
+
 async function acquire(id: string) {
   await registryApi.getRegisteredAgentHarness(id)!.harness.loadModelCatalog!({
     config: {},
@@ -197,9 +204,7 @@ describe("CLI process harness cleanup", () => {
           ? runtime.getActivePluginRegistry()!
           : emptyRegistry.createEmptyPluginRegistry();
       const resource = resourceHarness(mode);
-      runtime.withPluginRegistrationContext(registry, "fixture", () =>
-        registryApi.registerAgentHarness(resource.harness),
-      );
+      registerHarness(registry, resource.harness);
       const actionError = new Error("synthetic action failure");
       dispatch.run = async () => {
         await scopes.withPluginRuntimeRegistryScope(registry, () => acquire(mode));
@@ -225,9 +230,7 @@ describe("CLI process harness cleanup", () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const gate = createDeferredCore();
     const resource = resourceHarness("awaited", gate);
-    runtime.withPluginRegistrationContext(registry, "fixture", () =>
-      registryApi.registerAgentHarness(resource.harness),
-    );
+    registerHarness(registry, resource.harness);
     dispatch.run = () => scopes.withPluginRuntimeRegistryScope(registry, () => acquire("awaited"));
     let returned = false;
     const command = runProcessEntry().then(() => {
@@ -253,9 +256,7 @@ describe("CLI process harness cleanup", () => {
   it("retains transient cleanup from the primary executable bootstrap", async () => {
     const registry = emptyRegistry.createEmptyPluginRegistry();
     const resource = resourceHarness("primary-entry");
-    runtime.withPluginRegistrationContext(registry, "fixture", () =>
-      registryApi.registerAgentHarness(resource.harness),
-    );
+    registerHarness(registry, resource.harness);
     dispatch.run = () =>
       scopes.withPluginRuntimeRegistryScope(registry, () => acquire("primary-entry"));
     try {
@@ -272,9 +273,7 @@ describe("CLI process harness cleanup", () => {
     async (mode) => {
       const registry = emptyRegistry.createEmptyPluginRegistry();
       const resource = resourceHarness("borrowed");
-      runtime.withPluginRegistrationContext(registry, "fixture", () =>
-        registryApi.registerAgentHarness(resource.harness),
-      );
+      registerHarness(registry, resource.harness);
       dispatch.run = () =>
         scopes.withPluginRuntimeRegistryScope(registry, () => acquire("borrowed"));
       try {
@@ -353,9 +352,7 @@ describe("CLI process harness cleanup", () => {
           throw new Error("synthetic disposer failure");
         }
       };
-      runtime.withPluginRegistrationContext(target, "fixture", () =>
-        registryApi.registerAgentHarness(resource.harness),
-      );
+      registerHarness(target, resource.harness);
     }
     // The same exact registration can also be visible from the current registry.
     runtime.getActivePluginRegistry()!.agentHarnesses.push(registry.agentHarnesses[0]!);
@@ -394,9 +391,7 @@ describe("CLI process harness cleanup", () => {
     for (let invocation = 0; invocation < 2; invocation++) {
       const registry = emptyRegistry.createEmptyPluginRegistry();
       const resource = resourceHarness("sequential");
-      runtime.withPluginRegistrationContext(registry, "fixture", () =>
-        registryApi.registerAgentHarness(resource.harness),
-      );
+      registerHarness(registry, resource.harness);
       pluginLoaderCacheState.set("cleanup-used", registry);
       let retainedLookup:
         | (() => ReturnType<typeof registryApi.getRegisteredAgentHarness>)
