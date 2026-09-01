@@ -26,6 +26,23 @@ const JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ff
 const PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
 const ZIP_BYTES = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
 
+function createDescribedImageContext(describedIndexes: number[]): MsgContext {
+  return {
+    Body: "[Image]\nDescription:\na tiny dot image",
+    media: ["first", "second"].map((name) => ({
+      path: `/tmp/${name}.png`,
+      contentType: "image/png",
+    })),
+    MediaUnderstanding: describedIndexes.map((attachmentIndex) => ({
+      kind: "image.description" as const,
+      attachmentIndex,
+      provider: "openai",
+      model: "gpt-4o",
+      text: "a tiny dot image",
+    })),
+  };
+}
+
 function restoreProcessState() {
   if (originalStateDirEnv === undefined) {
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
@@ -99,6 +116,15 @@ describe("resolveCurrentTurnImages", () => {
       imageBytes: PNG_IMAGE_BYTES,
       expectedMime: "image/png",
     },
+    {
+      name: "an opaque image identified by separate filename metadata",
+      fileName: "opaque",
+      originalFileName: "photo.png",
+      contentType: "application/octet-stream",
+      kind: undefined,
+      imageBytes: PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
   ])("hydrates $name using the verified byte MIME", async (testCase) => {
     await withTestDir({ prefix: "openclaw-current-turn-canonical-kind-" }, async (base) => {
       const imagePath = path.join(base, testCase.fileName);
@@ -110,6 +136,7 @@ describe("resolveCurrentTurnImages", () => {
           media: [
             {
               path: imagePath,
+              ...("originalFileName" in testCase ? { fileName: testCase.originalFileName } : {}),
               contentType: testCase.contentType,
               kind: testCase.kind,
               workspaceDir: base,
@@ -354,6 +381,42 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
+  it("does not rehydrate current image facts already described in the prompt", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+
+    const result = await resolveCurrentTurnImages({
+      ctx: createDescribedImageContext([0, 1]),
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(result).toEqual({});
+    expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
+  });
+
+  it("hydrates only current image facts missing prompt descriptions", async () => {
+    const imageData = Buffer.from("second image").toString("base64");
+    vi.mocked(resolveAgentTurnAttachments).mockResolvedValueOnce({
+      attachments: [{ data: imageData, mediaType: "image/png" }],
+      attachmentIndexes: [1],
+      recentHistoryImages: [],
+    });
+
+    const result = await resolveCurrentTurnImages({
+      ctx: createDescribedImageContext([0]),
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(resolveAgentTurnAttachments).toHaveBeenCalledWith({
+      ctx: createDescribedImageContext([0]),
+      cfg: {},
+      includeRecentHistoryImages: false,
+      includeAttachmentIndexes: true,
+    });
+    expect(result.images).toEqual([{ type: "image", data: imageData, mimeType: "image/png" }]);
+    expect(result.imageOrder).toEqual(["inline"]);
+    expect(result.imageSourceIndexes).toEqual([1]);
+  });
+
   it("appends extracted PDF page images without dropping current image attachments", async () => {
     await withTestDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");
@@ -434,7 +497,7 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
-  it("retains resolved native images when current media partially resolves", async () => {
+  it("retains undescribed native images when a described sibling and missing sibling coexist", async () => {
     await withTestDir({ prefix: "openclaw-current-turn-partial-" }, async (base) => {
       const imagePath = path.join(base, "present.png");
       const imageBytes = Buffer.from("present-image");
@@ -444,11 +507,24 @@ describe("resolveCurrentTurnImages", () => {
         ctx: {
           Body: "compare these images",
           media: [
+            {
+              path: path.join(base, "described.png"),
+              contentType: "image/png",
+              workspaceDir: base,
+            },
             { path: imagePath, contentType: "image/png", workspaceDir: base },
             {
               path: path.join(base, "missing.png"),
               contentType: "image/png",
               workspaceDir: base,
+            },
+          ],
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "imageModel",
+              text: "an already described image",
             },
           ],
         } satisfies MsgContext,
@@ -463,8 +539,8 @@ describe("resolveCurrentTurnImages", () => {
         },
       ]);
       expect(result.imageOrder).toEqual(["inline"]);
-      expect(result.imageSourceIndexes).toEqual([0]);
-      expect(result.unresolvedSourceIndexes).toEqual([1]);
+      expect(result.imageSourceIndexes).toEqual([1]);
+      expect(result.unresolvedSourceIndexes).toEqual([2]);
     });
   });
 

@@ -31,6 +31,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -110,6 +111,9 @@ type AgentCommandDeliveryResult = {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  didSendDeterministicApprovalPrompt?: true;
+  acceptedSessionSpawns?: NonNullable<RunResult["acceptedSessionSpawns"]>;
+  successfulCronAdds?: number;
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 };
@@ -208,6 +212,11 @@ function buildDeliveryResult(params: {
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 }): AgentCommandDeliveryResult {
+  const successfulCronAdds = params.result.successfulCronAdds;
+  const hasSuccessfulCronAdds =
+    typeof successfulCronAdds === "number" &&
+    Number.isFinite(successfulCronAdds) &&
+    successfulCronAdds > 0;
   return {
     payloads: params.payloads,
     meta: params.meta,
@@ -221,6 +230,13 @@ function buildDeliveryResult(params: {
     ...(hasNonEmptyArray(params.result.messagingToolSentTargets)
       ? { messagingToolSentTargets: params.result.messagingToolSentTargets }
       : {}),
+    ...(params.result.didSendDeterministicApprovalPrompt === true
+      ? { didSendDeterministicApprovalPrompt: true }
+      : {}),
+    ...(hasNonEmptyArray(params.result.acceptedSessionSpawns)
+      ? { acceptedSessionSpawns: params.result.acceptedSessionSpawns }
+      : {}),
+    ...(hasSuccessfulCronAdds ? { successfulCronAdds } : {}),
     ...(params.deliverySucceeded !== undefined
       ? { deliverySucceeded: params.deliverySucceeded }
       : {}),
@@ -773,7 +789,7 @@ export async function deliverAgentCommandResult(
       );
       handlePreDeliveryError(err, "channel_resolved_to_internal");
     } else if (!isDeliveryChannelKnown) {
-      const err = new Error(`Unknown channel: ${deliveryChannel}`);
+      const err = new Error(formatUnknownChannelMessage({ channel: deliveryChannel }));
       handlePreDeliveryError(err, "unknown_channel");
     } else if (resolvedTarget && !resolvedTarget.ok) {
       handlePreDeliveryError(resolvedTarget.error, "invalid_delivery_target");

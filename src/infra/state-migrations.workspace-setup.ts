@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
   LEGACY_WORKSPACE_ATTESTATION_HEADER,
@@ -14,14 +13,15 @@ import {
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
   resolveLegacyWorkspaceSourcePaths,
 } from "../agents/workspace-legacy-state.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
-  legacyMigrationPathMayExist as pathMayExist,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
@@ -31,7 +31,6 @@ import {
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
-import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -285,7 +284,7 @@ function addLegacyWorkspaceSources(params: {
   }
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
     if (
-      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
       !siblingAttestationNeedsDoctor(sourcePath)
     ) {
       continue;
@@ -332,11 +331,7 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
-    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
-  }
-
-  for (const workspaceDir of listSandboxWorkspaceDirs({
+  for (const workspaceDir of listWorkspaceStateDirs({
     cfg: params.cfg,
     env,
     homedir,
@@ -378,12 +373,13 @@ async function cleanupReceiptSource(params: {
   source: LegacyWorkspaceStateSource;
   receipt: MigrationReceipt;
   env: NodeJS.ProcessEnv;
+  hasSource: boolean;
+  hasClaim: boolean;
 }): Promise<MigrationMessages> {
   try {
     assertConfiguredWorkspaceIdentity(params.source);
     const sourceClaim = params.sourceClaim;
-    const hasSource = await sourceClaim.exists();
-    const hasClaim = await sourceClaim.exists(true);
+    const { hasSource, hasClaim } = params;
     if (!hasSource && !hasClaim) {
       if (!params.receipt.removedSource) {
         markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
@@ -470,14 +466,6 @@ async function migrateOneSource(params: {
     };
   }
   const receipt = readReceipt(params.source, params.env);
-  if (receipt) {
-    return cleanupReceiptSource({
-      sourceClaim,
-      source: params.source,
-      receipt,
-      env: params.env,
-    });
-  }
   let hasSource: boolean;
   let hasClaim: boolean;
   try {
@@ -488,6 +476,18 @@ async function migrateOneSource(params: {
       changes: [],
       warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
     };
+  }
+  // One artifact after verified removal is a new generation, including a source
+  // already renamed before a crash. Collisions keep the stricter receipt check.
+  if (receipt && !(receipt.removedSource && hasSource !== hasClaim)) {
+    return cleanupReceiptSource({
+      sourceClaim,
+      source: params.source,
+      receipt,
+      env: params.env,
+      hasSource,
+      hasClaim,
+    });
   }
   if (hasSource && hasClaim) {
     return {
@@ -544,6 +544,7 @@ async function migrateOneSource(params: {
       snapshot,
       parsed,
       env: params.env,
+      replaceRemovedReceipt: receipt?.removedSource === true,
     });
   } catch (error) {
     const restoreError = claimedByThisRun ? await sourceClaim.restore() : null;

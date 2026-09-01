@@ -13,16 +13,22 @@ import {
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
-import { isHostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
+import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -50,27 +56,53 @@ const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]
 function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
-function rejectInvalid(
-  respond: RespondFn,
-  method: string,
-  validator: Parameters<typeof respondInvalidParams>[0]["validator"],
-) {
-  return respondInvalidParams({ respond, method, validator });
-}
-function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
+function summarizeNodeEnvironment(
+  node: NodeListNode,
+  config: Parameters<typeof resolveNodeCommandAllowlist>[0],
+): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   const platform = node.platform?.trim();
+  const allowlist =
+    node.connected === true
+      ? resolveNodeCommandAllowlist(config, {
+          platform: node.platform,
+          deviceFamily: node.deviceFamily,
+          commands: node.commands,
+          approvedCommands: node.commands,
+        })
+      : undefined;
+  const invocableCommands = allowlist
+    ? uniqueSortedStrings(node.commands)
+        .filter(
+          (command) =>
+            command.length <= 128 &&
+            isNodeCommandAllowed({ command, declaredCommands: node.commands, allowlist }).ok,
+        )
+        .slice(0, 128)
+    : [];
+  const desktop = invocableCommands.includes(NODE_DESKTOP_STREAM_COMMAND);
   return {
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
     ...(platform ? { platform } : {}),
-    sessionHost: false,
+    sessionHost: node.sessionHost === true,
+    ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
+    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
+    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
+    ...(node.lastDisconnectedAtMs !== undefined
+      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
+      : {}),
+    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
+    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
     trust: "persistent",
+    ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
+    ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
 /** Projects a durable worker row without exposing its SSH credential reference. */
@@ -104,35 +136,50 @@ export function summarizeWorkerEnvironment(
     },
   };
 }
-async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
+export async function listGatewayEnvironments(
+  context: GatewayRequestContext,
+  workers = listWorkerEnvironments(context),
+): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
-  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of devices.paired) {
-    const state = resolveNodePairingState(device);
-    if (state) {
-      currentPairingStates.set(state.identity.nodeId, {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      });
-    }
-  }
+  // Orphaned or failed rows that retain a node binding still own its pairing role.
+  // Only destroyed proves enrollment retirement; teardown-failed rows clear nodeDeviceId.
+  const managedCloudNodeIds = new Set(
+    workers.flatMap((environment) =>
+      environment.providerId !== "device" &&
+      environment.nodeDeviceId &&
+      environment.state !== "destroyed"
+        ? [environment.nodeDeviceId]
+        : [],
+    ),
+  );
+  const visibleDevices = devices.paired.filter(
+    (device) => !managedCloudNodeIds.has(device.deviceId),
+  );
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
+    projectPairedDeviceNodeBindings(visibleDevices),
+  );
+  const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
   const catalog = createKnownNodeCatalog({
-    pairedDevices: devices.paired,
-    pairedNodes: nodes.paired,
-    connectedNodes: context.nodeRegistry.listConnectedForPairingStates(currentPairingStates),
+    pairedDevices: visibleDevices,
+    pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
+    connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
+    ...runtimeState,
   });
+  const config = context.getRuntimeConfig();
   const gateway =
-    context.getRuntimeConfig().desktop?.host?.enabled === true
+    config.desktop?.host?.enabled === true
       ? { ...GATEWAY_ENVIRONMENT, desktop: true }
       : GATEWAY_ENVIRONMENT;
-  return [gateway, ...listKnownNodes(catalog).map(summarizeNodeEnvironment)];
+  return [
+    gateway,
+    ...listKnownNodes(catalog).map((node) => summarizeNodeEnvironment(node, config)),
+  ];
 }
 function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
   try {
     return context.workerEnvironmentService?.list() ?? [];
   } catch {
-    // A damaged worker store must not regress the pre-existing gateway/node inventory.
-    return [];
+    throw new Error("environment inventory unavailable");
   }
 }
 export function listWorkerProfiles(context: GatewayRequestContext) {
@@ -146,6 +193,32 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
       return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
+  const summaries = listWorkerProfiles(context);
+  return await Promise.all(
+    summaries.map(async (summary) => {
+      const executionModes = (["worker-turn", "remote-exec"] as const).filter(
+        (mode) =>
+          context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
+      );
+      const executionMode = executionModes[0];
+      const resolvedSummary = Object.assign(
+        summary,
+        executionMode ? { executionMode, executionModes } : {},
+      );
+      try {
+        const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
+        const machines = options ?? [];
+        return machines.length > 0 ? Object.assign(resolvedSummary, { machines }) : resolvedSummary;
+      } catch (error) {
+        context.logGateway.warn(
+          `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
+        );
+        return resolvedSummary;
+      }
+    }),
+  );
 }
 async function respondWorkerMutation(
   respond: RespondFn,
@@ -207,7 +280,7 @@ async function respondDesktopObserve(params: {
         undefined,
       );
     } catch (error) {
-      if (isHostDesktopCredentialsRequiredError(error)) {
+      if (isDesktopCredentialsRequiredError(error)) {
         params.respond(
           false,
           undefined,
@@ -228,6 +301,54 @@ async function respondDesktopObserve(params: {
           error instanceof Error
             ? error.message
             : "gateway host desktop observe unavailable; verify the VNC server and retry",
+        ),
+      );
+    }
+    return;
+  }
+
+  if (params.request.source.kind === "node") {
+    const service = getNodeDesktopService(params.context);
+    if (!service) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "node desktop is disabled; explicitly allow desktop.stream, then restart the gateway",
+        ),
+      );
+      return;
+    }
+    try {
+      params.respond(
+        true,
+        await service.observe({
+          nodeId: params.request.source.nodeId,
+          control: params.request.control ?? false,
+          ...("credentials" in params.request && params.request.credentials
+            ? { credentials: params.request.credentials }
+            : {}),
+        }),
+        undefined,
+      );
+    } catch (error) {
+      if (isDesktopCredentialsRequiredError(error)) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+            details: { code: error.detailCode, auth: error.auth },
+          }),
+        );
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "node desktop observe unavailable",
         ),
       );
     }
@@ -307,26 +428,28 @@ async function respondDesktopLaunch(params: {
 
 export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.list": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsListParams(params)) {
-      return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
+    if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
+      return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environments = await listEnvironments(context);
       const workers = listWorkerEnvironments(context);
+      const environments = await listGatewayEnvironments(context, workers);
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      const profiles = listWorkerProfiles(context);
+      const profiles = await listWorkerProfilesWithMachines(context);
       respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },
   "environments.status": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsStatusParams(params)) {
-      return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
+    ) {
+      return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environment = (await listEnvironments(context)).find(
+      const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
       if (environment) {
@@ -352,8 +475,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "environments.create": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsCreateParams(params)) {
-      return rejectInvalid(respond, "environments.create", validateEnvironmentsCreateParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsCreateParams, "environments.create", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -372,8 +497,10 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "environments.destroy": async ({ params, respond, context }) => {
-    if (!validateEnvironmentsDestroyParams(params)) {
-      return rejectInvalid(respond, "environments.destroy", validateEnvironmentsDestroyParams);
+    if (
+      !assertValidParams(params, validateEnvironmentsDestroyParams, "environments.destroy", respond)
+    ) {
+      return;
     }
     const service = context.workerEnvironmentService;
     if (!service) {
@@ -412,8 +539,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     );
   },
   "worker.desktop.observe": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.observe", validateWorkerDesktopObserveParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopObserveParams,
+        "worker.desktop.observe",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopObserve({
       request: {
@@ -425,8 +559,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "worker.desktop.launch": async ({ params, respond, context }) => {
-    if (!validateWorkerDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
+    if (
+      !assertValidParams(
+        params,
+        validateWorkerDesktopLaunchParams,
+        "worker.desktop.launch",
+        respond,
+      )
+    ) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.environmentId,
@@ -436,14 +577,14 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     });
   },
   "desktop.observe": async ({ params, respond, context }) => {
-    if (!validateDesktopObserveParams(params)) {
-      return rejectInvalid(respond, "desktop.observe", validateDesktopObserveParams);
+    if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
+      return;
     }
     await respondDesktopObserve({ request: params, respond, context });
   },
   "desktop.launch": async ({ params, respond, context }) => {
-    if (!validateDesktopLaunchParams(params)) {
-      return rejectInvalid(respond, "desktop.launch", validateDesktopLaunchParams);
+    if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {
+      return;
     }
     await respondDesktopLaunch({
       environmentId: params.source.environmentId,

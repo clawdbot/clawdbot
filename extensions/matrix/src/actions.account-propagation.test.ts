@@ -340,4 +340,48 @@ describe("matrixMessageActions account propagation", () => {
       },
     });
   });
+
+  it("defaults custom-emote discovery to the bound current Matrix conversation", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "emoji-list",
+        accountId: "ops",
+        requesterAccountId: "ops",
+        params: { limit: 3 },
+        toolContext: {
+          currentChannelId: "room:!current:example.org",
+          currentChannelProvider: "matrix",
+          currentChatType: "group",
+        },
+      }),
+    );
+
+    expect(matrixActionCall().input).toMatchObject({
+      action: "emoji-list",
+      accountId: "ops",
+      roomId: "room:!current:example.org",
+      limit: 3,
+    });
+    expect(matrixActionCall().options.readContext).toMatchObject({
+      requesterAccountId: "ops",
+      currentChannelId: "room:!current:example.org",
+      currentChannelProvider: "matrix",
+    });
+  });
+
+  it("rejects custom-emote discovery without an explicit room or bound Matrix conversation", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: "emoji-list",
+          params: {},
+          toolContext: {
+            currentChannelId: "room:!foreign:example.org",
+            currentChannelProvider: "slack",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Matrix emoji-list requires a roomId or current Matrix conversation.");
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+  });
 });

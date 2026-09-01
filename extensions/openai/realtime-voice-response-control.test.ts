@@ -394,7 +394,7 @@ describe("OpenAI realtime voice response control", () => {
     const bridge = createNativeBridge({ onError });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    emitAssistantPlayback(socket);
+    emitAssistantPlayback(socket, { audio: Buffer.alloc(2_400) });
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });

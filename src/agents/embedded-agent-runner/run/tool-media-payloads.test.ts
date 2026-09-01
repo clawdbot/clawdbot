@@ -84,6 +84,30 @@ describe("mergeAttemptToolMediaPayloads", () => {
     expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
   });
 
+  it("delivers contract-owned tool media without private source text", () => {
+    const [privateReply, mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(privateReply).toEqual({ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" });
+    expect(getReplyPayloadMetadata(privateReply ?? {})).toBeUndefined();
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("ignores host-owned provenance outside the delivered tool media set", () => {
     const [mediaReply] =
       mergeAttemptToolMediaPayloads({
@@ -217,6 +241,48 @@ describe("mergeAttemptToolMediaPayloads", () => {
       assistantMessageIndex: 7,
       deliverDespiteSourceReplySuppression: true,
     });
+  });
+
+  it("uses exact structured Markdown references to select tool media", () => {
+    const selected = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    const unselected = "/root/.openclaw/media/tool-image-generation/alternate.png";
+    const visibleReply = setReplyPayloadMetadata(
+      { text: `Our agent.\n\n![Our Agent meme](${selected})` },
+      { assistantMessageIndex: 7 },
+    );
+
+    const [reply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [visibleReply],
+        toolMediaUrls: [selected, unselected],
+        toolTrustedLocalMedia: true,
+      }) ?? [];
+
+    expect(reply).toEqual({
+      text: "Our agent.",
+      mediaUrls: [selected],
+      mediaUrl: selected,
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(reply ?? {})).toEqual({ assistantMessageIndex: 7 });
+  });
+
+  it("keeps unmatched local Markdown visible without selecting it", () => {
+    const input = "Caption\n\n![not tool media](/tmp/unrelated.png)";
+
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: input }],
+        toolMediaUrls: ["/tmp/pending.png"],
+      }),
+    ).toEqual([
+      {
+        text: input,
+        mediaUrls: ["/tmp/pending.png"],
+        mediaUrl: "/tmp/pending.png",
+      },
+    ]);
   });
 
   it("preserves trusted local media provenance when merging tool media", () => {

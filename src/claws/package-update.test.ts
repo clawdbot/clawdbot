@@ -231,77 +231,93 @@ describe("applyClawPackageUpdate", () => {
     );
   });
 
-  it("updates exact references but reports retained artifacts on rollback", async () => {
-    const oldSkill = ref("skill", "triage", "1.0.0");
-    const legacy = ref("plugin", "legacy", "1.0.0");
-    const installPackages = vi.fn(
-      async (current: ClawAddPlan, options: Parameters<typeof installClawPackages>[1]) => {
-        const details = current.actions[0]?.details as {
-          kind: "skill" | "plugin";
-          ref: string;
-          version: string;
-          integrity: string;
-        };
-        options?.onExternalMutation?.({ ...details, source: "clawhub" });
-        return [ref(details.kind, details.ref, details.version)];
-      },
-    );
-    const replaceExpected = vi.fn();
-    const execution = await applyClawPackageUpdate(
-      plan([
-        {
-          kind: "package",
-          id: "skill:triage",
-          action: "change",
-          target: "clawhub:triage@2.0.0",
-          blocked: false,
-          reason: "changed",
-          currentDigest: digestClawPackageRef(oldSkill),
+  it.each([false, true])(
+    "updates exact references but reports retained artifacts on rollback (undo errors: %s)",
+    async (rollbackErrors) => {
+      const oldSkill = ref("skill", "triage", "1.0.0");
+      const legacy = ref("plugin", "legacy", "1.0.0");
+      const installPackages = vi.fn(
+        async (current: ClawAddPlan, options: Parameters<typeof installClawPackages>[1]) => {
+          const details = current.actions[0]?.details as {
+            kind: "skill" | "plugin";
+            ref: string;
+            version: string;
+            integrity: string;
+          };
+          options?.onExternalMutation?.({ ...details, source: "clawhub" });
+          return [ref(details.kind, details.ref, details.version)];
         },
-        {
-          kind: "package",
-          id: "plugin:audit",
-          action: "add",
-          target: "clawhub:audit@1.0.0",
-          blocked: false,
-          reason: "added",
+      );
+      let rollingBack = false;
+      const replaceExpected = vi.fn(
+        (expected?: PersistedClawPackageRef, next?: PersistedClawPackageRef) => {
+          if (rollingBack && rollbackErrors) {
+            throw new Error((next ?? expected)?.ref);
+          }
         },
+      );
+      const execution = await applyClawPackageUpdate(
+        plan([
+          {
+            kind: "package",
+            id: "skill:triage",
+            action: "change",
+            target: "clawhub:triage@2.0.0",
+            blocked: false,
+            reason: "changed",
+            currentDigest: digestClawPackageRef(oldSkill),
+          },
+          {
+            kind: "package",
+            id: "plugin:audit",
+            action: "add",
+            target: "clawhub:audit@1.0.0",
+            blocked: false,
+            reason: "added",
+          },
+          {
+            kind: "package",
+            id: "plugin:legacy",
+            action: "release",
+            target: "clawhub:legacy@1.0.0",
+            blocked: false,
+            reason: "removed",
+            currentDigest: digestClawPackageRef(legacy),
+          },
+        ]),
+        manifest,
+        addPlan,
         {
-          kind: "package",
-          id: "plugin:legacy",
-          action: "release",
-          target: "clawhub:legacy@1.0.0",
-          blocked: false,
-          reason: "removed",
-          currentDigest: digestClawPackageRef(legacy),
+          installPackages,
+          readRefs: () => [oldSkill, legacy],
+          replaceExpected,
         },
-      ]),
-      manifest,
-      addPlan,
-      {
-        installPackages,
-        readRefs: () => [oldSkill, legacy],
-        replaceExpected,
-      },
-    );
+      );
 
-    expect(execution.appliedIds).toEqual(["skill:triage", "plugin:audit", "plugin:legacy"]);
-    expect(installPackages).toHaveBeenCalledTimes(2);
-    expect(replaceExpected).toHaveBeenCalledWith(
-      oldSkill,
-      expect.objectContaining({ version: "2.0.0", status: "pending" }),
-      expect.any(Object),
-    );
-    expect(replaceExpected).toHaveBeenCalledWith(legacy, undefined, expect.any(Object));
+      expect(execution.appliedIds).toEqual(["skill:triage", "plugin:audit", "plugin:legacy"]);
+      expect(installPackages).toHaveBeenCalledTimes(2);
+      expect(replaceExpected).toHaveBeenCalledWith(
+        oldSkill,
+        expect.objectContaining({ version: "2.0.0", status: "pending" }),
+        expect.any(Object),
+      );
+      expect(replaceExpected).toHaveBeenCalledWith(legacy, undefined, expect.any(Object));
 
-    await expect(execution.rollback()).rejects.toMatchObject({ partial: true });
-    expect(replaceExpected).toHaveBeenCalledWith(undefined, legacy, expect.any(Object));
-    expect(replaceExpected).toHaveBeenCalledWith(
-      expect.objectContaining({ version: "2.0.0", status: "complete" }),
-      oldSkill,
-      expect.any(Object),
-    );
-  });
+      rollingBack = true;
+      await expect(execution.rollback()).rejects.toMatchObject({
+        partial: true,
+        message:
+          (rollbackErrors ? "legacy; audit; triage; " : "") +
+          "package artifacts may have been retained: skill:triage@2.0.0, plugin:audit@1.0.0",
+      });
+      expect(replaceExpected).toHaveBeenCalledWith(undefined, legacy, expect.any(Object));
+      expect(replaceExpected).toHaveBeenCalledWith(
+        expect.objectContaining({ version: "2.0.0", status: "complete" }),
+        oldSkill,
+        expect.any(Object),
+      );
+    },
+  );
 
   it("reverses reference-only removal without uninstalling or reporting partial state", async () => {
     const legacy = ref("plugin", "legacy", "1.0.0");

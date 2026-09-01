@@ -207,6 +207,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     ),
     emoji: readOptionalEmoji(obj.emoji, `${label}.emoji`),
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
+    reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
 }
@@ -398,6 +399,17 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
   }
 }
 
+export function coerceDiscordComponentParam(raw: unknown): unknown {
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
 export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageSpec | null {
   if (raw === undefined || raw === null) {
     return null;
@@ -408,7 +420,6 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
     : undefined;
   const modalRaw = obj.modal;
-  const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {
     const modalObj = requireObject(modalRaw, "components.modal");
@@ -433,7 +444,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   }
   return {
     text: normalizeOptionalString(obj.text),
-    reusable,
+    reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
         ? {

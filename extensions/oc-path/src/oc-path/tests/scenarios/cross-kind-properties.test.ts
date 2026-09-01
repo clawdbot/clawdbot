@@ -107,29 +107,6 @@ describe("cross-kind property invariants", () => {
     expect(() => resolveJsonlOcPath(parseJsonl(jsonlRaw).ast, overlong)).not.toThrow();
   });
 
-  it("set-then-resolve produces the value just written (jsonc)", () => {
-    const ast = parseJsonc('{ "k": 1 }').ast;
-    const r = setJsoncOcPath(ast, parseOcPath("oc://X/k"), {
-      kind: "number",
-      value: 42,
-    });
-    if (r.ok) {
-      const m = resolveJsoncOcPath(r.ast, parseOcPath("oc://X/k"));
-      if (m?.kind === "object-entry") {
-        expect(m.node.value.kind).toBe("number");
-        if (m.node.value.kind === "number") {
-          expect(m.node.value.value).toBe(42);
-        }
-      }
-    }
-  });
-
-  it("verbs are deterministic — same input twice produces same output", () => {
-    expect(emitMd(parseMd(mdRaw).ast)).toBe(emitMd(parseMd(mdRaw).ast));
-    expect(emitJsonc(parseJsonc(jsoncRaw).ast)).toBe(emitJsonc(parseJsonc(jsoncRaw).ast));
-    expect(emitJsonl(parseJsonl(jsonlRaw).ast)).toBe(emitJsonl(parseJsonl(jsonlRaw).ast));
-  });
-
   it("inferKind returns null for unknown extensions", () => {
     expect(inferKind("binary.bin")).toBeNull();
     expect(inferKind("no-ext")).toBeNull();

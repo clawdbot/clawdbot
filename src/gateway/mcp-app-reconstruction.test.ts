@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   visitSessionMessagesAsync: vi.fn(),
 }));
 
-vi.mock("../agents/agent-bundle-mcp-runtime.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
 }));
 vi.mock("../agents/agent-scope.js", () => ({
@@ -116,6 +116,7 @@ describe("MCP App transcript reconstruction", () => {
     expect(restored).toEqual({ runtime, view });
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
       runtime,
+      agentId: "main",
       serverName: "demo",
       toolName: "show",
       uiResourceUri: "ui://demo/app",

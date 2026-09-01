@@ -13,6 +13,45 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it.each(
+    [
+      { source: "    # heading\n    command --flag", literal: "# heading" },
+      { source: "    > quoted source\n    next line", literal: "> quoted source" },
+      { source: "    - source item\n      nested", literal: "- source item" },
+    ].flatMap(({ source, literal }) => [
+      { source, literal, phase: "partial", complete: false },
+      { source, literal, phase: "final", complete: true },
+    ]),
+  )("preserves indented $literal in $phase tool output", ({ source, literal, complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: source }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered).toContain("```");
+    expect(rendered).toContain(literal);
+  });
+
+  it.each([
+    { phase: "partial", complete: false },
+    { phase: "final", complete: true },
+  ])("keeps whitespace-only $phase tool output visually empty", ({ complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: "   \n  " }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered.includes("...")).toBe(!complete);
+  });
+
   it.each([
     { width: 20, characters: 8_192 },
     { width: 20, characters: 16_384 },

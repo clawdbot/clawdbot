@@ -21,9 +21,9 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 ## Default location
 
 - Default: `~/.openclaw/workspace`
-- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
+- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw-<profile>/workspace`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
-- `openclaw onboard --non-interactive` uses `<state-dir>/workspace` when `OPENCLAW_STATE_DIR` is non-default, including for the initial `main` agent entry.
+- A non-default `OPENCLAW_STATE_DIR` keeps the default workspace at `<state-dir>/workspace`, including scheduled maintenance and the initial `main` agent entry.
 - Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:
@@ -81,7 +81,7 @@ Standard files OpenClaw expects inside the workspace:
     The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
-    Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled). Keep it short; use the message tool for outbound sends.
+    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends.
   </Accordion>
   <Accordion title="BOOTSTRAP.md - first-run ritual">
     One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete.
@@ -94,9 +94,6 @@ Standard files OpenClaw expects inside the workspace:
   </Accordion>
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
-  </Accordion>
-  <Accordion title="canvas/ - Canvas UI files (optional)">
-    Canvas UI files for node displays (for example `canvas/index.html`).
   </Accordion>
 </AccordionGroup>
 

@@ -22,8 +22,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   withTrustedEnvProxyGuardedFetchMode: (value: unknown) => value,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
   return { ...actual, loadOutboundMediaFromUrl };
 });
 vi.mock("./client.js", async (importOriginal) => {

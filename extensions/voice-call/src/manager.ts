@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
-import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
+import type { CallEndResult, CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
@@ -16,7 +16,7 @@ import {
   type SpeakOptions,
 } from "./manager/outbound.js";
 import {
-  findCallMatchesInStore,
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -29,6 +29,7 @@ import {
   TerminalStates,
   type CallId,
   type CallRecord,
+  type EndReason,
   type NormalizedEvent,
   type OutboundCallOptions,
 } from "./types.js";
@@ -77,6 +78,7 @@ export class CallManager {
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
+  private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
   private transcriptWaiters = new Map<
     CallId,
     {
@@ -87,6 +89,7 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  private autoResponseOwners = new WeakMap<CallRecord, symbol>();
 
   /**
    * Carrier-side stream session issuer. Wired by the runtime when realtime is
@@ -156,9 +159,7 @@ export class CallManager {
           ctx: this.getContext(),
           callId,
           timeoutMs: maxDurationMs - elapsed,
-          onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
-          },
+          onTimeout: (id) => this.endCall(id, { reason: "timeout" }),
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
       }
@@ -342,8 +343,8 @@ export class CallManager {
   /**
    * End an active call.
    */
-  async endCall(callId: CallId): Promise<{ success: boolean; error?: string }> {
-    return endCallWithContext(this.getContext(), callId);
+  endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
+    return endCallWithContext(this.getContext(), callId, options);
   }
 
   private getContext(): CallManagerContext {
@@ -358,9 +359,11 @@ export class CallManager {
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
+      endCallOperations: this.endCallOperations,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
+      onCallerSpeech: (call) => this.invalidateAutoResponse(call),
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -373,6 +376,28 @@ export class CallManager {
    */
   processEvent(event: NormalizedEvent): ProcessEventResult {
     return processManagerEvent(this.getContext(), event);
+  }
+
+  createAutoResponseGuard(call: CallRecord): { isCurrent: () => boolean; release: () => void } {
+    // Call identity fences restored/replaced records; generation identity fences
+    // newer speech without cancelling agent work that was already accepted.
+    const owner = Symbol("automatic response");
+    this.autoResponseOwners.set(call, owner);
+    return {
+      isCurrent: () =>
+        this.activeCalls.get(call.callId) === call &&
+        !TerminalStates.has(call.state) &&
+        this.autoResponseOwners.get(call) === owner,
+      release: () => {
+        if (this.autoResponseOwners.get(call) === owner) {
+          this.autoResponseOwners.delete(call);
+        }
+      },
+    };
+  }
+
+  invalidateAutoResponse(call: CallRecord): void {
+    this.autoResponseOwners.delete(call);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
@@ -456,10 +481,7 @@ export class CallManager {
     if (active) {
       return active;
     }
-    const persisted = await findCallMatchesInStore(this.storePath, callId);
-    // Active indexes are canonical for live calls and keep provider-id status
-    // lookups off the retained-store path. Persisted ids are fallback-only.
-    return persisted.byCallId ?? persisted.byProviderCallId;
+    return findCallInStore(this.storePath, callId);
   }
 
   /**

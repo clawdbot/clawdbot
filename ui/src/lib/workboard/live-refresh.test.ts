@@ -9,8 +9,7 @@ import {
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 import { loadWorkboard } from "./loading.ts";
-import { stopWorkboardLiveRefresh } from "./runtime.ts";
-import { getWorkboardState } from "./runtime.ts";
+import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
 
 function createClient(run: (method: string) => unknown) {
   return { request: vi.fn(async (method: string) => run(method)) };

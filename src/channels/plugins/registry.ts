@@ -1,5 +1,6 @@
 /** Active channel plugin registry with bundled fallback. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import {
@@ -29,20 +30,32 @@ export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined 
 /**
  * Resolves the active channel implementation together with host-owned provenance.
  */
-export function resolveChannelPluginRegistration(
-  id: ChannelId,
-): { plugin: ChannelPlugin; origin?: string } | undefined {
+export function resolveChannelPluginRegistration(id: ChannelId):
+  | {
+      plugin: ChannelPlugin;
+      origin?: string;
+      resolveChannelRuntime?: NonNullable<
+        ReturnType<typeof getLoadedChannelPluginEntryById>
+      >["resolveChannelRuntime"];
+    }
+  | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
   // Resolve implementation and provenance together. Loaded overrides win and
   // must never borrow bundled authority from the fallback with the same id.
-  const loadedEntry = getLoadedChannelPluginEntryById(resolvedId);
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const loadedEntry =
+    (scopedRegistry ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry) : undefined) ??
+    getLoadedChannelPluginEntryById(resolvedId);
   if (loadedEntry) {
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
       plugin: loadedEntry.plugin as ChannelPlugin,
+      ...(loadedEntry.resolveChannelRuntime
+        ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
+        : {}),
       ...(origin ? { origin } : {}),
     };
   }

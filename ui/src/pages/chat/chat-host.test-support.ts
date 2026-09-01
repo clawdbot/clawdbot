@@ -1,6 +1,14 @@
 import { vi } from "vitest";
+import type { ModelCatalogEntry } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+  type GatewayRequestMock,
+} from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
@@ -8,8 +16,8 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
-export function makeRequestMock(handlers: RequestHandlers = {}) {
-  return vi.fn((method: string, params?: unknown) => {
+export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
+  return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {
       // Keep unrelated Gateway traffic inert so each test declares only the responses it observes.
       return Promise.resolve({});
@@ -26,24 +34,23 @@ export function makeRequestMock(handlers: RequestHandlers = {}) {
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
 
-function clientWithRequest(request: unknown): ChatHost["client"] {
-  return { request } as unknown as ChatHost["client"];
-}
-
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (patch: Partial<UiSettings>) => void;
   basePath: string;
+  resourceBasePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
+  chatModelCatalog: ModelCatalogEntry[];
+  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
   sessionsArchivedFilter?: "active" | "archived" | "all";
   password?: string;
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
-  settings?: Partial<UiSettings>;
+  settings: Pick<UiSettings, "lastActiveSessionKey"> & Partial<UiSettings>;
 };
 
 function createPendingSettingsSessionCapability(
@@ -72,12 +79,15 @@ function createPendingSettingsSessionCapability(
 }
 
 type TestChatHostWithRequest = TestChatHost & { request: RequestMock };
-type MakeHostOverrides = Partial<TestChatHost> & { requestHandlers?: RequestHandlers };
+type MakeHostOverrides = Partial<Omit<TestChatHost, "settings">> & {
+  requestHandlers?: RequestHandlers;
+  settings?: Partial<UiSettings>;
+};
 
 export function makeChatHost(
   overrides: MakeHostOverrides & { requestHandlers: RequestHandlers },
 ): TestChatHostWithRequest;
-export function makeChatHost(overrides?: Partial<TestChatHost>): TestChatHost;
+export function makeChatHost(overrides?: MakeHostOverrides): TestChatHost;
 export function makeChatHost(
   overrides?: MakeHostOverrides,
 ): TestChatHost | TestChatHostWithRequest {
@@ -100,15 +110,19 @@ export function makeChatHost(
     },
   };
   const host = {
-    client: request ? clientWithRequest(request) : null,
+    chatSubmissions: createChatSubmissions(),
+    client: request ? createTestGatewayClient(request) : null,
     chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
     chatStream: null,
     chatStreamSegments: [],
     chatToolMessages: [],
     connected: true,
+    connectionEpoch: 0,
     chatLoading: false,
     chatMessage: "",
+    chatThinkingLevel: null,
+    chatVerboseLevel: null,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -119,10 +133,13 @@ export function makeChatHost(
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
+    chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
+    sidebarLayout: { columns: [] },
     basePath: "",
-    hello: null,
+    resourceBasePath: "",
+    hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
     chatAvatarSource: null,
     chatAvatarStatus: null,
@@ -133,8 +150,8 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
+    chatModelCatalogError: null,
     refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
@@ -143,7 +160,6 @@ export function makeChatHost(
     querySelector: () => null,
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -151,8 +167,6 @@ export function makeChatHost(
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
       const next = { ...settings, ...patch };

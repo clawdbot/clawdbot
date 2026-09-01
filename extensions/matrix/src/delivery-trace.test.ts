@@ -24,11 +24,13 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, describe, it, vi } from "vitest";
 import {
@@ -36,7 +38,6 @@ import {
   createMatrixTextMessageEvent,
 } from "./matrix/monitor/handler.test-helpers.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import type { PluginRuntime, ReplyPayload } from "./runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 
 const ROOM_ID = "!room:example.org";
@@ -329,8 +330,8 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
     ],
   },
   // Previews are mentions-inert and an edit cannot retro-notify, so a final
-  // whose text would activate mentions redacts the preview and re-sends the
-  // final as a fresh mention-bearing event.
+  // whose text would activate mentions is sent fresh before the preview is
+  // redacted. A failed replacement therefore leaves the preview visible.
   {
     name: "final-mentions-fresh",
     steps: [

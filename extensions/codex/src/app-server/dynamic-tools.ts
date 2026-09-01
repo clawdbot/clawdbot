@@ -20,6 +20,7 @@ import {
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
+  getPluginToolSideEffectOwnerKey,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -41,8 +42,13 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getCoreTtsToolResultMediaUrls } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import {
@@ -104,13 +110,64 @@ type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
   name: string;
   description: string;
-  inputSchema: JsonValue;
+  inputSchema: JsonSchemaObject & JsonValue;
 };
 
 type CodexDynamicToolSchemaQuarantine = {
   tool: string;
   violations: readonly string[];
 };
+
+const INTERNAL_TOOL_EXECUTION_VALIDATION = Symbol.for("openclaw.internalToolExecutionValidation");
+const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
+const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
+const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
+
+function shouldValidateCodexDynamicToolInput(tool: AnyAgentTool): boolean {
+  return getPluginToolMeta(tool)?.mcp?.operation !== "tool";
+}
+
+function assertCodexDynamicToolInputMatchesSchema(params: {
+  toolName: string;
+  schema: JsonSchemaObject;
+  value: unknown;
+}): void {
+  const validation = validateJsonSchemaValue({
+    schema: params.schema,
+    cacheKey: `codex-dynamic-tool-input:${params.toolName}:${JSON.stringify(params.schema)}`,
+    value: params.value,
+  });
+  if (validation.ok) {
+    return;
+  }
+  const visibleErrors = validation.errors.slice(0, MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS);
+  const details = visibleErrors
+    .map((error) => {
+      if (error.text.length <= MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS) {
+        return error.text;
+      }
+      return `${error.text.slice(
+        0,
+        MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS -
+          CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX.length,
+      )}${CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX}`;
+    })
+    .join("; ");
+  const omitted = validation.errors.length - visibleErrors.length;
+  const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
+  throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
+}
+
+function createCodexDynamicToolValidationControl(params: {
+  toolCallId: string;
+  validate: (value: unknown) => void;
+}): Record<PropertyKey, unknown> {
+  return {
+    [INTERNAL_TOOL_EXECUTION_VALIDATION]: true,
+    toolCallId: params.toolCallId,
+    validate: params.validate,
+  };
+}
 
 function applyCurrentMessageProvider(
   toolName: string,
@@ -354,6 +411,7 @@ export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
+  sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -378,6 +436,8 @@ export type CodexDynamicToolBridge = {
     messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
+    toolAutoDeliveryMediaUrls: string[];
+    coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
     acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
@@ -400,6 +460,8 @@ function normalizeAcceptedSessionSpawn(result: unknown): {
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
+const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 
 // Keep OpenClaw control-path tools directly callable even when Codex tool_search
 // is unavailable or resolves a connector-only universe. Developer instructions
@@ -488,7 +550,11 @@ export function createCodexDynamicToolBridge(params: {
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
-  warnQuarantinedDynamicTools(quarantinedTools);
+  warnQuarantinedDynamicTools({
+    tools: quarantinedTools,
+    availableToolCount: availableTools.length,
+    registeredToolCount: registeredSpecTools.length,
+  });
   emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
@@ -498,6 +564,8 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTargets: [],
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
+    toolAutoDeliveryMediaUrls: [],
+    coreTtsToolResults: [],
     toolAudioAsVoice: false,
     acceptedSessionSpawns: [],
     quarantinedTools,
@@ -543,6 +611,10 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
     }),
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
+    sideEffectOwnerKeyForTool: (toolName) => {
+      const tool = toolMap.get(toolName)?.tool;
+      return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
+    },
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;
@@ -583,7 +655,8 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const args = asNonArrayRecord(call.arguments);
+      const rawArguments = call.arguments;
+      const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
       let didStartExecution = false;
@@ -617,7 +690,9 @@ export function createCodexDynamicToolBridge(params: {
         }
       };
       try {
-        const toolArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        // Compatibility preparation owns raw arguments; record coercion must not run first.
+        const prepare = tool.prepareArguments;
+        const toolArgs = prepare ? Reflect.apply(prepare, tool, [rawArguments]) : args;
         const preparedArgs =
           toolName === "message" && isRecord(toolArgs)
             ? await prepareCodexRemoteWorkspaceMessageMedia({
@@ -642,7 +717,21 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         didDispatchExecution = true;
-        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
+        const executionArgs: unknown[] = [call.callId, preparedArgs, signal];
+        if (shouldValidateCodexDynamicToolInput(tool)) {
+          executionArgs.push(
+            createCodexDynamicToolValidationControl({
+              toolCallId: call.callId,
+              validate: (value) =>
+                assertCodexDynamicToolInputMatchesSchema({
+                  toolName,
+                  schema: toolEntry.inputSchema,
+                  value,
+                }),
+            }),
+          );
+        }
+        const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
         captureExecutionBoundary();
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
@@ -741,7 +830,10 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
-        withDynamicToolTranscriptDetails(response, result.details);
+        withDynamicToolTranscriptDetails(
+          response,
+          asOptionalRecord(sanitizeToolResult(result))?.details,
+        );
         withDiagnosticFailureDisposition(response, resultFailureKind);
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
           executedArgs,
@@ -784,13 +876,17 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
         const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
+        const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
         collectToolTelemetry({
           toolName,
           args: executedArgs,
           result,
           mediaTrustResult: telemetryRawResult,
           telemetry,
+          signal,
           isError: resultIsError,
+          autoDeliveryTtsMediaUrls,
+          coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
         });
@@ -856,13 +952,6 @@ export function createCodexDynamicToolBridge(params: {
           toolCallOrdinal: options?.toolCallOrdinal,
         });
         notifyAgentToolResult(options?.onAgentToolResult, toolName, failedResult, true);
-        collectToolTelemetry({
-          toolName,
-          args: executedArgs,
-          result: undefined,
-          telemetry,
-          isError: true,
-        });
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
@@ -1113,11 +1202,18 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
       quarantinedTools.push({ tool: descriptor.name, violations: projection.violations });
       continue;
     }
+    if (!isRecord(projection.schema)) {
+      quarantinedTools.push({
+        tool: descriptor.name,
+        violations: [`${descriptor.name}.inputSchema must be a JSON object schema`],
+      });
+      continue;
+    }
     projectedTools.push({
       tool,
       name: descriptor.name,
       description: descriptor.description,
-      inputSchema: projection.schema as JsonValue,
+      inputSchema: projection.schema,
     });
   }
   return { tools: projectedTools, quarantinedTools };
@@ -1149,6 +1245,28 @@ function readCodexDynamicToolDescriptor(
         diagnostic: {
           tool: fallbackName,
           violations: [`${fallbackName}.name must be a non-empty string`],
+        },
+      };
+    }
+    const trimmedName = rawName.trim();
+    let nameViolation: string | undefined;
+    if (!trimmedName) {
+      nameViolation = `${rawName}.name must not be empty`;
+    } else if (trimmedName !== rawName) {
+      nameViolation = `${rawName}.name must not have leading or trailing whitespace`;
+    } else if (!CODEX_DYNAMIC_TOOL_NAME_PATTERN.test(rawName)) {
+      nameViolation = `${rawName}.name must match ^[a-zA-Z0-9_-]+$`;
+    } else if (rawName.length > CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS) {
+      nameViolation = `${rawName}.name must be at most ${CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS} characters`;
+    } else if (rawName === "mcp" || rawName.startsWith("mcp__")) {
+      nameViolation = `${rawName}.name is reserved by Codex app-server`;
+    }
+    if (nameViolation) {
+      return {
+        ok: false,
+        diagnostic: {
+          tool: rawName,
+          violations: [nameViolation],
         },
       };
     }
@@ -1189,18 +1307,24 @@ function readCodexDynamicToolDescriptor(
   return { ok: true, name, description, parameters };
 }
 
-function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuarantine[]): void {
-  if (tools.length === 0) {
+function warnQuarantinedDynamicTools(params: {
+  tools: readonly CodexDynamicToolSchemaQuarantine[];
+  availableToolCount: number;
+  registeredToolCount: number;
+}): void {
+  if (params.tools.length === 0) {
     return;
   }
   const unique = new Map<string, readonly string[]>();
-  for (const tool of tools) {
+  for (const tool of params.tools) {
     unique.set(tool.tool, tool.violations);
   }
   embeddedAgentLog.warn(
-    `codex app-server quarantined ${unique.size} dynamic ${unique.size === 1 ? "tool" : "tools"} with unsupported input schemas: ${[...unique.keys()].join(", ")}`,
+    `codex app-server quarantined ${unique.size} unsupported dynamic tool ${unique.size === 1 ? "definition" : "definitions"}: ${[...unique.keys()].join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
     {
       tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
+      availableToolCount: params.availableToolCount,
+      registeredToolCount: params.registeredToolCount,
     },
   );
 }
@@ -1268,6 +1392,9 @@ function collectToolTelemetry(params: {
   mediaTrustResult?: unknown;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
+  signal: AbortSignal;
+  autoDeliveryTtsMediaUrls?: readonly string[];
+  coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
@@ -1283,7 +1410,8 @@ function collectToolTelemetry(params: {
       params.telemetry.heartbeatToolResponse = response;
     }
   }
-  if (!params.isError && params.result) {
+  // Only a live invocation may accept new media; committed effects remain evidence.
+  if (params.result && !params.signal.aborted) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
       const mediaUrls = filterToolResultMediaUrls(
@@ -1292,11 +1420,28 @@ function collectToolTelemetry(params: {
         params.mediaTrustResult ?? params.result,
       );
       const seen = new Set(params.telemetry.toolMediaUrls);
+      const autoDeliveryMediaUrls = new Set(params.telemetry.toolAutoDeliveryMediaUrls);
+      const rawAutoDeliveryMediaUrls = new Set(params.autoDeliveryTtsMediaUrls);
+      let retainsCoreTtsMedia = false;
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {
           seen.add(mediaUrl);
           params.telemetry.toolMediaUrls.push(mediaUrl);
         }
+        if (rawAutoDeliveryMediaUrls.has(mediaUrl)) {
+          autoDeliveryMediaUrls.add(mediaUrl);
+          retainsCoreTtsMedia = true;
+        } else {
+          autoDeliveryMediaUrls.delete(mediaUrl);
+        }
+      }
+      params.telemetry.toolAutoDeliveryMediaUrls = [...autoDeliveryMediaUrls];
+      if (
+        retainsCoreTtsMedia &&
+        params.coreTtsToolResult &&
+        !params.telemetry.coreTtsToolResults.includes(params.coreTtsToolResult)
+      ) {
+        params.telemetry.coreTtsToolResults.push(params.coreTtsToolResult);
       }
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;

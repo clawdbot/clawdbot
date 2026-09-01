@@ -1,11 +1,7 @@
 // QA Lab mock provider output event builders.
 
 import type { StreamEvent } from "./mock-openai-contracts.js";
-import {
-  readTargetFromPrompt,
-  buildMockFunctionCall,
-  buildToolCallEventsWithArgs,
-} from "./mock-openai-tooling.js";
+import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
 export function buildFailedResponseEvents(): StreamEvent[] {
   const responseId = `resp_qa_failed_${Date.now()}`;
@@ -53,11 +49,6 @@ export function buildPartialFailureEvents(partialText: string): StreamEvent[] {
       },
     },
   ];
-}
-
-export function buildToolCallEvents(prompt: string): StreamEvent[] {
-  const targetPath = readTargetFromPrompt(prompt);
-  return buildToolCallEventsWithArgs("read", { path: targetPath });
 }
 
 export function buildReleaseAuditJson() {

@@ -1,15 +1,20 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   collectModuleExportNames,
   collectRepositoryCollisions,
-  compareExportNameCollisionDebt,
   findAliasingReExports,
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+const guardScriptPath = fileURLToPath(
+  new URL("../../scripts/check-export-name-collisions.mts", import.meta.url),
+);
 
 describe("export name collision guard", () => {
   it.each([
@@ -244,34 +249,17 @@ describe("export name collision guard", () => {
       },
     ]);
   });
-});
 
-describe("export name collision debt baseline", () => {
-  it("separates new debt from baseline improvements", () => {
-    expect(
-      compareExportNameCollisionDebt(
-        [
-          { name: "added", files: ["src/a.ts", "src/b.ts"] },
-          { name: "expanded", files: ["src/a.ts", "src/b.ts", "src/c.ts"], sdk: true },
-        ],
-        [
-          { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          { name: "removed", files: ["src/c.ts", "src/d.ts"] },
-        ],
-      ),
-    ).toEqual({
-      regressions: [
-        { current: { name: "added", files: ["src/a.ts", "src/b.ts"] } },
-        {
-          baseline: { name: "expanded", files: ["src/a.ts", "src/b.ts"] },
-          current: {
-            name: "expanded",
-            files: ["src/a.ts", "src/b.ts", "src/c.ts"],
-            sdk: true,
-          },
-        },
-      ],
-      improvements: [{ baseline: { name: "removed", files: ["src/c.ts", "src/d.ts"] } }],
-    });
+  it("rejects debt-baseline updates with the collision trailer", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", guardScriptPath, "--update-debt-baseline"],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(
+      "[check-export-name-collisions] FAILED (exit 2)",
+    );
   });
 });

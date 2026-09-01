@@ -165,7 +165,10 @@ export const SystemChangesListResultSchema = closedObject({
  * client can walk the ladder candidate-by-candidate without ever leaving a
  * broken default model behind.
  */
-export const SystemAgentSetupDetectParamsSchema = closedObject({});
+export const SystemAgentSetupDetectParamsSchema = closedObject({
+  /** Agent whose model, credentials, and workspace are being inspected. */
+  agentId: Type.Optional(NonEmptyString),
+});
 
 const ProviderAutoSetupInferenceKind = Type.TemplateLiteral("provider-auto:${string}", {
   pattern: "^provider-auto:.+$",
@@ -307,7 +310,10 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
 });
 
 /** Live verification of the Gateway's current default-agent inference route. */
-export const SystemAgentSetupVerifyParamsSchema = closedObject({});
+export const SystemAgentSetupVerifyParamsSchema = closedObject({
+  /** Agent whose configured inference route is being verified. */
+  agentId: Type.Optional(NonEmptyString),
+});
 
 export const SystemAgentSetupVerifyResultSchema = Type.Union([
   closedObject({
@@ -323,6 +329,8 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
 ]);
 
 export const SystemAgentSetupActivateParamsSchema = closedObject({
+  /** Agent that owns the verified and persisted inference route. */
+  agentId: Type.Optional(NonEmptyString),
   kind: Type.Union([
     Type.Literal("existing-model"),
     Type.Literal("openai-api-key"),
@@ -342,6 +350,14 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   workspace: Type.Optional(Type.String()),
 });
 
+/** Starts interactive activation without moving artifact consent into the client. */
+export const SystemAgentSetupActivateStartParamsSchema = closedObject({
+  ...SystemAgentSetupActivateParamsSchema.properties,
+  /** Client-generated so the session can be cancelled after a lost start reply. */
+  sessionId: NonEmptyString,
+});
+export const SystemAgentSetupActivateStartResultSchema = WizardStartResultSchema;
+
 export const SystemAgentSetupActivateResultSchema = closedObject({
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
@@ -349,6 +365,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   latencyMs: Type.Optional(Type.Number()),
   /** Human-readable setup summary lines (workspace, model, gateway). */
   lines: Type.Optional(Type.Array(Type.String())),
+  /** The committed config requires clients to reconnect after a Gateway restart. */
+  gatewayRestartRequired: Type.Optional(Type.Literal(true)),
   /** Present on failure: coarse bucket for client copy + docs links. */
   status: Type.Optional(SetupInferenceStatus),
   error: Type.Optional(Type.String()),
@@ -358,6 +376,8 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
 export const SystemAgentSetupAuthStartParamsSchema = closedObject({
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
+  /** Agent that owns credentials and model selection created by this setup flow. */
+  agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
   workspace: Type.Optional(Type.String()),
 });
@@ -386,3 +406,10 @@ export type SystemAgentSetupVerifyParams = Static<typeof SystemAgentSetupVerifyP
 export type SystemAgentSetupVerifyResult = Static<typeof SystemAgentSetupVerifyResultSchema>;
 export type SystemAgentSetupAuthStartParams = Static<typeof SystemAgentSetupAuthStartParamsSchema>;
 export type SystemAgentSetupAuthStartResult = Static<typeof SystemAgentSetupAuthStartResultSchema>;
+
+export type SystemAgentSetupActivateStartParams = Static<
+  typeof SystemAgentSetupActivateStartParamsSchema
+>;
+export type SystemAgentSetupActivateStartResult = Static<
+  typeof SystemAgentSetupActivateStartResultSchema
+>;

@@ -22,7 +22,8 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
 
 type RecordedWireCall = {
@@ -35,6 +36,7 @@ type RecordedWireCall = {
 type CapturedDispatcherOptions = {
   deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
   onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   typingCallbacks?: {
     onReplyStart?: () => Promise<void>;
     onIdle?: () => void;
@@ -45,7 +47,22 @@ type CapturedDispatcherOptions = {
 type CapturedReplyOptions = {
   suppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-  onToolStart?: (payload: { name: string; phase: "start" | "result" }) => Promise<void> | void;
+  onToolStart?: (payload: {
+    name: string;
+    phase: "start" | "result";
+    itemId?: string;
+    toolCallId?: string;
+    args?: Record<string, unknown>;
+  }) => Promise<void> | void;
+  onItemEvent?: (payload: {
+    kind: string;
+    itemId?: string;
+    toolCallId?: string;
+    phase?: string;
+    status?: string;
+    progressText?: string;
+    name?: string;
+  }) => Promise<void> | void;
 };
 
 type TurnCounts = Record<ReplyDispatchKind, number>;
@@ -164,13 +181,23 @@ type SlackTraceScenarioName =
   | "stream-stop-first-network-call"
   | "final-blocks-and-text"
   | "cancel-mid-stream"
-  | "preview-edit-fallback";
+  | "preview-edit-fallback"
+  | "progress-compact-commentary"
+  | "progress-session-card"
+  | "progress-native-unified"
+  | "native-prose-then-exec-failed"
+  | "preview-exec-failed-then-prose";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
   "stream-stop-first-network-call",
   "final-blocks-and-text",
+  "native-prose-then-exec-failed",
 ]);
+
+const NATIVE_PROGRESS_NARRATION =
+  "I’m checking the native Slack stream before applying the focused patch.";
+const NATIVE_PROGRESS_NARRATION_UPDATED = `${NATIVE_PROGRESS_NARRATION} I’m applying it now.`;
 
 // Long enough that the second stream append pushes the SDK buffer past
 // buffer_size (256), forcing the first visible flush via chat.startStream.
@@ -187,6 +214,12 @@ const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
+const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
+const EXEC_FAILED_PROSE = "The directory is missing.";
+const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
+const COMPACT_COMMENTARY_TEXT_UPDATED =
+  "Checking the current Slack behavior and preparing the focused fix.";
+const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
 
 const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
 // Portable presentation actions; slack renders them as Block Kit and must
@@ -252,6 +285,48 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
     { kind: "final", text: PREVIEW_FINAL_TEXT },
+    { kind: "idle" },
+  ],
+  "progress-compact-commentary": [
+    { kind: "reply-start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT },
+    { kind: "advance", ms: 2000 },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT_UPDATED },
+    { kind: "advance", ms: 2000 },
+    { kind: "final", text: COMPACT_FINAL_TEXT },
+    { kind: "idle" },
+  ],
+  "progress-session-card": [
+    { kind: "reply-start" },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "advance", ms: 2000 },
+    { kind: "final", text: "The session card is complete." },
+    { kind: "idle" },
+  ],
+  "progress-native-unified": [
+    { kind: "reply-start" },
+    { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+    { kind: "tool-progress", name: "write", phase: "start" },
+    { kind: "advance", ms: 2000 },
+    { kind: "partial", text: NATIVE_PROGRESS_NARRATION_UPDATED },
+    { kind: "tool-progress", name: "write", phase: "result" },
+    { kind: "final", text: "The unified native Slack turn is complete." },
+    { kind: "idle" },
+  ],
+  "native-prose-then-exec-failed": [
+    { kind: "reply-start" },
+    { kind: "final", text: EXEC_FAILED_PROSE },
+    { kind: "final", text: EXEC_FAILED_TRACE },
+    { kind: "idle" },
+  ],
+  "preview-exec-failed-then-prose": [
+    { kind: "reply-start" },
+    { kind: "partial", text: EXEC_FAILED_TRACE },
+    { kind: "advance", ms: 1100 },
+    { kind: "partial", text: EXEC_FAILED_PROSE },
+    { kind: "advance", ms: 1100 },
+    { kind: "final", text: EXEC_FAILED_PROSE },
     { kind: "idle" },
   ],
 };
@@ -421,7 +496,20 @@ function createRecordingSlackClient(): Record<string, unknown> {
 }
 
 function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedSlackMessage {
-  const cfg = { channels: { slack: { enabled: true } } } as OpenClawConfig;
+  const compactProgress = scenario === "progress-compact-commentary";
+  const progressCard = scenario === "progress-session-card";
+  const nativeProgress = scenario === "progress-native-unified";
+  const cfg = {
+    channels: { slack: { enabled: true } },
+    ...(progressCard || nativeProgress
+      ? {
+          gateway: {
+            publicOrigin: "https://team.openclaw.ai",
+            controlUi: { basePath: "/openclaw" },
+          },
+        }
+      : {}),
+  } as OpenClawConfig;
   const client = traceState.client;
   if (!client) {
     throw new Error("trace Slack client not initialized");
@@ -469,9 +557,33 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     },
     account: {
       accountId: "default",
-      config: {
-        streaming: { mode: "partial", nativeTransport: NATIVE_SCENARIOS.has(scenario) },
-      },
+      config: compactProgress
+        ? {
+            streaming: {
+              mode: "progress",
+              nativeTransport: true,
+              progress: {
+                style: "compact",
+                nativeTaskCards: true,
+                label: false,
+                commentary: true,
+                toolProgress: false,
+              },
+            },
+          }
+        : progressCard
+          ? // Native task cards are the progress default; this scenario owns the
+            // Block Kit opt-out path.
+            { streaming: { progress: { nativeTaskCards: false } } }
+          : nativeProgress
+            ? // Empty progress config on purpose: proves the shipped default.
+              { streaming: { mode: "progress" } }
+            : {
+                streaming: {
+                  mode: "partial",
+                  nativeTransport: NATIVE_SCENARIOS.has(scenario),
+                },
+              },
     },
     message: {
       type: "message",
@@ -532,8 +644,14 @@ async function setupSlackTrace(
   }
 
   const deliver = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
+    const transformed = turn.options.transformReplyPayload
+      ? turn.options.transformReplyPayload(payload)
+      : payload;
+    if (!transformed) {
+      return;
+    }
     try {
-      await turn.options.deliver(payload, { kind });
+      await turn.options.deliver(transformed, { kind });
       traceState.counts[kind] += 1;
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
@@ -550,10 +668,47 @@ async function setupSlackTrace(
       case "partial":
         // Present only on the draft-preview tier; native streaming leaves
         // onPartialReply undefined and partials stay IN-only script context.
-        await turn.replyOptions.onPartialReply?.({ text: step.text });
+        if (scenario === "progress-compact-commentary") {
+          await turn.replyOptions.onItemEvent?.({
+            kind: "preamble",
+            itemId: "preamble-1",
+            progressText: step.text,
+          });
+        } else if (scenario === "progress-native-unified") {
+          await turn.replyOptions.onItemEvent?.({
+            kind: "preamble",
+            itemId: "preamble-1",
+            progressText: step.text,
+          });
+          await deliver({ text: step.text, isCommentary: true }, "block");
+        } else {
+          await turn.replyOptions.onPartialReply?.({ text: step.text });
+        }
         break;
       case "tool-progress":
-        await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        if (scenario === "progress-native-unified") {
+          if (step.phase === "start") {
+            await turn.replyOptions.onToolStart?.({
+              name: step.name,
+              phase: step.phase,
+              itemId: "write-1",
+              toolCallId: "write-call-1",
+              args: { path: "src/native-card.ts", content: "const unified = true;\n" },
+            });
+          } else {
+            await turn.replyOptions.onItemEvent?.({
+              kind: "tool",
+              itemId: "write-1",
+              toolCallId: "write-call-1",
+              phase: "end",
+              status: "completed",
+              progressText: "src/native-card.ts",
+              name: step.name,
+            });
+          }
+        } else {
+          await turn.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        }
         // The mocked core dispatcher owns default tool progress messages; when
         // dispatch did not suppress them it would deliver a tool-kind payload,
         // so the script forwards a deterministic stand-in text.
@@ -600,7 +755,67 @@ async function setupSlackTrace(
   };
 }
 
+function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
+  const texts: string[] = [];
+  const pushText = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) {
+      texts.push(value);
+    }
+  };
+  for (const event of events) {
+    if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
+      continue;
+    }
+    const payload = (event.data as { payload?: unknown }).payload;
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const record = payload as Record<string, unknown>;
+    pushText(record.text);
+    pushText(record.markdown_text);
+    if (Array.isArray(record.chunks)) {
+      for (const chunk of record.chunks) {
+        if (chunk && typeof chunk === "object") {
+          pushText((chunk as { text?: unknown }).text);
+        }
+      }
+    }
+  }
+  return texts;
+}
+
+function buildSlackDeliveryProofVerdict(params: {
+  scenario: SlackTraceScenarioName;
+  events: readonly TraceEvent[];
+  headSha: string;
+}): Record<string, unknown> {
+  const wireTexts = collectSlackWireTexts(params.events);
+  return {
+    kind: "mock-gateway",
+    liveSlack: false,
+    harness: "extensions/slack/src/delivery-trace.test.ts",
+    channel: "slack",
+    scenario: params.scenario,
+    headSha: params.headSha,
+    environment: {
+      node: process.version,
+      platform: process.platform,
+      slackApi: "recording WebClient",
+      provider: "scripted agent turn",
+      delivery: "real dispatchPreparedSlackMessage + ChatStreamer/draft preview",
+    },
+    inboundPayloads: params.events
+      .filter((event) => event.dir === "in" && (event.kind === "final" || event.kind === "partial"))
+      .map((event) => event.data),
+    deliveredWireTexts: wireTexts,
+    execFailedDelivered: wireTexts.some((text) => text.includes("Exec failed")),
+    proseDelivered: wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE)),
+    outMethods: params.events.filter((event) => event.dir === "out").map((event) => event.kind),
+  };
+}
+
 describe("slack delivery trace goldens", () => {
+  const headSha = process.env.OPENCLAW_DELIVERY_PROOF_SHA ?? "";
   for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
@@ -612,6 +827,105 @@ describe("slack delivery trace goldens", () => {
         goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
         events,
       });
+      const wireTexts = collectSlackWireTexts(events);
+      expect(wireTexts.join("\n")).not.toMatch(/Exec failed/i);
+      if (
+        scenarioName === "native-prose-then-exec-failed" ||
+        scenarioName === "preview-exec-failed-then-prose"
+      ) {
+        expect(wireTexts.some((text) => text.includes(EXEC_FAILED_PROSE))).toBe(true);
+        if (process.env.OPENCLAW_DELIVERY_PROOF === "1") {
+          process.stdout.write(
+            `${JSON.stringify(buildSlackDeliveryProofVerdict({ scenario: scenarioName, events, headSha }), null, 2)}\n`,
+          );
+        }
+      }
     });
   }
+
+  it("removes a progress card detached by a later human message", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "progress-session-card-detached",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "tool-progress", name: "read", phase: "start" },
+          { kind: "advance", ms: 2000 },
+          { kind: "partial", text: "Writing the implementation" },
+          { kind: "advance", ms: 2000 },
+          { kind: "final", text: "The replacement session card is complete." },
+          { kind: "idle" },
+        ],
+      },
+      setup: async (recorder) => {
+        const dispatch = await setupSlackTrace(recorder, "progress-session-card");
+        return async (step) => {
+          if (step.kind === "partial") {
+            traceState.tsCounter += 1;
+            noteSlackDraftConversationMessage({
+              accountId: "default",
+              channelId: CHANNEL_ID,
+              threadTs: INBOUND_TS,
+              messageTs: `1767225601.${String(traceState.tsCounter).padStart(6, "0")}`,
+              userId: "U_SECOND",
+              botUserId: "UBOT",
+            });
+            // A changed authored status moves progress below the human message;
+            // ordinary tool activity intentionally leaves the summary unchanged.
+            await traceState.turn?.replyOptions.onItemEvent?.({
+              kind: "preamble",
+              itemId: "preamble-1",
+              progressText: step.text,
+            });
+            return;
+          }
+          await dispatch(step);
+        };
+      },
+      normalize: createSlackTsNormalizer(),
+    });
+
+    const workingPosts = events.filter(
+      (event) =>
+        event.kind === "chat.postMessage" &&
+        Array.isArray(
+          (event.data as { payload?: { blocks?: unknown } } | undefined)?.payload?.blocks,
+        ),
+    );
+    expect(workingPosts).toHaveLength(2);
+    const firstCardId = (workingPosts[0]?.data as { result?: { ts?: string } } | undefined)?.result
+      ?.ts;
+    const secondCardId = (workingPosts[1]?.data as { result?: { ts?: string } } | undefined)?.result
+      ?.ts;
+    expect(firstCardId).toBeTruthy();
+    expect(secondCardId).toBeTruthy();
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "chat.delete" &&
+          (event.data as { target?: string } | undefined)?.target === firstCardId,
+      ),
+    ).toBe(true);
+    const completedCard = events.find(
+      (event) =>
+        event.kind === "chat.update" &&
+        (event.data as { target?: string } | undefined)?.target === secondCardId,
+    );
+    expect(completedCard?.data).toMatchObject({
+      payload: {
+        blocks: expect.arrayContaining([
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Completed: *Writing the implementation*" },
+          },
+          {
+            type: "actions",
+            elements: expect.arrayContaining([
+              expect.objectContaining({ action_id: "openclaw:session_link" }),
+            ]),
+          },
+        ]),
+      },
+    });
+  });
 });

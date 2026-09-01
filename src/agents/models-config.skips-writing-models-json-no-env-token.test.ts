@@ -26,6 +26,7 @@ function listPersistedPluginModelCatalogs(agentDir: string) {
 }
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));
@@ -51,7 +52,6 @@ vi.mock("./models-config.providers.js", async () => {
   }
 
   return {
-    applyNativeStreamingUsageCompat: (providers: Record<string, ModelsProviderConfig>) => providers,
     enforceSourceManagedProviderSecrets: ({
       providers,
     }: {

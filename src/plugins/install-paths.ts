@@ -1,6 +1,8 @@
 // Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
@@ -124,10 +126,67 @@ export function resolvePluginNpmProjectDir(params: {
 
 const PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR = "__openclaw-generation__";
 const PLUGIN_NPM_GENERATION_KEY_HASH_CHARS = 16;
+const PLUGIN_NPM_GENERATION_KEY_DIR_NAME_PATTERN = new RegExp(
+  `^g-[a-f0-9]{${PLUGIN_NPM_GENERATION_KEY_HASH_CHARS}}$`,
+  "u",
+);
 
 /** Resolves the managed npm artifact-generation project directory prefix for a package. */
 export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string): string {
   return `${encodePluginNpmProjectDirName(packageName)}${PLUGIN_NPM_GENERATION_PROJECT_SEPARATOR}`;
+}
+
+/** Checks that a managed path preserves its npm-root-relative real path. */
+export function isPluginNpmManagedPath(params: {
+  managedPath: string;
+  npmDir?: string;
+  allowMissing?: boolean;
+}): boolean {
+  const npmDir = path.resolve(params.npmDir ?? resolveDefaultPluginNpmDir());
+  const managedPath = path.resolve(params.managedPath);
+  try {
+    return (
+      lstatSync(npmDir).isDirectory() &&
+      path.relative(npmDir, managedPath) ===
+        path.relative(
+          realpathSync(npmDir),
+          params.allowMissing
+            ? resolvePathViaExistingAncestorSync(managedPath)
+            : realpathSync(managedPath),
+        )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Checks whether a project directory has the exact managed shape owned by a package. */
+export function isPluginNpmProjectDir(params: {
+  packageName: string;
+  projectDir: string;
+  npmDir?: string;
+}): boolean {
+  const npmDir = path.resolve(params.npmDir ?? resolveDefaultPluginNpmDir());
+  const projectDir = path.resolve(params.projectDir);
+  if (path.dirname(projectDir) !== path.resolve(resolvePluginNpmProjectsDir(npmDir))) {
+    return false;
+  }
+  if (!isPluginNpmManagedPath({ managedPath: projectDir, npmDir })) {
+    return false;
+  }
+  const packageDir = path.join(projectDir, "node_modules", ...params.packageName.split("/"));
+  if (!isPluginNpmManagedPath({ managedPath: packageDir, npmDir, allowMissing: true })) {
+    return false;
+  }
+  if (projectDir === path.resolve(resolvePluginNpmProjectDir(params))) {
+    return true;
+  }
+  const projectName = path.basename(projectDir);
+  const generationPrefix = resolvePluginNpmGenerationProjectDirPrefix(params.packageName);
+  return (
+    projectName.startsWith(generationPrefix) &&
+    PLUGIN_NPM_GENERATION_KEY_DIR_NAME_PATTERN.test(projectName.slice(generationPrefix.length))
+  );
 }
 
 /** Encodes a package generation fingerprint into a compact project directory suffix. */

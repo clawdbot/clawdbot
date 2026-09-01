@@ -1,7 +1,11 @@
 // Gateway Bench Child script supports OpenClaw repository automation.
-import { spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./managed-child-process.mts";
 import { sleep as delay } from "./sleep.mjs";
-import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 export { delay };
 
@@ -20,8 +24,6 @@ export type StopChildResult = ChildExit & {
 
 type StopChildOptions = {
   killGraceMs?: number;
-  platform?: NodeJS.Platform;
-  runTaskkill?: typeof spawnSync;
   teardownGraceMs?: number;
 };
 
@@ -31,9 +33,27 @@ export async function stopChild(
 ): Promise<StopChildResult> {
   const teardownGraceMs = options.teardownGraceMs ?? TEARDOWN_GRACE_MS;
   const killGraceMs = options.killGraceMs ?? TEARDOWN_KILL_GRACE_MS;
-  const processTreeOptions = {
-    platform: options.platform ?? process.platform,
-    runTaskkill: options.runTaskkill ?? spawnSync,
+  const processTreeAlive = () =>
+    inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
+  const signalProcessTree = (signal: NodeJS.Signals): boolean => {
+    let delivered = true;
+    terminateManagedChild(
+      {
+        kill(childSignal) {
+          delivered = child.kill(childSignal);
+          return delivered;
+        },
+        pid: child.pid,
+      },
+      signal,
+      {
+        onChildSignalError(error) {
+          throw error;
+        },
+        taskkillTimeoutMs: null,
+      },
+    );
+    return delivered;
   };
   let observedExit: ChildExit | null = null;
   const directExit = (): ChildExit | null =>
@@ -43,34 +63,30 @@ export async function stopChild(
       : null);
   const currentExit = (): ChildExit | null => {
     const exit = directExit();
-    if (exit == null || isProcessTreeAlive(child, processTreeOptions)) {
+    if (exit == null || processTreeAlive()) {
       return null;
     }
     return exit;
   };
-  const waitForProcessTreeExit = async (ms: number): Promise<boolean> => {
-    const deadlineAt = Date.now() + ms;
-    while (Date.now() < deadlineAt) {
-      if (!isProcessTreeAlive(child, processTreeOptions)) {
-        return true;
-      }
-      await delay(Math.min(EXIT_POLL_MS, deadlineAt - Date.now()));
-    }
-    return !isProcessTreeAlive(child, processTreeOptions);
-  };
+  const waitForProcessTreeExit = (ms: number): Promise<boolean> =>
+    waitForManagedProcessGroupExit(child, ms, {
+      clampPollToDeadline: true,
+      errorPolicy: "alive-on-eperm",
+      pollIntervalMs: EXIT_POLL_MS,
+    });
   const cleanupExitedProcessTree = async (
     exit: ChildExit,
     exitedBeforeTeardown: boolean,
   ): Promise<StopChildResult> => {
-    if (!isProcessTreeAlive(child, processTreeOptions)) {
+    if (!processTreeAlive()) {
       return { ...exit, exitedBeforeTeardown };
     }
-    const sentTeardownSignal = killProcessTree(child, "SIGTERM", processTreeOptions);
+    const sentTeardownSignal = signalProcessTree("SIGTERM");
     if (sentTeardownSignal) {
       await waitForProcessTreeExit(teardownGraceMs);
     }
-    if (sentTeardownSignal && isProcessTreeAlive(child, processTreeOptions)) {
-      killProcessTree(child, "SIGKILL", processTreeOptions);
+    if (sentTeardownSignal && processTreeAlive()) {
+      signalProcessTree("SIGKILL");
       await waitForProcessTreeExit(killGraceMs);
     }
     if (!sentTeardownSignal) {
@@ -115,7 +131,7 @@ export async function stopChild(
     return await cleanupExitedProcessTree(queuedExit, true);
   }
 
-  const sentTeardownSignal = killProcessTree(child, "SIGTERM", processTreeOptions);
+  const sentTeardownSignal = signalProcessTree("SIGTERM");
   const gracefulExit = await waitForExit(teardownGraceMs);
   if (gracefulExit != null) {
     return { ...gracefulExit, exitedBeforeTeardown: !sentTeardownSignal };
@@ -130,7 +146,7 @@ export async function stopChild(
     return { exitCode: null, exitedBeforeTeardown: true, signal: null };
   }
 
-  killProcessTree(child, "SIGKILL", processTreeOptions);
+  signalProcessTree("SIGKILL");
   const killedExit = await waitForExit(killGraceMs);
   const finalExit = killedExit ?? currentExit();
   if (finalExit != null) {
@@ -146,57 +162,4 @@ function releaseUnsettledChild(child: ChildProcessWithoutNullStreams): void {
   child.stdout.destroy();
   child.stderr.destroy();
   child.unref();
-}
-
-function isProcessTreeAlive(
-  child: ChildProcessWithoutNullStreams,
-  { platform = process.platform }: Pick<StopChildOptions, "platform"> = {},
-): boolean {
-  if (platform === "win32" || child.pid === undefined) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return isProcessStillExistsError(error);
-  }
-}
-
-function isProcessStillExistsError(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  return code === "EPERM";
-}
-
-function killProcessTree(
-  child: ChildProcessWithoutNullStreams,
-  signal: NodeJS.Signals,
-  { platform = process.platform, runTaskkill = spawnSync }: StopChildOptions = {},
-): boolean {
-  if (platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return true;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  if (platform === "win32" && child.pid !== undefined) {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return true;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return true;
-      }
-    }
-  }
-  return child.kill(signal);
 }

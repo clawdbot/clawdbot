@@ -26,10 +26,88 @@ function readOllamaCloudProvider(config: OpenClawConfig): Record<string, unknown
   return config.models?.providers?.["ollama-cloud"] as Record<string, unknown> | undefined;
 }
 
+function legacyLocalConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        ollama: {
+          baseUrl: "http://127.0.0.1:11434",
+          api: "ollama",
+          apiKey: "OLLAMA_API_KEY",
+          models: [cloudModel],
+        },
+      },
+    },
+    auth: {
+      profiles: {
+        "ollama:default": { provider: "ollama", mode: "api_key" },
+        "openai:default": { provider: "openai", mode: "api_key" },
+      },
+    },
+    agents: { defaults: { model: { primary: "ollama/kimi-k2.5:cloud" } } },
+  } as OpenClawConfig;
+}
+
 describe("ollama doctor contract", () => {
   it("detects retired Ollama Cloud provider endpoints", () => {
     expect(legacyConfigRules[0]?.match({ baseUrl: "https://ai.ollama.com" })).toBe(true);
     expect(legacyConfigRules[0]?.match({ baseUrl: "https://ollama.com" })).toBe(false);
+  });
+
+  it("migrates the pre-#123190 local marker without replacing its catalog or default", () => {
+    const config = legacyLocalConfig();
+    const localRule = legacyConfigRules[1];
+
+    expect(
+      localRule?.match(
+        config.models?.providers?.ollama,
+        config as unknown as Record<string, unknown>,
+      ),
+    ).toBe(true);
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes).toEqual([
+      "Migrated models.providers.ollama.apiKey to ollama-local and removed the obsolete ollama:default auth profile marker.",
+    ]);
+    expect(result.config.models?.providers?.ollama).toEqual({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      apiKey: "ollama-local",
+      models: [cloudModel],
+    });
+    expect(result.config.auth?.profiles).toEqual({
+      "openai:default": { provider: "openai", mode: "api_key" },
+    });
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "ollama/kimi-k2.5:cloud",
+    });
+    expect(config.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
+    expect(config.auth?.profiles?.["ollama:default"]).toBeDefined();
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
+
+  it("preserves current env-backed marker configs without the exact legacy profile", () => {
+    const withoutProfile = legacyLocalConfig();
+    delete withoutProfile.auth?.profiles?.["ollama:default"];
+    const customizedProfile = legacyLocalConfig();
+    customizedProfile.auth!.profiles!["ollama:default"] = {
+      provider: "ollama",
+      mode: "api_key",
+      displayName: "Remote Ollama",
+    };
+
+    expect(normalizeCompatibilityConfig({ cfg: withoutProfile })).toEqual({
+      config: withoutProfile,
+      changes: [],
+    });
+    expect(normalizeCompatibilityConfig({ cfg: customizedProfile })).toEqual({
+      config: customizedProfile,
+      changes: [],
+    });
   });
 
   it("migrates retired Ollama Cloud provider baseUrl to the canonical endpoint", () => {

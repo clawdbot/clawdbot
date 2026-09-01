@@ -625,8 +625,8 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await inbound.reply("pong");
-      await inbound.sendMedia({ text: "media after restart" });
+      await inbound.platform.reply("pong");
+      await inbound.platform.sendMedia({ text: "media after restart" });
 
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(2);
       expect(successorSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
@@ -650,7 +650,7 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await inbound.reply("pong");
+      await inbound.platform.reply("pong");
       expect(successorSock.sendMessage).toHaveBeenCalledTimes(1);
       expect(successorSock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
         text: "pong",
@@ -670,7 +670,7 @@ describe("web monitor inbox socket lifecycle", () => {
     });
 
     try {
-      await expect(inbound.reply("pong")).rejects.toThrow(
+      await expect(inbound.platform.reply("pong")).rejects.toThrow(
         "no active socket - reconnection in progress",
       );
       expect(successorSock.sendMessage).not.toHaveBeenCalled();

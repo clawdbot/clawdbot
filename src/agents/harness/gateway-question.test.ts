@@ -45,7 +45,7 @@ describe("gateway harness questions", () => {
         gatewayCall,
         delivery: { onBlockReply: vi.fn() },
       }),
-    ).rejects.toThrow("session already has a pending gateway question");
+    ).rejects.toThrow("session already has a pending agent input request");
     expect(gatewayCall).not.toHaveBeenCalled();
     reservation.dispose();
   });

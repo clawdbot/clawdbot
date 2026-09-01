@@ -5,8 +5,13 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
-import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
+import { wrapCopilotProviderStream } from "./stream.js";
+
+type ResponsesTestPayload = { input: Array<Record<string, unknown>> };
+
+function wrapCopilotTestStream(streamFn: StreamFn) {
+  return wrapCopilotProviderStream({ streamFn } as never);
+}
 
 function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>) {
   expect(streamFn).toBeTypeOf("function");
@@ -34,12 +39,47 @@ function buildExpectedCopilotHeaders(
 ): Record<string, string> {
   return {
     ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
+    "Copilot-Integration-Id": "copilot-developer-cli",
     "Openai-Organization": "github-copilot",
     "x-initiator": initiator,
     ...(hasImages ? { "Copilot-Vision-Request": "true" } : {}),
   };
 }
+
+it.each(["anthropic-messages", "openai-responses", "openai-completions"])(
+  "preserves a single configured integration identity through %s streaming",
+  (api) => {
+    const captured: Headers[] = [];
+    const baseStreamFn = vi.fn<StreamFn>((_model, _context, options) => {
+      captured.push(new Headers(options?.headers));
+      return { async *[Symbol.asyncIterator]() {} } as never;
+    });
+    const wrapped = requireStreamFn(
+      wrapCopilotProviderStream({
+        streamFn: baseStreamFn,
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                headers: { "copilot-integration-id": "vscode-chat" },
+              },
+            },
+          },
+        },
+      } as never),
+    );
+    const model = { provider: "github-copilot", api, id: "test-model" } as never;
+    const context = { messages: [{ role: "user", content: "hello" }] } as never;
+
+    void wrapped(model, context, {});
+    void wrapped(model, context, { headers: { "COPILOT-INTEGRATION-ID": "caller-identity" } });
+
+    expect(captured.map((headers) => headers.get("copilot-integration-id"))).toEqual([
+      "vscode-chat",
+      "caller-identity",
+    ]);
+  },
+);
 
 describe("wrapCopilotAnthropicStream", () => {
   it("normalizes Copilot Claude wire tool IDs without mutating the persisted transcript", () => {
@@ -113,7 +153,7 @@ describe("wrapCopilotAnthropicStream", () => {
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    void requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn))(model, { messages }, {});
+    void requireStreamFn(wrapCopilotTestStream(baseStreamFn))(model, { messages }, {});
 
     const outbound = observedPayload?.messages ?? [];
     const assistant = outbound.find((message) => message.role === "assistant");
@@ -207,7 +247,7 @@ describe("wrapCopilotAnthropicStream", () => {
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
 
-    void requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn))(
+    void requireStreamFn(wrapCopilotTestStream(baseStreamFn))(
       { provider: "github-copilot", api: "anthropic-messages", id: "claude-sonnet-4.6" } as never,
       { messages: [{ role: "user", content: "hi" }] } as never,
       {},
@@ -256,7 +296,7 @@ describe("wrapCopilotAnthropicStream", () => {
         ],
       };
 
-      await requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn))(
+      await requireStreamFn(wrapCopilotTestStream(baseStreamFn))(
         { provider: "github-copilot", api: "anthropic-messages", id: "claude-sonnet-4.6" } as never,
         { messages: [{ role: "user", content: "hi" }] } as never,
         {
@@ -308,6 +348,8 @@ describe("wrapCopilotAnthropicStream", () => {
   it("sends uniquely paired IDs through the actual Anthropic SDK and loopback HTTP", async () => {
     const requests: Array<{
       path: string;
+      integrationId: string | string[] | undefined;
+      integrationHeaderCount: number;
       messages: Array<{ role: string; content: Array<Record<string, unknown>> | string }>;
     }> = [];
     const server = createServer((request, response) => {
@@ -318,7 +360,14 @@ describe("wrapCopilotAnthropicStream", () => {
       });
       request.on("end", () => {
         const payload = JSON.parse(body) as { messages: (typeof requests)[number]["messages"] };
-        requests.push({ path: request.url ?? "", messages: payload.messages });
+        requests.push({
+          path: request.url ?? "",
+          messages: payload.messages,
+          integrationId: request.headers["copilot-integration-id"],
+          integrationHeaderCount: request.rawHeaders.filter(
+            (value, index) => index % 2 === 0 && value.toLowerCase() === "copilot-integration-id",
+          ).length,
+        });
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.write(
           "event: message_start\ndata: " +
@@ -354,6 +403,7 @@ describe("wrapCopilotAnthropicStream", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 4_096,
+      headers: { "copilot-integration-id": "model-identity" },
     } satisfies Model<"anthropic-messages">;
     const context = {
       messages: [
@@ -392,11 +442,11 @@ describe("wrapCopilotAnthropicStream", () => {
     } satisfies Context;
 
     try {
-      const stream = await requireStreamFn(wrapCopilotAnthropicStream(streamSimple))(
-        model,
-        context,
-        { apiKey: "copilot-token", maxRetries: 0 },
-      );
+      const stream = await requireStreamFn(wrapCopilotTestStream(streamSimple))(model, context, {
+        apiKey: "copilot-token",
+        maxRetries: 0,
+        headers: { "COPILOT-INTEGRATION-ID": "caller-identity" },
+      });
       const result = await stream.result();
       expect(result.stopReason).toBe("stop");
     } finally {
@@ -407,6 +457,8 @@ describe("wrapCopilotAnthropicStream", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.path).toBe("/v1/messages");
+    expect(requests[0]?.integrationId).toBe("caller-identity");
+    expect(requests[0]?.integrationHeaderCount).toBe(1);
     const wireBlocks = requests[0]?.messages.flatMap((message) =>
       Array.isArray(message.content) ? message.content : [],
     );
@@ -447,7 +499,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotTestStream(baseStreamFn));
     const messages = [
       {
         role: "user",
@@ -522,7 +574,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotTestStream(baseStreamFn));
     void wrapped(
       {
         provider: "github-copilot",
@@ -540,22 +592,6 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
   });
 
-  it("leaves non-Anthropic Copilot models untouched", () => {
-    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
-    const model = {
-      provider: "github-copilot",
-      api: "openai-responses",
-      id: "gpt-4.1",
-    } as never;
-    const context = { messages: [{ role: "user", content: "hi" }] } as never;
-    const options = { headers: { Existing: "1" } };
-
-    void wrapped(model, context, options as never);
-
-    expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
-  });
-
   it.each([
     { provider: "anthropic", id: "claude-sonnet-4-6", toolId: "toolu_native_123" },
     { provider: "kimi", id: "k2p5", toolId: "functions.read:0" },
@@ -570,7 +606,7 @@ describe("wrapCopilotAnthropicStream", () => {
       streamOptions?.onPayload?.(payload, streamModel);
       return { async *[Symbol.asyncIterator]() {} } as never;
     });
-    const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotTestStream(baseStreamFn));
     const streamModel = {
       provider: model.provider,
       id: model.id,
@@ -591,20 +627,21 @@ describe("wrapCopilotAnthropicStream", () => {
 
   it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
     const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
-    const overlongReasoningId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
-    const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
+    const payloads: ResponsesTestPayload[] = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
+          { id: "rs_active", type: "reasoning", encrypted_content: "native-encrypted" },
+          { type: "reasoning", status: null, encrypted_content: "idless-encrypted", summary: [] },
           { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
-          { type: "reasoning", encrypted_content: "idless-encrypted-payload", summary: [] },
           {
-            id: overlongReasoningId,
+            id: "thinking_0",
             type: "reasoning",
             encrypted_content: "invalid-encrypted-payload",
             summary: [],
           },
+          { id: "msg_signed", type: "message", role: "assistant" },
           { id: messageId, type: "message" },
         ],
       };
@@ -649,45 +686,63 @@ describe("wrapCopilotAnthropicStream", () => {
       },
       onPayload: options.onPayload,
     });
-    expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
+    expect(payloads[0]?.input[0]?.id).toBe("rs_active");
     expect(payloads[0]?.input.map((item) => item.type)).toEqual([
       "reasoning",
       "reasoning",
+      "reasoning",
+      "message",
       "message",
     ]);
     expect(payloads[0]?.input[1]?.id).toBeUndefined();
-    expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
-    expect(payloads[0]?.input[0]).not.toHaveProperty("encrypted_content");
-    expect(payloads[0]?.input[1]).not.toHaveProperty("encrypted_content");
+    expect(payloads[0]?.input[2]?.id).toBeUndefined();
+    expect(payloads[0]?.input[3]?.id).toBeUndefined();
+    expect(payloads[0]?.input[4]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input.slice(0, 3).every((item) => item.encrypted_content)).toBe(true);
   });
 
-  it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {
-    const connectionBoundId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
-    let returnedPayload: unknown;
-    const baseStreamFn = vi.fn(async (_model, _context, options) => {
-      returnedPayload = await options?.onPayload?.({ input: [] }, _model);
-      return {
-        async *[Symbol.asyncIterator]() {},
-      } as never;
-    });
+  it("sanitizes all sync and async Copilot Responses hook outcomes", async () => {
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-5.4",
+    } as never;
+    const context = { messages: [{ role: "user", content: "hi" }] } as never;
 
-    const wrapped = requireStreamFn(wrapCopilotProviderStream({ streamFn: baseStreamFn } as never));
+    for (const asyncHook of [false, true]) {
+      for (const replace of [false, true]) {
+        const connectionBoundId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
+        let originalPayload: ResponsesTestPayload = { input: [] };
+        let hookResult: unknown;
+        const baseStreamFn = vi.fn((_model, _context, options) => {
+          originalPayload = { input: [] };
+          hookResult = options?.onPayload?.(originalPayload, _model);
+          return {
+            async *[Symbol.asyncIterator]() {},
+          } as never;
+        });
 
-    await wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-5.4",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {
-        onPayload: () => ({ input: [{ id: connectionBoundId, type: "message" }] }),
-      } as never,
-    );
+        const wrapped = requireStreamFn(
+          wrapCopilotProviderStream({ streamFn: baseStreamFn } as never),
+        );
+        const mutatePayload = (payload: ResponsesTestPayload) => {
+          const target: ResponsesTestPayload = replace ? { input: [] } : payload;
+          target.input.push({ id: connectionBoundId, type: "message" });
+          return replace ? target : undefined;
+        };
+        const onPayload = asyncHook
+          ? async (payload: ResponsesTestPayload) => mutatePayload(payload)
+          : (payload: ResponsesTestPayload) => mutatePayload(payload);
 
-    expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
-      /^msg_[a-f0-9]{16}$/,
-    );
+        void wrapped(model, context, { onPayload } as never);
+
+        expect(hookResult instanceof Promise).toBe(asyncHook);
+        const replacement = await hookResult;
+        expect(replacement !== undefined).toBe(replace);
+        const returnedPayload = (replacement ?? originalPayload) as ResponsesTestPayload;
+        expect(returnedPayload.input[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+      }
+    }
   });
 
   it("adds Copilot headers for Chat Completions models", () => {
@@ -721,28 +776,6 @@ describe("wrapCopilotAnthropicStream", () => {
         "X-Test": "1",
       },
     });
-  });
-
-  it("adapts provider stream context without changing wrapper behavior", () => {
-    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-
-    const wrapped = requireStreamFn(
-      wrapCopilotProviderStream({
-        streamFn: baseStreamFn,
-      } as never),
-    );
-
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-4.1",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {},
-    );
-
-    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("does not claim provider transport before OpenClaw chooses one", () => {

@@ -30,6 +30,8 @@ export async function runCodexAppServerAttempt(
   const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
   const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
   const resources = prepareCodexAttemptResources(attemptPrompt);
+  attemptTools.runtimeYieldCompletionClaim.current = () =>
+    resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
   await startCodexAttemptRuntime(resources);
 
   const turnRuntime = createCodexAttemptTurnState(resources);
@@ -64,8 +66,9 @@ export async function runCodexAppServerAttempt(
     turnStart.turn,
   );
 
+  let finalizedResult: EmbeddedRunAttemptResult;
   try {
-    return await finalizeCodexAttempt(
+    finalizedResult = await finalizeCodexAttempt(
       resources,
       turnRuntime,
       lifecycle,
@@ -76,4 +79,13 @@ export async function runCodexAppServerAttempt(
   } finally {
     await cleanupCodexAttempt(resources, turnRuntime, lifecycle, turnRequest, activeTurn);
   }
+  // Cleanup retires the execution lease; only then can device loss no longer
+  // race the final result captured during asynchronous terminal processing.
+  if (
+    resources.state.executionDisconnectError &&
+    !connection.terminalState.explicitCancellationObserved
+  ) {
+    throw resources.state.executionDisconnectError;
+  }
+  return finalizedResult;
 }

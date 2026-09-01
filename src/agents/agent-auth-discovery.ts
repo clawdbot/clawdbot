@@ -1,4 +1,5 @@
 /** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -15,12 +16,14 @@ import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 /** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
   ambientCredentials?: Readonly<AgentCredentialMap>;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
+  preparedStore?: AuthProfileStore;
   readOnly?: boolean;
   skipExternalAuthProfiles?: boolean;
   skipCredentials?: boolean;
@@ -28,6 +31,7 @@ export type DiscoverAuthStorageOptions = {
 } & AgentDiscoveryAuthLookupOptions;
 
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
+  authoritativeSyntheticAuthProviderRefs?: Iterable<string>;
   resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined;
   syntheticAuthProviderRefs?: Iterable<string>;
 };
@@ -39,6 +43,16 @@ export function resolveAmbientAgentCredentialsForDiscovery(
   const credentials = addEnvBackedAgentCredentials({}, options);
   const syntheticAuthProviderRefs =
     options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+  const authoritativeSyntheticAuthProviderRefs = new Set(
+    [...(options.authoritativeSyntheticAuthProviderRefs ?? [])]
+      .map(normalizeProviderId)
+      .filter(Boolean),
+  );
+  // CLI-runtime authentication is a separate authority. Aliased provider
+  // credentials must not suppress or replace native account checks.
+  for (const provider of authoritativeSyntheticAuthProviderRefs) {
+    delete credentials[provider];
+  }
   const resolveSyntheticAuth =
     options.resolveSyntheticAuth ??
     ((provider: string) =>
@@ -54,7 +68,8 @@ export function resolveAmbientAgentCredentialsForDiscovery(
         },
       }));
   for (const provider of syntheticAuthProviderRefs) {
-    if (credentials[provider]) {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (!authoritativeSyntheticAuthProviderRefs.has(normalizedProvider) && credentials[provider]) {
       continue;
     }
     if (
@@ -75,7 +90,7 @@ export function resolveAmbientAgentCredentialsForDiscovery(
     if (!apiKey) {
       continue;
     }
-    credentials[provider] = {
+    credentials[normalizedProvider || provider] = {
       type: "api_key",
       key: apiKey,
     };
@@ -83,19 +98,20 @@ export function resolveAmbientAgentCredentialsForDiscovery(
   return credentials;
 }
 
-/** Resolves agent credentials from auth profiles, env, and synthetic auth hooks. */
-export function resolveAgentCredentialsForDiscovery(
+/** Resolves the effective auth store and provider credentials for one discovery generation. */
+export function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): AgentCredentialMap {
+): { store: AuthProfileStore; credentials: AgentCredentialMap } {
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
     ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
     ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
   };
-  const store =
-    options?.skipExternalAuthProfiles === true
+  const store = options?.preparedStore
+    ? options.preparedStore
+    : options?.skipExternalAuthProfiles === true
       ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
           ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
@@ -124,5 +140,5 @@ export function resolveAgentCredentialsForDiscovery(
     // Ambient auth is a lifecycle-owned fallback. Agent-local profiles remain authoritative.
     credentials[provider] = credential;
   }
-  return credentials;
+  return { store, credentials };
 }

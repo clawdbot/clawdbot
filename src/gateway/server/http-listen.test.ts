@@ -19,9 +19,11 @@ type ListenOutcome = { kind: "error"; code: string } | { kind: "listening" };
 function createFakeHttpServer(outcomes: ListenOutcome[]) {
   class FakeHttpServer extends EventEmitter {
     public closeCalls = 0;
+    public listenCalls: unknown[][] = [];
     private attempt = 0;
 
-    listen(_port: number, _hostValue: string) {
+    listen(...args: unknown[]) {
+      this.listenCalls.push(args);
       const outcome = outcomes[this.attempt] ?? { kind: "listening" };
       this.attempt += 1;
       setImmediate(() => {

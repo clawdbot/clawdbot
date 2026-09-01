@@ -6,15 +6,16 @@ import {
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listGatewayActivatedChannelIds } from "./channel-presence-policy.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   canStartConfiguredChannelPlugin,
   canStartGatewayStartupPlugin,
 } from "./gateway-startup-plugin-activation.js";
 import {
   hasConfiguredStartupChannel,
-  listPotentialEnabledChannelIds,
   resolveAuthorizedGatewayStartupDreamingPluginIds,
   resolveContextEngineSlotStartupPluginId,
   resolveMemorySlotStartupPluginId,
@@ -56,14 +57,23 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
   workerProviderIds?: readonly string[];
+  discovery?: PluginDiscoveryResult;
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
+  const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const configuredChannelIds = new Set(
-    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    listGatewayActivatedChannelIds({
+      config: params.config,
+      activationSourceConfig,
+      env: params.env,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      manifestRecords: params.manifestRegistry.plugins,
+      discovery: params.discovery,
+    }),
   );
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
@@ -71,7 +81,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
   // misclassified as explicit enablement.
-  const activationSourceConfig = params.activationSourceConfig ?? params.config;
   const activationSourcePlugins = normalizePluginsConfigWithRegistry(
     activationSourceConfig.plugins,
     params.index,
@@ -160,6 +169,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         activationSource,
         manifestLookup,
         platform: params.platform,
+        env: params.env,
       });
       if (canStartConfiguredChannel) {
         pluginIds.push(plugin.pluginId);
@@ -173,6 +183,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         config: params.config,
         pluginsConfig,
         activationSource,
+        env: params.env,
         requiredAgentHarnessRuntimes,
         configuredWorkerProviderIds,
         configuredSpeechProviderIds,

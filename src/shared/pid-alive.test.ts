@@ -10,8 +10,18 @@ import {
   isPidDefinitelyDead,
 } from "./pid-alive.js";
 
+const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
+  readWindowsProcessStartTimeSyncMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -223,8 +233,45 @@ describe("process start times", () => {
     });
   });
 
-  it("returns null on unsupported platforms", () => {
+  it("reads Windows file-lock identity through the canonical reader", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
+
     return withMockedPlatform("win32", async () => {
+      expect(getProcessStartTime(42)).toBeNull();
+      expect(getFileLockProcessStartTime(42)).toBe(1_752_000_000_123);
+      expect(readWindowsProcessStartTimeSyncMock).toHaveBeenCalledWith(42);
+    });
+  });
+
+  it("reuses a successful Windows identity for the running process", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(process.pid)).toBe(1_752_000_000_123);
+      expect(getFileLockProcessStartTime(process.pid)).toBe(1_752_000_000_123);
+      expect(readWindowsProcessStartTimeSyncMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("re-reads foreign Windows identities so PID reuse stays observable", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValueOnce(111).mockReturnValueOnce(222);
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(42)).toBe(111);
+      expect(getFileLockProcessStartTime(42)).toBe(222);
+    });
+  });
+
+  it("fails closed when the Windows identity reader finds nothing", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(null);
+
+    return withMockedPlatform("win32", async () => {
+      expect(getFileLockProcessStartTime(42)).toBeNull();
+    });
+  });
+
+  it("returns null on unsupported platforms", () => {
+    return withMockedPlatform("freebsd", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
       expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });

@@ -14,6 +14,7 @@ paths:
   - src/infra/push-apns-http2.ts
   - src/infra/ssh-tunnel.ts
   - src/proxy-capture
+  - src/secrets/egress-proxy
   - extensions/codex/src/app-server/transport-websocket.ts
   - extensions/irc/src
   - extensions/qa-lab/src

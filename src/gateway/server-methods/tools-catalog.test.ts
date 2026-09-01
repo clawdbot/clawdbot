@@ -3,16 +3,19 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentIds: vi.fn(() => ["main"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
@@ -23,22 +26,9 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
-
 vi.mock("../../plugins/tools.js", () => ({
-  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
-    JSON.stringify([pluginId, toolName]),
   ensureStandalonePluginToolRegistryLoaded: vi.fn(),
-  resolvePluginTools: vi.fn(() => [
-    { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
-    {
-      name: "matrix_room",
-      label: "matrix_room",
-      displaySummary: "Summarized Matrix room helper.",
-      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
-    },
-  ]),
-  getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
+  resolvePluginTools: vi.fn(),
 }));
 
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
@@ -124,9 +114,24 @@ function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload
 
 describe("tools.catalog handler", () => {
   beforeEach(() => {
-    pluginToolMetaState.clear();
-    pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
-    pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    const voiceCall = {
+      name: "voice_call",
+      label: "voice_call",
+      description: "Plugin calling tool",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const matrixRoom = {
+      name: "matrix_room",
+      label: "matrix_room",
+      displaySummary: "Summarized Matrix room helper.",
+      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    setPluginToolMeta(voiceCall, { pluginId: "voice-call", optional: true });
+    setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
+    vi.mocked(resolvePluginTools).mockReturnValue([voiceCall, matrixRoom]);
     getActivePluginRegistryMock.mockReturnValue(null);
     vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
   });

@@ -1,3 +1,4 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -18,6 +19,7 @@ const normalCommandSpec: NativeCommandSpec = {
 function createInteractionHarness(params: {
   commandSpecs: NativeCommandSpec[];
   voiceEnabled: boolean;
+  channelRuntime?: InteractionParams["channelRuntime"];
 }) {
   const createNativeCommand = vi.fn(
     (options: Parameters<CreateNativeCommand>[0]): ReturnType<CreateNativeCommand> =>
@@ -44,6 +46,7 @@ function createInteractionHarness(params: {
     allowFrom: [],
     dmPolicy: "open",
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv,
+    channelRuntime: params.channelRuntime,
     createNativeCommand,
   });
   return { createNativeCommand, surface };
@@ -77,5 +80,21 @@ describe("createDiscordProviderInteractionSurface", () => {
 
     expect(createNativeCommand).toHaveBeenCalledOnce();
     expect(surface.commands.map((command) => command.name)).toEqual(["normal"]);
+  });
+
+  it("binds native slash commands to the owning Gateway dispatcher", () => {
+    const dispatchReplyFromConfig = vi.fn();
+    const channelRuntime = createPluginRuntimeMock({
+      channel: { reply: { dispatchReplyFromConfig } },
+    }).channel;
+    const { createNativeCommand } = createInteractionHarness({
+      commandSpecs: [normalCommandSpec],
+      voiceEnabled: false,
+      channelRuntime,
+    });
+
+    expect(createNativeCommand.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
+      dispatchReplyFromConfig,
+    );
   });
 });

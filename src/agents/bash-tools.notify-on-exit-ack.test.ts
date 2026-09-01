@@ -6,6 +6,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempTelegramHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -54,6 +55,26 @@ afterEach(() => {
   resetSystemEventsForTest();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+it("keeps selected-agent global completions scoped to their owner", async () => {
+  const process = await startDeferredNotifyRun({
+    spawn: supervisorSpawnMock,
+    sessionKey: "global",
+    agentId: "research",
+  });
+  await process.finish();
+
+  expect(requestHeartbeatMock).toHaveBeenCalledWith({
+    source: "exec-event",
+    intent: "event",
+    reason: "exec-event",
+    coalesceMs: 0,
+    agentId: "research",
+  });
+  const queued = peekSystemEventEntries("global");
+  expect(selectAgentSystemEvents(queued, "research")).toHaveLength(1);
+  expect(selectAgentSystemEvents(queued, "main")).toEqual([]);
 });
 
 it("isolates identical completions across exact full-slug reuse", async () => {

@@ -2,7 +2,15 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyCodeModeCatalog } from "./code-mode.js";
+
+const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
+  vi.fn<() => Promise<typeof import("typescript")>>(),
+);
+
+vi.mock("./code-mode-typescript-runtime.js", () => ({
+  loadCodeModeTypeScriptRuntime,
+}));
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginTool,
@@ -11,30 +19,21 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { registerHeadlessToolSearchCatalog } from "./tool-search.js";
 
 describe("Code Mode TypeScript execution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    loadCodeModeTypeScriptRuntime.mockReset();
     resetCodeModeTestState();
   });
 
   it("supports TypeScript source transform", async () => {
-    testing.setTypescriptRuntimeForTest({
-      ...(await import("typescript")),
-      transpileModule: vi.fn((code: string) => ({
-        outputText: code.replace(": number", ""),
-        diagnostics: [],
-      })),
-      ScriptTarget: { ES2022: 9 },
-      ModuleKind: { ESNext: 99 },
-      ImportsNotUsedAsValues: { Remove: 0 },
-      DiagnosticCategory: { Error: 1 },
-      flattenDiagnosticMessageText: (message: unknown) => String(message),
-    } as never);
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -117,6 +116,38 @@ describe("Code Mode TypeScript execution", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it.each([-1, 1])(
+    "keeps the headless budget when TypeScript preparation shifts the wall clock by %i",
+    async (clockDirection) => {
+      const typescriptRuntime = await import("typescript");
+      const initialWallClockMs = Date.now();
+      let wallClockJumpMs = 0;
+      const wallClock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+      try {
+        loadCodeModeTypeScriptRuntime.mockImplementation(async () => {
+          wallClockJumpMs = clockDirection * 60_000;
+          return typescriptRuntime;
+        });
+        const { ctx, catalogRef } = createCodeModeHarness();
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+
+        const result = await runCodeModeScriptHeadless({
+          ctx,
+          language: "typescript",
+          code: "const value: number = 42; return value;",
+          wallClockMs: 30_000,
+        });
+
+        expect(result).toMatchObject({ status: "completed", value: 42 });
+        expect(loadCodeModeTypeScriptRuntime).toHaveBeenCalledOnce();
+      } finally {
+        wallClock.mockRestore();
+      }
+    },
+  );
+
   it("times out an unfinished TypeScript runtime load without starting a worker", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     (config as { tools: { codeMode: unknown } }).tools.codeMode = {
@@ -131,7 +162,7 @@ describe("Code Mode TypeScript execution", () => {
       runId: "run-code-mode",
       catalogRef,
     });
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
 
     const result = resultDetails(
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
@@ -161,7 +192,7 @@ describe("Code Mode TypeScript execution", () => {
       runId: "run-code-mode",
       catalogRef,
     });
-    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
     const controller = new AbortController();
     const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
       "code-call-typescript-load-abort",

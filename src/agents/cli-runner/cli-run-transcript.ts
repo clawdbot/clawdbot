@@ -1,10 +1,13 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
@@ -31,6 +34,11 @@ export function buildCliHookUserMessage(prompt: string): unknown {
   };
 }
 
+/** Interrupted turns persist as aborted so replayed history never treats partial text as complete. */
+export function resolveCliAssistantStopReason(output: CliOutput): StopReason {
+  return output.terminalInterruption ? "aborted" : "stop";
+}
+
 export function buildCliHookAssistantMessage(params: {
   text: string;
   provider: string;
@@ -42,6 +50,7 @@ export function buildCliHookAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): unknown {
   return {
     role: "assistant",
@@ -50,7 +59,7 @@ export function buildCliHookAssistantMessage(params: {
     provider: params.provider,
     model: params.model,
     ...(params.usage ? { usage: params.usage } : {}),
-    stopReason: "stop",
+    stopReason: params.stopReason,
     timestamp: Date.now(),
   };
 }
@@ -78,6 +87,7 @@ function buildCliContextEngineAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
 }
@@ -142,8 +152,10 @@ export async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
+  stopReason: StopReason;
 }): Promise<{
   owned: boolean;
+  idempotencyKey?: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
@@ -165,6 +177,7 @@ export async function persistCliAssistantTranscript(params: {
     return { owned: false };
   }
   try {
+    const idempotencyKey = `cli-assistant:${runParams.runId}`;
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -176,9 +189,13 @@ export async function persistCliAssistantTranscript(params: {
         ? { expectedWriterRunId: runParams.expectedWriterRunId }
         : {}),
       storePath: runParams.storePath,
-      idempotencyKey: `cli-assistant:${runParams.runId}`,
+      idempotencyKey,
       config: runParams.config,
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      beforeMessageWrite: (write) =>
+        runAgentHarnessBeforeMessageWriteHook({
+          ...write,
+          prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
+        }),
       message: buildAssistantMessage({
         model: {
           api: "cli",
@@ -186,7 +203,7 @@ export async function persistCliAssistantTranscript(params: {
           id: params.modelId,
         },
         content: [{ type: "text", text: params.text }],
-        stopReason: "stop",
+        stopReason: params.stopReason,
         usage: buildUsageWithNoCost({
           input: params.usage?.input,
           output: params.usage?.output,
@@ -200,7 +217,11 @@ export async function persistCliAssistantTranscript(params: {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
       return { owned: result.code === "blocked" || result.code === "session-rebound" };
     }
-    return { owned: true, ...(result.anchor ? { terminalAnchor: result.anchor } : {}) };
+    return {
+      owned: true,
+      idempotencyKey,
+      ...(result.anchor ? { terminalAnchor: result.anchor } : {}),
+    };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return { owned: false };
@@ -256,7 +277,27 @@ export async function persistCliRunBlock(
 
   try {
     const sessionKey = params.sessionKey?.trim() || params.sessionId;
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+    const targetAgentId = params.sessionTarget?.agentId;
+    const targetStorePath = params.sessionTarget?.storePath;
+    const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+      config: params.config ?? {},
+      sessionKey,
+      storePath: targetStorePath,
+    });
+    const explicitAlternateStoreAgentId =
+      targetAgentId &&
+      targetStorePath &&
+      !parseAgentSessionKey(sessionKey)?.agentId &&
+      targetStoreOwner.kind === "none"
+        ? targetAgentId
+        : undefined;
+    const agentId =
+      explicitAlternateStoreAgentId ??
+      resolveSessionAgentId({
+        agentId: targetAgentId ?? params.agentId,
+        config: params.config,
+        sessionKey,
+      });
     let sessionManager = params.sessionManager;
     if (!sessionManager) {
       const sessionTarget = params.sessionTarget ?? {
@@ -319,44 +360,57 @@ export async function finalizeCliContextEngineTurn(params: {
   }
 
   const { params: runParams } = context;
-  const prePromptMessages = params.historyMessages.filter(isAgentMessage);
-  const turnMessages: AgentMessage[] = [];
-  if (context.contextEngineTurnPrompt) {
-    turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
-  }
-  if (params.assistantText) {
-    turnMessages.push(
-      buildCliContextEngineAssistantMessage({
-        text: params.assistantText,
-        provider: runParams.provider,
-        model: context.modelId,
-        usage: params.output.usage,
-      }),
-    );
-  }
+  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (runParams.onContextEngineTurnCandidate) {
+    if (admission && params.terminalAnchor) {
+      runParams.onContextEngineTurnCandidate({
+        boundary: { admission, terminal: params.terminalAnchor },
+        sessionIdUsed: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        sessionTarget: runParams.sessionTarget,
+        promptError: false,
+        aborted:
+          params.output.terminalInterruption !== undefined ||
+          runParams.abortSignal?.aborted === true,
+        yieldAborted: false,
+        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
+      });
+    }
+  } else {
+    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const turnMessages: AgentMessage[] = [];
+    if (context.contextEngineTurnPrompt) {
+      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+    }
+    if (params.assistantText) {
+      turnMessages.push(
+        buildCliContextEngineAssistantMessage({
+          text: params.assistantText,
+          provider: runParams.provider,
+          model: context.modelId,
+          usage: params.output.usage,
+          stopReason: resolveCliAssistantStopReason(params.output),
+        }),
+      );
+    }
 
-  const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
-    backendId: context.backendResolved.id,
-  });
-  const finalizeTurn = async (transcript: {
-    messagesSnapshot: AgentMessage[];
-    prePromptMessageCount: number;
-    sessionManager?: SessionManager;
-    withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T) => Promise<T>;
-  }) => {
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: context.backendResolved.id,
+    });
     let deferredTurnMaintenance: Promise<void> | undefined;
     const result = await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
       promptError: false,
-      aborted: runParams.abortSignal?.aborted === true,
+      aborted:
+        params.output.terminalInterruption !== undefined || runParams.abortSignal?.aborted === true,
       yieldAborted: false,
       sessionIdUsed: runParams.sessionId,
       sessionKey: runParams.sessionKey,
+      sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
       isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-      messagesSnapshot: transcript.messagesSnapshot,
-      prePromptMessageCount: transcript.prePromptMessageCount,
-      sessionManager: transcript.sessionManager,
+      messagesSnapshot: [...prePromptMessages, ...turnMessages],
+      prePromptMessageCount: prePromptMessages.length,
       config: context.contextEngineConfig,
       contextEngineHostSupport,
       providerId: runParams.provider,
@@ -364,7 +418,7 @@ export async function finalizeCliContextEngineTurn(params: {
       runMaintenance: async (maintenanceParams) =>
         await runHarnessContextEngineMaintenance({
           ...maintenanceParams,
-          withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
+          withSessionManagerRewriteLock: async (operation) => await operation(),
           onDeferredMaintenance: (promise) => {
             deferredTurnMaintenance = promise;
           },
@@ -374,31 +428,5 @@ export async function finalizeCliContextEngineTurn(params: {
     if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
       context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
     }
-  };
-  const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
-  if (runParams.onContextEngineTurnCandidate) {
-    if (admission && params.terminalAnchor) {
-      runParams.onContextEngineTurnCandidate({
-        boundary: { admission, terminal: params.terminalAnchor },
-        sessionIdUsed: runParams.sessionId,
-        sessionKey: runParams.sessionKey,
-        sessionTarget: runParams.sessionTarget,
-        sessionFile: runParams.sessionFile,
-        promptError: false,
-        aborted: runParams.abortSignal?.aborted === true,
-        yieldAborted: false,
-        contextEngineHostSupport,
-        providerId: runParams.provider,
-        modelId: context.modelId,
-        config: context.contextEngineConfig,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
-      });
-    }
-  } else {
-    await finalizeTurn({
-      messagesSnapshot: [...prePromptMessages, ...turnMessages],
-      prePromptMessageCount: prePromptMessages.length,
-      withSessionManagerRewriteLock: async (operation) => await operation(),
-    });
   }
 }

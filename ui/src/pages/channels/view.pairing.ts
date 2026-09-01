@@ -1,7 +1,9 @@
 // DM sender access request queue shared by the Channels hub and detail panels.
 import { html, nothing } from "lit";
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
+import { renderChannelPicker } from "../../components/channel-picker.ts";
 import "../../components/modal-dialog.ts";
+import { renderPicker } from "../../components/select-picker.ts";
 import {
   renderSettingsEmpty,
   renderSettingsSection,
@@ -9,6 +11,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { renderChannelRefreshAction } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 function accountName(account: ChannelsPairingAccount): string {
@@ -22,11 +25,6 @@ function requestAccountName(request: ChannelsPairingRequest): string {
 function formatRequestTime(value: string): string {
   const time = Date.parse(value);
   return Number.isFinite(time) ? formatRelativeTimestamp(time) : value;
-}
-
-function selectValue(event: Event): string | null {
-  const value = event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : "";
-  return value || null;
 }
 
 function filteredAccounts(props: ChannelsProps): ChannelsPairingAccount[] {
@@ -58,29 +56,32 @@ function renderFilters(props: ChannelsProps) {
     <div class="channels-pairing-filters">
       <label>
         <span>${t("channels.pairing.channelFilter")}</span>
-        <select
-          class="settings-select"
-          .value=${props.pairingChannelFilter ?? ""}
-          @change=${(event: Event) => props.onPairingFilterChange(selectValue(event), null)}
-        >
-          <option value="">${t("channels.pairing.allChannels")}</option>
-          ${channels.map(([channel, label]) => html`<option value=${channel}>${label}</option>`)}
-        </select>
+        ${renderChannelPicker({
+          label: t("channels.pairing.channelFilter"),
+          value: props.pairingChannelFilter ?? "",
+          options: [
+            { value: "", label: t("channels.pairing.allChannels"), kind: "neutral" },
+            ...channels.map(([value, label]) => ({ value, label })),
+          ],
+          onChange: (value) => props.onPairingFilterChange(value || null, null),
+        })}
       </label>
       <label>
         <span>${t("channels.pairing.accountFilter")}</span>
-        <select
-          class="settings-select"
-          .value=${props.pairingAccountFilter ?? ""}
-          ?disabled=${!props.pairingChannelFilter}
-          @change=${(event: Event) =>
-            props.onPairingFilterChange(props.pairingChannelFilter, selectValue(event))}
-        >
-          <option value="">${t("channels.pairing.allAccounts")}</option>
-          ${accountsForChannel.map(
-            (account) => html`<option value=${account.accountId}>${accountName(account)}</option>`,
-          )}
-        </select>
+        ${renderPicker({
+          label: t("channels.pairing.accountFilter"),
+          value: props.pairingAccountFilter ?? "",
+          options: [
+            { value: "", label: t("channels.pairing.allAccounts") },
+            ...accountsForChannel.map((account) => ({
+              value: account.accountId,
+              label: accountName(account),
+            })),
+          ],
+          disabled: !props.pairingChannelFilter,
+          onChange: (value) =>
+            props.onPairingFilterChange(props.pairingChannelFilter, value || null),
+        })}
       </label>
     </div>
   `;
@@ -164,23 +165,11 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
           title: t("channels.pairing.title"),
           description: t("channels.pairing.subtitle"),
           ...(count > 0 ? { count } : {}),
-          actions: html`
-            <span class="settings-row__value">
-              ${props.canManagePairing && props.pairingLastSuccessAt
-                ? t("channels.hub.updatedAgo", {
-                    ago: formatRelativeTimestamp(props.pairingLastSuccessAt),
-                  })
-                : t("common.na")}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              ?disabled=${props.pairingLoading || !props.canManagePairing}
-              @click=${props.onPairingRefresh}
-            >
-              ${t("common.refresh")}
-            </button>
-          `,
+          actions: renderChannelRefreshAction({
+            updatedAt: props.canManagePairing ? props.pairingLastSuccessAt : null,
+            disabled: props.pairingLoading || !props.canManagePairing,
+            onRefresh: props.onPairingRefresh,
+          }),
         },
         !props.canManagePairing
           ? html`

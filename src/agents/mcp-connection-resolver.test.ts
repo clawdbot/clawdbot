@@ -330,6 +330,10 @@ describe("mcp connection resolver helpers", () => {
           } as GatewayReloadProofState["cronState"]["cron"],
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
           cronEnabled: false,
+          reconcileExitWatchers: async () => {},
+          reconcileStreamWatchers: async () => {},
+          stopStreamWatchers: async () => {},
+          reconcileHeartbeatJobs: async () => "converged" as const,
         },
         channelHealthMonitor: null,
       };
@@ -358,8 +362,11 @@ describe("mcp connection resolver helpers", () => {
         setState(nextState) {
           gatewayState = nextState;
         },
-        async startChannel() {},
+        async startChannel() {
+          return new Map();
+        },
         async stopChannel() {},
+        pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
@@ -380,7 +387,7 @@ describe("mcp connection resolver helpers", () => {
         requestRecoveryRestart,
       });
 
-      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBeUndefined();
+      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBe("applied");
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
         allowGatewaySubagentBinding: true,
         catalogMode: "static",

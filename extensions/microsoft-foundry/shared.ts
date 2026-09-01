@@ -295,18 +295,6 @@ function supportsFoundryReasoningEffort(value?: string | null): boolean {
   );
 }
 
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, {
-    ...api,
-    isAnthropicFoundryDeployment,
-    supportsFoundryImageInput,
-    supportsFoundryReasoningContent,
-    supportsFoundryReasoningEffort,
-  });
-}
-
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
@@ -755,7 +743,7 @@ export function buildFoundryAuthResult(params: {
               api: params.api,
               deployments: params.deployments,
             },
-          ) as unknown as ModelProviderConfig,
+          ),
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),

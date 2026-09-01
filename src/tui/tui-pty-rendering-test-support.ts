@@ -23,7 +23,15 @@ export function toolFrame(rows: string[], complete: boolean) {
     const before = frame.indexOf("PTY_BEFORE_TOOL");
     const running = frame.indexOf("Read File (running)");
     const partial = frame.indexOf("PTY_TOOL_PARTIAL");
-    return before >= 0 && running >= 0 && partial >= 0 && before < running && running < partial;
+    return (
+      before >= 0 &&
+      running >= 0 &&
+      partial >= 0 &&
+      before < running &&
+      running < partial &&
+      frame.includes("# PTY_TOOL_PARTIAL") &&
+      frame.includes("```")
+    );
   }
   const markers = ["PTY_BEFORE_TOOL", "Read File", "PTY_TOOL_RESULT", "PTY_AFTER_TOOL"];
   return (
@@ -34,6 +42,8 @@ export function toolFrame(rows: string[], complete: boolean) {
     ) &&
     !frame.includes("(running)") &&
     !frame.includes("PTY_TOOL_PARTIAL") &&
+    frame.includes("> PTY_TOOL_RESULT") &&
+    frame.includes("```") &&
     frame.includes("idle")
   );
 }
@@ -90,12 +100,13 @@ export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
   async function waitForRenderingRelease(gate: string) {
     const target = actionLogPath + "." + gate + ".release";
     if (existsSync(target)) return;
-    await new Promise<void>((resolve, reject) => {
-      const watcher = watch(dirname(target), () => {
-        if (existsSync(target)) { watcher.close(); resolve(); }
-      });
-      watcher.on("error", (error) => { watcher.close(); reject(error); });
-      if (existsSync(target)) { watcher.close(); resolve(); }
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (existsSync(target)) { unwatchFile(target, check); resolve(); }
+      };
+      // Release is file state; native watch delivery can outlast the fixture budget.
+      watchFile(target, { interval: 50, persistent: false }, check);
+      check();
     });
   }
   function emitAssistant(backend, runId, sessionKey, state, value) {
@@ -113,9 +124,9 @@ export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
     const base = { toolCallId: "pty-rendering-tool", name: process.env.OPENCLAW_TUI_PTY_TOOL_NAME ?? "read_file" };
     backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "start", args: { path: "chronology-proof.txt" } } } });
     if (process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL === "full") {
-      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "update", partialResult: { content: [{ type: "text", text: "PTY_TOOL_PARTIAL" }] } } } });
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "update", partialResult: { content: [{ type: "text", text: "    # PTY_TOOL_PARTIAL" }] } } } });
       record("toolPartialReady", { runId }); await waitForRenderingRelease("tool");
-      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "result", result: { content: [{ type: "text", text: "PTY_TOOL_RESULT" }] } } } });
+      backend.onEvent?.({ event: "agent", payload: { runId, sessionKey, stream: "tool", data: { ...base, phase: "result", result: { content: [{ type: "text", text: "    > PTY_TOOL_RESULT" }] } } } });
     }
     const finalText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL"; emitAssistant(backend, runId, sessionKey, "delta", finalText); emitAssistant(backend, runId, sessionKey, "final", finalText); record("toolComplete", { runId }); record("toolChronologyComplete", { runId });
   }

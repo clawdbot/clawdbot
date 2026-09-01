@@ -8,23 +8,30 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
+import { AuthProfileStoreUnreadableError } from "./legacy-source-diagnostic.js";
 import {
   hasOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
-import { readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
-  coerceAuthProfileState,
-  loadPersistedAuthProfileState,
-  mergeAuthProfileState,
-} from "./state.js";
+  getRuntimeExternalCliProfileIds,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
+import {
+  inspectAuthProfileJsonCellReadOnly,
+  readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  type AuthProfileDatabase,
+} from "./sqlite.js";
+import { coerceAuthProfileState, mergeAuthProfileState } from "./state.js";
 import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
@@ -38,7 +45,7 @@ type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
-  database?: OpenClawAgentDatabase;
+  database?: AuthProfileDatabase;
 };
 
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
@@ -555,7 +562,7 @@ function replaceMergedProfileReferences(params: {
     }
   }
 
-  return {
+  const next = {
     ...store,
     profiles,
     ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
@@ -564,6 +571,13 @@ function replaceMergedProfileReferences(params: {
       ? { usageStats }
       : { usageStats: undefined }),
   };
+  setRuntimeExternalCliProfileIds(
+    next,
+    getRuntimeExternalCliProfileIds(store).map(
+      (profileId) => replacements.get(profileId) ?? profileId,
+    ),
+  );
+  return next;
 }
 
 function reconcileMainStoreOAuthProfileDrift(params: {
@@ -609,7 +623,8 @@ export function mergeAuthProfileStores(
     override.runtimeLocalProfileIds === undefined &&
     override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
-    override.runtimeExternalProfileIdsAuthoritative !== true
+    override.runtimeExternalProfileIdsAuthoritative !== true &&
+    getRuntimeExternalCliProfileIds(override).length === 0
   ) {
     return base;
   }
@@ -705,7 +720,14 @@ export function mergeAuthProfileStores(
             : {}),
         }
       : {};
-  return reconcileMainStoreOAuthProfileDrift({
+  const runtimeExternalCliProfileIds = [
+    ...getRuntimeExternalCliProfileIds(base).filter(
+      (profileId) =>
+        !overrideProfileIds.has(profileId) && !removedRuntimeExternalProfileIds.has(profileId),
+    ),
+    ...getRuntimeExternalCliProfileIds(override),
+  ];
+  const result = reconcileMainStoreOAuthProfileDrift({
     base,
     override,
     merged: {
@@ -720,6 +742,8 @@ export function mergeAuthProfileStores(
       ...runtimeExternalProfileMetadata,
     },
   }) as RuntimeAuthProfileStore;
+  setRuntimeExternalCliProfileIds(result, runtimeExternalCliProfileIds);
+  return result;
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */
@@ -765,24 +789,61 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
   }
 }
 
+function mergePersistedAuthProfileState(
+  raw: unknown,
+  readState: () => unknown,
+): AuthProfileStore | null {
+  const store = coercePersistedAuthProfileStore(raw);
+  if (!store) {
+    return null;
+  }
+  return {
+    ...store,
+    ...mergeAuthProfileState(coerceAuthProfileState(raw), coerceAuthProfileState(readState())),
+  };
+}
+
 /** Loads the persisted auth profile store and merges runtime state. */
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
   options?: LoadPersistedAuthProfileStoreOptions,
 ): AuthProfileStore | null {
-  const raw = readPersistedAuthProfileStoreRaw(agentDir, options?.database);
-  const store = coercePersistedAuthProfileStore(raw);
-  if (!store) {
+  return mergePersistedAuthProfileState(
+    readPersistedAuthProfileStoreRaw(agentDir, options?.database),
+    () => readPersistedAuthProfileStateRaw(agentDir, options?.database),
+  );
+}
+
+/** Read an already selected owner without rediscovering an environment or opening a writer. */
+export function loadPersistedAuthProfileStoreAtDatabasePath(
+  databasePath: string,
+  kind: "agent" | "shared-state",
+): AuthProfileStore | null {
+  const target = { path: databasePath, kind };
+  const credentials = inspectAuthProfileJsonCellReadOnly(target, "store");
+  if (credentials.status === "missing") {
     return null;
   }
-  const merged = {
-    ...store,
-    ...mergeAuthProfileState(
-      coerceAuthProfileState(raw),
-      loadPersistedAuthProfileState(agentDir, options?.database),
-    ),
-  };
-  return merged;
+  if (credentials.status === "unreadable") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  const state = inspectAuthProfileJsonCellReadOnly(target, "state");
+  const store = mergePersistedAuthProfileState(credentials.raw, () =>
+    state.status === "readable" ? state.raw : null,
+  );
+  if (!store) {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return store;
+}
+
+/** Load the shared auth store from an explicit state root. */
+export function loadPersistedSharedAuthProfileStore(
+  env: NodeJS.ProcessEnv,
+): AuthProfileStore | null {
+  return mergePersistedAuthProfileState(readPersistedSharedAuthProfileStoreRaw(env), () =>
+    readPersistedSharedAuthProfileStateRaw(env),
+  );
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

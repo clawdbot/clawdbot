@@ -4,13 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installGatewayTestHooks, testState, writeSessionStore } from "../test-helpers.js";
 import { getGatewayConfigModule, sessionStoreEntry } from "../test/server-sessions.test-helpers.js";
-import { toolsEffectiveGlobalAgentRuntimeMocks as inventoryMocks } from "./__mocks__/tools-effective.runtime.js";
-import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
+import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
+import {
+  toolsEffectiveInventoryMocks as inventoryMocks,
+  toolsEffectiveTestDependencies,
+} from "./tools-effective.test-support.js";
 
-vi.mock("./tools-effective.runtime.js", async () => {
-  const mockModule = await import("./__mocks__/tools-effective.runtime.js");
-  return { ...mockModule, ...mockModule.toolsEffectiveRuntimeMockModule };
-});
+const toolsEffectiveHandlers = createToolsEffectiveHandlers(toolsEffectiveTestDependencies);
 
 installGatewayTestHooks();
 
@@ -183,7 +183,7 @@ describe("tools.effective global agent integration", () => {
       | [boolean, unknown?, { code: number; message: string }?]
       | undefined;
     expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.message).toBe('agent id "work" does not match session agent "main"');
+    expect(call?.[2]?.message).toBe('agent "work" does not match session key agent "main"');
     expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 

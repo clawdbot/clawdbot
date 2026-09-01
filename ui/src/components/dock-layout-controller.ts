@@ -7,6 +7,7 @@ import {
   type TemplateResult,
 } from "lit";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
+import "./resizable-divider.ts";
 
 type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
 
@@ -15,6 +16,8 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   reservationPrefix: string;
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
+  maxWidth?: () => number;
+  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -25,10 +28,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   width: number;
 
   private suppressed = false;
-  private resizeCleanup: (() => void) | null = null;
   private readonly onViewportResize = () => {
     const height = Math.min(this.height, this.options.layout.maxHeight());
-    const width = Math.min(this.width, this.options.layout.maxWidth());
+    const width = Math.min(this.width, this.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -58,13 +60,12 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
     this.height = layout.height;
-    this.width = layout.width;
+    this.width = Math.min(layout.width, this.maxWidth());
     window.addEventListener("resize", this.onViewportResize);
   }
 
   hostDisconnected(): void {
     window.removeEventListener("resize", this.onViewportResize);
-    this.clearResizeListeners();
     this.clearReservation();
   }
 
@@ -138,10 +139,13 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.isFullscreen()) {
+    if (this.options.reserveViewport === false) {
       return;
     }
-    const visible = this.options.isAvailable() && this.open;
+    // Embedded docks live inside a parent layout that already owns their geometry.
+    // Reserving the viewport here would apply the standalone dock a second time.
+    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
+    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -153,65 +157,52 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 
-  startResize(event: PointerEvent): void {
-    event.preventDefault();
-    this.clearResizeListeners();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startHeight = this.height;
-    const startWidth = this.width;
-    const onMove = (move: PointerEvent) => {
-      if (this.dock === "bottom") {
-        const next = Math.max(this.options.layout.minHeight, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, this.options.layout.maxHeight());
-      } else {
-        const next = Math.max(this.options.layout.minWidth, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, this.options.layout.maxWidth());
-      }
-      this.syncReservation();
-      this.options.onResize?.();
-      this.host.requestUpdate();
-    };
-    const cleanup = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("blur", onUp);
-      if (this.resizeCleanup === cleanup) {
-        this.resizeCleanup = null;
-      }
-    };
-    const onUp = () => {
-      cleanup();
-      if (this.host.isConnected) {
-        this.persist();
-      }
-    };
-    this.resizeCleanup = cleanup;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    window.addEventListener("blur", onUp);
+  private resize(event: CustomEvent<{ splitRatio: number }>): void {
+    const horizontal = this.dock === "bottom";
+    const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
+    const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
+    const size = Math.min(maximum, Math.max(minimum, (1 - event.detail.splitRatio) * this.size()));
+    if (horizontal) {
+      this.height = size;
+    } else {
+      this.width = size;
+    }
+    this.syncReservation();
+    this.options.onResize?.();
+    this.host.requestUpdate();
+  }
+
+  private size(): number {
+    return this.dock === "bottom" ? window.innerHeight : window.innerWidth;
   }
 
   renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
     if (this.isFullscreen() || this.dock === "main") {
       return nothing;
     }
-    return html`<div
+    const horizontal = this.dock === "bottom";
+    const size = this.size();
+    const minimum = horizontal ? this.options.layout.minHeight : this.options.layout.minWidth;
+    const maximum = horizontal ? this.options.layout.maxHeight() : this.maxWidth();
+    const current = horizontal ? this.height : this.width;
+    return html`<resizable-divider
       class="${classPrefix}-resizer ${classPrefix}-resizer--${this.dock}"
-      @pointerdown=${(event: PointerEvent) => this.startResize(event)}
-      role="separator"
-      aria-label=${label}
-    ></div>`;
-  }
-
-  clearResizeListeners(): void {
-    this.resizeCleanup?.();
-    this.resizeCleanup = null;
+      .orientation=${horizontal ? "horizontal" : "vertical"}
+      .label=${label}
+      .splitRatio=${1 - current / size}
+      .minRatio=${1 - maximum / size}
+      .maxRatio=${1 - minimum / size}
+      .measureRatio=${() => 1 - (horizontal ? this.height : this.width) / this.size()}
+      .measureSize=${() => this.size()}
+      @resize=${(event: CustomEvent<{ splitRatio: number }>) => this.resize(event)}
+      @resize-end=${() => this.persist()}
+    ></resizable-divider>`;
   }
 
   private clearReservation(): void {
+    if (this.options.reserveViewport === false) {
+      return;
+    }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
@@ -219,6 +210,16 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
 
   private isFullscreen(): boolean {
     return this.options.isFullscreen?.() === true;
+  }
+
+  private maxWidth(): number {
+    return Math.max(
+      this.options.layout.minWidth,
+      Math.min(
+        this.options.layout.maxWidth(),
+        this.options.maxWidth?.() ?? Number.POSITIVE_INFINITY,
+      ),
+    );
   }
 }
 
@@ -229,6 +230,15 @@ export const dockPanelStyles = css`
     color: var(--text, #d7dae0);
     font-family: var(--font-body);
   }
+  :host([embedded]) {
+    position: static;
+    z-index: auto;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+  }
   :is(.bp, .tp) {
     position: fixed;
     display: flex;
@@ -236,64 +246,115 @@ export const dockPanelStyles = css`
     background: var(--bg, #0e1015);
     overflow: hidden;
   }
-  :is(.bp--bottom, .tp--bottom) {
-    border-top: 1px solid var(--border, #262b34);
-  }
-  :is(.bp--right, .tp--right) {
-    border-left: 1px solid var(--border, #262b34);
-  }
   :is(.bp-resizer, .tp-resizer) {
     position: absolute;
     z-index: 2;
-    background: transparent;
-  }
-  :is(.bp-resizer, .tp-resizer):hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
   }
   :is(.bp-resizer--bottom, .tp-resizer--bottom) {
+    --resize-handle-line-block: 0;
     top: 0;
     left: 0;
     right: 0;
-    height: 5px;
-    cursor: ns-resize;
   }
   :is(.bp-resizer--right, .tp-resizer--right) {
+    --resize-handle-line-inline: 0;
     top: 0;
     bottom: 0;
     left: 0;
-    width: 5px;
-    cursor: ew-resize;
   }
-  :is(.bp-header, .tp-header) {
+  .rail-header {
+    box-sizing: border-box;
     display: flex;
+    height: var(--rail-header-height, 48px);
+    min-height: var(--rail-header-height, 48px);
+    flex: 0 0 auto;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 0 6px 0 4px;
-    border-bottom: 1px solid var(--border, #262b34);
-    min-height: 36px;
+    padding: 0 var(--rail-header-padding-end, 8px) 0 var(--rail-header-padding-start, 12px);
+    border-bottom: var(--rail-divider-size, 1px) solid
+      var(--rail-divider-color, var(--border, #262b34));
+    background: var(--rail-header-background, var(--bg, #0e1015));
   }
-  :is(.bp-icon, .tp-icon) {
+  .rail-header__actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: var(--rail-header-action-gap, 2px);
+  }
+  .rail-header__copy {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--rail-header-copy-gap, 2px);
+  }
+  .rail-header__eyebrow {
+    overflow: hidden;
+    color: var(--muted, #8a919e);
+    font-size: var(--rail-header-eyebrow-size, 10px);
+    letter-spacing: var(--rail-header-eyebrow-letter-spacing, 0.04em);
+    line-height: 1;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .rail-header__title {
+    overflow: hidden;
+    color: var(--text, #d7dae0);
+    font-size: var(--rail-header-title-size, 12px);
+    font-weight: var(--rail-header-title-weight, 600);
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rail-header__action {
     display: inline-flex;
+    width: var(--rail-header-action-size, 28px);
+    min-width: var(--rail-header-action-size, 28px);
+    height: var(--rail-header-action-size, 28px);
+    min-height: var(--rail-header-action-size, 28px);
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
     padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--rail-header-action-color, var(--muted, #8a919e));
+    font: inherit;
+    opacity: 1;
   }
-  :is(.bp-icon, .tp-icon):hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
+  .rail-header__action:hover,
+  .rail-header__action:focus-visible {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--rail-header-action-hover-color, var(--text, #d7dae0));
   }
-  :is(.bp-actions, .tp-actions) {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding-left: 6px;
+  .rail-header__action:focus-visible {
+    outline: 2px solid var(--ring, var(--accent, #ff5c5c));
+    outline-offset: -3px;
+  }
+  .rail-header__action.is-active,
+  .rail-header__action[aria-pressed="true"] {
+    background: transparent;
+    color: var(--rail-header-action-active-color, var(--accent, #ff5c5c));
+  }
+  .rail-header__action:disabled,
+  .rail-header__action[aria-disabled="true"] {
+    opacity: var(--rail-header-action-disabled-opacity, 0.4);
+  }
+  [data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  .rail-header__action svg {
+    width: var(--rail-header-action-glyph-size, 16px);
+    height: var(--rail-header-action-glyph-size, 16px);
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 `;

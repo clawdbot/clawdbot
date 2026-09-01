@@ -1,25 +1,3 @@
-/**
- * Shared session-tool data shapes and classification helpers.
- *
- * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
- */
-export {
-  createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
-  createSessionVisibilityRowChecker,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
-} from "./sessions-access.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export {
-  resolveCurrentSessionClientAlias,
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  resolveSessionReference,
-  resolveVisibleSessionReference,
-  shouldResolveSessionIdInput,
-} from "./sessions-resolution.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionRow,
@@ -29,9 +7,38 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { FastModeSource } from "../../shared/fast-mode.js";
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
+import {
+  createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+} from "./sessions-access.js";
+export {
+  createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
+} from "./sessions-access.js";
+export {
+  resolveCurrentSessionClientAlias,
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+  resolveSessionReference,
+  resolveVisibleSessionReference,
+  isExpectedSessionLookupMiss,
+  shouldResolveSessionIdInput,
+} from "./sessions-resolution.js";
 
-/** Coarse session category used by session list/status tools. */
-type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+/** Coarse session kind used by session list/status tools. */
+export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
+type SessionKind = (typeof SESSION_LIST_KINDS)[number];
 
 const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
   main: "main",
@@ -65,6 +72,7 @@ export type GatewaySessionListRow = {
   };
   spawnedBy?: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -114,6 +122,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
+  group?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -133,22 +142,30 @@ export type SessionListRow = {
 
 /** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
   const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
+    a2aPolicy: createAgentToAgentPolicy(cfg),
+    sessionVisibility: resolveEffectiveSessionToolsVisibility({
+      cfg,
+      sandboxed: opts?.sandboxed === true,
+    }),
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,
+      requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),
   };
 }
 
-/** Projects the Gateway's authoritative classification into the tool's coarse categories. */
+/** Projects the Gateway's authoritative classification into the tool's coarse kinds. */
 export function classifySessionListKind(params: {
   classification: NonNullable<GatewaySessionListRow["classification"]>;
   peerKind?: GatewaySessionListRow["peerKind"];

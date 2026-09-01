@@ -1,13 +1,14 @@
 // Feishu plugin module implements monitor.card action.lifecycle support behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./lifecycle.test-support.js";
-import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
-import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
+import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,

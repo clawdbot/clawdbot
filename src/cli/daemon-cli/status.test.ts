@@ -1,5 +1,6 @@
 // Daemon status tests cover service status gathering and CLI responses.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
@@ -8,6 +9,7 @@ const gatherDaemonStatus = vi.fn(
     service: {
       label: "LaunchAgent",
       loaded: true,
+      loadState: { status: "loaded" },
       loadedText: "loaded",
       notLoadedText: "not loaded",
     },
@@ -19,6 +21,10 @@ const gatherDaemonStatus = vi.fn(
   }),
 );
 const printDaemonStatus = vi.fn();
+
+vi.mock("../../infra/update-check-package-target.js", () => ({
+  fetchNpmPackageTargetStatus: vi.fn(),
+}));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -45,6 +51,7 @@ const { runDaemonStatus } = await import("./status.js");
 describe("runDaemonStatus", () => {
   beforeEach(() => {
     gatherDaemonStatus.mockClear();
+    vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     printDaemonStatus.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.exit.mockClear();
@@ -52,11 +59,44 @@ describe("runDaemonStatus", () => {
     resetRuntimeCapture();
   });
 
+  it.each([false, true])("confirms repair targets only for deep status (deep=%s)", async (deep) => {
+    const gathered = await gatherDaemonStatus();
+    gathered.pluginVersionDrift = {
+      gatewayVersion: "2026.7.1-2",
+      drifts: [
+        {
+          pluginId: "brave",
+          installedVersion: "2026.7.0",
+          gatewayVersion: "2026.7.1-2",
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.0",
+        },
+      ],
+    };
+    gatherDaemonStatus.mockResolvedValueOnce(gathered);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.7.1",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+
+    await runDaemonStatus({ rpc: {}, probe: true, requireRpc: false, json: false, deep });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledTimes(deep ? 1 : 0);
+    const printed = printDaemonStatus.mock.calls[0]?.[0] as DaemonStatus;
+    expect(printed.pluginVersionDrift?.drifts[0]?.targetResolution?.status).toBe(
+      deep ? "unresolved" : undefined,
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it("exits when require-rpc is set and the probe fails", async () => {
     gatherDaemonStatus.mockResolvedValueOnce({
       service: {
         label: "LaunchAgent",
         loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",
       },
@@ -84,6 +124,40 @@ describe("runDaemonStatus", () => {
     });
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "does not exit after reporting a failed non-required RPC probe in json=%s mode",
+    async (json) => {
+      gatherDaemonStatus.mockResolvedValueOnce({
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        rpc: {
+          ok: false,
+          url: "ws://127.0.0.1:18789",
+          error: "connect ECONNREFUSED 127.0.0.1:18789",
+        },
+        extraServices: [],
+      });
+
+      await runDaemonStatus({
+        rpc: {},
+        probe: true,
+        requireRpc: false,
+        json,
+      });
+
+      expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+        json,
+        deep: false,
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards require-rpc to daemon status gathering", async () => {
     await runDaemonStatus({
@@ -131,15 +205,21 @@ describe("runDaemonStatus", () => {
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error:
-        "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      error: {
+        type: "cli_error",
+        message:
+          "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
 
   it("renders service-inspection failures as JSON in JSON mode", async () => {
-    gatherDaemonStatus.mockRejectedValueOnce(new Error("service manager unavailable"));
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`service manager unavailable: Authorization: Bearer ${secret}`);
+    error.name = "ServiceManagerError";
+    gatherDaemonStatus.mockRejectedValueOnce(error);
 
     await expect(
       runDaemonStatus({
@@ -153,8 +233,13 @@ describe("runDaemonStatus", () => {
     expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
       ok: false,
-      error: "Gateway status failed: Error: service manager unavailable",
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("Gateway status failed: service manager unavailable"),
+      },
     });
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(error.name);
+    expect(JSON.stringify(defaultRuntime.writeJson.mock.calls)).not.toContain(secret);
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
   });
@@ -164,6 +249,7 @@ describe("runDaemonStatus", () => {
       service: {
         label: "LaunchAgent",
         loaded: true,
+        loadState: { status: "loaded" },
         loadedText: "loaded",
         notLoadedText: "not loaded",
       },

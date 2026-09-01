@@ -256,7 +256,9 @@ export function registerAuthModesSuite(): void {
 
   describe("tailscale auth", () => {
     let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
-    let port: number;
+    let tailscaleEndpoint: NonNullable<
+      ReturnType<Awaited<ReturnType<typeof startTestGatewayServer>>["getTailscaleIngressEndpoint"]>
+    >;
     const tailscaleOrigin = "https://gateway.tailnet.ts.net";
 
     beforeAll(async () => {
@@ -267,13 +269,18 @@ export function registerAuthModesSuite(): void {
         nextConfig: {
           gateway: {
             auth: testState.gatewayAuth,
+            tailscale: { mode: "serve" },
             controlUi: testState.gatewayControlUi,
           },
         },
         afterWrite: { mode: "auto" },
       });
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      server = await startTestGatewayServer(await getGatewayTestPort());
+      const endpoint = server.getTailscaleIngressEndpoint();
+      if (!endpoint) {
+        throw new Error("expected managed Tailscale listener");
+      }
+      tailscaleEndpoint = endpoint;
     });
 
     afterAll(async () => {
@@ -291,7 +298,7 @@ export function registerAuthModesSuite(): void {
     });
 
     test("requires device identity when only tailscale auth is available", async () => {
-      const ws = await openTailscaleWs(port);
+      const ws = await openTailscaleWs(tailscaleEndpoint);
       const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
@@ -299,7 +306,7 @@ export function registerAuthModesSuite(): void {
     });
 
     test("skips pairing for tailscale-authenticated control ui with device identity", async () => {
-      const ws = await openTailscaleWs(port, { origin: tailscaleOrigin });
+      const ws = await openTailscaleWs(tailscaleEndpoint, { origin: tailscaleOrigin });
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         client: {
@@ -313,7 +320,7 @@ export function registerAuthModesSuite(): void {
     });
 
     test("connects with shared token but clears scopes when tailscale auth skips device", async () => {
-      const ws = await openTailscaleWs(port);
+      const ws = await openTailscaleWs(tailscaleEndpoint);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");

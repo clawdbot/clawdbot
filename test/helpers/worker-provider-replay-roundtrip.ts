@@ -24,6 +24,7 @@ type RoundTripHarness = {
   createDescriptor(options?: DescriptorOptions): WorkerLaunchDescriptor;
   requestParams(method: string): unknown[];
   sessionTarget: Parameters<typeof SessionManager.open>[0];
+  settleRun(runId: string): void;
   setOutcome(outcome: WorkerInferenceTerminalOutcome): void;
 };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
@@ -111,6 +112,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
   if (initial.kind !== "complete") {
     throw new Error("expected replayable canonical history");
   }
+  harness.settleRun("replay-run-1");
 
   harness.setOutcome({
     type: "done",
@@ -133,6 +135,7 @@ export async function runWorkerProviderReplayRoundTrip(harness: RoundTripHarness
   await expect(runWorkerDescriptor(secondDescriptor)).resolves.toMatchObject({
     status: "completed",
   });
+  harness.settleRun("replay-run-2");
 
   const requests = harness.requestParams("worker.inference.start") as WorkerInferenceStartParams[];
   const nextContext = requests[1]?.context;

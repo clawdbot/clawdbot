@@ -113,8 +113,6 @@ type FallbackContextStatusOverrides = {
   activeProvider?: string;
   activeModel?: string;
   activeContextWindow?: number | null;
-  agentContextTokens?: number;
-  explicitConfiguredContextTokens?: number;
   runtimeContextTokens?: number;
   sessionContextTokens?: number;
 };
@@ -125,8 +123,6 @@ function makeFallbackContextStatusArgs({
   activeProvider = "minimax-portal",
   activeModel = "MiniMax-M2.7",
   activeContextWindow = 200_000,
-  agentContextTokens,
-  explicitConfiguredContextTokens,
   runtimeContextTokens,
   sessionContextTokens,
 }: FallbackContextStatusOverrides): Parameters<typeof buildStatusMessage>[0] {
@@ -143,11 +139,7 @@ function makeFallbackContextStatusArgs({
 
   return {
     config: { models: { providers } } as unknown as OpenClawConfig,
-    agent: {
-      model: "xiaomi/mimo-v2-flash",
-      ...(agentContextTokens === undefined ? {} : { contextTokens: agentContextTokens }),
-    },
-    ...(explicitConfiguredContextTokens === undefined ? {} : { explicitConfiguredContextTokens }),
+    agent: { model: "xiaomi/mimo-v2-flash" },
     ...(runtimeContextTokens === undefined ? {} : { runtimeContextTokens }),
     sessionEntry: {
       sessionId,
@@ -165,13 +157,20 @@ function makeFallbackContextStatusArgs({
       totalTokens: 49_000,
       totalTokensFresh: true,
       totalTokensVersion: 1 as const,
-      ...(sessionContextTokens === undefined ? {} : { contextTokens: sessionContextTokens }),
+      ...(sessionContextTokens === undefined
+        ? {}
+        : {
+            contextTokens: sessionContextTokens,
+            contextTokensSource: "runtime" as const,
+            agentHarnessId: "openclaw" as const,
+          }),
     },
     sessionKey: "agent:main:main",
     sessionScope: "per-sender",
     queue: { mode: "collect", depth: 0 },
     modelAuth: "api-key",
     activeModelAuth: "api-key",
+    resolvedHarness: "openclaw",
   };
 }
 
@@ -186,6 +185,7 @@ describe("buildStatusMessage", () => {
               models: [
                 {
                   id: "test:opus",
+                  contextTokens: 32_000,
                   cost: {
                     input: 1,
                     output: 1,
@@ -200,7 +200,6 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agent: {
         model: "anthropic/test:opus",
-        contextTokens: 32_000,
       },
       sessionEntry: {
         sessionId: "abc",
@@ -274,7 +273,6 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agent: {
         model: "amazon-bedrock/us.anthropic.claude-sonnet-4-6",
-        contextTokens: 200_000,
       },
       sessionEntry: {
         sessionId: "bedrock-session",
@@ -331,8 +329,8 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/test:opus",
-        contextTokens: 1_000_000,
       },
+      runtimeContextTokens: 1_000_000,
       sessionEntry,
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -350,7 +348,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-sonnet-4.6",
-        contextTokens: 1_000_000,
       },
       sessionEntry: {
         sessionId: "abc",
@@ -408,7 +405,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-sonnet-4.6",
-        contextTokens: 1_000_000,
       },
       sessionEntry,
       sessionKey: "agent:main:main",
@@ -887,7 +883,6 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agent: {
         model: "minimax-portal/MiniMax-M2.7",
-        contextTokens: 1_048_576,
       },
       sessionEntry: {
         sessionId: "channel-context-window",
@@ -987,9 +982,17 @@ describe("buildStatusMessage", () => {
     });
 
     const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            local: {
+              models: [{ id: "large-model", contextWindow: 65_536 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
       agent: {
         model: "local/large-model",
-        contextTokens: 65_536,
       },
       sessionEntry,
       sessionKey: "agent:main:main",
@@ -1002,11 +1005,18 @@ describe("buildStatusMessage", () => {
 
   it("ignores stale session contextTokens after the default model changes", () => {
     const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              models: [{ id: "kimi-k2.7-code", contextWindow: 262_144 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
       agent: {
         model: "ollama-cloud/kimi-k2.7-code",
-        contextTokens: 262_144,
       },
-      explicitConfiguredContextTokens: 262_144,
       sessionEntry: {
         sessionId: "default-model-context-window",
         updatedAt: 0,
@@ -1045,9 +1055,7 @@ describe("buildStatusMessage", () => {
       } as unknown as OpenClawConfig,
       agent: {
         model: "ollama-cloud/deepseek-v4-pro",
-        contextTokens: 1_000_000,
       },
-      explicitConfiguredContextTokens: 1_000_000,
       sessionEntry: {
         sessionId: "default-model-context-window-larger",
         updatedAt: 0,
@@ -1082,37 +1090,12 @@ describe("buildStatusMessage", () => {
       unexpectedContext: "Context: 49k/1.0m",
     },
     {
-      name: "keeps an explicit configured context cap even when it matches the selected model window",
-      overrides: {
-        sessionId: "fallback-context-window-configured-cap-equals-selected",
-        selectedContextWindow: 128_000,
-        agentContextTokens: 128_000,
-        explicitConfiguredContextTokens: 128_000,
-      },
-      expectedFallback: "Fallback: minimax-portal/MiniMax-M2.7",
-      expectedContext: "Context: 49k/128k",
-      unexpectedContext: "Context: 49k/200k",
-    },
-    {
-      name: "clamps an explicit configured context cap to the active fallback window",
-      overrides: {
-        sessionId: "fallback-context-window-configured-cap-clamped",
-        agentContextTokens: 1_048_576,
-        explicitConfiguredContextTokens: 1_048_576,
-      },
-      expectedFallback: "Fallback: minimax-portal/MiniMax-M2.7",
-      expectedContext: "Context: 49k/200k",
-      unexpectedContext: "Context: 49k/1.0m",
-    },
-    {
       name: "keeps a persisted fallback limit when the active runtime model lookup is unavailable",
       overrides: {
         sessionId: "fallback-context-window-persisted-unknown-active",
         activeProvider: "custom-runtime",
         activeModel: "unknown-fallback-model",
         activeContextWindow: null,
-        agentContextTokens: 1_048_576,
-        explicitConfiguredContextTokens: 1_048_576,
         sessionContextTokens: 128_000,
       },
       expectedFallback: "Fallback: custom-runtime/unknown-fallback-model",
@@ -1259,17 +1242,6 @@ describe("buildStatusMessage", () => {
       expectedContext: "Context: 49k/123k",
       unexpectedContext: "Context: 49k/1.0m",
       otherUnexpectedContext: "Context: 49k/200k",
-    },
-    {
-      name: "keeps an explicit configured context cap for fallback status before runtime snapshot persists",
-      overrides: {
-        sessionId: "fallback-context-window-configured-cap",
-        agentContextTokens: 120_000,
-        explicitConfiguredContextTokens: 120_000,
-      },
-      expectedContext: "Context: 49k/120k",
-      unexpectedContext: "Context: 49k/200k",
-      otherUnexpectedContext: "Context: 49k/1.0m",
     },
   ])("$name", ({ overrides, expectedContext, unexpectedContext, otherUnexpectedContext }) => {
     const normalized = normalizeTestText(
@@ -1475,7 +1447,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
-        contextTokens: 32_000,
       },
       sessionEntry: {
         sessionId: "override-1",
@@ -1512,7 +1483,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-4.1-mini",
-        contextTokens: 32_000,
       },
       sessionEntry: {
         sessionId: "runtime-drift-only",
@@ -1543,7 +1513,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-4.1-mini",
-        contextTokens: 32_000,
       },
       sessionEntry: {
         sessionId: "selected-active-same",
@@ -1778,7 +1747,8 @@ describe("buildStatusMessage", () => {
 
   it("inserts usage summary beneath context line", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-6", contextTokens: 32_000 },
+      agent: { model: "anthropic/claude-opus-4-6" },
+      runtimeContextTokens: 32_000,
       sessionEntry: { sessionId: "u1", updatedAt: 0, totalTokens: 1000 },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -1878,19 +1848,23 @@ describe("buildStatusMessage", () => {
     return buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
-        contextTokens: 32_000,
       },
       sessionEntry: {
         sessionId: params.sessionId,
         updatedAt: 0,
         totalTokens: 3,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        agentHarnessId: "openclaw",
         contextTokens: 32_000,
+        contextTokensSource: "runtime",
       },
       sessionKey: params.sessionKey,
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
       includeTranscriptUsage: true,
       modelAuth: "api-key",
+      resolvedHarness: "openclaw",
     });
   }
 
@@ -1949,7 +1923,6 @@ describe("buildStatusMessage", () => {
         const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-6",
-            contextTokens: 1_000_000,
           },
           sessionEntry: {
             sessionId,
@@ -1996,7 +1969,6 @@ describe("buildStatusMessage", () => {
         const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-6",
-            contextTokens: 1_000_000,
           },
           sessionEntry: {
             sessionId,
@@ -2044,20 +2016,24 @@ describe("buildStatusMessage", () => {
         const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-6",
-            contextTokens: 32_000,
           },
           agentId: "worker2",
           sessionEntry: {
             sessionId,
             updatedAt: 0,
             totalTokens: 5,
+            modelProvider: "anthropic",
+            model: "claude-opus-4-6",
+            agentHarnessId: "openclaw",
             contextTokens: 32_000,
+            contextTokensSource: "runtime",
           },
           // Intentionally omitted: sessionKey
           sessionScope: "per-sender",
           queue: { mode: "collect", depth: 0 },
           includeTranscriptUsage: true,
           modelAuth: "api-key",
+          resolvedHarness: "openclaw",
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.2k/32k");
@@ -2119,7 +2095,6 @@ describe("buildStatusMessage", () => {
         const text = buildStatusMessage({
           agent: {
             model: "anthropic/claude-opus-4-6",
-            contextTokens: 32_000,
           },
           sessionEntry: {
             sessionId,
@@ -2391,7 +2366,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 25k/200k");
   });
 
-  it("does not let agent contextTokens inflate status above the model window", () => {
+  it("uses model discovery without inflating status above the model window", () => {
     getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("openai", "gpt-5.5"),
       272_000,
@@ -2400,7 +2375,6 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.5",
-        contextTokens: 1_000_000,
       },
       sessionEntry: {
         sessionId: "sess-openai-chatgpt-cap-context",
@@ -2424,9 +2398,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.5",
-        contextTokens: 1_000_000,
       },
-      explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 272_000,
       sessionEntry: {
         sessionId: "sess-openai-chatgpt-runtime-cap-context",

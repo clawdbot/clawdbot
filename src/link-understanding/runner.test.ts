@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig } from "../config/types.tools.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { applyLinkUnderstanding } from "./apply.js";
 import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
@@ -72,6 +73,39 @@ describe("runLinkUnderstanding", () => {
     mocks.runCommandWithTimeout.mockReset();
   });
 
+  it("applies shared media scope rules to link message context", async () => {
+    const result = await runLinkUnderstanding({
+      cfg: {
+        tools: {
+          links: {
+            enabled: true,
+            scope: {
+              default: "allow",
+              rules: [
+                {
+                  action: "deny",
+                  match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
+                },
+              ],
+            },
+            models: [{ type: "cli", command: "summarize" }],
+          },
+        },
+      } as OpenClawConfig,
+      ctx: {
+        Body: "see https://example.com/page",
+        ChatType: "channel",
+        Provider: "discord",
+        SessionKey: "agent:main:slack:channel:C123",
+        Surface: "slack",
+      } as MsgContext,
+    });
+
+    expect(result).toEqual({ urls: [], outputs: [] });
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
     const release = mockGuardedFetch("page body", "https://example.com/final");
     mockCommand("summarized page");
@@ -100,6 +134,67 @@ describe("runLinkUnderstanding", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      agentText: "prepared transcript",
+      BodyForAgent: "stale alias",
+      expected: "prepared transcript",
+    },
+    { BodyForAgent: "SDK transcript", expected: "SDK transcript" },
+    { agentText: "", BodyForAgent: "stale alias", expected: "" },
+    { expected: "transport envelope" },
+  ])(
+    "preserves the prepared model text $expected through link enrichment",
+    async ({ expected, ...text }) => {
+      mockGuardedFetch("page body");
+      mockCommand("summarized page");
+      const context: MsgContext = {
+        Body: "transport envelope",
+        RawBody: "see https://example.com/page",
+        CommandBody: "see https://example.com/page",
+        ...text,
+      };
+
+      await applyLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: context,
+      });
+
+      expect(context.Body).toBe("transport envelope\n\nsummarized page");
+      expect(context.agentText).toBe(
+        expected ? `${expected}\n\nsummarized page` : "summarized page",
+      );
+      expect(context.BodyForAgent).toBe(context.agentText);
+      expect(context).toMatchObject({
+        RawBody: "see https://example.com/page",
+        CommandBody: "see https://example.com/page",
+        rawText: "see https://example.com/page",
+        commandText: "see https://example.com/page",
+        LinkUnderstanding: ["summarized page"],
+      });
+    },
+  );
+
+  it("leaves context untouched when guarded link fetch produces no output", async () => {
+    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error("blocked by DNS policy"));
+    const context: MsgContext = {
+      Body: "transport envelope",
+      agentText: "prepared transcript",
+      BodyForAgent: "SDK transcript",
+      CommandBody: "see https://example.com/page",
+    };
+    const before = structuredClone(context);
+
+    const result = await applyLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: context,
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(context).toEqual(before);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
   it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
     mockGuardedFetch("guarded page body");
 
@@ -117,35 +212,37 @@ describe("runLinkUnderstanding", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("skips links rejected by the guarded fetch DNS policy", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(
-      new Error("Blocked: resolves to private/internal/special-use IP address"),
-    );
+  it.each([
+    [
+      "skips links rejected by the guarded fetch DNS policy",
+      "http://169.254.169.254.nip.io/latest/meta-data/",
+      "Blocked: resolves to private/internal/special-use IP address",
+    ],
+    [
+      "skips links rejected by the guarded fetch redirect policy",
+      "https://public.example/redirect-to-metadata",
+      "redirect target resolves to private network",
+    ],
+  ])("%s", async (_name, url, errorMessage) => {
+    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(errorMessage));
 
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: ctx("see http://169.254.169.254.nip.io/latest/meta-data/"),
+      ctx: ctx(`see ${url}`),
     });
 
     expect(result.outputs).toEqual([]);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("skips links rejected by the guarded fetch redirect policy", async () => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(
-      new Error("redirect target resolves to private network"),
-    );
-
-    const result = await runLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: ctx("see https://public.example/redirect-to-metadata"),
-    });
-
-    expect(result.outputs).toEqual([]);
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
-
-  it("uses the global link-tools timeout for fetches when configured", async () => {
+  it.each([
+    [
+      "uses the global link-tools timeout for fetches when configured",
+      { timeoutSeconds: 15 },
+      15000,
+    ],
+    ["falls back to the largest model timeout for fetches when no global timeout is set", {}, 9000],
+  ] as const)("%s", async (_name, timeoutConfig, timeoutMs) => {
     mockGuardedFetch("page body", "https://example.com/final");
     mockCommand("summarized page");
 
@@ -154,7 +251,7 @@ describe("runLinkUnderstanding", () => {
         tools: {
           links: {
             enabled: true,
-            timeoutSeconds: 15,
+            ...timeoutConfig,
             models: [
               { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
               { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
@@ -167,34 +264,7 @@ describe("runLinkUnderstanding", () => {
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
-        timeoutMs: 15000,
-        url: "https://example.com/page",
-      }),
-    );
-  });
-
-  it("falls back to the largest model timeout for fetches when no global timeout is set", async () => {
-    mockGuardedFetch("page body", "https://example.com/final");
-    mockCommand("summarized page");
-
-    await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            enabled: true,
-            models: [
-              { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
-              { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
-            ],
-          },
-        },
-      } as OpenClawConfig,
-      ctx: ctx("see https://example.com/page"),
-    });
-
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 9000,
+        timeoutMs,
         url: "https://example.com/page",
       }),
     );

@@ -1,13 +1,8 @@
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-import {
-  formatAbandonedLivenessError,
-  formatBlockedLivenessError,
-  isAbandonedLivenessState,
-  isBlockedLivenessState,
-} from "../../../shared/agent-liveness.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import { isAbortedAgentStopReason } from "../../run-termination.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -60,7 +55,7 @@ export function createSubagentRegistryListener(config: {
             // terminal. Keep capture + persistence inside the suspension fence.
             await runWithGatewayIndependentRootWorkAdmission(async () => {
               await refreshFrozenResultFromSession(sessionKey);
-            });
+            }, "subagents:result-refresh");
           }
           return;
         }
@@ -82,11 +77,6 @@ export function createSubagentRegistryListener(config: {
         }
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
-        const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-        const livenessState =
-          typeof evt.data?.livenessState === "string" ? evt.data.livenessState : undefined;
-        const stopReason =
-          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         // sessions_yield ends the turn by aborting the run signal, so a yielded
         // terminal can also look aborted. An explicit yield is authoritative — pause,
@@ -106,70 +96,67 @@ export function createSubagentRegistryListener(config: {
           }
           return;
         }
-        if (isAbortedAgentStopReason(stopReason)) {
-          pendingLifecycle.clear(evt.runId);
-          await completeSubagentRunWithRecovery(
-            {
-              runId: evt.runId,
-              endedAt,
-              outcome: {
-                status: "error",
-                error: "subagent run terminated",
-              },
-              reason: SUBAGENT_ENDED_REASON_KILLED,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-              startedAt,
-              terminalReply,
-            },
-            "lifecycle-killed-event",
-          );
-          return;
-        }
-        if (phase === "error") {
-          pendingLifecycle.scheduleError({
+        const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase,
+          data: evt.data,
+          startedAt,
+          endedAt,
+        });
+        const classification = classifySubagentTerminalOutcome(terminalOutcome);
+        if (
+          classification === "cancellation" &&
+          evt.data?.aborted === true &&
+          evt.data.stopReason === undefined &&
+          evt.data.status === undefined &&
+          evt.data.timeoutPhase === undefined
+        ) {
+          pendingLifecycle.scheduleCancellation({
             runId: evt.runId,
             endedAt,
             startedAt,
             terminalReply,
-            error,
           });
           return;
         }
-        const blocked = isBlockedLivenessState(livenessState);
-        const abandoned = isAbandonedLivenessState(livenessState);
-        if (blocked || abandoned) {
-          pendingLifecycle.clear(evt.runId);
-          const blockedParams = {
-            runId: evt.runId,
-            endedAt,
-            outcome: {
-              status: "error" as const,
-              error: blocked
-                ? formatBlockedLivenessError(error)
-                : formatAbandonedLivenessError(error),
-            },
-            reason: SUBAGENT_ENDED_REASON_ERROR,
-            sendFarewell: true,
-            accountId: entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-            startedAt,
-            terminalReply,
-          };
-          await completeSubagentRunWithRecovery(
-            blockedParams,
-            blocked ? "lifecycle-blocked-event" : "lifecycle-abandoned-event",
-          );
-          return;
-        }
-        if (evt.data?.aborted) {
+        if (classification === "timeout") {
           pendingLifecycle.scheduleTimeout({
             runId: evt.runId,
             endedAt,
             startedAt,
             terminalReply,
           });
+          return;
+        }
+        if (phase === "error" && classification === "failure") {
+          pendingLifecycle.scheduleError({
+            runId: evt.runId,
+            endedAt,
+            startedAt,
+            terminalReply,
+            error: terminalOutcome.error,
+          });
+          return;
+        }
+        if (classification !== "success") {
+          const cancelled = classification === "cancellation";
+          pendingLifecycle.clear(evt.runId);
+          await completeSubagentRunWithRecovery(
+            {
+              runId: evt.runId,
+              endedAt,
+              outcome: {
+                status: "error" as const,
+                error: cancelled ? "subagent run terminated" : terminalOutcome.error,
+              },
+              reason: cancelled ? SUBAGENT_ENDED_REASON_KILLED : SUBAGENT_ENDED_REASON_ERROR,
+              sendFarewell: true,
+              accountId: entry.requesterOrigin?.accountId,
+              triggerCleanup: true,
+              startedAt,
+              terminalReply,
+            },
+            cancelled ? "lifecycle-killed-event" : `lifecycle-${terminalOutcome.reason}-event`,
+          );
           return;
         }
         pendingLifecycle.clear(evt.runId);

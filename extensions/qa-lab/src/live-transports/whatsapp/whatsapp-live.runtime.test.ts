@@ -14,7 +14,10 @@ import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
-import { applyQaMergePatch, collectQaSuiteGatewayConfigPatch } from "../../suite-planning.js";
+import {
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
+} from "../../suite-planning.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
@@ -1185,10 +1188,10 @@ describe("WhatsApp QA live runtime", () => {
         const scenario = readQaScenarioById(policyScenario.id);
         const flow = scenario.execution.kind === "flow" ? scenario.execution.flow : undefined;
         expect(JSON.stringify(flow), policyScenario.id).not.toContain('"patchConfig"');
-        const startupPatch = collectQaSuiteGatewayConfigPatch([scenario], accountId);
-        const patchedConfig = applyQaMergePatch(
+        const startupPatches = collectQaSuiteGatewayConfigPatches([scenario], accountId);
+        const patchedConfig = applyQaSuiteGatewayConfigPatches(
           initialConfig,
-          startupPatch ?? {},
+          startupPatches,
         ) as WhatsAppQaConfigBase;
         const effective = resolveWhatsAppAccount({ cfg: patchedConfig, accountId });
         expect(

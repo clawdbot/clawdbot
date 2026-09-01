@@ -46,14 +46,14 @@ describe("session observer settings patches", () => {
       container,
     );
 
-    const select = container.querySelector<HTMLSelectElement>("select");
-    const options = [...(select?.options ?? [])];
-    expect(select?.disabled).toBe(false);
-    expect(options.find((option) => option.text === "Auto (provider default)")?.disabled).toBe(
-      false,
-    );
-    expect(options.find((option) => option.text === "Disabled")?.disabled).toBe(false);
-    expect(options.find((option) => option.text === "GPT Mini")?.disabled).toBe(true);
+    const select = container.querySelector("wa-select.model-picker__select");
+    const options = [...(select?.querySelectorAll("wa-option") ?? [])];
+    const option = (label: string) =>
+      options.find((candidate) => candidate.textContent?.trim() === label);
+    expect(select?.hasAttribute("disabled")).toBe(false);
+    expect(option("Auto (provider default)")?.hasAttribute("disabled")).toBe(false);
+    expect(option("Disabled")?.hasAttribute("disabled")).toBe(false);
+    expect(option("GPT Mini")?.hasAttribute("disabled")).toBe(true);
     expect(container.textContent).toContain("Explicit model catalog unavailable");
   });
 });

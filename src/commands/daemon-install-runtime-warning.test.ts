@@ -56,4 +56,19 @@ describe("emitNodeRuntimeWarning", () => {
 
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it("does not run Node diagnostics for Bun", async () => {
+    const warn = vi.fn();
+
+    await emitNodeRuntimeWarning({
+      env: {},
+      runtime: "bun",
+      nodeProgram: "/home/test/.bun/bin/bun",
+      warn,
+      title: "Gateway runtime",
+    });
+
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

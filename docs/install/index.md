@@ -1,7 +1,8 @@
 ---
-summary: "Install OpenClaw - installer script, npm/pnpm/bun, from source, Docker, and more"
+summary: "Install OpenClaw - desktop app downloads, installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
+  - You want to download the Windows Hub or macOS desktop app instead of the CLI
   - You want to deploy to a cloud platform
   - You need to update, migrate, or uninstall
 title: "Install"
@@ -9,9 +10,21 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is recommended; the installer provisions Node 26 on macOS and Node 24 LTS on Linux when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
+
+## Download the desktop app
+
+Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
+
+- **Windows**: the [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
+  - [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
+  - [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
+  - All Hub releases: [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
+- **macOS**: the [macOS menu bar app](/platforms/macos) — download the `OpenClaw-<version>.dmg` (preferred) or `.zip` asset from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases), then install and launch **OpenClaw.app**. See the [macOS app page](/platforms/macos) for details, including what to do when the newest release ships no macOS asset.
+
+Both desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
 
 ## Recommended: installer script
 
@@ -75,26 +88,28 @@ If you already manage Node yourself:
 
 <Tabs>
   <Tab title="npm">
+    On npm 12 or npm 11.16+:
+
     ```bash
-    npm install -g openclaw@latest
+    npm install -g openclaw@latest --allow-scripts=openclaw
     openclaw onboard --install-daemon
     ```
 
+    On npm 11.15 and earlier, use the same command without
+    `--allow-scripts=openclaw`.
+
     <Note>
-    npm 12 blocks package lifecycle scripts by default, so the command above
-    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
-    as `blocked because they are not covered by allowScripts`. Allow them
-    explicitly:
+    npm 12 blocks unapproved package lifecycle scripts by default. The
+    `--allow-scripts=openclaw` option explicitly allows OpenClaw's `preinstall`
+    and `postinstall` steps; without it, npm reports them as `blocked because
+    they are not covered by allowScripts`.
 
-    ```bash
-    npm install -g openclaw@latest --allow-scripts openclaw
-    ```
-
-    npm 11.16.x only warns that the scripts are `not yet covered by
-    allowScripts` and still runs them. If you want to clear that warning, be
-    aware that the `npm approve-scripts openclaw` command it suggests does not
-    work for a global install — it fails with `ENOMATCH  No installed packages
-    match: openclaw`. npm 11.12 and earlier have no such policy.
+    npm 11.16 accepts the option but otherwise only warns that the scripts are
+    `not yet covered by allowScripts` and still runs them. npm 11.15 and earlier
+    have neither the policy nor the option, so their command must be unflagged.
+    The `npm approve-scripts openclaw`
+    command suggested by npm 11.16 does not work for a global install — it fails
+    with `ENOMATCH  No installed packages match: openclaw`.
     </Note>
 
     <Note>
@@ -117,12 +132,16 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="bun">
     ```bash
-    bun add -g openclaw@latest
-    openclaw onboard --install-daemon
+    bun add -g --trust openclaw@latest
+    bun run --bun openclaw onboard --install-daemon --daemon-runtime bun
     ```
 
     <Note>
-    Bun can install the global package, but the resulting `openclaw` executable requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
+    `--trust` allows OpenClaw's package lifecycle scripts for this install. Bun
+    1.4 or newer can also run OpenClaw's CLI, local agent, and Gateway. Node
+    remains the primary runtime, so the plain `openclaw` executable keeps its
+    Node shebang. `bun run --bun` forces the Bun runtime, while
+    `--daemon-runtime bun` installs the managed Gateway under Bun.
     </Note>
 
   </Tab>
@@ -135,12 +154,20 @@ For contributors or anyone who wants to run from a local checkout:
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
+corepack enable
 pnpm install && pnpm build && pnpm ui:build
-pnpm link --global
+pnpm add --global "openclaw@link:$PWD"
 openclaw onboard --install-daemon
 ```
 
-Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+`pnpm add --global "openclaw@link:$PWD"` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
+
+Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
+If Corepack is unavailable, install that version explicitly with
+`npm install -g pnpm@12.1.0 --allow-scripts=pnpm@12.1.0`; keep npm install scripts and optional dependencies
+enabled so pnpm can provision its native executable.
+
+Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 
@@ -151,20 +178,20 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
 ### Containers and package managers
 
 <CardGroup cols={2}>
-  <Card title="Docker" href="/install/docker" icon="container">
-    Containerized or headless deployments.
-  </Card>
-  <Card title="Podman" href="/install/podman" icon="container">
-    Rootless container alternative to Docker.
-  </Card>
-  <Card title="Nix" href="/install/nix" icon="snowflake">
-    Declarative install via Nix flake.
-  </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
+  </Card>
+  <Card title="Docker" href="/install/docker" icon="container">
+    Containerized or headless deployments.
+  </Card>
+  <Card title="Nix" href="/install/nix" icon="snowflake">
+    Declarative install via Nix flake.
+  </Card>
+  <Card title="Podman" href="/install/podman" icon="container">
+    Rootless container alternative to Docker.
   </Card>
 </CardGroup>
 
@@ -186,12 +213,13 @@ If you want managed startup after install:
 
 Deploy OpenClaw on a cloud server or VPS. See [Linux server](/vps) for the full
 provider picker (DigitalOcean, Hetzner, Hostinger, Fly.io, GCP, Azure, Railway,
-Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
-[Render](/install/render).
+Northflank, Oracle Cloud, Raspberry Pi, and more), deploy declaratively on
+[Render](/install/render), or try the experimental [Cloudflare Containers](/install/cloudflare)
+template.
 
 <CardGroup cols={3}>
-  <Card title="VPS" href="/vps">
-    Pick a provider.
+  <Card title="Cloudflare" href="/install/cloudflare">
+    Experimental Worker + Container deployment.
   </Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">
     Shared Docker steps.
@@ -199,11 +227,23 @@ Northflank, Oracle Cloud, Raspberry Pi, and more), or deploy declaratively on
   <Card title="Kubernetes" href="/install/kubernetes">
     K8s deployment.
   </Card>
+  <Card title="macOS VM" href="/install/macos-vm">
+    Isolated local or hosted macOS deployment.
+  </Card>
+  <Card title="Upstash Box" href="/install/upstash">
+    Managed Linux host with SSH-tunneled access.
+  </Card>
+  <Card title="VPS" href="/vps">
+    Pick a provider.
+  </Card>
 </CardGroup>
 
-## Update, migrate, or uninstall
+## Back up, update, migrate, or uninstall
 
 <CardGroup cols={3}>
+  <Card title="Backups" href="/install/backups" icon="archive">
+    Create, verify, and restore state archives.
+  </Card>
   <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Keep OpenClaw up to date.
   </Card>

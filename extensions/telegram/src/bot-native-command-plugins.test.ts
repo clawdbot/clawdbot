@@ -18,7 +18,11 @@ import {
   emitTelegramMessageSentHooks,
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
+
+const UNMATCHED_FORUM_CHAT_ID = -1_001_234_567_891;
+const BOUND_FORUM_CHAT_ID = -1_001_234_567_892;
+const GENERAL_FORUM_CHAT_ID = -1_001_234_567_893;
+const PERSISTED_FORUM_CHAT_ID = -1_001_234_567_894;
 
 const pluginSessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
@@ -143,7 +147,6 @@ registerTelegramNativeCommands(createNativeCommandTestParams({}));
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -253,7 +256,7 @@ describe("registerTelegramNativeCommands", () => {
         message_id: 2,
         date: Math.floor(Date.now() / 1000),
         chat: {
-          id: -1001234567890,
+          id: UNMATCHED_FORUM_CHAT_ID,
           type: "supergroup",
           title: "Forum Group",
           is_forum: true,
@@ -264,7 +267,7 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     const sendMessageCall = firstCall(sendMessage);
-    expect(sendMessageCall[0]).toBe(-1001234567890);
+    expect(sendMessageCall[0]).toBe(UNMATCHED_FORUM_CHAT_ID);
     expect(sendMessageCall[1]).toBe("Command not found.");
     expect(
       (sendMessageCall[2] as { message_thread_id?: number } | undefined)?.message_thread_id,
@@ -536,7 +539,7 @@ describe("registerTelegramNativeCommands", () => {
         message_id: 2,
         date: Math.floor(Date.now() / 1000),
         chat: {
-          id: -1001234567890,
+          id: BOUND_FORUM_CHAT_ID,
           type: "supergroup",
           title: "Forum Group",
           is_forum: true,
@@ -549,13 +552,17 @@ describe("registerTelegramNativeCommands", () => {
     const commandParams = firstExecutePluginCommandParams();
     expect(commandParams.channel).toBe("telegram");
     expect(commandParams.accountId).toBe("default");
-    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:77");
-    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.from).toBe(`telegram:group:${BOUND_FORUM_CHAT_ID}:topic:77`);
+    expect(commandParams.to).toBe(`telegram:${BOUND_FORUM_CHAT_ID}`);
     expect(commandParams.messageThreadId).toBe(77);
   });
 
   it("treats Telegram forum #General commands as topic 1 when Telegram omits topic metadata", async () => {
-    const getChat = vi.fn(async () => ({ id: -1001234567890, type: "supergroup", is_forum: true }));
+    const getChat = vi.fn(async () => ({
+      id: GENERAL_FORUM_CHAT_ID,
+      type: "supergroup",
+      is_forum: true,
+    }));
     const { handler } = registerPlugCommand({
       botHarness: createCommandBot({ api: { getChat } }),
     });
@@ -566,7 +573,7 @@ describe("registerTelegramNativeCommands", () => {
         message_id: 2,
         date: Math.floor(Date.now() / 1000),
         chat: {
-          id: -1001234567890,
+          id: GENERAL_FORUM_CHAT_ID,
           type: "supergroup",
           title: "Forum Group",
         },
@@ -574,11 +581,11 @@ describe("registerTelegramNativeCommands", () => {
       },
     });
 
-    expect(getChat).toHaveBeenCalledWith(-1001234567890);
+    expect(getChat).toHaveBeenCalledWith(GENERAL_FORUM_CHAT_ID);
     const commandParams = firstExecutePluginCommandParams();
     expect(commandParams.accountId).toBe("default");
-    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:1");
-    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.from).toBe(`telegram:group:${GENERAL_FORUM_CHAT_ID}:topic:1`);
+    expect(commandParams.to).toBe(`telegram:${GENERAL_FORUM_CHAT_ID}`);
     expect(commandParams.messageThreadId).toBe(1);
   });
 
@@ -631,12 +638,16 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     await handler(
-      createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
+      createTelegramTopicCommandContext({
+        match: "bind --cwd /tmp/work",
+        chatId: PERSISTED_FORUM_CHAT_ID,
+        threadId: 42,
+      }),
     );
 
     expect(firstExecutePluginCommandParams()).toEqual(
       expect.objectContaining({
-        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        sessionKey: `agent:main:telegram:group:${PERSISTED_FORUM_CHAT_ID}:topic:42`,
         sessionId: "sess-topic",
         messageThreadId: 42,
       }),

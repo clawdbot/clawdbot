@@ -83,6 +83,7 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
   it("mints only for the admitted direct local admin turn", () => {
     expect(resolveGatewayCronCreatorAuthorityAdmission(createParams())).toEqual({
       runId: "run-local-operator",
+      callerOrigin: { kind: "local" },
     } satisfies GatewayCronCreatorAuthorityAdmission);
   });
 
@@ -165,6 +166,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
   it("mints only for a direct external local-admin user turn", () => {
     expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
       runId: "run-local-chat",
+      callerOrigin: { kind: "local" },
     });
   });
 

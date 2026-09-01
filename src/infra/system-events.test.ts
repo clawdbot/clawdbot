@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { enqueueRoutedSystemEvent } from "../plugin-sdk/system-event-runtime.js";
 import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
   resolveSystemEventOwnerAgentId,
@@ -701,6 +702,29 @@ describe("system events (session routing)", () => {
       ["Hook finished", "beta"],
       ["Later alpha event", "alpha"],
     ]);
+  });
+
+  it("keeps routed global Slack and Discord events isolated by route owner", async () => {
+    const slackRoute = { agentId: "alpha", sessionKey: "global" };
+    const discordRoute = { agentId: "beta", sessionKey: "global" };
+    enqueueRoutedSystemEvent("Slack event for alpha", slackRoute);
+    enqueueRoutedSystemEvent("Discord event for beta", discordRoute);
+
+    const alpha = await drainFormattedEvents("global", { agentId: "alpha" });
+    expect(alpha).toContain("Slack event for alpha");
+    expect(alpha).not.toContain("Discord event for beta");
+    expect(peekSystemEvents("global")).toEqual(["Discord event for beta"]);
+
+    const beta = await drainFormattedEvents("global", { agentId: "beta" });
+    expect(beta).toContain("Discord event for beta");
+    expect(peekSystemEvents("global")).toStrictEqual([]);
+  });
+
+  it("rejects routed system events without an owner", () => {
+    expect(() =>
+      enqueueRoutedSystemEvent("Unbound event", { agentId: " ", sessionKey: "global" }),
+    ).toThrow("route.agentId");
+    expect(peekSystemEvents("global")).toStrictEqual([]);
   });
 
   it("replaces only the matching owner slot", () => {

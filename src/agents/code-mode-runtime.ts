@@ -1,12 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import type { CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   buildCodeModeScriptParseSource,
@@ -16,6 +18,7 @@ import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import { loadCodeModeTypeScriptRuntime } from "./code-mode-typescript-runtime.js";
 import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -40,7 +43,7 @@ export type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
 export type CodeModeConfig = {
-  /** Master switch tier: true/false, or "auto" (engage per model catalog flag). */
+  /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
   runtime: "quickjs-wasi";
   mode: "only";
@@ -93,16 +96,8 @@ export type CodeModeWorkerResult =
       code: CodeModeFailureCode;
       failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: boolean;
-      output: unknown[];
+      output: CodeModeOutputSource;
     };
-
-const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
-  cacheRejections: true,
-});
-let typescriptRuntimeForTest:
-  | typeof import("typescript")
-  | Promise<typeof import("typescript")>
-  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -118,20 +113,35 @@ function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | u
   return isRecord(codeMode) ? codeMode : undefined;
 }
 
-function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Record<string, unknown> {
+function readCodeModeRawConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
-  const agentRaw =
-    config && agentId
-      ? normalizeCodeModeRawConfig(resolveAgentConfig(config, agentId)?.tools?.codeMode)
-      : undefined;
-  return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
+  const agent = config && agentId ? resolveAgentConfig(config, agentId) : undefined;
+  const agentRaw = normalizeCodeModeRawConfig(agent?.tools?.codeMode);
+  const key = model
+    ? normalizeAgentModelRefForConfig(modelKey(model.provider, model.modelId))
+    : undefined;
+  // An options-only agent object inherits activation; it must not hide a model
+  // override. Explicit false at either scope remains an authored choice.
+  return {
+    ...globalRaw,
+    ...agentRaw,
+    enabled:
+      (key ? agent?.models?.[key]?.codeMode : undefined) ??
+      agentRaw?.enabled ??
+      (key ? config?.agents?.defaults?.models?.[key]?.codeMode : undefined) ??
+      globalRaw.enabled,
+  };
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  // Shipped default is "auto": code mode engages only for catalog-preferred
-  // models, so unevaluated models keep normal tool exposure by construction.
-  return typeof value === "boolean" || value === "auto" ? value : "auto";
+  // Stable option-bearing objects made `enabled` optional and defaulted it off.
+  // Automatic activation therefore requires an explicit `"auto"` selection.
+  return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -149,8 +159,12 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
 }
 
 /** Resolves Code Mode runtime limits and language support from config. */
-export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
-  const raw = readCodeModeRawConfig(config, agentId);
+export function resolveCodeModeConfig(
+  config?: OpenClawConfig,
+  agentId?: string,
+  model?: { provider: string; modelId: string },
+): CodeModeConfig {
+  const raw = readCodeModeRawConfig(config, agentId, model);
   const maxSearchLimit = clampNumber(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
@@ -197,7 +211,7 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
 }
 
 /**
- * Resolves the master switch against one model's catalog capability flag.
+ * Resolves the effective activation policy against one model's catalog flag.
  * `true`/`false` are absolute; `"auto"` engages only for models whose catalog
  * compat declares `codeMode: "preferred"`. This gates the model-facing tool
  * surface only; runs that route to a provider-native harness (for example the
@@ -241,46 +255,20 @@ export function resolveCodeModeHeadlessConfig(
   >,
 ): CodeModeConfig {
   const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
-  return {
-    ...base,
-    timeoutMs: clampNumber(readPositiveInteger(overrides?.timeoutMs, base.timeoutMs), 100, 60_000),
-    memoryLimitBytes: clampNumber(
-      readPositiveInteger(overrides?.memoryLimitBytes, base.memoryLimitBytes),
-      1024 * 1024,
-      1024 * 1024 * 1024,
-    ),
-    maxOutputBytes: clampNumber(
-      readPositiveInteger(overrides?.maxOutputBytes, base.maxOutputBytes),
-      1024,
-      10 * 1024 * 1024,
-    ),
-    maxSnapshotBytes: clampNumber(
-      readPositiveInteger(overrides?.maxSnapshotBytes, base.maxSnapshotBytes),
-      1024,
-      256 * 1024 * 1024,
-    ),
-    maxPendingToolCalls: clampNumber(
-      readPositiveInteger(overrides?.maxPendingToolCalls, base.maxPendingToolCalls),
-      1,
-      128,
-    ),
-  };
-}
-
-function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(toCodeModeJsonSafe(value)) ?? "null", "utf8");
+  const definedOverrides = Object.fromEntries(
+    Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),
+  );
+  return resolveCodeModeConfig({
+    tools: { codeMode: { ...base, ...definedOverrides } },
+  } as OpenClawConfig);
 }
 
 class CodeModeLimitError extends ToolInputError {
-  readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
+  readonly code = "snapshot_limit_exceeded" as const;
 
-  constructor(
-    code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">,
-    message: string,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "CodeModeLimitError";
-    this.code = code;
   }
 }
 
@@ -304,47 +292,21 @@ export function codeModeFailureMessage(error: unknown): string {
     : formatErrorMessage(error);
 }
 
-export function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
-  if (jsonByteLength(output) > config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-}
-
-export function enforceResultLimit(params: {
-  output: unknown[];
-  value?: unknown;
-  config: CodeModeConfig;
-}): void {
-  const serializedOutputBytes = jsonByteLength(params.output);
-  if (serializedOutputBytes > params.config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
-  if (
-    params.value !== undefined &&
-    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
-  ) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-}
-
 export function readCode(args: unknown): {
   code: string;
   language?: CodeModeLanguage;
   restartSafe: boolean;
 } {
   const params = asToolParamsRecord(args);
-  const codeParam = params.code;
-  const commandParam = params.command;
-  if (
-    typeof codeParam === "string" &&
-    typeof commandParam === "string" &&
-    codeParam !== commandParam
-  ) {
+  // Full-schema tool calls can materialize an unused alias as blank.
+  // Only nonblank aliases participate in divergence checks.
+  const codeAlias = readNonBlankString(params.code);
+  const commandAlias = readNonBlankString(params.command);
+  if (codeAlias !== undefined && commandAlias !== undefined && codeAlias !== commandAlias) {
     throw new ToolInputError("code and command must match when both are provided.");
   }
-  const code = typeof commandParam === "string" ? commandParam : codeParam;
-  if (typeof code !== "string" || !code.trim()) {
+  const code = commandAlias ?? codeAlias;
+  if (code === undefined) {
     throw new ToolInputError("code or command must be a non-empty string.");
   }
   const language = params.language;
@@ -570,13 +532,6 @@ function rejectsModuleAccess(
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
 
-async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
-  if (typescriptRuntimeForTest) {
-    return await typescriptRuntimeForTest;
-  }
-  return await typescriptRuntimeLoader.load();
-}
-
 export async function prepareSource(input: {
   code: string;
   language?: CodeModeLanguage;
@@ -595,7 +550,7 @@ export async function prepareSource(input: {
     }
     return input.code;
   }
-  const ts = await loadTypeScriptRuntime();
+  const ts = await loadCodeModeTypeScriptRuntime();
   if (rejectsModuleAccess(input.code, ts)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
@@ -638,20 +593,8 @@ export function createCodeModeApiFilesForRun(
 export function enforceSnapshotPayloadLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
 }) {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
+    throw new CodeModeLimitError("code mode snapshot limit exceeded");
   }
-  enforceOutputLimit(params.output, params.config);
 }
-
-export const codeModeRuntimeTesting = {
-  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
-    typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (
-    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
-  ) => {
-    typescriptRuntimeForTest = runtime;
-  },
-};

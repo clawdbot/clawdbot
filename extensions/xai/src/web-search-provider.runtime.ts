@@ -1,5 +1,4 @@
 // Xai provider module implements model/runtime integration.
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   coerceSecretRef,
@@ -25,7 +24,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
   resolveXaiWebSearchEndpoint,
@@ -137,7 +135,7 @@ function runXaiWebSearch(params: {
   const cacheKey = normalizeCacheKey(
     `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
-  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey);
+  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return Promise.resolve({ ...cached.value, cached: true });
   }
@@ -153,6 +151,7 @@ function runXaiWebSearch(params: {
       inlineCitations: params.inlineCitations,
       ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",
@@ -178,14 +177,6 @@ function resolveXaiToolSearchConfig(ctx: {
     "grok",
     resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
   );
-}
-
-function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
-  return resolveWebSearchProviderCredential({
-    credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "plugins.entries.xai.config.webSearch.apiKey",
-    envVars: ["XAI_API_KEY"],
-  });
 }
 
 function resolveConfiguredXaiWebSearchCredential(
@@ -217,12 +208,10 @@ async function resolveXaiProviderAuthCredential(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   try {
     const config = params.config as OpenClawConfig | undefined;
-    const agentDir =
-      params.agentDir?.trim() || (config ? resolveDefaultAgentDir(config) : undefined);
     const resolved = await resolveApiKeyForProvider({
       provider: XAI_PROVIDER_ID,
       cfg: config,
-      ...(agentDir ? { agentDir } : {}),
+      agentDir: params.agentDir,
       ...(params.profileId
         ? {
             profileId: params.profileId,
@@ -422,10 +411,8 @@ export async function executeXaiWebSearchProviderTool(
 
 export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
-  resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
 };

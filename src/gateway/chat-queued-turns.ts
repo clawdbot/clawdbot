@@ -7,6 +7,8 @@
  * remain abortable by authorized requesters after chat.send terminalizes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { chatRunBelongsToAgent } from "./chat-run-owner.js";
 
 export type QueuedChatTurnEntry = {
   controller: AbortController;
@@ -36,6 +38,14 @@ function resolveExactRunId(runId: string): string | undefined {
   // chat.send idempotency keys are exact protocol identities. Trimming here
   // would diverge from the active-run and dedupe registries.
   return runId.length > 0 ? runId : undefined;
+}
+
+function createQueuedChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  // Queued turns can outlive active registrations; their signal owns restart disposition.
+  if (stopReason === "restart") {
+    return createAgentRunRestartAbortError();
+  }
+  return stopReason ? new Error(`queued turn aborted: ${stopReason}`) : undefined;
 }
 
 // Queue callbacks can outlive their map entry, and protocol run IDs may be reused.
@@ -160,9 +170,7 @@ export function abortQueuedChatTurnById(
     return { aborted: false };
   }
   if (!entry.controller.signal.aborted) {
-    entry.controller.abort(
-      params.stopReason ? new Error(`queued turn aborted: ${params.stopReason}`) : undefined,
-    );
+    entry.controller.abort(createQueuedChatAbortSignalReason(params.stopReason));
   }
   deleteQueuedChatTurnEntry(chatQueuedTurns, runId, entry);
   return { aborted: true };
@@ -204,11 +212,18 @@ export function listQueuedChatTurnsForSession(params: {
     if (!sessionKeys.has(entry.sessionKey) && !sessionIds.has(entry.sessionId)) {
       continue;
     }
-    if (agentId && entry.sessionKey === "global") {
-      const entryAgent = (entry.agentId ?? defaultAgentId)?.toLowerCase();
-      if (entryAgent !== agentId) {
-        continue;
-      }
+    if (
+      agentId &&
+      !chatRunBelongsToAgent(
+        {
+          agentId: entry.agentId,
+          sessionKey: entry.sessionKey,
+          defaultAgentId,
+        },
+        agentId,
+      )
+    ) {
+      continue;
     }
     matches.push({ runId, entry });
   }
@@ -230,9 +245,7 @@ export function abortQueuedChatTurns(
       continue;
     }
     if (!entry.controller.signal.aborted) {
-      entry.controller.abort(
-        stopReason ? new Error(`queued turn aborted: ${stopReason}`) : undefined,
-      );
+      entry.controller.abort(createQueuedChatAbortSignalReason(stopReason));
     }
     deleteQueuedChatTurnEntry(chatQueuedTurns, runId, entry);
     runIds.push(runId);

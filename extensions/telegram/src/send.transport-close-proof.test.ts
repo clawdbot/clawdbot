@@ -2,8 +2,7 @@
 // grammY Bot, real undici agents, production-mode cache, against a local HTTP
 // server standing in for the Telegram Bot API. Observes actual TCP sockets.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { Socket } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;

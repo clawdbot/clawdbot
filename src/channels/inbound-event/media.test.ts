@@ -416,7 +416,12 @@ describe("channel inbound media facts", () => {
 
   it("normalizes provider media into inbound media facts", () => {
     const input = [
-      { path: " /tmp/image.png ", contentType: " image/png ", messageId: " " },
+      {
+        path: " /tmp/image.png ",
+        contentType: " image/png ",
+        fileName: " original image.png ",
+        messageId: " ",
+      },
       {
         url: "https://example.test/audio.mp3",
         contentType: "audio/mpeg",
@@ -434,6 +439,7 @@ describe("channel inbound media facts", () => {
         url: undefined,
         contentType: "image/png",
         kind: "image",
+        fileName: "original image.png",
         transcribed: false,
         messageId: "msg-1",
       },

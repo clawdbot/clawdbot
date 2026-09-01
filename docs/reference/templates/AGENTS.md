@@ -112,35 +112,23 @@ Example placeholders (replace or remove them):
 - On Discord, wrap multiple links in `<>` to suppress embeds (`<https://example.com>`).
 - On WhatsApp, use **bold** or CAPS instead of headers.
 
-## Heartbeats - Be Proactive
+## Automations - Be Proactive
 
-When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Keep a short checklist or reminders in the heartbeat monitor's automation scratch; use `openclaw automations list --all` to find the monitor job, then `openclaw automations scratch <jobId> --set "..."` to update it. Keep it small to limit token burn.
-
-See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the full decision table. Short version: heartbeat batches periodic checks with full session context on approximate timing (default every 30 minutes); automations are for exact timing, isolated runs, a different model, or one-shot reminders.
+Use scheduled automations for recurring checks, reminders, and background work. Keep any task-specific checklist in the automation's scratch, and keep it small to limit token burn. Use `openclaw automations list --all` to find scheduled jobs and `openclaw automations scratch <jobId> --set "..."` to update their scratch.
 
 **Things to check (rotate through these, 2-4 times per day):** emails for urgent unread messages; calendar for events in the next 24-48h; social mentions; weather if your human might go out.
 
-Track your checks in a workspace file of your choosing, for example `memory/heartbeat-state.json`:
-
-```json
-{
-  "lastChecks": {
-    "email": 1703275200,
-    "calendar": 1703260800,
-    "weather": null
-  }
-}
-```
+Track check timing in the relevant automation's scratch; do not create a separate state file.
 
 **Reach out when:** an important email arrived; a calendar event is coming up (&lt;2h); you found something interesting; it's been &gt;8h since you last said anything.
 
-**Stay quiet (`HEARTBEAT_OK`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
+**Stay quiet (`NO_REPLY`) when:** it's late night (23:00-08:00) unless urgent; the human is clearly busy; nothing is new since the last check; you checked &lt;30 minutes ago.
 
 **Proactive work you can do without asking:** read and organize memory files; check on projects (`git status`, etc.); update documentation; commit and push your own changes; review and update `USER.md` and `MEMORY.md`.
 
 ### Memory Maintenance
 
-Every few days, use a heartbeat to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
+Every few days, use a scheduled automation to read recent `memory/YYYY-MM-DD.md` files and identify what's worth keeping long-term. Update active user directives in `USER.md`, fold durable non-profile material into `MEMORY.md`, and remove outdated entries. Daily files are raw notes; `USER.md` and `MEMORY.md` are curated layers.
 
 Be helpful without being annoying: check in a few times a day, do useful background work, respect quiet time.
 

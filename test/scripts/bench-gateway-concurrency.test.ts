@@ -1,10 +1,41 @@
-// Gateway concurrency benchmark tests cover CLI parsing and bounded percentile summaries.
+// Gateway concurrency benchmark tests cover CLI controls, probe budgets, and summaries.
 import { spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createRawServer, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
+
+type BenchmarkRun = Parameters<typeof testing.summarizeRuns>[0][number];
+
+function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun {
+  return {
+    controlUi: [],
+    durationMs: 10,
+    freshConnection: { error: null, latencyMs: 25, ok: true },
+    history: [],
+    memory: {
+      after: { atMs: 10, heapTotalMb: 120, heapUsedMb: 80, rssMb: 200 },
+      before: { atMs: 0, heapTotalMb: 100, heapUsedMb: 60, rssMb: 180 },
+      peakRssMb: 210,
+    },
+    messageSubscriptions: [],
+    messageSubscriptionsDuringLoad: [],
+    modelRequestCount: 1,
+    probeWarmup: { durationMs: 2, samples: [] },
+    pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
+    readyz: [],
+    sessionSeedDurationMs: 2,
+    sessionsList: [],
+    sessionUpdates: [],
+    setupDurationMs: 3,
+    turnCount: 8,
+    turnsDurationMs: 5,
+    ...overrides,
+  };
+}
 
 describe("gateway concurrency benchmark script", () => {
   it("parses benchmark controls without booting a gateway", () => {
@@ -20,6 +51,32 @@ describe("gateway concurrency benchmark script", () => {
         "50",
         "--timeout-ms",
         "90000",
+        "--cpu-prof-dir",
+        "/tmp/gateway-cpu-profiles",
+        "--plugin-count",
+        "50",
+        "--session-count",
+        "120",
+        "--history-clients",
+        "6",
+        "--history-burst",
+        "5",
+        "--session-updates",
+        "500",
+        "--session-update-clients",
+        "8",
+        "--subscribers",
+        "4",
+        "--stream-chunk-delay-ms",
+        "2000",
+        "--max-control-ms",
+        "2000",
+        "--max-handshake-ms",
+        "2000",
+        "--tool-events",
+        "--no-diagnostics-timeline",
+        "--visible-observer",
+        "--workspace-fanout",
         "--output",
         "concurrency.json",
         "--json",
@@ -27,11 +84,26 @@ describe("gateway concurrency benchmark script", () => {
     ).toMatchObject({
       cadenceMs: 50,
       concurrency: 12,
+      cpuProfDir: "/tmp/gateway-cpu-profiles",
+      diagnosticsTimeline: false,
       json: true,
+      historyBurst: 5,
+      historyClients: 6,
+      maxControlMs: 2_000,
+      maxHandshakeMs: 2_000,
       output: "concurrency.json",
+      pluginCount: 50,
       runs: 2,
+      sessionCount: 120,
+      sessionUpdateClients: 8,
+      sessionUpdates: 500,
+      streamChunkDelayMs: 2_000,
+      subscribers: 4,
       timeoutMs: 90_000,
+      toolEvents: true,
+      visibleObserver: true,
       warmup: 0,
+      workspaceFanout: true,
     });
     expect(() => testing.parseOptions(["--concurrency", "65"])).toThrow(
       "--concurrency must be at most 64",
@@ -40,6 +112,87 @@ describe("gateway concurrency benchmark script", () => {
       "--runs was provided more than once",
     );
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+    expect(() => testing.parseOptions(["--plugin-count", "101"])).toThrow(
+      "--plugin-count must be at most 100",
+    );
+    expect(testing.parseOptions(["--session-count", "10000"]).sessionCount).toBe(10_000);
+    expect(() => testing.parseOptions(["--session-count", "10001"])).toThrow(
+      "--session-count must be at most 10000",
+    );
+    expect(() => testing.parseOptions(["--history-burst", "33"])).toThrow(
+      "--history-burst must be at most 32",
+    );
+    expect(() => testing.parseOptions(["--session-updates", "100001"])).toThrow(
+      "--session-updates must be at most 100000",
+    );
+    expect(testing.parseOptions([]).diagnosticsTimeline).toBe(true);
+  });
+
+  it("summarizes plugin metadata scans captured after startup warmup", () => {
+    expect(
+      testing.summarizePluginMetadataScans([
+        { durationMs: 18, name: "plugins.metadata.scan" },
+        { durationMs: 22, name: "plugins.metadata.scan" },
+        { durationMs: 9, name: "plugins.metadata.freeze" },
+      ]),
+    ).toEqual({
+      count: 2,
+      durationMs: { count: 2, max: 22, p50: 18, p95: 22, p99: 22 },
+      totalDurationMs: 40,
+    });
+  });
+
+  it("does not report missing or incomplete timeline evidence as zero scans", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, "");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+      await writeFile(file, '{"type":"span.end","name":"plugins.metadata.scan"');
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow();
+    });
+  });
+
+  it("counts load spans by emission time even when buffered setup spans arrive later", async () => {
+    await withTempDir("openclaw-concurrency-timeline-", async (root) => {
+      const file = `${root}/timeline.jsonl`;
+      const spans = [999, 1_000, 1_500, 2_000, 2_001].map((timestamp) => ({
+        schemaVersion: "openclaw.diagnostics.v1",
+        type: "span.end",
+        name: "plugins.metadata.scan",
+        durationMs: 10,
+        timestamp: new Date(timestamp).toISOString(),
+      }));
+      await writeFile(file, spans.map((span) => JSON.stringify(span)).join("\n") + "\n");
+
+      expect(
+        testing.summarizePluginMetadataScans(
+          testing.readDiagnosticsTimelineSpans(file, { from: 1_000, through: 2_000 }),
+        ),
+      ).toMatchObject({ count: 3, totalDurationMs: 30 });
+      await writeFile(file, JSON.stringify({ ...spans[0], timestamp: "invalid" }) + "\n");
+      expect(() => testing.readDiagnosticsTimelineSpans(file)).toThrow("invalid diagnostics");
+    });
+  });
+
+  it("aggregates plugin metadata scans across measured runs", () => {
+    const createRun = (count: number, durations: number[]) =>
+      createBenchmarkRun({
+        pluginMetadataScans: {
+          count,
+          durationMs: testing.summarizeNumbers(durations),
+          totalDurationMs: durations.reduce((sum, value) => sum + value, 0),
+        },
+      });
+
+    expect(testing.summarizeRuns([createRun(2, [10, 20]), createRun(1, [30])])).toMatchObject({
+      gatewayHeapGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      gatewayPeakRssMb: { count: 2, max: 210, p50: 210, p95: 210, p99: 210 },
+      gatewayRssGrowthMb: { count: 2, max: 20, p50: 20, p95: 20, p99: 20 },
+      modelRequestCount: 2,
+      pluginMetadataScanCount: 3,
+      pluginMetadataScanTotalDurationMs: 60,
+    });
   });
 
   it("reports p50, p95, p99, and max with nearest-rank percentiles", () => {
@@ -53,40 +206,116 @@ describe("gateway concurrency benchmark script", () => {
     expect(testing.summarizeNumbers([])).toBeNull();
   });
 
-  it("bounds an accepted turn wait by the benchmark deadline", async () => {
-    const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
-    const rpc = async <T>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
-      calls.push({ method, params, timeoutMs });
-      return (
-        method === "agent" ? { runId: "run-1", status: "accepted" } : { status: "timeout" }
-      ) as T;
+  it.each([
+    ["readyz", "readyz"],
+    ["controlUi", "Control UI"],
+    ["sessionsList", "sessions.list"],
+    ["history", "chat.history"],
+    ["messageSubscriptionsDuringLoad", "sessions.messages.subscribe"],
+    ["sessionUpdates", "sessions.patch"],
+  ] as const)("enforces the control budget for measured %s probes", (field, name) => {
+    const options = testing.parseOptions(["--max-control-ms", "2000"]);
+    const probe: BenchmarkRun["readyz"][number] = {
+      atMs: 0,
+      cpuCoreRatio: null,
+      degraded: null,
+      degradedSinceMs: null,
+      delayP99Ms: null,
+      error: null,
+      latencyMs: 2_000,
+      ok: true,
+      status: 200,
+      utilization: null,
     };
+    const run = createBenchmarkRun({ [field]: [probe] });
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
 
-    await expect(testing.runTurn(rpc, 0, performance.now() + 2_000)).rejects.toThrow(
-      "agent 1 did not complete",
-    );
+    probe.latencyMs = 2_576;
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      `Gateway ${name} probe exceeded 2000ms: ok=true latencyMs=2576.0 error=none`,
+    ]);
 
-    const wait = calls.find((call) => call.method === "agent.wait");
-    expect(wait?.params).toMatchObject({ runId: "run-1" });
-    const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown } | undefined)?.timeoutMs;
-    expect(serverTimeoutMs).toBe(0);
-    expect(wait?.timeoutMs).toEqual(expect.any(Number));
-    expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
-    expect(wait?.timeoutMs).toBeGreaterThan(serverTimeoutMs as number);
-    expect(wait?.timeoutMs).toBeLessThanOrEqual(2_000);
+    probe.latencyMs = 10;
+    probe.ok = false;
+    probe.error = "request failed";
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      `Gateway ${name} probe exceeded 2000ms: ok=false latencyMs=10.0 error=request failed`,
+    ]);
+    expect(testing.summarizeRuns([run]).budgetViolations).toEqual([]);
   });
+
+  it("keeps setup probes outside the control budget and handshakes under their own budget", () => {
+    const slowProbe = { atMs: 0, error: null, latencyMs: 5_000, ok: true };
+    const slowReady = {
+      ...slowProbe,
+      cpuCoreRatio: null,
+      degraded: null,
+      degradedSinceMs: null,
+      delayP99Ms: null,
+      status: 200,
+      utilization: null,
+    };
+    const run = createBenchmarkRun({
+      freshConnection: slowProbe,
+      messageSubscriptions: [slowProbe],
+      probeWarmup: {
+        durationMs: 10_000,
+        samples: [{ controlUi: slowReady, readyz: slowReady, sessionsList: slowProbe }],
+      },
+      sessionSeedDurationMs: 10_000,
+      setupDurationMs: 20_000,
+      turnsDurationMs: 30_000,
+    });
+    const options = testing.parseOptions(["--max-control-ms", "2000"]);
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
+    options.maxHandshakeMs = 2_000;
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      "fresh Gateway connection exceeded 2000ms: ok=true latencyMs=5000.0 error=none",
+    ]);
+    run.freshConnection = { error: null, latencyMs: 2_000, ok: true };
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([]);
+    run.freshConnection = { error: "unauthorized", latencyMs: 10, ok: false };
+    expect(testing.summarizeRuns([run], options).budgetViolations).toEqual([
+      "fresh Gateway connection exceeded 2000ms: ok=false latencyMs=10.0 error=unauthorized",
+    ]);
+  });
+
+  it.each([
+    { budgetMs: 2_000, minimumWaitMs: 0 },
+    { budgetMs: 120_000, minimumWaitMs: 110_000 },
+  ])(
+    "bounds an accepted turn wait by its $budgetMs ms benchmark budget",
+    async ({ budgetMs, minimumWaitMs }) => {
+      const calls: Array<{ method: string; params: unknown; timeoutMs?: number }> = [];
+      const rpc = async <T>(method: string, params: unknown, timeoutMs?: number): Promise<T> => {
+        calls.push({ method, params, timeoutMs });
+        return (
+          method === "agent" ? { runId: "run-1", status: "accepted" } : { status: "timeout" }
+        ) as T;
+      };
+
+      await expect(testing.runTurn(rpc, 0, performance.now() + budgetMs)).rejects.toThrow(
+        "agent 1 did not complete",
+      );
+
+      const wait = calls.find((call) => call.method === "agent.wait");
+      expect(wait?.params).toMatchObject({ runId: "run-1" });
+      const serverTimeoutMs = (wait?.params as { timeoutMs?: unknown } | undefined)?.timeoutMs;
+      if (minimumWaitMs === 0) {
+        expect(serverTimeoutMs).toBe(0);
+      } else {
+        expect(serverTimeoutMs).toBeGreaterThanOrEqual(minimumWaitMs);
+      }
+      expect(wait?.timeoutMs).toEqual(expect.any(Number));
+      expect(Number.isInteger(wait?.timeoutMs)).toBe(true);
+      expect(wait?.timeoutMs).toBeGreaterThan(serverTimeoutMs as number);
+      expect(wait?.timeoutMs).toBeLessThanOrEqual(budgetMs);
+    },
+  );
 
   it("gives every gateway sample a fresh pre-warmup timeout budget", async () => {
     const deadlines: number[] = [];
-    const sample = {
-      controlUi: [],
-      durationMs: 10,
-      probeWarmup: { durationMs: 2, samples: [] },
-      readyz: [],
-      sessionsList: [],
-      turnCount: 8,
-      turnsDurationMs: 5,
-    };
+    const sample = createBenchmarkRun();
 
     const runs = await testing.runBenchmarkSamples({
       now: (() => {
@@ -142,6 +371,16 @@ describe("gateway concurrency benchmark script", () => {
         error: "sessions.list failed: unauthorized",
         ok: false,
       });
+      const unicodeSample = await testing.sampleGateway({
+        deadlineAt: performance.now() + 5_000,
+        port: address.port,
+        rpc: async () => {
+          throw new Error(`${"x".repeat(499)}😀`);
+        },
+        runStartedAt: performance.now(),
+        serial: true,
+      });
+      expect(unicodeSample.sessionsList.error).toBe("x".repeat(499));
       const failure = testing.formatRunFailure(
         new Error(testing.formatProbeFailure(sample)),
         {
@@ -163,17 +402,21 @@ describe("gateway concurrency benchmark script", () => {
       };
       const healthyFast = {
         controlUi: { ...healthySlow.controlUi, latencyMs: 10 },
-        readyz: { ...healthySlow.readyz, latencyMs: 10 },
+        readyz: { ...healthySlow.readyz, degraded: true, latencyMs: 10 },
         sessionsList: { ...healthySlow.sessionsList, latencyMs: 10 },
       };
-      const samples = [sample, healthySlow, healthyFast];
+      const healthySettled = {
+        ...healthyFast,
+        readyz: { ...healthyFast.readyz, degraded: false },
+      };
+      const samples = [sample, healthySlow, healthyFast, healthySettled];
       const warmed = await testing.warmGatewayProbes({
         deadlineAt: performance.now() + 5_000,
         retryDelayMs: 0,
         sample: async () => samples.shift() ?? healthyFast,
         targetMs: 100,
       });
-      expect(warmed.samples).toHaveLength(3);
+      expect(warmed.samples).toHaveLength(4);
     } finally {
       server.close();
     }

@@ -23,25 +23,7 @@ export {
   pauseVirtualClock,
 };
 
-export const managedImageCacheProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "managed-image-cache",
-);
-export const channelStopProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "channel-stop",
-);
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const sessionAccessibilityProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-accessibility",
-);
 
 export function createChatFlowE2eSuite() {
   return createControlUiE2eSuite({
@@ -50,6 +32,22 @@ export function createChatFlowE2eSuite() {
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
+}
+
+export async function buildLocalWebchatAudioMessage(source: string) {
+  const { buildWebchatAssistantMessageFromReplyPayloads } =
+    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
+  const audioPath = new URL(source).pathname;
+  const localRoot = path.dirname(audioPath);
+  await mkdir(localRoot, { recursive: true });
+  await writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  return expectDefined(
+    await buildWebchatAssistantMessageFromReplyPayloads(
+      [{ mediaUrl: source, trustedLocalMedia: true }],
+      { localRoots: [localRoot] },
+    ),
+    "Gateway-produced WebChat audio message",
+  );
 }
 
 export const requireRecord = createRequireRecord("record", "expected-object-value");
@@ -162,11 +160,15 @@ export async function scrollChatThreadToTop(page: Page): Promise<void> {
   });
 }
 
-export async function captureSessionAccessibilityProof(page: Page, name: string): Promise<void> {
+export async function captureSessionAccessibilityProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  name: string,
+): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(sessionAccessibilityProofDir, { recursive: true });
+  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,
@@ -228,4 +230,53 @@ export async function sidebarSessionOrder(page: Page): Promise<string[]> {
         .map((row) => row.getAttribute("data-session-key") ?? "")
         .filter((key) => key.startsWith("agent:main:session-")),
     );
+}
+
+/** Read native queued Blobs without going through a credential-filtered UI projection. */
+export async function readOutboxPayloadAttachments(page: Page, key: string) {
+  return page.evaluate(async (payloadKey) => {
+    type StoredPayload = {
+      attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
+    };
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-control-ui");
+      request.addEventListener("success", () => resolve(request.result), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("IDB open failed")),
+        { once: true },
+      );
+    });
+    try {
+      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
+        const request = database
+          .transaction("outboxPayloads")
+          .objectStore("outboxPayloads")
+          .get(payloadKey);
+        request.addEventListener(
+          "success",
+          () => resolve(request.result as StoredPayload | undefined),
+          { once: true },
+        );
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("IDB read failed")),
+          { once: true },
+        );
+      });
+      return payload
+        ? Promise.all(
+            payload.attachments.map(async ({ blob, fileName, mimeType }) => {
+              let binary = "";
+              for (const byte of new Uint8Array(await blob.arrayBuffer())) {
+                binary += String.fromCharCode(byte);
+              }
+              return { fileName, mimeType, base64: btoa(binary) };
+            }),
+          )
+        : null;
+    } finally {
+      database.close();
+    }
+  }, key);
 }

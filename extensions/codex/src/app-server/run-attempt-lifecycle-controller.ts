@@ -73,9 +73,8 @@ export function createCodexAttemptLifecycleController(
     // Interrupt drops accepted pending input. Reject unconsumed steering first so
     // completion delivery can use its fallback path instead of reporting success.
     turnRuntime.steeringQueueRef.current?.cancel();
-    void turnRuntime
-      .interruptTurn(value.call.turnId, { locallyCompleted: true })
-      .then(turnRuntime.completeTurn);
+    void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
@@ -132,7 +131,11 @@ export function createCodexAttemptLifecycleController(
     state.lifecycleStarted = true;
   };
   const emitLifecycleTerminal = (data: Record<string, unknown> & { phase: "end" | "error" }) => {
-    if (!state.lifecycleStarted || state.lifecycleTerminalEmitted) {
+    if (
+      !state.lifecycleStarted ||
+      state.lifecycleTerminalEmitted ||
+      state.permissionChangeRestart
+    ) {
       return;
     }
     void emitCodexAppServerEvent(params, {

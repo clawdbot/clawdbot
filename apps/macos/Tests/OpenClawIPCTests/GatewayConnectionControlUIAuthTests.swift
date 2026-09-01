@@ -27,8 +27,8 @@ private func makeControlUIAuthSession(
 }
 
 private func controlUIRoute(_ rawURL: String, token: String? = nil) throws -> GatewayConnection.Config {
-    (
-        url: try #require(URL(string: rawURL)),
+    try (
+        url: #require(URL(string: rawURL)),
         token: token,
         password: nil)
 }
@@ -42,7 +42,7 @@ struct GatewayConnectionControlUIAuthTests {
             routeAuthority: 1,
             deviceAuthGatewayID: "route-a"))
         let connection = GatewayConnection(
-            endpointProvider: { source.snapshot() },
+            testEndpointProvider: { source.snapshot() },
             sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession()))
 
         #expect(await connection.controlUiAutoAuthToken(config: routeA) == nil)
@@ -91,6 +91,8 @@ struct GatewayConnectionControlUIAuthTests {
                         routeAuthority: 1,
                         deviceAuthGatewayID: "route-a")
                 },
+                supportsSharedEndpointRecovery: false,
+                activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession()))
             _ = try await routeAConnection.request(
                 method: "health",
@@ -109,6 +111,8 @@ struct GatewayConnectionControlUIAuthTests {
                         routeAuthority: 2,
                         deviceAuthGatewayID: "route-b")
                 },
+                supportsSharedEndpointRecovery: false,
+                activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession()))
             _ = try await routeBConnection.request(
                 method: "health",
@@ -139,6 +143,8 @@ struct GatewayConnectionControlUIAuthTests {
                 deviceAuthGatewayID: "route-a"))
             let connection = GatewayConnection(
                 endpointProvider: { source.snapshot() },
+                supportsSharedEndpointRecovery: false,
+                activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession(
                     issuedDeviceToken: "route-a-issued-token")))
 

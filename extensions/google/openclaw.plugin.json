@@ -750,7 +750,7 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
-    "memoryEmbeddingProviders": ["gemini"],
+    "embeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
     "realtimeVoiceProviders": ["google"],

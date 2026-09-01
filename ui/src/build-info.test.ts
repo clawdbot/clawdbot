@@ -20,14 +20,20 @@ describe("Control UI build info", () => {
     vi.resetModules();
 
     try {
-      const { CONTROL_UI_BUILD_INFO, controlUiVersionDiffersFrom } =
-        await import("./build-info.ts");
+      const { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } = await import("./build-info.ts");
       expect(CONTROL_UI_BUILD_INFO).toBe(injectedBuildInfo);
-      expect(controlUiVersionDiffersFrom(" 2026.7.19 ")).toBe(false);
-      expect(controlUiVersionDiffersFrom("2026.7.20")).toBe(true);
-      expect(controlUiVersionDiffersFrom("2026.7.19", COMMIT.slice(0, 12))).toBe(false);
-      expect(controlUiVersionDiffersFrom("2026.7.19", "f".repeat(40))).toBe(true);
-      expect(controlUiVersionDiffersFrom(undefined)).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: " 2026.7.19 " })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.20" })).toBe(true);
+      expect(controlUiBuildDiffersFrom({ version: undefined })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "test" })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "other" })).toBe(true);
+      expect(
+        controlUiBuildDiffersFrom({
+          version: "2026.7.20",
+          buildId: "other",
+          controlUiBuildSource: "configured",
+        }),
+      ).toBe(false);
     } finally {
       vi.unstubAllGlobals();
       vi.resetModules();

@@ -23,7 +23,7 @@ vi.mock("../infra/agent-events.js", () => ({
     generation === "current-generation",
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
-vi.mock("../infra/session-delivery-queue.js", () => ({
+vi.mock("../infra/session-delivery-queue-storage.js", () => ({
   loadPendingSessionDeliveries: mocks.loadPendingSessionDeliveries,
 }));
 vi.mock("./task-status-access.js", () => ({

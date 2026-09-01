@@ -264,7 +264,9 @@ class I18nManager {
     }
 
     if (params) {
-      return value.replace(/\{(\w+)\}/g, (_, k) => params[k] || `{${k}}`);
+      // ?? not ||: an empty-string param is a provided value (render empty),
+      // while a missing param keeps the visible {placeholder} for debugging.
+      return value.replace(/\{(\w+)\}/g, (_, k) => params[k] ?? `{${k}}`);
     }
 
     return value;

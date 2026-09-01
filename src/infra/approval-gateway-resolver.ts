@@ -2,7 +2,6 @@
 import type {
   ApprovalChannelReviewer,
   ApprovalDecision,
-  ApprovalKind,
   ApprovalResolveParams,
   ApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -13,6 +12,7 @@ import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approval
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
@@ -35,7 +35,7 @@ type ApprovalGatewayRuntime = {
 
 type CanonicalResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBaseParams & {
   /** Explicit owner required by the canonical approval resolver. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   gatewayRuntime?: ApprovalGatewayRuntime;
   allowPluginFallback?: never;
   resolveMethod?: never;
@@ -56,7 +56,7 @@ type LegacyResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBasePara
    * Explicit legacy owner. Omission retains the shipped id-based routing contract.
    * @deprecated Pass approvalKind so resolution uses the canonical approval service.
    */
-  resolveMethod?: "exec" | "plugin";
+  resolveMethod?: ChannelApprovalKind;
 };
 
 type ResolveApprovalOverGatewayParams =

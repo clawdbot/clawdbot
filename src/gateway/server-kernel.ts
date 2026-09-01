@@ -1,12 +1,14 @@
 import { isNixMode } from "../config/paths.js";
+import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
+import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -16,6 +18,10 @@ type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 type ReadPreparedGatewayModelCatalog =
   typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
+type LoadPreparedGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadPreparedGatewayModelCatalogSnapshot;
+type ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogOwnerSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -32,7 +38,9 @@ const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
   () => import("./server-plugin-bootstrap.js"),
 );
-const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-close.runtime.js"));
+const loadGatewayShutdownModule = createLazyRuntimeModule(
+  () => import("./server-shutdown.runtime.js"),
+);
 
 const log = createSubsystemLogger("gateway");
 const logDiscovery = log.child("discovery");
@@ -76,6 +84,22 @@ const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.readPreparedGatewayModelCatalog(...args);
 };
+const loadPreparedGatewayModelCatalogSnapshot: LoadPreparedGatewayModelCatalogSnapshot = async (
+  ...args
+) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadPreparedGatewayModelCatalogSnapshot(...args);
+};
+const readPreparedGatewayModelCatalogOwnerSnapshot: ReadPreparedGatewayModelCatalogOwnerSnapshot =
+  async (...args) => {
+    const mod = await loadGatewayModelCatalogModule();
+    return mod.readPreparedGatewayModelCatalogOwnerSnapshot(...args);
+  };
+
+registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+  loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot(params),
+  readPrepared: readPreparedGatewayModelCatalogOwnerSnapshot,
+});
 
 function formatRuntimeGatewayAuthTokenWarning(): string {
   const base =
@@ -90,16 +114,6 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
   ].join(" ");
 }
 
-async function closeMcpLoopbackServerOnDemand(): Promise<void> {
-  const { closeMcpLoopbackServer } = await import("./mcp-http.js");
-  await closeMcpLoopbackServer();
-}
-
-async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
-  const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
-  stopTaskRegistryMaintenance();
-}
-
 export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
   const { resetPreparedModelCatalogStateForTest } = await loadGatewayModelCatalogModule();
   await resetPreparedModelCatalogStateForTest();
@@ -108,6 +122,7 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 /** Builds the Gateway kernel and internal dispatch surface without creating HTTP servers. */
 export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
   ensureOpenClawCliOnPath();
+  const releasePluginMetadata = retainGatewayPluginMetadata();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
@@ -131,15 +146,20 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadWorkerEnvironmentStartupModule,
       loadWorkerPlacementStartupModule,
     });
+    // An in-place update may replace every hashed chunk before SIGTERM arrives.
+    // Resolve and retain the complete shutdown graph while the install is healthy.
+    const shutdownRuntime = await runtime.startupTrace.measure(
+      "gateway.shutdown-runtime-import",
+      async () => (await loadGatewayShutdownModule()).prepareGatewayShutdownRuntime(),
+    );
     lifecycleRuntime = await prepareGatewayLifecycle({
       runtime,
+      releasePluginMetadata,
       port,
       log,
       logCron,
       diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-      loadGatewayCloseModule,
-      closeMcpLoopbackServerOnDemand,
-      stopTaskRegistryMaintenanceOnDemand,
+      shutdownRuntime,
     });
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");
@@ -159,11 +179,15 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     });
     return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
   } catch (error) {
-    if (lifecycleRuntime) {
-      await lifecycleRuntime.closeOnStartupFailure();
-    } else {
-      clearSecretsRuntimeSnapshotState();
-      clearPluginMetadataLifecycleCaches();
+    try {
+      if (lifecycleRuntime) {
+        await lifecycleRuntime.closeOnStartupFailure();
+      } else {
+        clearGatewayAgentCliShim();
+        clearSecretsRuntimeSnapshotState();
+      }
+    } finally {
+      releasePluginMetadata();
     }
     throw error;
   }

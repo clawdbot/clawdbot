@@ -14,7 +14,11 @@ const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
 };
 
 describe("gateway request scope", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => {
+    vi.doUnmock("../current-plugin-metadata-snapshot.js");
+    vi.resetModules();
+    resetPluginRuntimeStateForTest();
+  });
   async function importGatewayRequestScopeModule() {
     return await import("./gateway-request-scope.js");
   }
@@ -57,6 +61,17 @@ describe("gateway request scope", () => {
     });
   }
 
+  it("does not import the plugin metadata control plane", async () => {
+    vi.resetModules();
+    vi.doMock("../current-plugin-metadata-snapshot.js", () => {
+      throw new Error("gateway request scope must remain lightweight");
+    });
+
+    const runtimeScope = await importGatewayRequestScopeModule();
+
+    expect(runtimeScope.withPluginRuntimeGatewayRequestScope).toBeTypeOf("function");
+  });
+
   it("reuses AsyncLocalStorage across reloaded module instances", async () => {
     const first = await importGatewayRequestScopeModule();
 
@@ -65,6 +80,23 @@ describe("gateway request scope", () => {
       const second = await importGatewayRequestScopeModule();
       expectGatewayScope(second, TEST_SCOPE);
     });
+  });
+
+  it("preserves host-issued Gateway resolver bindings across reloaded modules", async () => {
+    const first = await importGatewayRequestScopeModule();
+    const owner = {};
+    const resolver = vi.fn(() => TEST_SCOPE.context!);
+    first.bindGatewayContextResolver(owner, resolver);
+
+    vi.resetModules();
+    const second = await importGatewayRequestScopeModule();
+
+    expect(second.getGatewayContextResolver(owner)).toBe(resolver);
+    expect(second.getSharedGatewayContextResolver([owner])).toBe(resolver);
+    expect(second.getGatewayContextResolver({})).toBeUndefined();
+
+    second.clearGatewayContextResolver(owner);
+    expect(first.getGatewayContextResolver(owner)).toBeUndefined();
   });
 
   it("attaches plugin id to the active scope", async () => {

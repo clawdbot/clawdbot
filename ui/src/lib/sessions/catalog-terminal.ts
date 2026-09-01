@@ -10,8 +10,8 @@ function openTerminal(detail: TerminalPanelToggleDetail): void {
   );
 }
 
-export function openCatalogSessionInTerminal(key: CatalogSessionKey): void {
-  openTerminal({ open: true, catalog: key });
+export function openCatalogSessionInTerminal(key: CatalogSessionKey, agentId: string): void {
+  openTerminal({ open: true, agentId, catalog: key });
 }
 
 export function openTerminalSessionInTerminal(terminalSessionId: string): void {

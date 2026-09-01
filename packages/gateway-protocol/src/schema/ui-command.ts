@@ -45,6 +45,7 @@ export type UiCommand = Static<typeof UiCommandSchema>;
 export const UiCommandParamsSchema = closedObject({
   command: UiCommandSchema,
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
 });
 export type UiCommandParams = Static<typeof UiCommandParamsSchema>;
 

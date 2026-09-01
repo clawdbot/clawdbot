@@ -1,7 +1,6 @@
 // Implements `openclaw channels list` across runtime accounts, local config, and catalog-only entries.
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -14,12 +13,17 @@ import {
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
+import {
+  formatChannelAccountLabel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
+  requireValidChannelConfig,
+} from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
@@ -153,7 +157,11 @@ export async function channelsListCommand(
     return;
   }
   const showAll = opts.all === true;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config: cfg,
+    env: process.env,
+  });
+  const workspaceDir = workspace.workspaceDir;
   // Plugin metadata is process-stable. Resolve it once and carry its manifest,
   // discovery, and installed-index facts through every list projection.
   const metadataSnapshot = resolvePluginMetadataSnapshot({
@@ -323,19 +331,21 @@ export async function channelsListCommand(
         origin: line.configured ? "configured" : line.installed ? "available" : "installable",
       };
     }
-    writeRuntimeJson(runtime, { chat });
+    writeRuntimeJson(runtime, {
+      chat,
+      ...(workspace.diagnostic ? { diagnostics: [workspace.diagnostic] } : {}),
+    });
     return;
   }
 
   const lines: string[] = [];
   lines.push(theme.heading("Chat channels:"));
+  if (workspace.diagnostic) {
+    lines.push(theme.warn(`- ${workspace.diagnostic.message}`));
+  }
   if (accountLines.length === 0 && catalogOnlyLines.length === 0) {
     lines.push(
-      theme.muted(
-        showAll
-          ? "- no chat channels found"
-          : "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
-      ),
+      theme.muted(showAll ? "- no chat channels found" : NO_CONFIGURED_CHAT_CHANNELS_LINE),
     );
   } else {
     for (const line of accountLines) {

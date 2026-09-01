@@ -4,6 +4,7 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isPlainObject } from "../utils.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { inheritLegacyDefaultAgentId } from "./legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
@@ -49,10 +50,12 @@ function mergeOverrides(base: unknown, override: unknown): unknown {
 
 function applyOverrideTree(cfg: OpenClawConfig, overrideTree: OverrideTree): OpenClawConfig {
   const next = mergeOverrides(cfg, overrideTree) as OpenClawConfig;
+  // Runtime cloning must preserve retained migration ownership or unrelated
+  // overrides turn an upgraded fleet back into an ownerless explicit roster.
   if (next.agents === cfg.agents) {
-    return next;
+    return inheritLegacyDefaultAgentId(cfg, next);
   }
-  return attachAgentListProjection(next);
+  return inheritLegacyDefaultAgentId(cfg, attachAgentListProjection(next));
 }
 
 /** Return the process-local runtime override tree used by debug config commands. */

@@ -42,13 +42,11 @@ function addConfiguredMemoryEmbeddingProviderPluginIds(
   if (configuredProviderIds.size === 0) {
     return;
   }
-  for (const contract of ["embeddingProviders", "memoryEmbeddingProviders"] as const) {
-    for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-      contract,
-      providerIds: configuredProviderIds,
-    })) {
-      ids.add(pluginId);
-    }
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "embeddingProviders",
+    providerIds: configuredProviderIds,
+  })) {
+    ids.add(pluginId);
   }
 }
 

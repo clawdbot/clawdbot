@@ -1,6 +1,7 @@
 // Control UI E2E tests cover composable skill references in the chat composer.
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -9,8 +10,11 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("references multiple skills inside a normal prompt and sends the visible tokens", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  it("references multiple skills inside a normal prompt and sends their raw names", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-skill-references", artifactRoot)
+      : undefined;
     await suite.withPage(
       {
         viewport: { width: 1280, height: 900 },
@@ -24,6 +28,7 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Pre-commit and ship code review.",
             name: "autoreview",
+            skillDisplayName: "Auto Review",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
@@ -33,10 +38,21 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Build and review technical documentation.",
             name: "technical_documentation",
+            skillDisplayName: "Technical Documentation",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
             textAliases: ["/technical_documentation"],
+          },
+          {
+            acceptsArgs: true,
+            description: "Prepare a detailed status report.",
+            name: "status_report",
+            skillDisplayName: "Status Report",
+            scope: "both",
+            source: "skill",
+            skillModelVisible: true,
+            textAliases: ["/status_report"],
           },
           {
             acceptsArgs: false,
@@ -76,7 +92,13 @@ suite.define(() => {
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await expect
           .poll(() => picker.getByRole("option").first().textContent())
-          .toContain("$autoreview");
+          .toContain("Auto Review");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "skill-reference-picker.png"),
+            fullPage: true,
+          });
+        }
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
 
@@ -102,9 +124,29 @@ suite.define(() => {
 
         await composer.fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
+        await composer.fill("Review this with /auto");
+        const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
+        await slashPicker.waitFor({ state: "visible" });
+        await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
+        await composer.press("Enter");
+        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+
         await composer.fill("/");
         await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
-        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(1);
+        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
+
+        const slashOptions = page
+          .getByRole("listbox", { name: "Slash commands" })
+          .getByRole("option");
+        await composer.fill("/sta");
+        await expect
+          .poll(async () => {
+            const names = await slashOptions.locator(".slash-menu-name").allTextContents();
+            return { first: names[0], last: names.at(-1) };
+          })
+          .toEqual({ first: "/status", last: "/status_report" });
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/status");
       },
     );
   });

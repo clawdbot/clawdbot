@@ -73,6 +73,7 @@ type TelegramHandlerLogger = {
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
   accountId: string;
+  ownerAgentId: string;
   bot: Bot;
   mediaMaxBytes: number;
   opts: TelegramBotOptions;
@@ -82,10 +83,8 @@ export type RegisterTelegramHandlerParams = {
   telegramDeps: TelegramBotDeps;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
   resolveGroupActivation: (params: {
-    chatId: string | number;
     agentId?: string;
-    messageThreadId?: number;
-    sessionKey?: string;
+    sessionKey: string;
     cfg: OpenClawConfig;
   }) => boolean | undefined;
   resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
@@ -117,6 +116,7 @@ export interface TelegramCallbackRouter {
 }
 
 export interface TelegramEventBindings {
+  registerChatMembership(): void;
   registerReaction(): void;
   registerPolls(): void;
   registerMigration(): void;

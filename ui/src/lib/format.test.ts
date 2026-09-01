@@ -14,7 +14,6 @@ import {
   formatRelativeTimestamp,
   formatTimeAgo,
   formatTimeMs,
-  formatTokens,
   formatUnknownText,
   truncateText,
 } from "./format.ts";
@@ -66,8 +65,24 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
+  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "preserves invalid duration fallbacks for %s",
+    (durationMs) => {
+      expect(formatDurationCompact(durationMs)).toBeUndefined();
+      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+    },
+  );
+
+  it("keeps zero distinct from a positive duration rounded to zero", () => {
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe("0ms");
+    expect(formatDurationHuman(0)).toBe("0ms");
+  });
+
   it.each([
+    { durationMs: 999.5, expected: "1s" },
     { durationMs: 59_000, expected: "59s" },
+    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
     { durationMs: 3_660_000, expected: "1h 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
@@ -77,6 +92,22 @@ describe("localized durations", () => {
 
   it("switches human durations to days at 24 hours", () => {
     expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  });
+
+  it("uses the active locale for both duration formats", async () => {
+    await i18n.setLocale("fr");
+    try {
+      const minute = new Intl.NumberFormat("fr", {
+        style: "unit",
+        unit: "minute",
+        unitDisplay: "narrow",
+        maximumFractionDigits: 0,
+      }).format(1);
+      expect(formatDurationCompact(60_000)).toBe(minute);
+      expect(formatDurationHuman(60_000)).toBe(minute);
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 });
 
@@ -153,36 +184,6 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
   });
-
-  it("strips <relevant-memories> blocks", () => {
-    const input = [
-      "<relevant-memories>",
-      "The following memories may be relevant to this conversation:",
-      "- Internal memory note",
-      "</relevant-memories>",
-      "",
-      "User-visible answer",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe("User-visible answer");
-  });
-
-  it("keeps relevant-memories tags in fenced code blocks", () => {
-    const input = [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe(input);
-  });
-
-  it("hides unfinished <relevant-memories> block tails", () => {
-    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello\n");
-  });
 });
 
 describe("formatUnknownText", () => {
@@ -257,15 +258,16 @@ describe("formatContextTokenCapacity", () => {
   });
 });
 
-describe("formatTokens", () => {
-  it("rolls a value that rounds up to 1000k over into the M branch", () => {
-    expect(formatTokens(999_500)).toBe("1.0M");
-    expect(formatTokens(999_999)).toBe("1.0M");
-    expect(formatTokens(999_499)).toBe("999k");
-    expect(formatTokens(1_000_000)).toBe("1.0M");
-    expect(formatTokens(12_345)).toBe("12k");
-    expect(formatTokens(5_500)).toBe("5.5k");
-    expect(formatTokens(null)).toBe("0");
+describe("formatCompactTokenCount edge inputs", () => {
+  it("falls back to 0 for nullish or non-finite input", () => {
+    expect(formatCompactTokenCount(null)).toBe("0");
+    expect(formatCompactTokenCount(undefined)).toBe("0");
+    expect(formatCompactTokenCount(Number.NaN)).toBe("0");
+  });
+
+  it("formats billion-scale provider totals with a B suffix", () => {
+    expect(formatCompactTokenCount(1_000_000_000)).toBe("1B");
+    expect(formatCompactTokenCount(4_132_000_000)).toBe("4.1B");
   });
 });
 

@@ -106,6 +106,81 @@ describe("agent run session target", () => {
     ).resolves.toMatchObject({ sessionId, sessionKey, storePath });
   });
 
+  it("resolves an existing bare row through its persisted fixed-store owner", async () => {
+    const storePath = path.join(tempDir, "fixed-owner", "sessions.json");
+    const sessionId = "fixed-owner-session";
+    await upsertSessionEntryCore(
+      { agentId: "ops", sessionKey: "global", storePath },
+      { sessionId, updatedAt: 1 },
+    );
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: {
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+        },
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      agentId: "ops",
+      sessionId,
+      sessionKey: "global",
+      storePath,
+    });
+  });
+
+  it("keeps a scoped live row available when the fixed-store owner is retired", async () => {
+    const storePath = path.join(tempDir, "retired-owner", "sessions.json");
+    const sessionId = "research-session";
+    const sessionKey = "agent:research:work";
+    await upsertSessionEntryCore(
+      { agentId: "research", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: {
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { research: {}, support: {} },
+          },
+        },
+        sessionId,
+      }),
+    ).resolves.toMatchObject({ agentId: "research", sessionId, sessionKey, storePath });
+  });
+
+  it("finds an agent-scoped row by id in an ownerless explicit fleet", async () => {
+    const storePath = path.join(tempDir, "ownerless", "sessions.json");
+    const sessionId = "research-session";
+    const sessionKey = "agent:research:work";
+    await upsertSessionEntryCore(
+      { agentId: "research", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: {
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+        sessionId,
+      }),
+    ).resolves.toMatchObject({ agentId: "research", sessionId, sessionKey, storePath });
+  });
+
   it("uses the active runtime store when compatibility projection omits config", async () => {
     const storePath = path.join(tempDir, "runtime-config", "sessions.json");
     const sessionId = "7ef14ab2-4801-40e1-9c56-83f9250c1706";
@@ -132,6 +207,26 @@ describe("agent run session target", () => {
         agentId: "main",
         config: { session: { store: storePath } } as OpenClawConfig,
         sessionId: "missing-session",
+      }),
+    ).rejects.toMatchObject({
+      code: "session-key-missing",
+      name: "AgentRunSessionTargetResolutionError",
+    });
+  });
+
+  it("does not create a key for an unknown session id during cross-agent lookup", async () => {
+    const storePath = path.join(tempDir, "missing-cross-agent", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        config: {
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+          },
+        },
+        sessionId: "unknown-cross-agent-session",
       }),
     ).rejects.toMatchObject({
       code: "session-key-missing",
@@ -206,7 +301,7 @@ describe("agent run session target", () => {
     });
   });
 
-  it("recovers the stored key from a legacy SQLite marker", async () => {
+  it("recovers the persisted owner from a legacy SQLite marker", async () => {
     const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
     await upsertSessionEntryCore(
@@ -239,7 +334,7 @@ describe("agent run session target", () => {
           storePath,
         }),
       }),
-    ).resolves.toMatchObject({ sessionKey, storePath });
+    ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
   });
 
   it("uses the marker store for a compatible partial typed target", async () => {

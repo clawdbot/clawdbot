@@ -51,8 +51,4 @@ export const BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES: BannedInternalPluginSdkF
     modulePath: "src/plugin-sdk/inbound-envelope",
     canonical: "openclaw/plugin-sdk/channel-inbound",
   },
-  {
-    modulePath: "src/plugin-sdk/text-runtime",
-    canonical: "the focused typed public Plugin SDK subpath for the imported helper",
-  },
 ];

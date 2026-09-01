@@ -38,7 +38,7 @@ import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./man
 import { safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
@@ -459,7 +459,8 @@ function resolvePluginConfigEnablement(params: {
   }
   const entry = params.config.plugins?.entries?.[params.pluginId];
   const hasConfig = isRecord(entry) && Object.hasOwn(entry, "config");
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: manifest.origin,
     schema: manifest.configSchema,
     cacheKey: manifest.schemaCacheKey ?? manifest.manifestPath,
     value: hasConfig ? entry.config : {},
@@ -468,7 +469,10 @@ function resolvePluginConfigEnablement(params: {
   if (result.ok) {
     return { mode: "ready" };
   }
-  if (!hasConfig) {
+  // A malformed manifest schema fails validation regardless of what config is supplied,
+  // so it is never "missing" (no config value could satisfy it) even when hasConfig is
+  // false; only a well-formed schema rejecting an absent/empty config counts as missing.
+  if (!hasConfig && !result.schemaError) {
     return { mode: "missing" };
   }
   return { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
@@ -484,14 +488,12 @@ export async function persistPluginInstall(params: {
   warningMessage?: string;
   runtime?: RuntimeEnv;
   persistenceLogger?: PluginInstallLogger;
+  onCommitted?: () => void;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
   const warn = (message: string, managementMessage: string): void => {
-    if (params.persistenceLogger?.warn) {
-      params.persistenceLogger.warn(managementMessage);
-      return;
-    }
+    params.persistenceLogger?.warn?.(managementMessage);
     runtime.log(theme.warn(message));
   };
   const installRecords = await tracePluginLifecyclePhaseAsync(
@@ -579,28 +581,20 @@ export async function persistPluginInstall(params: {
 
   let next = reconciledConfig;
   const enabledPluginIds: string[] = [];
-  const preserveExistingPolicy = previousInstall !== undefined;
   for (const pluginId of ownedPluginIds) {
     const configEnablement = enablementByPluginId.get(pluginId) ?? { mode: "ready" as const };
     const explicitlyDisabled = reconciledConfig.plugins?.entries?.[pluginId]?.enabled === false;
-    const existingAllow = reconciledConfig.plugins?.allow ?? [];
-    const blockedByExistingPolicy =
-      preserveExistingPolicy &&
-      ((reconciledConfig.plugins?.deny ?? []).includes(pluginId) ||
-        (existingAllow.length > 0 && !existingAllow.includes(pluginId)));
     if (configEnablement.mode === "missing") {
       next = prepareConfigForDisabledInstall(next, pluginId);
     }
     if (params.enable === false) {
       continue;
     }
-    if (!preserveExistingPolicy) {
-      next = removeInstalledPluginFromDenylist(
-        addInstalledPluginToAllowlist(next, pluginId),
-        pluginId,
-      );
-    }
-    if (configEnablement.mode !== "ready" || explicitlyDisabled || blockedByExistingPolicy) {
+    next = removeInstalledPluginFromDenylist(
+      addInstalledPluginToAllowlist(next, pluginId),
+      pluginId,
+    );
+    if (configEnablement.mode !== "ready" || explicitlyDisabled) {
       continue;
     }
     const enabled = enablePluginInConfig(next, pluginId, { updateChannelConfig: false });
@@ -635,6 +629,8 @@ export async function persistPluginInstall(params: {
       }),
     { command: "install" },
   );
+  // The source transaction must survive later cleanup or registry-refresh failures.
+  params.onCommitted?.();
   if (replacedInstallRemoval) {
     const removalResult = await tracePluginLifecyclePhaseAsync(
       "replaced install cleanup",

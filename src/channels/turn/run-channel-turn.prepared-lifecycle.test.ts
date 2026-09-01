@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
 import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
@@ -43,6 +45,16 @@ function finalizeResult(value: unknown): FinalizeResult {
 }
 
 describe("prepared channel turn lifecycle", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  let storePath: string;
+
+  beforeEach(() => {
+    storePath = path.join(
+      tempDirs.make("openclaw-channel-turn-prepared-lifecycle-"),
+      "sessions.json",
+    );
+  });
+
   it("runs custom prepared dispatch from a full turn adapter", async () => {
     const events: string[] = [];
     const result = await runChannelTurn({
@@ -53,7 +65,7 @@ describe("prepared channel turn lifecycle", () => {
         resolveTurn: () => ({
           channel: "test",
           routeSessionKey: "agent:main:test:peer",
-          storePath: "/tmp/sessions.json",
+          storePath,
           ctxPayload: createCtx(),
           recordInboundSession: createRecordInboundSession(events),
           runDispatch: async () => {
@@ -94,7 +106,7 @@ describe("prepared channel turn lifecycle", () => {
             ({
               channel: "test",
               routeSessionKey: "agent:main:test:peer",
-              storePath: "/tmp/sessions.json",
+              storePath,
               ctxPayload: createCtx(),
               recordInboundSession,
               runDispatch,
@@ -126,7 +138,7 @@ describe("prepared channel turn lifecycle", () => {
           resolveTurn: () => ({
             channel: "test",
             routeSessionKey: "agent:main:test:peer",
-            storePath: "/tmp/sessions.json",
+            storePath,
             ctxPayload: createCtx(),
             recordInboundSession,
             runDispatch,
@@ -166,7 +178,7 @@ describe("prepared channel turn lifecycle", () => {
         resolveTurn: () => ({
           channel: "test",
           routeSessionKey: "agent:main:test:peer",
-          storePath: "/tmp/sessions.json",
+          storePath,
           ctxPayload: createCtx(),
           recordInboundSession: createRecordInboundSession(),
           runDispatch,
@@ -209,7 +221,7 @@ describe("prepared channel turn lifecycle", () => {
           resolveTurn: () => ({
             channel: "test",
             routeSessionKey: "agent:observer:test:peer",
-            storePath: "/tmp/sessions.json",
+            storePath,
             ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
             recordInboundSession: createRecordInboundSession(events),
             runDispatch,

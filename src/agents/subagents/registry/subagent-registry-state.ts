@@ -1,4 +1,5 @@
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 /**
  * Subagent registry state persistence bridge.
  *
@@ -67,10 +68,12 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     childSessionKey: entry.childSessionKey,
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
     requesterSessionKey: entry.requesterSessionKey,
+    ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
     createdAt: entry.createdAt,
     execution: {
+      status: entry.execution.status,
       ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
       ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
       ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
@@ -225,6 +228,7 @@ export function restoreSubagentRunsFromDisk(params: {
       continue;
     }
     params.runs.set(runId, entry);
+    subagentRuns.commitOwnership(entry);
     added += 1;
   }
   return added;

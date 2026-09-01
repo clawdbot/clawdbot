@@ -49,6 +49,9 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     } else {
       process.env.OPENCLAW_STATE_DIR = previous;
     }
+    // The keyed store keeps the state database open under the temporary dir, so Windows
+    // fails the removal with EBUSY unless the cached handle is released first.
+    resetPluginStateStoreForTests();
     await fs.rm(dir, { recursive: true, force: true });
   }
 }

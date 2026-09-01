@@ -24,6 +24,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -60,9 +61,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -83,8 +87,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       },
     );
   }
-  const toolState = {
+  const toolState: {
+    yieldDetected: boolean;
+    yieldAcknowledgment?: string;
+    persistentWebSearchAllowed?: boolean;
+    webSearchAllowed: boolean;
+  } = {
     yieldDetected: false,
+    yieldAcknowledgment: undefined,
     persistentWebSearchAllowed: undefined as boolean | undefined,
     webSearchAllowed: false,
   };
@@ -115,21 +125,24 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         return ordinal;
       }
     : undefined;
-  const dynamicToolParams =
-    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
-      ? {
-          ...runtimeParams,
-          ...(allocateCodexToolOutcomeOrdinal
-            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
-            : {}),
-          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
-        }
-      : runtimeParams;
+  const compactionPlanState = new CodexCompactionPlanState();
+  const dynamicToolParams = {
+    ...runtimeParams,
+    onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
+      compactionPlanState.record(event);
+      return runtimeParams.onAgentEvent?.(event);
+    },
+    ...(allocateCodexToolOutcomeOrdinal
+      ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+      : {}),
+    ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+  };
   const computerContextEpoch: {
     value: number;
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
@@ -180,6 +193,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
+  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -187,10 +201,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -199,9 +215,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: () => {
+    onYieldDetected: (acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldAcknowledgment = acknowledgment;
     },
+    claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
       void emitCodexAppServerEvent(params, event);
     },
@@ -235,6 +253,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -257,7 +276,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -370,7 +389,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -539,13 +558,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cronCreatorToolAllowlistCaptureRef,
       scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,
       suppressedDynamicToolOutcomeOrdinals,
       onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
+      runtimeYieldCompletionClaim,
     };
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.

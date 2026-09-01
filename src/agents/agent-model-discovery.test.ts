@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -17,7 +17,7 @@ import {
 // The ambient plugin metadata snapshot is cleared for the same reason.
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 afterEach(() => vi.unstubAllEnvs());

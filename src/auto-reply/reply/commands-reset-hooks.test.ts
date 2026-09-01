@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
+import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -102,6 +103,7 @@ function buildResetParams(
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp/openclaw-commands",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
@@ -458,32 +460,103 @@ describe("handleCommands reset hooks", () => {
     expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
   });
 
-  it("requires operator.admin for internal /reset soft commands", async () => {
-    const params = buildResetParams(
-      "/reset soft",
-      {
-        commands: { text: true },
-        channels: { webchat: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-      {
-        Provider: "webchat",
-        Surface: "webchat",
-        CommandAuthorized: true,
-        GatewayClientScopes: ["operator.write"],
-      },
-    );
-    params.command.isAuthorizedSender = true;
-    params.command.channel = "webchat";
-    params.command.channelId = "webchat";
-    params.command.surface = "webchat";
+  it.each([
+    {
+      name: "write scope",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+    {
+      name: "admin scope",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: ["operator.admin"],
+      allowed: true,
+    },
+    {
+      name: "legacy missing scopes",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: undefined,
+      allowed: true,
+    },
+    {
+      name: "legacy empty scopes",
+      provider: "webchat",
+      surface: "webchat",
+      scopes: [],
+      allowed: true,
+    },
+    {
+      name: "internal Provider remains authoritative",
+      provider: "webchat",
+      surface: "telegram",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+    {
+      name: "external Provider remains authoritative",
+      provider: "telegram",
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: true,
+    },
+    {
+      name: "missing Provider uses internal Surface",
+      provider: undefined,
+      surface: "webchat",
+      scopes: ["operator.write"],
+      allowed: false,
+    },
+  ])(
+    "preserves internal soft-reset scope policy: $name",
+    async ({ provider, surface, scopes, allowed }) => {
+      const params = buildResetParams(
+        "/reset soft",
+        {
+          commands: { text: true },
+        } as OpenClawConfig,
+        {
+          Provider: provider,
+          Surface: surface,
+          CommandAuthorized: true,
+          GatewayClientScopes: scopes,
+        },
+      );
+      params.command = buildCommandContext({
+        ctx: params.ctx,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        isGroup: false,
+        triggerBodyNormalized: "/reset soft",
+        commandAuthorized: true,
+      });
+      params.sessionEntry = {
+        sessionId: "existing-soft-session",
+        lifecycleRevision: "existing-soft-generation",
+        updatedAt: 1,
+        cliSessionIds: { "claude-cli": "existing-cli-binding" },
+      };
+      const before = structuredClone(params.sessionEntry);
 
-    const result = await maybeHandleResetCommand(params);
+      const result = await maybeHandleResetCommand(params);
 
-    expect(result).toEqual({ shouldContinue: false });
-    expect(triggerInternalHookMock).not.toHaveBeenCalled();
-    expect(params.command.softResetTriggered).not.toBe(true);
-    expect(clearBootstrapSnapshotSpy).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual(allowed ? null : { shouldContinue: false });
+      expect(params.sessionEntry.sessionId).toBe(before.sessionId);
+      expect(params.sessionEntry.lifecycleRevision).toBe(before.lifecycleRevision);
+      expect(params.command.softResetTriggered === true).toBe(allowed);
+      expect(triggerInternalHookMock).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(clearBootstrapSnapshotSpy).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(routeReplyMock).not.toHaveBeenCalled();
+      if (allowed) {
+        expect(params.sessionEntry.cliSessionIds).toBeUndefined();
+      } else {
+        expect(params.sessionEntry).toEqual(before);
+      }
+    },
+  );
 
   it("clears both sessionStore and sessionEntry when they are distinct objects", async () => {
     const params = buildResetParams("/reset soft", {

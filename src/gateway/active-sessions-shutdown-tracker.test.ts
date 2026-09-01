@@ -61,6 +61,7 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     expect(listActiveSessionsForShutdown()).toEqual([]);
@@ -72,12 +73,14 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
     noteActiveSessionForShutdown({
       cfg,
       sessionKey: "agent:main:other",
       sessionId: "session-B",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     forgetActiveSessionForShutdown("session-A");
@@ -92,6 +95,7 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     forgetActiveSessionForShutdown("does-not-exist");
@@ -106,6 +110,7 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     const snapshot = listActiveSessionsForShutdown();

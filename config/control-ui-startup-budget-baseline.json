@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 328285,
-  "reason": "Gateway update outcome (#121686); Testbox-measured exact-head bytes",
-  "updatedAt": "2026-08-11"
+  "startupJsGzipBytes": 347792,
+  "reason": "Final automatic update lifecycle ownership and stale hold response fencing measured 347792 B in the canonical isolated production build (+1015 B, 0.29% from the original baseline); fixed 358400 B cap and allowances unchanged",
+  "updatedAt": "2026-09-01"
 }

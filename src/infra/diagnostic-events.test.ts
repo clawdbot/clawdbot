@@ -1,6 +1,9 @@
 // Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasInternalDiagnosticEventListeners } from "./diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  hasInternalDiagnosticEventListeners,
+} from "./diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -9,7 +12,6 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
-  formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -147,6 +149,42 @@ describe("diagnostic-events", () => {
     expect(seen).toEqual(["webhook.received"]);
   });
 
+  it("applies internal listener interests before dispatch", async () => {
+    const included: string[] = [];
+    const excluded: string[] = [];
+    onInternalDiagnosticEvent((event) => included.push(event.type), {
+      include: ["message.queued"],
+    });
+    onTrustedInternalDiagnosticEvent((event) => excluded.push(event.type), {
+      exclude: ["log.record"],
+    });
+
+    emitDiagnosticEvent({ type: "message.queued", source: "plugin" });
+    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
+    await waitForDiagnosticEventsDrained();
+
+    expect(included).toEqual(["message.queued"]);
+    expect(excluded).toEqual(["message.queued"]);
+  });
+
+  it("tracks broad, included, and excluded event interest through unsubscribe and reset", () => {
+    const stopBroad = onInternalDiagnosticEvent(() => undefined);
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
+    stopBroad();
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+
+    const stopIncluded = onInternalDiagnosticEvent(() => undefined, {
+      include: ["message.queued", "log.record"],
+      exclude: ["log.record"],
+    });
+    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+
+    resetDiagnosticEventsForTest();
+    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(false);
+    stopIncluded();
+  });
+
   it("carries explicit trace context without creating retained trace state", () => {
     const trace = createDiagnosticTraceContext({
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -244,38 +282,6 @@ describe("diagnostic-events", () => {
       { internal: false, metadataTrusted: true, type: "model.call.started" },
     ]);
     expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
-  });
-
-  it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    });
-    const traceparents: Array<string | undefined> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      traceparents.push(formatDiagnosticTraceparentForPropagation(event, metadata));
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-      trace,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 1 },
-      trace,
-    });
-
-    expect(traceparents).toEqual([undefined, `00-${trace.traceId}-${trace.spanId}-01`]);
-    expect(formatDiagnosticTraceparentForPropagation({ trace }, { trusted: true })).toBeUndefined();
-    expect(
-      formatDiagnosticTraceparentForPropagation(
-        { trace },
-        { trusted: false, trustedTraceContext: true },
-      ),
-    ).toBeUndefined();
   });
 
   it("prepares trusted events synchronously without cloning private data", async () => {

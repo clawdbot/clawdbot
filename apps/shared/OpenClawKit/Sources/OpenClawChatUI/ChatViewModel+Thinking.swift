@@ -5,6 +5,14 @@ import Foundation
 // extension owns collapsing them into the canonical option list.
 
 extension OpenClawChatViewModel {
+    static let baseThinkingLevelOptions: [OpenClawChatThinkingLevelOption] = [
+        OpenClawChatThinkingLevelOption(id: "off", label: "off"),
+        OpenClawChatThinkingLevelOption(id: "minimal", label: "minimal"),
+        OpenClawChatThinkingLevelOption(id: "low", label: "low"),
+        OpenClawChatThinkingLevelOption(id: "medium", label: "medium"),
+        OpenClawChatThinkingLevelOption(id: "high", label: "high"),
+    ]
+
     func applyAdvertisedThinkingLevel(_ level: String) {
         guard level != thinkingLevel else { return }
         thinkingLevel = level
@@ -25,6 +33,7 @@ extension OpenClawChatViewModel {
             guard next != preferredThinkingLevel || self.thinkingOverrideIsInherited else { return }
         }
 
+        self.errorText = nil
         let sessionKey = self.sessionKey
         let acceptedBaseline = Self.normalizedThinkingLevel(currentSessionEntry()?.thinkingLevel)
             ?? Self.normalizedThinkingLevel(thinkingLevel)
@@ -159,6 +168,7 @@ extension OpenClawChatViewModel {
                 self.updateCurrentSessionThinkingLevel(
                     self.acceptedThinkingOverrideClearedByTarget[target] == true ? nil : rollbackLevel,
                     sessionKey: sessionKey)
+                self.errorText = error.localizedDescription
             }
         }
     }

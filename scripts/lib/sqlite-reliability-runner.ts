@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -468,10 +467,10 @@ async function compactTargetDatabase(
     throw new Error(`unsupported reliability target role: ${target.identity.role}`);
   }
   const autoVacuumBefore = readAutoVacuum(target.path);
-  const report = compactDoctorSessionSqliteTarget({
-    agentId: target.identity.agentId,
-    storePath: target.path,
-  });
+  const report = await compactDoctorSessionSqliteTarget(
+    { agentId: target.identity.agentId, storePath: target.path },
+    { env },
+  );
   if (report.skipped) {
     throw new Error(`agent compaction unexpectedly skipped ${target.path}`);
   }

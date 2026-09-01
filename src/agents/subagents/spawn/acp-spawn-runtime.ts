@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -25,6 +26,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
+import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   resolveConfiguredSubagentSpawnModelSelection,
   resolveThinkingDefault,
@@ -98,11 +100,20 @@ export function resolveAcpSpawnRuntimeOptions(params: {
   | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const modelExplicit = normalizeOptionalString(params.model) !== undefined;
-  const model = resolveConfiguredSubagentSpawnModelSelection({
+  const rawModel = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
   });
+  const modelSelection = splitTrailingAuthProfile(rawModel ?? "");
+  if (modelExplicit && modelSelection.profile) {
+    return {
+      ok: false,
+      error:
+        "ACP model overrides cannot select OpenClaw auth profiles; configure credentials in the ACP runtime instead.",
+    };
+  }
+  const model = modelSelection.model || undefined;
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
@@ -117,7 +128,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride;
+  let thinking = thinkingPlan.thinkingOverride ?? targetAgentConfig?.thinkingDefault;
   if (!thinking && model) {
     const { provider, model: modelId } = splitModelRef(model);
     if (provider && modelId) {
@@ -146,6 +157,7 @@ export async function initializeAcpSpawnRuntime(params: {
   sessionKey: string;
   targetAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
+  backendId?: string;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
@@ -157,6 +169,7 @@ export async function initializeAcpSpawnRuntime(params: {
   let sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
     clone: false,
   });
   const sessionId = sessionEntry?.sessionId;
@@ -174,13 +187,14 @@ export async function initializeAcpSpawnRuntime(params: {
   const initialized = await getAcpSessionManager().initializeSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
     agent: params.targetAgentId,
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
     cwd: params.cwd,
-    backendId: params.cfg.acp?.backend,
+    backendId: params.backendId,
   });
 
   return {
@@ -273,4 +287,3 @@ export async function bindPreparedAcpThread(params: {
 
   return { binding, sessionEntry };
 }
-import fs from "node:fs/promises";

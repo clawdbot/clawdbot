@@ -1,78 +1,33 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import fs from "node:fs";
+import { describe, expect, it } from "vitest";
 import {
-  runOtelGenerationConfigWatcherRuntime,
-  testing,
-} from "./otel-generation-config-watcher-runtime.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  inspectOtelParentGraph,
+  parseOtelGenerationConfigWatcherOptions,
+  sanitizeOtelWatcherFailure,
+} from "./otel-generation-config-watcher-contract.js";
 
 describe("OTEL generation config watcher runtime", () => {
-  it(
-    "keeps all three signals on the active same-PID provider generation",
-    { timeout: 300_000 },
-    async () => {
-      const artifactBase = tempDirs.make("otel-generation-config-watcher-");
-
-      const { evidence, summary } = await runOtelGenerationConfigWatcherRuntime({
-        artifactBase,
-        repoRoot: process.cwd(),
-      });
-
-      expect(evidence.schemaVersion).toBe(2);
-      expect(evidence.entries[0]?.result.status).toBe("pass");
-      expect(summary).toMatchObject({
-        collectorAPostReadyRequestCount: 0,
-        failures: [],
-        noRespawn: true,
-        passed: true,
-        pid: { same: true },
-        readyAfterMutation: true,
-        restartLogObserved: true,
-      });
-      for (const [collector, parentSpanId] of [
-        [summary.collectorA, "1111111111111111"],
-        [summary.collectorB, "2222222222222222"],
-      ] as const) {
-        expect(collector).toMatchObject({
-          externalParentSpanIds: [parentSpanId],
-          failedRequestCount: 0,
-          logCorrelationValid: true,
-          parentGraphValid: true,
-          requiredSpanNames: ["openclaw.model.call", "openclaw.run"],
-          traceparentAccepted: true,
-        });
-        expect(collector?.signalRequestCounts).toMatchObject({
-          logs: expect.any(Number),
-          metrics: expect.any(Number),
-          traces: expect.any(Number),
-        });
-        expect(collector?.signalRequestCounts.logs).toBeGreaterThan(0);
-        expect(collector?.signalRequestCounts.metrics).toBeGreaterThan(0);
-        expect(collector?.signalRequestCounts.traces).toBeGreaterThan(0);
-      }
-
-      const summaryText = await fs.readFile(
-        path.join(artifactBase, "otel-generation-config-watcher-summary.json"),
-        "utf8",
-      );
-      expect(summaryText).not.toContain(artifactBase);
-      expect(summaryText).not.toContain("http://127.0.0.1");
-      const evidenceText = await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8");
-      expect(evidenceText).not.toContain(artifactBase);
-    },
-  );
+  it("keeps the full same-PID proof in the QA script scenario", () => {
+    const scenario = fs.readFileSync(
+      "qa/scenarios/observability/otel-generation-config-watcher.yaml",
+      "utf8",
+    );
+    expect(scenario).toContain("kind: script");
+    expect(scenario).toContain(
+      "path: test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.ts",
+    );
+  });
 
   it("rejects missing output-dir values", () => {
-    expect(() => testing.parseOptions(["--output-dir"])).toThrow("--output-dir requires a value");
+    expect(() => parseOtelGenerationConfigWatcherOptions(["--output-dir"])).toThrow(
+      "--output-dir requires a value",
+    );
   });
 
   it("redacts local failure details before writing artifacts", () => {
     const localEndpoint = `http://${["127", "0", "0", "1"].join(".")}:4318`;
     const gatewayToken = "qa-suite-12345678-1234-1234-1234-123456789abc";
-    const failure = testing.sanitizeProofFailure(
+    const failure = sanitizeOtelWatcherFailure(
       new Error(
         `failed at /workspace/repo/test.ts via ${localEndpoint} in /tmp/openclaw-qa-suite-private with ${gatewayToken}`,
       ),
@@ -97,8 +52,8 @@ describe("OTEL generation config watcher runtime", () => {
       parent: true,
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     };
-    const inspect = (spans: Parameters<typeof testing.inspectParentGraph>[0]) =>
-      testing.inspectParentGraph(spans, externalParentSpanId);
+    const inspect = (spans: Parameters<typeof inspectOtelParentGraph>[0]) =>
+      inspectOtelParentGraph(spans, externalParentSpanId);
     expect(
       inspect([
         { ...base, parentSpanId: externalParentSpanId, spanId: rootSpanId },

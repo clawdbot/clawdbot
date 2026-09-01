@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 // @vitest-environment node
-import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import { classifyRunInspection } from "./run-inspector-model.ts";
+import {
+  classifyRunInspection,
+  mergeDecisionPage,
+  type RunInspectorResult,
+} from "./run-inspector-model.ts";
 
 function unavailable(
   state: "unknown" | "unsupported" | "ambiguous",
   reasonCode: string,
   remediation: Array<{ code: string; text: string }> = [],
-): AuditRunInspectResult {
+): RunInspectorResult {
   return {
     schemaVersion: 1,
     run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
@@ -26,7 +29,7 @@ function unavailable(
             missingEvidence: ["identity.context"],
             remediation,
           },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: state === "ambiguous" ? "unknown" : state, missingEvidence: [] },
   };
 }
@@ -46,5 +49,65 @@ describe("classifyRunInspection", () => {
     [unavailable("ambiguous", "execution_selection_required"), "ambiguous"],
   ] as const)("classifies the authoritative diagnostic result as %s", (result, expected) => {
     expect(classifyRunInspection(result)).toBe(expected);
+  });
+});
+
+describe("receipt paging model", () => {
+  const present = {
+    schemaVersion: 1,
+    run: {
+      runId: "run-1",
+      executionId: "execution-1",
+      status: "known" as const,
+    },
+    identity: {
+      state: "present" as const,
+      context: {
+        schemaVersion: 1,
+        contextId: "context-1",
+        executionId: "execution-1",
+        runId: "run-1",
+        createdAt: 1,
+        trustDomain: {
+          kind: "gateway-cell" as const,
+          domainRef: "domain",
+          state: "present" as const,
+        },
+        invoker: { state: "absent" as const },
+        ingress: {
+          kind: "gateway-client" as const,
+          boundary: "agent-command.gateway",
+          state: "present" as const,
+        },
+        agentPrincipal: {
+          kind: "agent" as const,
+          domainRef: "domain",
+          principalRef: "main",
+        },
+        agentDefinition: { definitionRef: "main", state: "unknown" as const },
+        runtimeInstance: {
+          runtimeRef: "gateway",
+          kind: "gateway" as const,
+          state: "present" as const,
+        },
+        applicableGrants: [],
+        assurance: [],
+        coverageState: "attribution-only" as const,
+        missingEvidence: [],
+      },
+    },
+    decisionDisplays: [],
+    coverage: { state: "attribution-only" as const, missingEvidence: [] },
+  } satisfies RunInspectorResult;
+
+  it("merges only a page for the exact inspected execution and context", () => {
+    const page = { ...present, nextDecisionCursor: "g:10:2" };
+    expect(mergeDecisionPage(present, page)?.nextDecisionCursor).toBe("g:10:2");
+    expect(
+      mergeDecisionPage(present, {
+        ...page,
+        run: { ...page.run, executionId: "execution-2" },
+      }),
+    ).toBeNull();
   });
 });

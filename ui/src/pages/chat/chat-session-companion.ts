@@ -12,6 +12,7 @@ const COMPANION_ASK_TIMEOUT_MS = 70_000;
 
 export type ChatSessionCompanionThread = {
   exchanges: SessionCompanionExchange[];
+  loading: boolean;
   pendingQuestion: string | null;
   failedQuestion: string | null;
   hint:
@@ -68,6 +69,7 @@ function errorIsRetryable(error: unknown): boolean {
 function createThread(): MutableCompanionThread {
   return {
     exchanges: [],
+    loading: false,
     pendingQuestion: null,
     failedQuestion: null,
     failedQuestionKnownExchanges: null,
@@ -78,6 +80,10 @@ function createThread(): MutableCompanionThread {
   };
 }
 
+function companionThreadKey(sessionKey: string, agentId?: string | null): string {
+  return `${agentId?.trim() ?? ""}\0${sessionKey.trim()}`;
+}
+
 /** Pane-owned ephemeral companion threads, keyed by the exact selected session. */
 export class ChatSessionCompanionThreads {
   private readonly threads = new Map<string, MutableCompanionThread>();
@@ -86,12 +92,12 @@ export class ChatSessionCompanionThreads {
 
   constructor(private readonly notify: () => void = () => {}) {}
 
-  view(sessionKey: string): ChatSessionCompanionThread {
-    return this.get(sessionKey);
+  view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
+    return this.get(sessionKey, agentId);
   }
 
-  setDraft(sessionKey: string, draft: string): void {
-    const thread = this.get(sessionKey);
+  setDraft(sessionKey: string, draft: string, agentId?: string | null): void {
+    const thread = this.get(sessionKey, agentId);
     if (thread.draft === draft) {
       return;
     }
@@ -103,17 +109,21 @@ export class ChatSessionCompanionThreads {
   async hydrate(
     sessionKey: string,
     load: (sessionKey: string) => Promise<SessionsCompanionStateResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
-    if (!key) {
+    const targetSessionKey = sessionKey.trim();
+    if (!targetSessionKey) {
       return;
     }
-    const thread = this.get(key);
+    const key = companionThreadKey(targetSessionKey, agentId);
+    const thread = this.get(targetSessionKey, agentId);
     const revision = thread.revision;
     const token = Symbol(key);
     this.hydrationTokens.set(key, token);
+    thread.loading = true;
+    this.notify();
     try {
-      const result = await load(key);
+      const result = await load(targetSessionKey);
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
         return;
       }
@@ -143,6 +153,8 @@ export class ChatSessionCompanionThreads {
     } finally {
       if (this.hydrationTokens.get(key) === token) {
         this.hydrationTokens.delete(key);
+        thread.loading = false;
+        this.notify();
       }
     }
   }
@@ -151,13 +163,15 @@ export class ChatSessionCompanionThreads {
     sessionKey: string,
     question: string,
     ask: (sessionKey: string, question: string) => Promise<SessionsCompanionAskResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
+    const targetSessionKey = sessionKey.trim();
     const normalized = question.trim();
-    if (!key || !normalized) {
+    if (!targetSessionKey || !normalized) {
       return;
     }
-    const thread = this.get(key);
+    const key = companionThreadKey(targetSessionKey, agentId);
+    const thread = this.get(targetSessionKey, agentId);
     if (thread.pendingQuestion) {
       return;
     }
@@ -173,7 +187,7 @@ export class ChatSessionCompanionThreads {
     this.submissionTokens.set(key, token);
     this.notify();
     try {
-      const result = await ask(key, normalized);
+      const result = await ask(targetSessionKey, normalized);
       if (this.submissionTokens.get(key) !== token) {
         return;
       }
@@ -215,20 +229,26 @@ export class ChatSessionCompanionThreads {
   async reset(
     sessionKey: string,
     clear: (sessionKey: string) => Promise<SessionsCompanionResetResult>,
+    agentId?: string | null,
   ): Promise<void> {
-    const key = sessionKey.trim();
-    if (!key) {
+    const targetSessionKey = sessionKey.trim();
+    if (!targetSessionKey) {
       return;
     }
-    await clear(key);
-    this.hydrationTokens.delete(key);
-    this.submissionTokens.delete(key);
-    this.threads.set(key, createThread());
+    await clear(targetSessionKey);
+    this.retire(targetSessionKey, agentId);
+  }
+
+  retire(sessionKey?: string, agentId?: string | null): void {
+    const key = sessionKey ? companionThreadKey(sessionKey, agentId) : null;
+    for (const store of [this.threads, this.hydrationTokens, this.submissionTokens]) {
+      void (key ? store.delete(key) : store.clear());
+    }
     this.notify();
   }
 
-  private get(sessionKey: string): MutableCompanionThread {
-    const key = sessionKey.trim();
+  private get(sessionKey: string, agentId?: string | null): MutableCompanionThread {
+    const key = companionThreadKey(sessionKey, agentId);
     let thread = this.threads.get(key);
     if (!thread) {
       thread = createThread();
@@ -242,10 +262,11 @@ export function requestSessionCompanionAnswer(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
   question: string,
+  agentId?: string | null,
 ): Promise<SessionsCompanionAskResult> {
   return client.request<SessionsCompanionAskResult>(
     "sessions.companion.ask",
-    { sessionKey, question },
+    { sessionKey, ...(agentId ? { agentId } : {}), question },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );
 }
@@ -253,13 +274,21 @@ export function requestSessionCompanionAnswer(
 export function requestSessionCompanionState(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
+  agentId?: string | null,
 ): Promise<SessionsCompanionStateResult> {
-  return client.request<SessionsCompanionStateResult>("sessions.companion.state", { sessionKey });
+  return client.request<SessionsCompanionStateResult>("sessions.companion.state", {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+  });
 }
 
 export function resetSessionCompanion(
   client: Pick<GatewayBrowserClient, "request">,
   sessionKey: string,
+  agentId?: string | null,
 ): Promise<SessionsCompanionResetResult> {
-  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", { sessionKey });
+  return client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+  });
 }

@@ -11,9 +11,11 @@ set -euo pipefail
 #   NOTARYTOOL_KEY       path to App Store Connect API key (.p8)
 #   NOTARYTOOL_KEY_ID    API key ID
 #   NOTARYTOOL_ISSUER    API issuer ID
+#   NOTARY_RESULT_FILE   optional mode-0600 JSON result path
 
 ARTIFACT=""
 STAPLE_APP_PATH="${STAPLE_APP_PATH:-}"
+NOTARY_RESULT_FILE="${NOTARY_RESULT_FILE:-}"
 
 usage() {
   cat <<'HELP'
@@ -25,6 +27,7 @@ Env:
   NOTARYTOOL_KEY=<api-key.p8>
   NOTARYTOOL_KEY_ID=<api-key-id>
   NOTARYTOOL_ISSUER=<issuer-id>
+  NOTARY_RESULT_FILE=<accepted-result.json>
 HELP
 }
 
@@ -63,6 +66,14 @@ if ! command -v xcrun >/dev/null 2>&1; then
   echo "Error: xcrun not found; install Xcode command line tools." >&2
   exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq not found; install jq to validate notarization results." >&2
+  exit 1
+fi
+if [[ -n "$NOTARY_RESULT_FILE" && ! -d "$(dirname "$NOTARY_RESULT_FILE")" ]]; then
+  echo "Error: NOTARY_RESULT_FILE parent directory not found: $(dirname "$NOTARY_RESULT_FILE")" >&2
+  exit 1
+fi
 
 auth_args=()
 if [[ -n "${NOTARYTOOL_PROFILE:-}" ]]; then
@@ -75,7 +86,24 @@ else
 fi
 
 echo "🧾 Notarizing: $ARTIFACT"
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait --no-s3-acceleration
+notary_result="$(
+  xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" \
+    --wait --no-s3-acceleration --output-format json
+)"
+printf '%s\n' "$notary_result"
+notary_status="$(jq -r '.status // empty' <<<"$notary_result")"
+notary_id="$(jq -r '.id // empty' <<<"$notary_result")"
+if [[ "$notary_status" != "Accepted" || -z "$notary_id" ]]; then
+  echo "Error: notarization did not return an accepted result with an id." >&2
+  exit 1
+fi
+if [[ -n "$NOTARY_RESULT_FILE" ]]; then
+  notary_result_tmp="${NOTARY_RESULT_FILE}.tmp.$$"
+  umask 077
+  printf '%s\n' "$notary_result" >"$notary_result_tmp"
+  chmod 600 "$notary_result_tmp"
+  mv "$notary_result_tmp" "$NOTARY_RESULT_FILE"
+fi
 
 case "$ARTIFACT" in
   *.dmg|*.pkg)

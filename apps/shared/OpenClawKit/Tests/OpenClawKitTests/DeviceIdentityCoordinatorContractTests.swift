@@ -6,8 +6,9 @@ import Testing
 private struct DeviceIdentityCoordinatorContractFixture: Decodable {
     let databasePath: String
     let stateDirectory: String
-    let temporaryDirectory: String
+    let runtimeDirectory: String
     let uid: UInt32
+    let stateCoordinatorPath: String
     let orderedExpectedPaths: [String]
 }
 
@@ -34,14 +35,32 @@ private enum DeviceIdentityCoordinatorContractFixtureLoader {
 }
 
 struct DeviceIdentityCoordinatorContractTests {
+    @Test func `uses a sandbox writable lifecycle runtime`() {
+        let stateDirectory = URL(fileURLWithPath: "/sandbox/group/OpenClaw", isDirectory: true)
+
+        #expect(
+            DeviceIdentitySQLiteStore.resolveStateLifecycleRuntimeDirectory(
+                destinationStateDirURL: stateDirectory,
+                appSandboxed: true).path == "/sandbox/group/OpenClaw/tmp")
+        #expect(
+            DeviceIdentitySQLiteStore.resolveStateLifecycleRuntimeDirectory(
+                destinationStateDirURL: stateDirectory,
+                appSandboxed: false).path == "/tmp")
+    }
+
     @Test func `matches shared ordered path vector`() throws {
         let fixture = try DeviceIdentityCoordinatorContractFixtureLoader.load()
+        let databaseURL = URL(fileURLWithPath: fixture.databasePath)
         let resolved = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
-            databaseURL: URL(fileURLWithPath: fixture.databasePath),
+            databaseURL: databaseURL,
             destinationStateDirURL: URL(fileURLWithPath: fixture.stateDirectory, isDirectory: true),
-            temporaryDirectory: URL(fileURLWithPath: fixture.temporaryDirectory, isDirectory: true),
+            uid: uid_t(fixture.uid))
+        let stateCoordinator = DeviceIdentitySQLiteStore.resolveStateDatabaseCoordinatorURL(
+            databaseURL: databaseURL,
+            runtimeDirectory: URL(fileURLWithPath: fixture.runtimeDirectory, isDirectory: true),
             uid: uid_t(fixture.uid))
 
+        #expect(stateCoordinator.path == fixture.stateCoordinatorPath)
         #expect(resolved.map(\.path) == fixture.orderedExpectedPaths)
     }
 }

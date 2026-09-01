@@ -2,19 +2,23 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Insertable, Selectable } from "kysely";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  normalizeNodeHostCloudflareAccessConfig,
+  type NodeHostCloudflareAccessConfig,
+} from "./gateway-cloudflare-access.js";
 
 /** Gateway endpoint metadata persisted with node-host config. */
 export type NodeHostGatewayConfig = {
@@ -24,6 +28,8 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
   /** Gateway WebSocket context path (e.g. "/openclaw-gw"). */
   contextPath?: string;
+  /** Cloudflare Access service-token inputs bound to this exact Gateway origin. */
+  cloudflareAccess?: NodeHostCloudflareAccessConfig;
 };
 
 export type NodeHostConfig = {
@@ -35,14 +41,11 @@ export type NodeHostConfig = {
   installedAppsSharing?: boolean;
 };
 
-export const NODE_HOST_CONFIG_KEY = "current";
+export const NODE_HOST_CONFIG_KEY = "nodeHost.config";
 export const LEGACY_NODE_HOST_CONFIG_FILE = "node.json";
 export const LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX = ".doctor-importing";
 
-type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "node_host_config">;
-type NodeHostConfigRow = Selectable<NodeHostConfigDatabase["node_host_config"]>;
-type NodeHostConfigRuntimeRow = Omit<NodeHostConfigRow, "token">;
-type NodeHostConfigInsert = Insertable<NodeHostConfigDatabase["node_host_config"]>;
+type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 function databaseOptions(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return { env };
@@ -82,9 +85,12 @@ function assertNodeHostLegacyStateMigrated(env: NodeJS.ProcessEnv = process.env)
   );
 }
 
-function optionalNonEmptyString(value: string | null, label: string): string | undefined {
-  if (value === null) {
+function optionalNonEmptyString(value: unknown, label: string): string | undefined {
+  if (value === null || value === undefined) {
     return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`invalid node-host SQLite row: ${label} must be a string`);
   }
   const normalized = value.trim();
   if (!normalized) {
@@ -98,48 +104,68 @@ function optionalInputString(value: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
-function validatePort(value: number | null | undefined, label: string): number | undefined {
+function validatePort(value: unknown, label: string): number | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 65_535) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 65_535) {
     throw new Error(`invalid node-host ${label}: expected an integer between 1 and 65535`);
   }
   return value;
 }
 
-function rowToNodeHostConfig(row: NodeHostConfigRuntimeRow): NodeHostConfig {
-  if (row.version !== 1) {
-    throw new Error(`invalid node-host SQLite row: unsupported version ${String(row.version)}`);
+function normalizeStoredNodeHostConfig(value: unknown): NodeHostConfig {
+  if (!isRecord(value)) {
+    throw new Error("invalid node-host SQLite row: expected a configuration object");
   }
-  const nodeId = row.node_id.trim();
+  if (value.version !== 1) {
+    throw new Error(`invalid node-host SQLite row: unsupported version ${String(value.version)}`);
+  }
+  const nodeId = typeof value.nodeId === "string" ? value.nodeId.trim() : "";
   if (!nodeId) {
     throw new Error("invalid node-host SQLite row: node_id must not be empty");
   }
-  if (!Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
-    throw new Error("invalid node-host SQLite row: updated_at_ms must be a non-negative integer");
+  const storedGateway = value.gateway;
+  if (storedGateway !== undefined && !isRecord(storedGateway)) {
+    throw new Error("invalid node-host SQLite row: gateway must be an object");
   }
-  if (row.gateway_tls !== null && row.gateway_tls !== 0 && row.gateway_tls !== 1) {
-    throw new Error("invalid node-host SQLite row: gateway_tls must be 0, 1, or null");
+  const gatewayTls = storedGateway?.tls;
+  if (gatewayTls !== undefined && typeof gatewayTls !== "boolean") {
+    throw new Error("invalid node-host SQLite row: gateway_tls must be a boolean");
   }
-  if (row.installed_apps_sharing !== 0 && row.installed_apps_sharing !== 1) {
-    throw new Error("invalid node-host SQLite row: installed_apps_sharing must be 0 or 1");
+  if (value.installedAppsSharing !== undefined && typeof value.installedAppsSharing !== "boolean") {
+    throw new Error("invalid node-host SQLite row: installed_apps_sharing must be a boolean");
   }
-  const gateway: NodeHostGatewayConfig = {
-    host: optionalNonEmptyString(row.gateway_host, "gateway_host"),
-    port: validatePort(row.gateway_port, "SQLite gateway_port"),
-    tls: row.gateway_tls === null ? undefined : row.gateway_tls === 1,
-    tlsFingerprint: optionalNonEmptyString(row.gateway_tls_fingerprint, "gateway_tls_fingerprint"),
-    contextPath: optionalNonEmptyString(row.gateway_context_path, "gateway_context_path"),
-  };
-  const hasGateway = Object.values(gateway).some((value) => value !== undefined);
+  const gateway = storedGateway
+    ? normalizeGatewayConfig({
+        host: optionalNonEmptyString(storedGateway.host, "gateway_host"),
+        port: validatePort(storedGateway.port, "SQLite gateway_port"),
+        tls: typeof gatewayTls === "boolean" ? gatewayTls : undefined,
+        tlsFingerprint: optionalNonEmptyString(
+          storedGateway.tlsFingerprint,
+          "gateway_tls_fingerprint",
+        ),
+        contextPath: optionalNonEmptyString(storedGateway.contextPath, "gateway_context_path"),
+        ...cloudflareAccessEntry(
+          normalizeNodeHostCloudflareAccessConfig(storedGateway.cloudflareAccess),
+        ),
+      })
+    : undefined;
   return {
     version: 1,
     nodeId,
-    displayName: optionalNonEmptyString(row.display_name, "display_name"),
-    gateway: hasGateway ? gateway : undefined,
-    installedAppsSharing: row.installed_apps_sharing === 1,
+    displayName: optionalNonEmptyString(value.displayName, "display_name"),
+    gateway,
+    installedAppsSharing: value.installedAppsSharing === true,
   };
+}
+
+// Own-property parity with the retired column reader: an absent Cloudflare
+// Access config omits the key entirely so toStrictEqual consumers match.
+function cloudflareAccessEntry(cloudflareAccess: NodeHostCloudflareAccessConfig | undefined): {
+  cloudflareAccess?: NodeHostCloudflareAccessConfig;
+} {
+  return cloudflareAccess ? { cloudflareAccess } : {};
 }
 
 function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGatewayConfig | undefined {
@@ -149,53 +175,23 @@ function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGateway
     tls: gateway.tls,
     tlsFingerprint: optionalInputString(gateway.tlsFingerprint),
     contextPath: optionalInputString(gateway.contextPath),
+    ...cloudflareAccessEntry(normalizeNodeHostCloudflareAccessConfig(gateway.cloudflareAccess)),
   };
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : undefined;
 }
 
-function configToRow(params: {
-  config: NodeHostConfig;
-  updatedAtMs: number;
-}): NodeHostConfigInsert {
-  const gateway = params.config.gateway;
-  return {
-    config_key: NODE_HOST_CONFIG_KEY,
-    version: 1,
-    node_id: params.config.nodeId,
-    token: null,
-    display_name: params.config.displayName ?? null,
-    gateway_host: gateway?.host ?? null,
-    gateway_port: gateway?.port ?? null,
-    gateway_tls: gateway?.tls === undefined ? null : gateway.tls ? 1 : 0,
-    gateway_tls_fingerprint: gateway?.tlsFingerprint ?? null,
-    gateway_context_path: gateway?.contextPath ?? null,
-    installed_apps_sharing: params.config.installedAppsSharing ? 1 : 0,
-    updated_at_ms: params.updatedAtMs,
-  };
-}
-
-function readNodeHostConfigRow(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
-): NodeHostConfigRuntimeRow | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<NodeHostConfigDatabase>(database.db)
-      .selectFrom("node_host_config")
-      .select([
-        "config_key",
-        "version",
-        "node_id",
-        "display_name",
-        "gateway_host",
-        "gateway_port",
-        "gateway_tls",
-        "gateway_tls_fingerprint",
-        "gateway_context_path",
-        "installed_apps_sharing",
-        "updated_at_ms",
-      ])
-      .where("config_key", "=", NODE_HOST_CONFIG_KEY),
+function readNodeHostConfig(env: NodeJS.ProcessEnv): NodeHostConfig | null {
+  const stored = readConfigMachineStateWithMetadata<unknown>(
+    NODE_HOST_CONFIG_KEY,
+    databaseOptions(env),
   );
+  if (!stored) {
+    return null;
+  }
+  if (!Number.isSafeInteger(stored.updatedAtMs) || stored.updatedAtMs < 0) {
+    throw new Error("invalid node-host SQLite row: updated_at_ms must be a non-negative integer");
+  }
+  return normalizeStoredNodeHostConfig(stored.value);
 }
 
 /** Load canonical node-host state. Legacy files block the read until Doctor migrates them. */
@@ -203,9 +199,15 @@ export async function loadNodeHostConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeHostConfig | null> {
   assertNodeHostLegacyStateMigrated(env);
-  const database = openOpenClawStateDatabase(databaseOptions(env));
-  const row = readNodeHostConfigRow(database);
-  return row ? rowToNodeHostConfig(row) : null;
+  return readNodeHostConfig(env);
+}
+
+/** Load existing node-host state without creating or joining the writable shared-state lifecycle. */
+export async function loadNodeHostConfigReadOnly(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<NodeHostConfig | null> {
+  assertNodeHostLegacyStateMigrated(env);
+  return readNodeHostConfig(env);
 }
 
 /**
@@ -234,27 +236,40 @@ export async function configureNodeHost(params: {
     throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
   }
 
-  const config = runOpenClawStateWriteTransaction((database) => {
-    const { db } = database;
-    const existingRow = readNodeHostConfigRow(database);
-    const existing = existingRow ? rowToNodeHostConfig(existingRow) : null;
-    const nodeId = explicitNodeId ?? existing?.nodeId ?? candidateNodeId;
-    const displayName = explicitDisplayName ?? existing?.displayName ?? fallbackDisplayName;
+  const config = runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
+    const stored = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", NODE_HOST_CONFIG_KEY),
+    );
+    const existing = stored
+      ? normalizeStoredNodeHostConfig(JSON.parse(stored.value_json) as unknown)
+      : undefined;
     const next: NodeHostConfig = {
       version: 1,
-      nodeId,
-      displayName,
+      nodeId: explicitNodeId ?? existing?.nodeId ?? candidateNodeId,
+      displayName: explicitDisplayName ?? existing?.displayName ?? fallbackDisplayName,
       gateway,
       installedAppsSharing: params.installedAppsSharing ?? existing?.installedAppsSharing ?? false,
     };
-    const row = configToRow({ config: next, updatedAtMs });
-    const { config_key: _configKey, ...updates } = row;
+    const valueJson = JSON.stringify(next);
     executeSqliteQuerySync(
       db,
-      getNodeSqliteKysely<NodeHostConfigDatabase>(db)
-        .insertInto("node_host_config")
-        .values(row)
-        .onConflict((conflict) => conflict.column("config_key").doUpdateSet(updates)),
+      stateDb
+        .insertInto("config_machine_state")
+        .values({
+          state_key: NODE_HOST_CONFIG_KEY,
+          value_json: valueJson,
+          updated_at_ms: updatedAtMs,
+        })
+        .onConflict((conflict) =>
+          conflict
+            .column("state_key")
+            .doUpdateSet({ value_json: valueJson, updated_at_ms: updatedAtMs }),
+        ),
     );
     return next;
   }, databaseOptions(env));

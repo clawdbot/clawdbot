@@ -13,6 +13,7 @@ Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 Run this ladder in order:
 
 ```bash
+openclaw triage
 openclaw status
 openclaw status --all
 openclaw gateway probe
@@ -24,6 +25,7 @@ openclaw logs --follow
 
 Good output, one line each:
 
+- `openclaw triage` writes a sanitized, agent-ready diagnosis and, when the Gateway is reachable, a support archive. See [Triage](/cli/triage) for agent handoff options.
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
@@ -147,7 +149,7 @@ openclaw plugins inspect <plugin-id> --runtime --json
 openclaw plugins enable <plugin-id>
 ```
 
-Reference: [Operator install policy](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+Reference: [Operator install policy](/tools/skills-config#operator-install-policy-security-installpolicy)
 
 ## Plugin present but blocked by suspicious ownership
 

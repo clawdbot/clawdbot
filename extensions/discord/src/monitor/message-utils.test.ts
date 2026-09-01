@@ -2,12 +2,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 
-let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
-let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
+let resolveDiscordChannelInfo: typeof import("./message-channel-info.js").resolveDiscordChannelInfo;
+let resolveDiscordMessageChannelId: typeof import("./message-channel-info.js").resolveDiscordMessageChannelId;
 
 beforeAll(async () => {
   ({ resolveDiscordChannelInfo, resolveDiscordMessageChannelId } =
-    await import("./message-utils.js"));
+    await import("./message-channel-info.js"));
 });
 
 function asMessage(payload: Record<string, unknown>): Message {

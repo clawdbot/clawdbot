@@ -1,5 +1,6 @@
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
@@ -21,6 +22,7 @@ import {
   unregisterGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
+import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
   isGoogleChatNativeApprovalClientEnabled,
   shouldHandleGoogleChatNativeApprovalRequest,
@@ -43,7 +45,7 @@ type GoogleChatApprovalActionToken = {
 
 type GoogleChatPendingDelivery = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];
@@ -85,10 +87,6 @@ function resolveHandlerAccount(
     return null;
   }
   return account;
-}
-
-function escapeGoogleChatText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function truncateText(text: string, maxChars = MAX_TEXT_PARAGRAPH_CHARS): string {

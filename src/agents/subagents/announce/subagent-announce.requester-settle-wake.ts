@@ -5,7 +5,9 @@
  * this module selects a drained wave and delivers its synthesized wake.
  */
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
+import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
@@ -13,6 +15,7 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   hasDescendantRunAwaitingSettle,
@@ -41,6 +44,7 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
+const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
@@ -140,6 +144,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
       : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
   };
 }
 
@@ -147,7 +152,27 @@ function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+  completeBatch(
+    runIds: readonly string[],
+    rearmGeneration?: number,
+    delivery?: SubagentAnnounceDeliveryResult,
+  ): void;
 }): void {
+  const deferralCount = (params.state.deferralCount ?? 0) + 1;
+  if (deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
+    completeRequesterSettleWakeBatch({
+      runIds: params.batchRunIds,
+      state: params.state,
+      completeBatch: (runIds, rearmGeneration, delivery) =>
+        params.completeBatch(runIds, rearmGeneration, delivery),
+      delivery: {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake deferred too many times",
+      },
+    });
+    return;
+  }
   params.transitionBatch(params.batchRunIds, {
     status: params.state.status,
     attemptCount: params.state.attemptCount,
@@ -163,6 +188,7 @@ function deferRequesterSettleWakeBatch(params: {
       ? { rearmGeneration: params.state.rearmGeneration }
       : {}),
     ...(params.state.lastError !== undefined ? { lastError: params.state.lastError } : {}),
+    deferralCount,
   });
 }
 
@@ -215,6 +241,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     params.completeBatch(runIds, rearmGeneration, delivery);
   };
   const requesterSessionKey = params.requesterSessionKey.trim();
+  const cfg = getRuntimeConfig();
+  const requesterAgentId = resolveSubagentRequesterAgentId(cfg, params.settledEntry);
   const initialState = params.settledEntry.requesterSettleWake;
   if (!requesterSessionKey || !initialState) {
     return false;
@@ -229,7 +257,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const listedRuns = listSubagentRunsForRequester(requesterSessionKey);
+  const listedRuns = listSubagentRunsForRequester(requesterSessionKey, {
+    requesterAgentId,
+  });
   const requesterRuns = Array.isArray(listedRuns) ? listedRuns : [];
   const currentSettledEntry =
     requesterRuns.find((entry) => entry.runId === params.settledEntry.runId) ?? params.settledEntry;
@@ -240,7 +270,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
   const requesterHasUnsettledDescendants = () =>
-    hasDescendantRunAwaitingSettle(requesterSessionKey, currentSettledEntry.runId);
+    hasDescendantRunAwaitingSettle(
+      requesterSessionKey,
+      currentSettledEntry.runId,
+      requesterAgentId,
+    );
 
   const frozenBatchRunIds = currentState.batchRunIds;
   const currentRearmGeneration = currentState.rearmGeneration;
@@ -290,6 +324,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         batchRunIds,
         state: selectedState,
         transitionBatch: params.transitionBatch,
+        completeBatch,
       });
     }
     return false;
@@ -308,7 +343,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey) >= 1
+    getSubagentDepthFromSessionStore(requesterSessionKey, {
+      cfg,
+      agentId: requesterAgentId,
+    }) >= 1
   ) {
     completeRequesterSettleWakeBatch({
       runIds: batchRunIds,
@@ -318,7 +356,10 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
+  const { entry: requesterEntry } = loadRequesterSessionEntry(
+    requesterSessionKey,
+    requesterAgentId,
+  );
   if (!hasUsableSessionEntry(requesterEntry)) {
     completeRequesterSettleWakeBatch({
       runIds: batchRunIds,
@@ -333,6 +374,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     dedupeLatestChildCompletionRows(
       filterCurrentDirectChildCompletionRows(settledBatch, {
         requesterSessionKey,
+        requesterAgentId,
         getLatestSubagentRunByChildSessionKey,
       }),
     ),
@@ -344,7 +386,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
   const wakeKeyBase = [
-    `requester-settle:${requesterSessionKey}:${batchRunIds.join(",")}`,
+    `requester-settle:${requesterAgentId ?? "unknown"}:${requesterSessionKey}:${batchRunIds.join(",")}`,
     selectedState.rearmGeneration === undefined
       ? undefined
       : `yield-${selectedState.rearmGeneration}`,
@@ -376,6 +418,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         batchRunIds,
         state,
         transitionBatch: params.transitionBatch,
+        completeBatch,
       });
       return false;
     }
@@ -415,6 +458,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     try {
       delivery = await deliverSubagentAnnouncement({
         requesterSessionKey,
+        requesterAgentId,
         triggerMessage: wakeMessage,
         steerMessage: wakeMessage,
         summaryLine: "all spawned subagents settled",
@@ -433,6 +477,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
         signal: params.signal,
+        resolveGatewayContext: getSharedGatewayContextResolver(settledBatch),
       });
     } catch (error) {
       // A transport exception can arrive after gateway admission. Replay the

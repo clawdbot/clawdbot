@@ -13,6 +13,18 @@ describe("new-session location", () => {
     ).toEqual({
       agentId: "main/agent",
       catalogId: "claude",
+      group: "",
+    });
+  });
+
+  it("round-trips a custom group target", () => {
+    const search = newSessionSearch("main", { group: "Client work" });
+
+    expect(search).toBe("?agent=main&group=Client+work");
+    expect(newSessionLocationFromSearch(search)).toEqual({
+      agentId: "main",
+      catalogId: "",
+      group: "Client work",
     });
   });
 
@@ -21,6 +33,7 @@ describe("new-session location", () => {
     expect(newSessionLocationFromSearch("")).toEqual({
       agentId: "",
       catalogId: "",
+      group: "",
     });
   });
 });

@@ -2,6 +2,7 @@
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
@@ -16,7 +17,6 @@ import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
-import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import {
@@ -274,7 +274,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     const pendingHistoryBody =
       params.mentionText === undefined
         ? undefined
-        : formatWhatsAppAudioTranscriptForAgent(params.mentionText);
+        : formatAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,

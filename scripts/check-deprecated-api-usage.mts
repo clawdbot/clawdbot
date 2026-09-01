@@ -27,29 +27,24 @@ const skippedFilePatterns = [
   /\.d\.ts$/u,
 ];
 
+type RuleSource = { repoPath: string; source: string };
+
 type DeprecatedRule = {
   allowedFiles?: string[];
   collect?: () => string[];
+  collectFile?: (file: RuleSource) => string[];
   id?: string;
   message?: string;
   moduleSpecifiers?: string[];
   names?: string[];
   roots?: string[];
-  skippedFilePatterns?: RegExp[];
 };
 
 function toRepoPath(filePath: string) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 
-function shouldSkipFile(filePath: string, rule: DeprecatedRule) {
-  const repoPath = toRepoPath(filePath);
-  return (rule.skippedFilePatterns ?? skippedFilePatterns).some((pattern) =>
-    pattern.test(repoPath),
-  );
-}
-
-function* walk(dir: string, rule: DeprecatedRule): Generator<string> {
+function* walk(dir: string): Generator<string> {
   if (!fs.existsSync(dir)) {
     return;
   }
@@ -59,45 +54,35 @@ function* walk(dir: string, rule: DeprecatedRule): Generator<string> {
     }
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      yield* walk(entryPath, rule);
+      yield* walk(entryPath);
       continue;
     }
     if (!entry.isFile() || !sourceExtensions.has(path.extname(entry.name))) {
       continue;
     }
-    if (!shouldSkipFile(entryPath, rule)) {
+    const repoPath = toRepoPath(entryPath);
+    if (!skippedFilePatterns.some((pattern) => pattern.test(repoPath))) {
       yield entryPath;
     }
   }
 }
 
-function collectIdentifierRuleViolations(rule: DeprecatedRule) {
-  const allowedFiles = new Set(rule.allowedFiles ?? []);
+function createIdentifierRuleCollector(rule: DeprecatedRule) {
   const pattern = new RegExp(
     `\\b(?:${(rule.names ?? []).map((name) => escapeRegExp(name)).join("|")})\\b`,
     "gu",
   );
-  const violations: string[] = [];
-
-  for (const root of rule.roots ?? []) {
-    for (const filePath of walk(path.join(repoRoot, root), rule)) {
-      const repoPath = toRepoPath(filePath);
-      if (allowedFiles.has(repoPath)) {
-        continue;
-      }
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const match of source.matchAll(pattern)) {
-        const line = source.slice(0, match.index).split("\n").length;
-        violations.push(`${repoPath}:${line}: ${match[0]} (${rule.message ?? "deprecated API"})`);
-      }
+  return ({ repoPath, source }: RuleSource) => {
+    const violations: string[] = [];
+    for (const match of source.matchAll(pattern)) {
+      const line = source.slice(0, match.index).split("\n").length;
+      violations.push(`${repoPath}:${line}: ${match[0]} (${rule.message ?? "deprecated API"})`);
     }
-  }
-
-  return violations;
+    return violations;
+  };
 }
 
-function collectModuleSpecifierRuleViolations(rule: DeprecatedRule) {
-  const allowedFiles = new Set(rule.allowedFiles ?? []);
+function createModuleSpecifierRuleCollector(rule: DeprecatedRule) {
   const specifierPattern = (rule.moduleSpecifiers ?? [])
     .map((specifier) => escapeRegExp(specifier))
     .join("|");
@@ -112,35 +97,16 @@ function collectModuleSpecifierRuleViolations(rule: DeprecatedRule) {
     ),
     new RegExp(`\\bimport\\s*\\(\\s*["'](${specifierPattern})["']\\s*[,)]`, "gu"),
   ];
-  const violations: string[] = [];
-
-  for (const root of rule.roots ?? []) {
-    for (const filePath of walk(path.join(repoRoot, root), rule)) {
-      const repoPath = toRepoPath(filePath);
-      if (allowedFiles.has(repoPath)) {
-        continue;
-      }
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const pattern of patterns) {
-        for (const match of source.matchAll(pattern)) {
-          const line = source.slice(0, match.index).split("\n").length;
-          violations.push(`${repoPath}:${line}: ${match[1]} (${rule.message})`);
-        }
+  return ({ repoPath, source }: RuleSource) => {
+    const violations: string[] = [];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        const line = source.slice(0, match.index).split("\n").length;
+        violations.push(`${repoPath}:${line}: ${match[1]} (${rule.message})`);
       }
     }
-  }
-
-  return violations;
-}
-
-function collectRuleViolations(rule: DeprecatedRule) {
-  if (rule.collect) {
-    return rule.collect();
-  }
-  if (rule.moduleSpecifiers) {
-    return collectModuleSpecifierRuleViolations(rule);
-  }
-  return collectIdentifierRuleViolations(rule);
+    return violations;
+  };
 }
 
 const internalFacadeImportPatterns = [
@@ -166,30 +132,25 @@ function resolveInternalFacadeModulePath(repoPath: string, specifier: string) {
   return path.posix.normalize(path.posix.join(path.posix.dirname(repoPath), stripped));
 }
 
-function collectBannedInternalFacadeImportViolations(rule: DeprecatedRule) {
-  const bansByModulePath = new Map(
-    BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => [ban.modulePath, ban]),
-  );
+const bansByModulePath = new Map(
+  BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => [ban.modulePath, ban]),
+);
+
+function collectBannedInternalFacadeImportViolations({ repoPath, source }: RuleSource) {
   const violations: string[] = [];
-  for (const root of rule.roots ?? []) {
-    for (const filePath of walk(path.join(repoRoot, root), rule)) {
-      const repoPath = toRepoPath(filePath);
-      const source = fs.readFileSync(filePath, "utf8");
-      for (const pattern of internalFacadeImportPatterns) {
-        for (const match of source.matchAll(pattern)) {
-          const specifier = match[1];
-          if (!specifier) {
-            continue;
-          }
-          const resolved = resolveInternalFacadeModulePath(repoPath, specifier);
-          const ban = resolved ? bansByModulePath.get(resolved) : undefined;
-          if (!ban || (ban.allowedImporters ?? []).includes(repoPath)) {
-            continue;
-          }
-          const line = source.slice(0, match.index).split("\n").length;
-          violations.push(`${repoPath}:${line}: ${match[1]} (use ${ban.canonical})`);
-        }
+  for (const pattern of internalFacadeImportPatterns) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      if (!specifier) {
+        continue;
       }
+      const resolved = resolveInternalFacadeModulePath(repoPath, specifier);
+      const ban = resolved ? bansByModulePath.get(resolved) : undefined;
+      if (!ban || (ban.allowedImporters ?? []).includes(repoPath)) {
+        continue;
+      }
+      const line = source.slice(0, match.index).split("\n").length;
+      violations.push(`${repoPath}:${line}: ${match[1]} (use ${ban.canonical})`);
     }
   }
   return violations;
@@ -216,7 +177,8 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     // Deprecated facades stay exported for third-party plugins, but internal code
     // must not reach them via package specifier or relative import.
     id: "facade-internal-imports",
-    collect: () => collectBannedInternalFacadeImportViolations({ roots: ["src", "extensions"] }),
+    roots: ["src", "extensions"],
+    collectFile: collectBannedInternalFacadeImportViolations,
   },
   {
     id: "message-api",
@@ -248,8 +210,36 @@ if (unknownRuleIds.length > 0) {
   process.exit(1);
 }
 
-const violations = selectedRules.flatMap((rule) =>
-  collectRuleViolations(rule).map((violation) => `${rule.id}: ${violation}`),
+const scans = selectedRules.map((rule) => ({
+  rule,
+  violations: rule.collect?.(),
+  byRoot: new Map<string, string[]>((rule.roots ?? []).map((root) => [root, []])),
+  allowedFiles: new Set(rule.allowedFiles ?? []),
+  collectFile:
+    rule.collectFile ??
+    (rule.moduleSpecifiers
+      ? createModuleSpecifierRuleCollector(rule)
+      : createIdentifierRuleCollector(rule)),
+}));
+
+for (const root of new Set(scans.flatMap((scan) => [...scan.byRoot.keys()]))) {
+  const rootScans = scans.filter((scan) => scan.byRoot.has(root));
+  for (const filePath of walk(path.join(repoRoot, root))) {
+    const repoPath = toRepoPath(filePath);
+    const fileScans = rootScans.filter((scan) => !scan.allowedFiles.has(repoPath));
+    if (fileScans.length === 0) {
+      continue;
+    }
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const scan of fileScans) {
+      scan.byRoot.get(root)!.push(...scan.collectFile({ repoPath, source }));
+    }
+  }
+}
+
+// Keep rule and root diagnostic order while each source is read only once.
+const violations = scans.flatMap(({ rule, violations: collected, byRoot }) =>
+  (collected ?? [...byRoot.values()].flat()).map((violation) => `${rule.id}: ${violation}`),
 );
 
 if (violations.length > 0) {

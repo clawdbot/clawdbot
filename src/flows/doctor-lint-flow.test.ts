@@ -206,6 +206,7 @@ describe("runDoctorLintChecks", () => {
         { checkId: "targeted", severity: "warning" as const, message: "warn" },
       ]),
       defaultEnabled: false,
+      sourceContract: "split",
     });
 
     await expect(
@@ -236,6 +237,7 @@ describe("runDoctorLintChecks", () => {
         { checkId: "targeted", severity: "warning" as const, message: "warn" },
       ]),
       defaultEnabled: false,
+      sourceContract: "split",
     });
     const defaultEnabled = check("regular", async () => []);
 
@@ -253,6 +255,7 @@ describe("runDoctorLintChecks", () => {
 
   it("supports single-run checks in lint mode", async () => {
     const runnable: RunnableHealthCheck = {
+      sourceContract: "run",
       id: "run-check",
       kind: "core",
       description: "run check",

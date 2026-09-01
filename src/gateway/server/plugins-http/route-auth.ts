@@ -33,3 +33,23 @@ export function shouldEnforceGatewayAuthForPluginPath(
   }
   return matchedPluginRoutesRequireGatewayAuth(findMatchingPluginHttpRoutes(registry, pathContext));
 }
+
+/** Returns true only when an existing route owns authentication entirely inside its plugin. */
+export function isPluginAuthenticatedRoutePath(
+  registry: PluginRegistry,
+  pathnameOrContext: string | PluginRoutePathContext,
+): boolean {
+  const pathContext =
+    typeof pathnameOrContext === "string"
+      ? resolvePluginRoutePathContext(pathnameOrContext)
+      : pathnameOrContext;
+  if (
+    pathContext.malformedEncoding ||
+    pathContext.decodePassLimitReached ||
+    isProtectedPluginRoutePathFromContext(pathContext)
+  ) {
+    return false;
+  }
+  const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+  return matchedRoutes.length > 0 && matchedRoutes.every((route) => route.auth === "plugin");
+}

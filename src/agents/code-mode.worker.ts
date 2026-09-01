@@ -5,42 +5,30 @@ import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import { toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
+import {
+  boundCodeModeError,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  EMPTY_CODE_MODE_OUTPUT,
+  toCodeModeJsonSafe as toJsonSafe,
+} from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import type {
   CodeModeConfig,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerThreadResult as CodeModeWorkerResult,
+  CodeModeVmResult as CodeModeWorkerResult,
+  CodeModeWorkerThreadResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
 
-  constructor(
-    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+  constructor(code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"], message: string) {
+    super(message);
     this.name = "CodeModeWorkerFailure";
     this.code = code;
-  }
-}
-
-class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
-  readonly output: unknown[];
-
-  constructor(
-    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
-    message: string,
-    output: unknown[],
-    options?: ErrorOptions,
-  ) {
-    super(code, message, options);
-    this.name = "CodeModeWorkerFailureWithOutput";
-    this.output = output;
   }
 }
 
@@ -52,6 +40,10 @@ type VmRun = {
   vm: QuickJS;
   didTimeout: () => boolean;
 };
+
+// Each worker handles exactly one exec/resume payload, so bridge state is run-scoped.
+const canceledBridgeRequestIds: string[] = [];
+let bridgeAdmissionFailure: CodeModeWorkerFailure | undefined;
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
@@ -80,6 +72,19 @@ function buildUserSource(code: string): string {
   return `globalThis.__openclawResult = (async () => {\n${code}\n})()`;
 }
 
+function trackPromiseRejection(
+  promise: JSValueHandle,
+  reason: JSValueHandle,
+  handled: boolean,
+): void {
+  const vm = promise.vm;
+  vm.global
+    .getProp("__openclawTrackRejection")
+    .consume((track) =>
+      vm.callFunction(track, vm.undefined, promise, reason, handled ? vm.true : vm.false).dispose(),
+    );
+}
+
 function createHostRequestHandler(params: {
   vm: QuickJS;
   pendingRequests: PendingBridgeRequest[];
@@ -92,13 +97,16 @@ function createHostRequestHandler(params: {
 ) => JSValueHandle {
   return (methodHandle, argsHandle, bridgeIdHandle) => {
     if (params.pendingRequests.length >= params.config.maxPendingToolCalls) {
-      throw new Error("too many pending code mode tool calls");
+      bridgeAdmissionFailure ??= new CodeModeWorkerFailure(
+        "invalid_input",
+        "too many pending code mode tool calls",
+      );
+      throw bridgeAdmissionFailure;
     }
     const method = methodHandle.toString();
     if (
       method !== "search" &&
       method !== "describe" &&
-      method !== "call" &&
       method !== "callValue" &&
       method !== "nodes" &&
       method !== "yield" &&
@@ -107,6 +115,7 @@ function createHostRequestHandler(params: {
       method !== "agentWait" &&
       method !== "skillsList" &&
       method !== "skillsRead" &&
+      method !== "sleep" &&
       method !== "swarmNote"
     ) {
       throw new Error("unsupported code mode bridge method");
@@ -137,6 +146,23 @@ function createHostRequestHandler(params: {
   };
 }
 
+function createHostCancelRequestHandler(params: {
+  vm: QuickJS;
+  pendingRequests: PendingBridgeRequest[];
+}): (this: JSValueHandle, id: JSValueHandle) => JSValueHandle {
+  return (idHandle) => {
+    const id = idHandle.toString();
+    const index = params.pendingRequests.findIndex((request) => request.id === id);
+    if (index >= 0) {
+      // Return the cancellation to the parent owner as well as removing it
+      // locally; restored requests may already have a live host operation.
+      params.pendingRequests.splice(index, 1);
+      canceledBridgeRequestIds.push(id);
+    }
+    return params.vm.undefined;
+  };
+}
+
 async function createVm(params: {
   wasmModule: WebAssembly.Module;
   catalog: unknown[];
@@ -146,13 +172,14 @@ async function createVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -178,6 +205,12 @@ async function createVm(params: {
       config: params.config,
     }),
   ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
+  vm.newFunction(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
+  ).consume((hostCancelRequest) =>
+    vm.global.setProp("__openclawHostCancelRequest", hostCancelRequest),
+  );
   vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -188,14 +221,15 @@ async function restoreVm(params: {
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
+  const deadlineReached = () => performance.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: params.wasmModule,
     memoryLimit: params.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
@@ -208,6 +242,10 @@ async function restoreVm(params: {
       pendingRequests: params.pendingRequests,
       config: params.config,
     }),
+  );
+  vm.registerHostCallback(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
   );
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -229,73 +267,57 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function enforceWorkerOutputLimit(
-  value: unknown,
+function captureWorkerResult(
+  result: CodeModeWorkerResult,
   config: CodeModeConfig,
-  consumedBytes = 0,
-): number {
-  const bytes = Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
-  if (consumedBytes + bytes > config.maxOutputBytes) {
-    throw new CodeModeWorkerFailure("output_limit_exceeded", "code mode output limit exceeded");
+): CodeModeWorkerThreadResult {
+  const output = captureCodeModeOutput(result.output, config.maxOutputBytes);
+  if (result.status === "completed") {
+    return { ...result, output, value: captureCodeModeValue(result.value, config.maxOutputBytes) };
   }
-  return bytes;
+  return result.status === "failed"
+    ? { ...result, output, error: boundCodeModeError(result.error, config.maxOutputBytes) }
+    : { ...result, output };
 }
 
-function throwWorkerFailureWithOutput(params: {
+function failedWorkerResult(
+  code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+  error: string,
+  output: unknown[] = [],
+): Extract<CodeModeWorkerResult, { status: "failed" }> {
+  return {
+    status: "failed",
+    code,
+    error,
+    failurePhase: code === "invalid_input" ? "input" : "guest",
+    bridgeDispatchStarted: false,
+    output,
+  };
+}
+
+function workerFailureResult(params: {
   error: unknown;
   didTimeout: () => boolean;
   output: unknown[];
   vm: QuickJS;
-  config: CodeModeConfig;
-}): never {
+}): CodeModeWorkerResult {
   const timedOut = params.didTimeout() || isQuickJsInterruptedError(params.error);
-  const failureOutput = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
-  if (
-    params.error instanceof CodeModeWorkerFailure &&
-    params.error.code === "output_limit_exceeded"
-  ) {
-    throw new CodeModeWorkerFailureWithOutput(params.error.code, params.error.message, [], {
-      cause: params.error,
-    });
-  }
-  try {
-    enforceWorkerOutputLimit(failureOutput, params.config);
-  } catch (error) {
-    if (error instanceof CodeModeWorkerFailure) {
-      throw new CodeModeWorkerFailureWithOutput(error.code, error.message, [], { cause: error });
-    }
-    throw error;
-  }
+  const output = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
   if (timedOut) {
-    throw new CodeModeWorkerFailureWithOutput(
-      "timeout",
-      "code mode timeout exceeded",
-      failureOutput,
-      { cause: params.error },
-    );
+    return failedWorkerResult("timeout", "code mode timeout exceeded", output);
   }
   if (params.error instanceof CodeModeWorkerFailure) {
-    throw new CodeModeWorkerFailureWithOutput(
-      params.error.code,
-      params.error.message,
-      failureOutput,
-      { cause: params.error },
-    );
+    return failedWorkerResult(params.error.code, params.error.message, output);
   }
-  if (failureOutput.length > 0) {
-    throw new CodeModeWorkerFailureWithOutput(
-      "internal_error",
-      errorMessage(params.error),
-      failureOutput,
-      { cause: params.error },
-    );
+  if (output.length > 0) {
+    return failedWorkerResult("internal_error", errorMessage(params.error), output);
   }
   throw params.error;
 }
 
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
-    return toJsonSafe(vm.dump(resultHandle));
+    return serializeCompletedCatalogHandles(vm, resultHandle);
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
@@ -321,7 +343,17 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       throw new Error(text);
     });
   }
-  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
+  return settled.value.consume((value) => serializeCompletedCatalogHandles(vm, value));
+}
+
+function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): unknown {
+  return vm.global
+    .getProp("__openclawSerializeCatalogHandles")
+    .consume((serialize) =>
+      vm
+        .callFunction(serialize, vm.undefined, value)
+        .consume((serialized) => toJsonSafe(vm.dump(serialized))),
+    );
 }
 
 function waitingResult(params: {
@@ -339,6 +371,7 @@ function waitingResult(params: {
     status: "waiting",
     snapshotBytes,
     pendingRequests: params.pendingRequests,
+    canceledRequestIds: canceledBridgeRequestIds,
     settlementMode: params.settlementMode,
     output: params.output,
   };
@@ -355,8 +388,10 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
+    if (bridgeAdmissionFailure) {
+      throw bridgeAdmissionFailure;
+    }
     output = takeOutput(params.vm);
-    const outputBytes = enforceWorkerOutputLimit(output, params.config);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       const promisePending = resultHandle.isPromise && resultHandle.promiseState === 0;
@@ -378,22 +413,22 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
-      enforceWorkerOutputLimit(value, params.config, output.length > 0 ? outputBytes : 0);
-      return {
-        status: "completed",
-        value,
-        output,
-      };
+      // Check only after all host work and microtasks settle. Catches attached
+      // after an await (including a restored snapshot) still own their errors.
+      using rejection = params.vm.global
+        .getProp("__openclawUnhandledRejection")
+        .consume((read) => params.vm.callFunction(read, params.vm.undefined));
+      await readCompletedResult(params.vm, rejection);
+      return { status: "completed", value, output };
     } finally {
       resultHandle.dispose();
     }
   } catch (error) {
-    return throwWorkerFailureWithOutput({
+    return workerFailureResult({
       error,
       didTimeout: params.didTimeout,
       output,
       vm: params.vm,
-      config: params.config,
     });
   } finally {
     params.vm.dispose();
@@ -468,54 +503,55 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
-async function main(): Promise<CodeModeWorkerResult> {
+async function main(): Promise<CodeModeWorkerThreadResult> {
   const input = workerData as unknown;
   if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
     return {
-      status: "failed",
-      error: "invalid code mode worker input",
-      code: "invalid_input",
-      failurePhase: "input",
-      bridgeDispatchStarted: false,
-      output: [],
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
     };
   }
+  const config = input.config as CodeModeConfig;
   try {
     if (input.kind === "exec" && typeof input.source === "string") {
-      return await runExec({
-        kind: "exec",
-        wasmModule: input.wasmModule,
-        source: input.source,
-        config: input.config as CodeModeConfig,
-        catalog: Array.isArray(input.catalog) ? input.catalog : [],
-        apiFiles: Array.isArray(input.apiFiles) ? (input.apiFiles as CodeModeApiVirtualFile[]) : [],
-        namespaces: Array.isArray(input.namespaces)
-          ? (input.namespaces as CodeModeNamespaceDescriptor[])
-          : [],
-        swarmEnabled: input.swarmEnabled === true,
-      });
+      return captureWorkerResult(
+        await runExec({
+          kind: "exec",
+          wasmModule: input.wasmModule,
+          source: input.source,
+          config,
+          catalog: Array.isArray(input.catalog) ? input.catalog : [],
+          apiFiles: Array.isArray(input.apiFiles)
+            ? (input.apiFiles as CodeModeApiVirtualFile[])
+            : [],
+          namespaces: Array.isArray(input.namespaces)
+            ? (input.namespaces as CodeModeNamespaceDescriptor[])
+            : [],
+          swarmEnabled: input.swarmEnabled === true,
+        }),
+        config,
+      );
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
-      return await runResume({
-        kind: "resume",
-        wasmModule: input.wasmModule,
-        snapshotBytes: input.snapshotBytes,
-        config: input.config as CodeModeConfig,
-        settledRequests: Array.isArray(input.settledRequests)
-          ? (input.settledRequests as SettledBridgeRequest[])
-          : [],
-        pendingRequests: Array.isArray(input.pendingRequests)
-          ? (input.pendingRequests as PendingBridgeRequest[])
-          : [],
-      });
+      return captureWorkerResult(
+        await runResume({
+          kind: "resume",
+          wasmModule: input.wasmModule,
+          snapshotBytes: input.snapshotBytes,
+          config,
+          settledRequests: Array.isArray(input.settledRequests)
+            ? (input.settledRequests as SettledBridgeRequest[])
+            : [],
+          pendingRequests: Array.isArray(input.pendingRequests)
+            ? (input.pendingRequests as PendingBridgeRequest[])
+            : [],
+        }),
+        config,
+      );
     }
     return {
-      status: "failed",
-      error: "invalid code mode worker input",
-      code: "invalid_input",
-      failurePhase: "input",
-      bridgeDispatchStarted: false,
-      output: [],
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
     };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
@@ -524,14 +560,10 @@ async function main(): Promise<CodeModeWorkerResult> {
       : error instanceof CodeModeWorkerFailure
         ? error.code
         : "internal_error";
-    return {
-      status: "failed",
-      error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
-      code,
-      failurePhase: code === "invalid_input" ? "input" : "guest",
-      bridgeDispatchStarted: false,
-      output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
-    };
+    return captureWorkerResult(
+      failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error)),
+      config,
+    );
   }
 }
 

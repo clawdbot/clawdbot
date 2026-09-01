@@ -1,4 +1,5 @@
 // Control UI view renders agents panels overview screen content.
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import type {
   AgentIdentityResult,
@@ -6,16 +7,16 @@ import type {
   AgentsListResult,
   ModelCatalogEntry,
 } from "../../api/types.ts";
+import { renderModelPicker } from "../../components/model-picker.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsRow, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  buildAgentContext,
   buildModelOptions,
   normalizeModelValue,
-  parseFallbackList,
   resolveAgentConfig,
-  resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
   resolveEffectiveModelFallbacks,
   resolveModelFallbacks,
@@ -73,23 +74,16 @@ export function renderAgentOverview(params: {
     onModelFallbacksChange,
     onSelectPanel,
   } = params;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const context = buildAgentContext(
+    agent,
+    configForm,
+    agentFilesList,
+    params.defaultId,
+    params.agentIdentity,
+  );
+  const isDefault = context.isDefault;
   const config = resolveAgentConfig(configForm, agent.id);
   const agentModel = agent.model;
-  const workspaceFromFiles =
-    agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
-  const workspace =
-    workspaceFromFiles ||
-    config.entry?.workspace ||
-    config.defaults?.workspace ||
-    agent.workspace ||
-    "default";
-  const model = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agentModel);
-  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
@@ -102,8 +96,6 @@ export function renderAgentOverview(params: {
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
-  const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
-  const skillCount = skillFilter?.length ?? null;
   const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
@@ -115,7 +107,8 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
+    resolveAgentTextAvatar(agent, params.agentIdentity) ??
+    (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
@@ -141,7 +134,7 @@ export function renderAgentOverview(params: {
     const input = e.target as HTMLInputElement;
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      const parsed = parseFallbackList(input.value);
+      const parsed = normalizeCsvOrLooseStringList(input.value);
       if (parsed.length > 0) {
         onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
         input.value = "";
@@ -213,7 +206,7 @@ export function renderAgentOverview(params: {
               ?disabled=${identityBusy || !identityDirty || identityInvalid}
               @click=${() => params.onIdentitySave()}
             >
-              ${identityBusy ? t("common.saving") : t("common.save")}
+              ${params.identitySaving ? t("common.saving") : t("common.save")}
             </button>
           </div>
           <div class="settings-row__desc agent-identity-editor__hint">
@@ -235,22 +228,18 @@ export function renderAgentOverview(params: {
                 @click=${() => onSelectPanel("files")}
                 aria-label=${t("agents.context.openFilesTab")}
               >
-                ${workspace}
+                ${context.workspace}
               </button>
             </openclaw-tooltip>
           </dd>
           <dt>${t("agents.context.primaryModel")}</dt>
-          <dd><code>${model}</code></dd>
+          <dd><code>${context.model}</code></dd>
           <dt>${t("agents.context.runtime")}</dt>
-          <dd><code>${runtime}</code></dd>
+          <dd><code>${context.runtime}</code></dd>
           <dt>${t("agents.context.thinkingDefault")}</dt>
           <dd><code>${thinkingDefault}</code></dd>
           <dt>${t("agents.context.skillsFilter")}</dt>
-          <dd>
-            ${skillFilter
-              ? t("agents.overview.selectedSkills", { count: String(skillCount) })
-              : t("agents.overview.allSkills")}
-          </dd>
+          <dd>${context.skillsLabel}</dd>
         </dl>
       `,
     )}
@@ -292,35 +281,31 @@ export function renderAgentOverview(params: {
           title: isDefault
             ? t("agents.overview.primaryModelDefault")
             : t("agents.overview.primaryModel"),
-          control: html`
-            <select
-              class="settings-select"
-              .value=${selectedPrimary ?? ""}
-              ?disabled=${disabled}
-              @change=${(e: Event) =>
-                onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
-            >
-              ${isDefault
-                ? html`
-                    <option value="" ?selected=${!selectedPrimary}>
-                      ${t("agents.overview.notSet")}
-                    </option>
-                  `
-                : html`
-                    <option value="" ?selected=${!selectedPrimary}>
-                      ${defaultPrimary
-                        ? t("agents.overview.inheritDefaultModel", { model: defaultPrimary })
-                        : t("agents.overview.inheritDefault")}
-                    </option>
-                  `}
-              ${buildModelOptions(
+          control: renderModelPicker({
+            label: isDefault
+              ? t("agents.overview.primaryModelDefault")
+              : t("agents.overview.primaryModel"),
+            value: selectedPrimary ?? "",
+            options: [
+              {
+                value: "",
+                label: isDefault
+                  ? t("agents.overview.notSet")
+                  : defaultPrimary
+                    ? t("agents.overview.inheritDefaultModel", { model: defaultPrimary })
+                    : t("agents.overview.inheritDefault"),
+              },
+              ...buildModelOptions(
                 configForm,
                 effectivePrimary ?? undefined,
                 params.modelCatalog,
-                selectedPrimary,
-              )}
-            </select>
-          `,
+                agent.id,
+              ),
+            ],
+            disabled,
+            onChange: (value) => onModelChange(agent.id, value || null),
+            onOpen: params.onModelCatalogRetry,
+          }),
         })}
         ${renderSettingsRow({
           title: t("agents.overview.fallbacks"),
@@ -357,7 +342,7 @@ export function renderAgentOverview(params: {
                 @keydown=${handleChipKeydown}
                 @blur=${(e: Event) => {
                   const input = e.target as HTMLInputElement;
-                  const parsed = parseFallbackList(input.value);
+                  const parsed = normalizeCsvOrLooseStringList(input.value);
                   if (parsed.length > 0) {
                     onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
                     input.value = "";

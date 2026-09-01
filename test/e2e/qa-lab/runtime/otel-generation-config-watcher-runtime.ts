@@ -7,8 +7,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_IDS,
@@ -20,10 +21,17 @@ import {
 } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  inspectOtelParentGraph,
+  isSpanId,
+  type OtelGenerationConfigWatcherOptions,
+  parseOtelGenerationConfigWatcherOptions,
+  sanitizeOtelWatcherFailure,
+} from "./otel-generation-config-watcher-contract.js";
 import {
   type CapturedLogRecord,
   type CapturedRequest,
-  type CapturedSpan,
   startLocalOtlpReceiver,
 } from "./otel-test-support.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
@@ -35,10 +43,7 @@ const SIGNAL_TIMEOUT_MS = 60_000;
 const RESTART_TIMEOUT_MS = 120_000;
 const POST_STOP_SETTLE_MS = 500;
 
-type RuntimeOptions = {
-  artifactBase: string;
-  repoRoot: string;
-};
+type RuntimeOptions = OtelGenerationConfigWatcherOptions;
 
 type GenerationTarget = {
   marker: string;
@@ -103,26 +108,6 @@ function assertContract(condition: unknown, message: string): asserts condition 
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function parseOptions(argv: readonly string[], repoRoot = process.cwd()): RuntimeOptions {
-  let artifactBase = path.join(repoRoot, ".artifacts", "qa-e2e", "otel-generation-config-watcher");
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--output-dir") {
-      const value = argv[++index];
-      if (!value) {
-        throw new Error("--output-dir requires a value");
-      }
-      artifactBase = path.resolve(repoRoot, value);
-      continue;
-    }
-    if (arg === "--") {
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return { artifactBase, repoRoot };
 }
 
 function rawDataText(data: RawData): string {
@@ -291,10 +276,7 @@ function traceparent(target: GenerationTarget): string {
   return `00-${target.traceId}-${target.parentSpanId}-01`;
 }
 
-async function runTracedTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  target: GenerationTarget,
-): Promise<void> {
+async function runTracedTurn(gateway: QaGatewayChild, target: GenerationTarget): Promise<void> {
   const client = await connectRawGateway({ token: gateway.token, wsUrl: gateway.wsUrl });
   try {
     const started = await requestRaw(client, {
@@ -352,56 +334,10 @@ function isTraceId(value: string | undefined): value is string {
   return typeof value === "string" && /^[0-9a-f]{32}$/u.test(value);
 }
 
-function isSpanId(value: string | undefined): value is string {
-  return typeof value === "string" && /^[0-9a-f]{16}$/u.test(value);
-}
-
-function inspectParentGraph(
-  spans: readonly CapturedSpan[],
-  expectedExternalParentSpanId: string,
-): {
-  externalParentSpanIds: string[];
-  valid: boolean;
-} {
-  const spansById = new Map(
-    spans.flatMap((span) => (isSpanId(span.spanId) ? ([[span.spanId, span]] as const) : [])),
-  );
-  if (spansById.size !== spans.length) {
-    return { externalParentSpanIds: [], valid: false };
-  }
-  const externalParentSpanIds = new Set<string>();
-  for (const span of spans) {
-    const visited = new Set<string>();
-    let current: CapturedSpan | undefined = span;
-    while (current) {
-      if (!isSpanId(current.parentSpanId)) {
-        return { externalParentSpanIds: [...externalParentSpanIds].toSorted(), valid: false };
-      }
-      if (visited.has(current.parentSpanId)) {
-        return { externalParentSpanIds: [...externalParentSpanIds].toSorted(), valid: false };
-      }
-      visited.add(current.parentSpanId);
-      const parent = spansById.get(current.parentSpanId);
-      if (!parent) {
-        externalParentSpanIds.add(current.parentSpanId);
-        if (current.parentSpanId !== expectedExternalParentSpanId) {
-          return { externalParentSpanIds: [...externalParentSpanIds].toSorted(), valid: false };
-        }
-      }
-      current = parent;
-    }
-  }
-  return {
-    externalParentSpanIds: [...externalParentSpanIds].toSorted(),
-    valid:
-      externalParentSpanIds.size === 1 && externalParentSpanIds.has(expectedExternalParentSpanId),
-  };
-}
-
 function inspectGeneration(receiver: LocalReceiver, target: GenerationTarget): GenerationEvidence {
   const spans = receiver.capturedSpans.filter((span) => span.traceId === target.traceId);
   const logs = receiver.capturedLogRecords.filter((record) => record.traceId === target.traceId);
-  const graph = inspectParentGraph(spans, target.parentSpanId);
+  const graph = inspectOtelParentGraph(spans, target.parentSpanId);
   const spanNames = [...new Set(spans.map((span) => span.name))].toSorted();
   const metricNames = [
     ...new Set(
@@ -505,15 +441,15 @@ async function updateWatchedEndpoint(configPath: string, endpoint: string): Prom
 }
 
 async function stopResources(params: {
-  gateway?: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gatewayOwner: ReturnType<typeof createQaGatewayChild>;
   gatewayStopped: boolean;
   mock?: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
   receiverA?: LocalReceiver;
   receiverB?: LocalReceiver;
 }): Promise<void> {
   const failures: unknown[] = [];
-  if (params.gateway && !params.gatewayStopped) {
-    await params.gateway.stop().catch((error: unknown) => failures.push(error));
+  if (!params.gatewayStopped) {
+    await stopQaGatewayFixture(params.gatewayOwner).catch((error: unknown) => failures.push(error));
   }
   await params.mock?.stop().catch((error: unknown) => failures.push(error));
   await params.receiverA?.close().catch((error: unknown) => failures.push(error));
@@ -529,13 +465,14 @@ async function probeOtelGenerationConfigWatcher(
   let receiverA: LocalReceiver | undefined;
   let receiverB: LocalReceiver | undefined;
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let gatewayStopped = false;
   try {
     receiverA = await startReceiver();
     receiverB = await startReceiver();
     mock = await startQaMockOpenAiServer();
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -595,7 +532,7 @@ async function probeOtelGenerationConfigWatcher(
     await runTracedTurn(gateway, GENERATION_B);
     await waitForGeneration(receiverB, GENERATION_B);
     await sleep(1_000);
-    await gateway.stop();
+    await stopQaGatewayFixture(gatewayOwner);
     gatewayStopped = true;
     await sleep(POST_STOP_SETTLE_MS);
 
@@ -641,7 +578,7 @@ async function probeOtelGenerationConfigWatcher(
       restartLogObserved,
     };
   } finally {
-    await stopResources({ gateway, gatewayStopped, mock, receiverA, receiverB });
+    await stopResources({ gatewayOwner, gatewayStopped, mock, receiverA, receiverB });
   }
 }
 
@@ -668,25 +605,10 @@ function createWriter(options: RuntimeOptions) {
   });
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function sanitizeProofFailure(error: unknown, repoRoot: string): string {
-  return formatErrorMessage(error)
-    .replace(new RegExp(escapeRegExp(repoRoot), "gu"), "<repo>")
-    .replace(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/giu, "<local-endpoint>")
-    .replace(/qa-suite-[0-9a-f-]{20,}/giu, "<gateway-token>")
-    .replace(/(?:\/private)?\/var\/folders\/[^\s'"]+/gu, "<temp-path>")
-    .replace(/\/tmp\/[^\s'"]+/gu, "<temp-path>")
-    .replace(/[a-z]:\\[^\s'"]+/giu, "<absolute-path>")
-    .slice(0, 2_000);
-}
-
 function failedSummary(error: unknown, repoRoot: string): OtelGenerationConfigWatcherSummary {
   return {
     collectorAPostReadyRequestCount: null,
-    failures: [sanitizeProofFailure(error, repoRoot)],
+    failures: [sanitizeOtelWatcherFailure(error, repoRoot)],
     noRespawn: false,
     passed: false,
     pid: {
@@ -728,7 +650,9 @@ export async function runOtelGenerationConfigWatcherRuntime(options: RuntimeOpti
 }
 
 async function main(): Promise<void> {
-  const result = await runOtelGenerationConfigWatcherRuntime(parseOptions(process.argv.slice(2)));
+  const result = await runOtelGenerationConfigWatcherRuntime(
+    parseOtelGenerationConfigWatcherOptions(process.argv.slice(2)),
+  );
   process.stdout.write(
     `${SCENARIO_ID}: ${result.summary.passed ? "passed" : "failed"}; evidence=${QA_EVIDENCE_FILENAME}\n`,
   );
@@ -736,13 +660,6 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
 }
-
-export const testing = {
-  inspectGeneration,
-  inspectParentGraph,
-  parseOptions,
-  sanitizeProofFailure,
-};
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((error: unknown) => {

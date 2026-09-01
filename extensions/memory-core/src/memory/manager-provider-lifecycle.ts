@@ -27,10 +27,11 @@ import {
   type EmbeddingProviderResult,
 } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
+  resolveFallbackCurrentProviderId,
+  resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
 } from "./manager-provider-state.js";
@@ -109,7 +110,7 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
 
 export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps {
   protected abstract readonly cacheKey: string;
-  protected abstract readonly purpose: "default" | "status" | "cli";
+  protected abstract readonly purpose: "default" | "status" | "cli" | "maintenance";
   protected abstract readonly providerRequirement: MemoryEmbeddingProviderRequirement;
   protected abstract readonly requestedProvider: EmbeddingProviderRequest;
   protected abstract providerInitPromise: Promise<void> | null;
@@ -120,12 +121,14 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract closing: boolean;
   protected abstract activeManagerOperations: number;
   protected abstract managerIdleWaiters: Set<() => void>;
+  protected abstract activeBackgroundSearchSyncs: Set<Promise<void>>;
   protected abstract indexIdentityDirty: boolean;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
     options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
   ): Promise<void>;
+  protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
 
   protected applyProviderResult(providerResult: EmbeddingProviderResult): void {
     const providerState = resolveMemoryProviderState(providerResult);
@@ -255,6 +258,38 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
   }
 
+  protected async adoptPublishedFallbackProviderIfMatched(): Promise<boolean> {
+    if (this.fallbackFrom || !this.provider) {
+      return false;
+    }
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
+    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+      cfg: this.cfg,
+      settings: this.settings,
+      currentProviderId,
+    });
+    const meta = this.readMeta();
+    if (
+      !fallbackRequest ||
+      !meta ||
+      meta.provider !== fallbackRequest.provider ||
+      meta.model !== fallbackRequest.model
+    ) {
+      return false;
+    }
+    const activated = await this.activateFallbackProvider(
+      "published memory index uses the configured fallback provider",
+    );
+    return (
+      activated &&
+      this.refreshIndexIdentityDirty({ providerKeyKnown: this.providerInitialized }).status ===
+        "valid"
+    );
+  }
+
   protected async confirmEmbeddingBootstrapRecovery(): Promise<boolean> {
     const cached = this.getCachedEmbeddingAvailability();
     if (cached) {
@@ -342,28 +377,19 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (this.provider?.id !== "local") {
       return;
     }
-    const workerFailure = isLocalEmbeddingWorkerFailure(err)
-      ? err
-      : err instanceof Error && isLocalEmbeddingWorkerFailure(err.cause)
-        ? err.cause
-        : null;
-    if (!workerFailure) {
-      return;
-    }
-    const message = formatErrorMessage(workerFailure);
+    const message = formatErrorMessage(err);
     const degradedProvider = this.provider;
     void this.retireCurrentProvider();
     this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: degradedProvider.id,
       reason: message,
-      code: workerFailure.code,
     });
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    log.warn("memory embeddings: local provider degraded after worker failure", {
+    log.warn("memory embeddings: local provider degraded after transport failure", {
       error: message,
     });
   }
@@ -497,7 +523,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
     this.activeManagerOperations += 1;
     try {
-      return await run();
+      return await this.withPublishedDatabase(run);
     } finally {
       this.activeManagerOperations -= 1;
       if (this.activeManagerOperations === 0) {
@@ -511,12 +537,17 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected async awaitManagerIdle(): Promise<void> {
-    if (this.activeManagerOperations === 0) {
-      return;
+    if (this.activeManagerOperations > 0) {
+      await new Promise<void>((resolve) => {
+        this.managerIdleWaiters.add(resolve);
+      });
     }
-    await new Promise<void>((resolve) => {
-      this.managerIdleWaiters.add(resolve);
-    });
+    // CLI request teardown must not wait after a published search result is ready;
+    // its detached task owns a separate maintenance manager. Persistent managers
+    // still drain maintenance before closing shared resources.
+    while (this.purpose !== "cli" && this.activeBackgroundSearchSyncs.size > 0) {
+      await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
+    }
   }
 
   async probeVectorAvailability(): Promise<boolean> {

@@ -1,7 +1,8 @@
 // Slack plugin module implements interactions.modal behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -130,10 +131,14 @@ function resolveModalSessionRouting(params: {
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
   userId?: string;
   eventScope?: SlackEventScope;
-}): { sessionKey: string; channelId?: string; channelType?: string } {
+}): { agentId: string; sessionKey: string; channelId?: string; channelType?: string } {
   const metadata = params.metadata;
-  if (metadata.sessionKey && !params.eventScope) {
+  const metadataAgentId = metadata.sessionKey
+    ? resolveAgentIdFromSessionKey(metadata.sessionKey)
+    : undefined;
+  if (metadata.sessionKey && metadataAgentId && !params.eventScope) {
     return {
+      agentId: metadataAgentId,
       sessionKey: metadata.sessionKey,
       channelId: metadata.channelId,
       channelType: metadata.channelType,
@@ -141,7 +146,7 @@ function resolveModalSessionRouting(params: {
   }
   const routing = metadata.channelId
     ? {
-        sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+        ...params.ctx.resolveSlackSystemEventRoute({
           channelId: metadata.channelId,
           channelType: metadata.channelType,
           senderId: params.userId,
@@ -151,7 +156,7 @@ function resolveModalSessionRouting(params: {
         channelType: metadata.channelType,
       }
     : {
-        sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+        ...params.ctx.resolveSlackSystemEventRoute({
           channelType: "im",
           senderId: params.userId,
           eventScope: params.eventScope,
@@ -445,10 +450,10 @@ async function emitSlackModalLifecycleEvent(params: {
       })
     : undefined;
 
-  const queued = enqueueSystemEvent(
+  const queued = enqueueRoutedSystemEvent(
     params.formatSystemEvent({ ...eventPayload, ...pluginEventFields }),
+    sessionRouting,
     {
-      sessionKey: sessionRouting.sessionKey,
       contextKey: [params.contextPrefix, params.teamId, callbackId, viewId, userId]
         .filter(Boolean)
         .join(":"),
@@ -464,6 +469,7 @@ async function emitSlackModalLifecycleEvent(params: {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: sessionRouting.agentId,
       sessionKey: sessionRouting.sessionKey,
       heartbeat: { target: "last" },
     });

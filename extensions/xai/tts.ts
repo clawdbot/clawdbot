@@ -10,7 +10,7 @@ import {
 import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -42,7 +42,7 @@ export async function listXaiTtsVoices(params: {
       },
     },
     timeoutMs: XAI_TTS_VOICE_LIST_TIMEOUT_MS,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     auditContext: "xai tts voices",
   });
   try {
@@ -463,6 +463,7 @@ export async function xaiTTS(params: {
     },
     timeoutMs,
     fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(ttsBaseUrl),
     auditContext: "xai tts",
   });
   try {

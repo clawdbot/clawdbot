@@ -4,6 +4,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+
+const mocks = vi.hoisted(() => ({
+  readClaudeCliFallbackSeed: vi.fn(),
+}));
+
+vi.mock("../cli-runner/log.js", () => ({
+  cliBackendLog: { warn: vi.fn() },
+}));
+
+vi.mock("../../gateway/cli-session-history.js", () => ({
+  readClaudeCliFallbackSeed: mocks.readClaudeCliFallbackSeed,
+}));
+
 import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -11,7 +29,7 @@ import {
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
   resolveFallbackRetryPrompt,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 import {
   claudeCliSessionTranscriptPath,
@@ -41,16 +59,6 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(`[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`);
   });
 
-  it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: false,
-      }),
-    ).toBe(originalBody);
-  });
-
   it("preserves original body for fallback retry when sessionHasHistory is undefined", () => {
     expect(
       resolveFallbackRetryPrompt({
@@ -73,16 +81,6 @@ describe("resolveFallbackRetryPrompt", () => {
       resolveFallbackRetryPrompt({
         body: originalBody,
         isFallbackRetry: false,
-        sessionHasHistory: false,
-      }),
-    ).toBe(originalBody);
-  });
-
-  it("preserves original body on fallback retry without history", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
         sessionHasHistory: false,
       }),
     ).toBe(originalBody);
@@ -244,152 +242,134 @@ describe("formatClaudeCliFallbackPrelude", () => {
 });
 
 describe("buildClaudeCliFallbackContextPrelude", () => {
+  beforeEach(() => {
+    mocks.readClaudeCliFallbackSeed.mockReset();
+  });
+
   it("returns empty string when no sessionId is provided", () => {
     expect(buildClaudeCliFallbackContextPrelude({ cliSessionId: undefined })).toBe("");
     expect(buildClaudeCliFallbackContextPrelude({ cliSessionId: "  " })).toBe("");
+    expect(mocks.readClaudeCliFallbackSeed).not.toHaveBeenCalled();
   });
 
-  it("returns empty string when the Claude session file does not exist", async () => {
-    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-prelude-"));
-    try {
-      expect(
-        buildClaudeCliFallbackContextPrelude({
-          cliSessionId: "missing-session",
-          homeDir: tmpHome,
-        }),
-      ).toBe("");
-    } finally {
-      await fs.rm(tmpHome, { recursive: true, force: true });
-    }
+  it("returns empty string when the Claude session loader finds no seed", () => {
+    mocks.readClaudeCliFallbackSeed.mockReturnValue(undefined);
+
+    expect(
+      buildClaudeCliFallbackContextPrelude({
+        cliSessionId: "missing-session",
+        homeDir: "/tmp/test-home",
+      }),
+    ).toBe("");
+    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
+      cliSessionId: "missing-session",
+      homeDir: "/tmp/test-home",
+    });
   });
 
-  it("reads a real Claude JSONL fixture and emits a labeled prelude end-to-end", async () => {
-    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-prelude-"));
-    const sessionId = "e2e-session";
-    const projectsDir = path.join(tmpHome, ".claude", "projects", "demo");
-    try {
-      // Use Claude's JSONL shape directly so parser and formatter behavior stay
-      // aligned with real CLI transcripts rather than synthetic message arrays.
-      await fs.mkdir(projectsDir, { recursive: true });
-      const lines = [
+  it("formats the Claude session loader seed into a labeled fallback prelude", () => {
+    mocks.readClaudeCliFallbackSeed.mockReturnValue({
+      recentTurns: [
         {
-          type: "user",
-          uuid: "u1",
-          message: { role: "user", content: "prior question about deploys" },
+          role: "user",
+          content: "prior question about deploys",
         },
         {
-          type: "assistant",
-          uuid: "a1",
-          message: {
-            role: "assistant",
-            model: "claude-sonnet-4-6",
-            content: [
-              { type: "text", text: "prior answer about blue-green" },
-              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } },
-            ],
-          },
+          role: "assistant",
+          content: [
+            { type: "text", text: "prior answer about blue-green" },
+            { type: "toolcall", name: "Bash" },
+          ],
         },
-      ];
-      await fs.writeFile(
-        path.join(projectsDir, `${sessionId}.jsonl`),
-        `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-        "utf-8",
-      );
-      const prelude = buildClaudeCliFallbackContextPrelude({
-        cliSessionId: sessionId,
-        homeDir: tmpHome,
-      });
-      expect(prelude).toContain("## Prior session context (from claude-cli)");
-      expect(prelude).toContain("user: prior question about deploys");
-      expect(prelude).toContain("assistant: prior answer about blue-green");
-      expect(prelude).toContain("(tool call: Bash)");
-    } finally {
-      await fs.rm(tmpHome, { recursive: true, force: true });
-    }
+      ],
+    });
+
+    const prelude = buildClaudeCliFallbackContextPrelude({
+      cliSessionId: " e2e-session ",
+      homeDir: "/tmp/test-home",
+    });
+    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
+      cliSessionId: "e2e-session",
+      homeDir: "/tmp/test-home",
+    });
+    expect(prelude).toContain("## Prior session context (from claude-cli)");
+    expect(prelude).toContain("user: prior question about deploys");
+    expect(prelude).toContain("assistant: prior answer about blue-green");
+    expect(prelude).toContain("(tool call: Bash)");
   });
 });
 
-describe("sessionFileHasContent", () => {
+describe("sessionTranscriptHasContent", () => {
   let tmpDir: string;
+  let target: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-test-"));
+    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "oc-transcript-probe-")));
+    target = {
+      agentId: "audit",
+      sessionId: "fallback-history",
+      sessionKey: "agent:audit:main",
+      storePath: path.join(tmpDir, "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   });
 
   afterEach(async () => {
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: target.agentId,
+      path: target.storePath,
+    });
+    closeOpenClawAgentDatabaseByPath(target.storePath);
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns false for undefined sessionFile", async () => {
-    expect(await sessionFileHasContent(undefined)).toBe(false);
+  const assistantMessage = () =>
+    buildAssistantMessage({
+      model: { api: "test", provider: "test", id: "test-assistant-model" },
+      content: [{ type: "text", text: "persisted answer" }],
+      stopReason: "stop",
+      usage: buildUsageWithNoCost({}),
+      timestamp: 2,
+    });
+
+  it("marks fallback history only after SQLite contains an assistant turn", async () => {
+    expect(await sessionTranscriptHasContent(undefined)).toBe(false);
+    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    const manager = SessionManager.open(target, tmpDir);
+    manager.appendMessage({ role: "user", content: "x".repeat(300 * 1024), timestamp: 1 });
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(false);
+    manager.appendMessage(assistantMessage());
+    manager.flushPendingPersistence();
+
+    const sessionHasHistory = await sessionTranscriptHasContent(target);
+    expect(sessionHasHistory).toBe(true);
+    expect(
+      resolveFallbackRetryPrompt({ body: "continue", isFallbackRetry: true, sessionHasHistory }),
+    ).toBe("[Retry after the previous model attempt failed or timed out]\n\ncontinue");
   });
 
-  it("returns false when session file does not exist", async () => {
-    expect(await sessionFileHasContent(path.join(tmpDir, "nonexistent.jsonl"))).toBe(false);
-  });
+  it("ignores abandoned assistants and clears history at reset boundaries", async () => {
+    const manager = SessionManager.open(target, tmpDir);
+    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    manager.appendMessage(assistantMessage());
+    manager.branch(root);
+    manager.appendMessage({ role: "user", content: "active branch", timestamp: 3 });
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(false);
 
-  it("returns false when session file is empty", async () => {
-    const file = path.join(tmpDir, "empty.jsonl");
-    await fs.writeFile(file, "", "utf-8");
-    expect(await sessionFileHasContent(file)).toBe(false);
-  });
-
-  it("returns false when session file has only user message (no assistant flush)", async () => {
-    const file = path.join(tmpDir, "user-only.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
-      "utf-8",
-    );
-    expect(await sessionFileHasContent(file)).toBe(false);
-  });
-
-  it("returns true when session file has assistant message (flushed)", async () => {
-    const file = path.join(tmpDir, "with-assistant.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"session","id":"s1"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
-      "utf-8",
-    );
-    expect(await sessionFileHasContent(file)).toBe(true);
-  });
-
-  it("returns true when session file has spaced JSON (role : assistant)", async () => {
-    const file = path.join(tmpDir, "spaced.jsonl");
-    await fs.writeFile(
-      file,
-      '{"type":"message","message":{"role": "assistant","content":"hi"}}\n',
-      "utf-8",
-    );
-    expect(await sessionFileHasContent(file)).toBe(true);
-  });
-
-  it("returns true when assistant message appears after large user content", async () => {
-    const file = path.join(tmpDir, "large-user.jsonl");
-    // Create a user message whose JSON line exceeds 256KB to ensure the
-    // JSONL-based parser (CWE-703 fix) finds the assistant record that a
-    // naive byte-prefix approach would miss.
-    const bigContent = "x".repeat(300 * 1024);
-    const lines =
-      [
-        `{"type":"session","id":"s1"}`,
-        `{"type":"message","message":{"role":"user","content":"${bigContent}"}}`,
-        `{"type":"message","message":{"role":"assistant","content":"done"}}`,
-      ].join("\n") + "\n";
-    await fs.writeFile(file, lines, "utf-8");
-    expect(await sessionFileHasContent(file)).toBe(true);
-  });
-
-  it("returns false when session file is a symbolic link", async () => {
-    const realFile = path.join(tmpDir, "real.jsonl");
-    await fs.writeFile(
-      realFile,
-      '{"type":"message","message":{"role":"assistant","content":"hi"}}\n',
-      "utf-8",
-    );
-    const link = path.join(tmpDir, "link.jsonl");
-    await fs.symlink(realFile, link);
-    expect(await sessionFileHasContent(link)).toBe(false);
+    manager.appendMessage(assistantMessage());
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(true);
+    manager.appendResetBoundary("new");
+    manager.appendMessage({ role: "user", content: "fresh turn", timestamp: 4 });
+    manager.flushPendingPersistence();
+    expect(await sessionTranscriptHasContent(target)).toBe(false);
   });
 });
 
@@ -504,26 +484,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
   }
 
   const GRACE_MS = 250;
-
-  it("returns false when the Claude project transcript is missing or empty", async () => {
-    const workspaceDir = await makeWorkspace();
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "missing-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-
-    await writeClaudeProjectFile(workspaceDir, "empty-session", "");
-    expect(
-      await claudeCliSessionTranscriptHasContent({
-        sessionId: "empty-session",
-        workspaceDir,
-        homeDir: tmpDir,
-      }),
-    ).toBe(false);
-  });
 
   it("returns true when the Claude project transcript has an assistant message", async () => {
     const workspaceDir = await makeWorkspace();

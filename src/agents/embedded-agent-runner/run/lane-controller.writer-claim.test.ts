@@ -216,6 +216,93 @@ describe("embedded run durable writer admission", () => {
     ).toMatchObject({ activeWriterRunId: "run-next" });
   });
 
+  it("silently replaces a stopped prior writer while keeping stale transcript writes fenced", async () => {
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
+      activeWriterRunId: "run-stopped",
+      lifecycleRevision,
+      sessionId,
+      updatedAt: 1,
+    } as InternalSessionEntry);
+    const cancel = vi.fn();
+    setActiveEmbeddedRun(
+      sessionId,
+      {
+        kind: "embedded",
+        runId: "run-stopped",
+        cancel,
+        abort: vi.fn(),
+        isCompacting: () => false,
+        isStopped: () => true,
+        isStreaming: () => false,
+        queueMessage: async () => {},
+      },
+      sessionKey,
+      sessionKey,
+    );
+    const lifecycleEvents: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === "run-stopped" && event.stream === "lifecycle") {
+        lifecycleEvents.push(event);
+      }
+    });
+    const staleManagerTarget = {
+      agentId: "main",
+      expectedLifecycleRevision: lifecycleRevision,
+      expectedWriterRunId: "run-stopped",
+      sessionId,
+      sessionKey,
+      storePath: fixture.storePath(),
+    };
+    const staleManager = SessionManager.open(staleManagerTarget, "/tmp");
+
+    try {
+      await claimAgentSessionWriter({
+        agentId: "main",
+        prompt: "next turn",
+        runId: "run-next",
+        sessionId,
+        sessionKey,
+        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(lifecycleEvents).toEqual([]);
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
+    ).toMatchObject({ activeWriterRunId: "run-next" });
+    expect(() =>
+      staleManager.appendMessage(
+        buildAssistantMessage({
+          model: { api: "openai-responses", provider: "openai", id: "gpt-test" },
+          content: [{ type: "text", text: "late model output" }],
+          stopReason: "stop",
+          usage: buildUsageWithNoCost({}),
+        }),
+      ),
+    ).toThrow(SessionTranscriptWriterClaimReboundError);
+
+    const staleAppend = await appendExactAssistantMessageToSessionTranscript({
+      agentId: "main",
+      expectedLifecycleRevision: lifecycleRevision,
+      expectedSessionId: sessionId,
+      expectedWriterRunId: "run-stopped",
+      message: buildAssistantMessage({
+        model: { api: "openai-responses", provider: "openai", id: "gpt-test" },
+        content: [{ type: "text", text: "late output" }],
+        stopReason: "stop",
+        usage: buildUsageWithNoCost({}),
+      }),
+      sessionKey,
+      storePath: fixture.storePath(),
+    });
+    expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
   it("leaves the incumbent live when the replacement claim does not commit", async () => {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
       activeWriterRunId: "run-a",

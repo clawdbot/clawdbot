@@ -93,11 +93,15 @@ export async function runAgentResetPhase(params: {
   try {
     resetResult = await runSessionResetFromAgent({
       key: params.requestedSessionKey,
-      ...(params.requestedSessionKey === "global" && params.agentId
-        ? { agentId: params.agentId }
-        : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
       creation: resolveAgentRunSessionCreation(params.client),
+      ...(params.client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(params.client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+        : {}),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
       onCommitted: (commit) => {
         params.setCommittedResetCompletion({
@@ -184,7 +188,7 @@ export async function runAgentResetPhase(params: {
     params.respond(true, responsePayload, undefined, { runId: params.runId });
     emitSessionsChanged(params.context, {
       sessionKey: resetResult.key,
-      ...(resetResult.key === "global" && params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
     });
     return { ...next, stop: true, accepted: true };

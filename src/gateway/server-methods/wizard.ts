@@ -12,7 +12,6 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -23,7 +22,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import {
   createAdmittedWizardSession,
-  SETUP_ADMISSION_BUSY_MESSAGE,
+  respondSetupAdmissionBusy,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -77,15 +76,6 @@ function readWizardStatus(session: WizardSession) {
 
 function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: T): T {
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
-}
-
-function retainGatewayWorkUntilSettled(session: WizardSession): void {
-  // Hosted wizard state spans RPC requests. Keep restart/suspend admission
-  // active between steps or a config reload can erase the process-local session.
-  const release = retainGatewayRootWorkAdmissionContinuation();
-  if (release) {
-    void whenAdmittedWizardSessionSettled(session).then(release, release);
-  }
 }
 
 /** Resolves a live wizard session or sends the public not-found error. */
@@ -148,14 +138,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
           );
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_MESSAGE, { retryable: true }),
-      );
+      respondSetupAdmissionBusy(respond);
       return;
     }
-    retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {
@@ -221,7 +206,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (cancelled) {
       const purge = () => context.purgeWizardSession(sessionId);
       void whenAdmittedWizardSessionSettled(session).then(purge, purge);
-    } else {
+    } else if (status.status !== "running") {
       context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);

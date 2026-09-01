@@ -7,7 +7,8 @@ import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.j
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
-  collectQaSuiteGatewayConfigPatch,
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   collectQaSuiteTransportPolicy,
@@ -44,6 +45,7 @@ function makeMatrixFlowQaSuiteTestScenario(
     execution: {
       kind: "flow",
       channel: "matrix",
+      channels: ["matrix"],
       timeoutMs: 60_000,
       retryCount: 0,
       ...(providerMode ? { providerMode } : {}),
@@ -612,7 +614,9 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    expect(collectQaSuiteGatewayConfigPatch(scenarios)).toEqual({
+    expect(
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({
       agents: {
         defaults: {
           thinkingDefault: "minimal",
@@ -641,16 +645,58 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    const patch = collectQaSuiteGatewayConfigPatch(scenarios);
+    const patch = applyQaSuiteGatewayConfigPatches(
+      {},
+      collectQaSuiteGatewayConfigPatches(scenarios),
+    );
 
     expect(patch).toEqual({ plugins: { entries: {} } });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
+  it("keeps a scenario deletion from resurrecting baseline siblings", () => {
+    // One document cannot express "delete this parent, then recreate part of
+    // it": composing the two would merge the later object into the baseline and
+    // keep the siblings the first scenario removed. Startup replays them in
+    // order instead.
+    const scenarios = [
+      makeQaSuiteTestScenario("drops-tools", { gatewayConfigPatch: { tools: null } }),
+      makeQaSuiteTestScenario("adds-web-search", {
+        gatewayConfigPatch: { tools: { web: { search: { enabled: true } } } },
+      }),
+    ];
+    const baseline = { tools: { profile: "coding", deny: ["shell"] } };
+
+    expect(
+      applyQaSuiteGatewayConfigPatches(baseline, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({ tools: { web: { search: { enabled: true } } } });
+  });
+
+  it("applies scenario startup patches in scenario order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first", {
+        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "minimal" } } },
+      }),
+      makeQaSuiteTestScenario("second", {
+        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "medium" } } },
+      }),
+    ];
+
+    expect(collectQaSuiteGatewayConfigPatches(scenarios)).toHaveLength(2);
+    expect(
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({ agents: { defaults: { thinkingDefault: "medium" } } });
+  });
+
   it("targets the selected adapter account in scenario startup config patches", () => {
     const scenarios = [readQaScenarioById("whatsapp-access-control-dm-open")];
 
-    expect(collectQaSuiteGatewayConfigPatch(scenarios, "whatsapp-alt")).toEqual({
+    expect(
+      applyQaSuiteGatewayConfigPatches(
+        {},
+        collectQaSuiteGatewayConfigPatches(scenarios, "whatsapp-alt"),
+      ),
+    ).toEqual({
       channels: {
         whatsapp: {
           accounts: {

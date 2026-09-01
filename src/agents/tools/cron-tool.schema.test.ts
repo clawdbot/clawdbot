@@ -110,6 +110,26 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
+  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+    "advertises job retargeting only without session scope (%j)",
+    (agentSessionKey) => {
+      const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
+      for (const projected of [
+        toolSchema,
+        normalizeToolParameterSchema(toolSchema, { modelProvider: "gemini" }),
+        normalizeToolParameterSchema(toolSchema, {
+          modelCompat: { toolSchemaProfile: "llamacpp" },
+        }),
+      ]) {
+        const record = projected as unknown as Record<string, unknown>;
+        expect(keysAt(record, "job").includes("agentId")).toBe(!agentSessionKey?.trim());
+        expect(propertyAt(record, "agentId")).toMatchObject({ type: "string" });
+        expect(propertyAt(record, "agentId")?.description).toContain("list");
+        expect(propertyAt(record, "agentId")?.description).toContain("wake");
+      }
+    },
+  );
+
   it("exposes next_check with its relative duration parameter", () => {
     expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
     expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");
@@ -519,16 +539,12 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
-  it("gates the surface when config omits cron.triggers entirely (disabled default)", () => {
+  it("keeps the full surface when config omits cron.triggers (enabled default)", () => {
     const defaultPostureSchema = createCronTool({
       config: { cron: { enabled: true } } as OpenClawConfig,
     }).parameters as unknown as Record<string, unknown>;
-    expect(keysAt(defaultPostureSchema, "job")).not.toContain("trigger");
-    expect(propertyAt(defaultPostureSchema, "job.schedule.kind")?.enum).toEqual([
-      "at",
-      "every",
-      "cron",
-    ]);
+    expect(keysAt(defaultPostureSchema, "job")).toContain("trigger");
+    expect(propertyAt(defaultPostureSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
   it("still validates a plain reminder add call", () => {

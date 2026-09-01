@@ -2,7 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 import {
+  beginProfileTransition,
   enqueueProfileStart,
   getProfileLifecycle,
   getOrCreateProfileRuntime,
@@ -161,6 +163,33 @@ function createProfileFixture(
   return { state, profile, runtime };
 }
 
+function createExtensionRelayFixture(name = "chrome") {
+  const fixture = createProfileFixture({
+    name,
+    config: { cdpPort: 18799, driver: "extension" },
+    lastTargetId: "shared-tab",
+  });
+  const relay = {
+    ownership: "owned",
+    port: 18799,
+    token: "persistent-relay-test-key",
+    allowLegacyAuth: true,
+    internalToken: `${name}-process-only-credential`,
+    bridge: {} as ExtensionRelayHandle["bridge"],
+    close: vi.fn(async () => {}),
+  } satisfies ExtensionRelayHandle;
+  fixture.state.extensionRelays = new Map([[name, relay]]);
+  fixture.state.resolved = {
+    ...fixture.state.resolved,
+    extensionRelayInternalTokens: { [name]: relay.internalToken },
+  };
+  fixture.runtime.profile = requireValue(
+    resolveProfile(fixture.state.resolved, name),
+    `${name} extension profile missing`,
+  );
+  return { ...fixture, relay };
+}
+
 function refreshProfiles(state: BrowserServerState) {
   refreshResolvedBrowserConfigFromDisk({ current: state, refreshConfigFromDisk: true });
 }
@@ -285,6 +314,139 @@ describe("server-context hot-reload profiles", () => {
     });
     expect(after?.cdpPort).toBe(19999);
     expect(state.resolved.profiles.openclaw?.cdpPort).toBe(19999);
+  });
+
+  it("keeps only exact live relay credentials stable across repeated profile refreshes", () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+    const expectedUrl = runtime.profile.cdpUrl;
+    state.resolved = {
+      ...state.resolved,
+      extensionRelayToken: relay.token,
+      extensionRelayInternalTokens: {
+        chrome: relay.internalToken,
+        orphaned: "closed-relay-credential",
+      },
+    };
+
+    for (let request = 0; request < 3; request += 1) {
+      const resolved = resolveBrowserProfileWithHotReload({
+        current: state,
+        refreshConfigFromDisk: true,
+        name: "chrome",
+      });
+
+      expect(resolved?.cdpUrl).toBe(expectedUrl);
+      expect(state.extensionRelays?.get("chrome")).toBe(relay);
+      expect(state.resolved.extensionRelayInternalTokens).toEqual({
+        chrome: relay.internalToken,
+      });
+      expect(state.resolved.extensionRelayToken).toBe(relay.token);
+      expect(getProfileLifecycle(runtime).configRevision).toBe(0);
+      expect(runtime.lastTargetId).toBe("shared-tab");
+    }
+    expect(relay.close).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a relay credential across a configured profile-port change", async () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+
+    updateProfile(state, "chrome", { cdpPort: 18801, driver: "extension" });
+
+    expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
+    expect(runtime.profile.cdpPort).toBe(18801);
+    expect(getProfileLifecycle(runtime).transitionReason).toContain("cdpPort");
+    await getProfileLifecycle(runtime).tail;
+    expect(relay.close).toHaveBeenCalledOnce();
+    expect(state.extensionRelays?.has("chrome")).toBe(false);
+  });
+
+  it("revokes only the exact closed relay credential after lifecycle cleanup", async () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+    state.resolved.extensionRelayInternalTokens.work = "other-live-profile-credential";
+
+    await beginProfileTransition({
+      state,
+      runtime,
+      reason: "extension relay stopped",
+      closeRelay: true,
+    });
+
+    expect(relay.close).toHaveBeenCalledOnce();
+    expect(state.extensionRelays?.has("chrome")).toBe(false);
+    expect(state.resolved.extensionRelayInternalTokens).toEqual({
+      work: "other-live-profile-credential",
+    });
+  });
+
+  it("preserves a replacement relay credential when an older handle finishes closing", async () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+    const replacement = {
+      ...relay,
+      internalToken: "replacement-process-only-credential",
+      close: vi.fn(async () => {}),
+    } satisfies ExtensionRelayHandle;
+    relay.close.mockImplementationOnce(async () => {
+      state.extensionRelays?.set("chrome", replacement);
+      state.resolved = {
+        ...state.resolved,
+        extensionRelayInternalTokens: { chrome: replacement.internalToken },
+      };
+    });
+
+    await beginProfileTransition({
+      state,
+      runtime,
+      reason: "superseded extension relay",
+      closeRelay: true,
+    });
+
+    expect(state.extensionRelays?.get("chrome")).toBe(replacement);
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toBe(replacement.internalToken);
+    expect(replacement.close).not.toHaveBeenCalled();
+  });
+
+  it("retains the exact relay credential when its lifecycle close fails", async () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+    relay.close.mockRejectedValueOnce(new Error("relay still listening"));
+
+    await expect(
+      beginProfileTransition({
+        state,
+        runtime,
+        reason: "extension relay stopped",
+        closeRelay: true,
+      }),
+    ).rejects.toThrow("relay still listening");
+
+    expect(state.extensionRelays?.get("chrome")).toBe(relay);
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toBe(relay.internalToken);
+  });
+
+  it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
+    const { state, runtime, relay } = createExtensionRelayFixture();
+    const closeStarted = deferred();
+    const closeReleased = deferred();
+    relay.close.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await closeReleased.promise;
+    });
+
+    const closing = beginProfileTransition({
+      state,
+      runtime,
+      reason: "extension relay stopped",
+      closeRelay: true,
+    });
+    await closeStarted.promise;
+    expect(getProfileLifecycle(runtime).transitionReason).toBeNull();
+
+    refreshProfiles(state);
+    expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
+
+    closeReleased.resolve();
+    await closing;
+    await getProfileLifecycle(runtime).tail;
+    expect(relay.close).toHaveBeenCalledOnce();
   });
 
   it("listProfiles refreshes config before enumerating profiles", () => {

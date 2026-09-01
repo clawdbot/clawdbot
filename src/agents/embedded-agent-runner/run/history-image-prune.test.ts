@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
@@ -703,6 +703,43 @@ describe("installHistoryImagePruneContextTransform", () => {
     } finally {
       restore();
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces a failed active image through the installed context transform", async () => {
+    const onCurrentTurnImageFailure = vi.fn();
+    const message = castAgentMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", data: "%%%", mimeType: "image/png" },
+      ],
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      onCurrentTurnImageFailure,
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message]);
+      expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+      expect(expectArrayMessageContent(replay?.[0], "expected failure notice")).toEqual([
+        { type: "text", text: "inspect" },
+        {
+          type: "text",
+          text: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+        },
+      ]);
+    } finally {
+      restore();
     }
   });
 

@@ -1,10 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProofEnabled,
-  channelStopProofDir,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -31,6 +29,27 @@ async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { draft: "Draft from a shared link", name: "a one-shot chat draft" },
+    { draft: undefined, name: "an existing session URL" },
+  ])("preserves remaining URL state while resolving $name", async ({ draft }) => {
+    await withChatPage(async (page) => {
+      await installMockGateway(page, { historyMessages: [] });
+      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, "main"));
+      if (draft !== undefined) {
+        sessionUrl.searchParams.set("draft", draft);
+      }
+      sessionUrl.searchParams.set("panel", "details");
+      sessionUrl.hash = "#pane";
+
+      await page.goto(sessionUrl.href);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => composer.inputValue()).toBe(draft ?? "");
+      await expect.poll(() => new URL(page.url()).search).toBe("?panel=details");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
+    });
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, {
@@ -51,7 +70,7 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe("agent:main:main");
       expect(params.message).toBe(prompt);
       expect(params.deliver).toBe(false);
 
@@ -100,12 +119,12 @@ suite.define(() => {
         session: {
           activeRunIds: [runId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       await expect.poll(() => userRow.count()).toBe(1);
@@ -133,6 +152,122 @@ suite.define(() => {
         timeout: 10_000,
       });
       await expect.poll(() => userRow.count()).toBe(1);
+    });
+  });
+
+  it("keeps a previous final above a newer active turn when events arrive late", async () => {
+    await withChatPage(async (page) => {
+      const gateway = await installMockGateway(page, { historyMessages: [] });
+      const previousRunId = "previous-run";
+      const previousPrompt = "What are groups?";
+      const previousFinal = "Groups organize conversations.";
+      const currentPrompt = "Why were my sessions missing?";
+      const currentPartial = "Checking external sessions...";
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: previousRunId,
+        hasActiveRun: false,
+        message: {
+          content: [{ text: previousPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "previous-user",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "agent:main:main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "agent:main:main",
+      });
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill(currentPrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const currentRunId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "current chat run id",
+      );
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [currentRunId],
+        clientRunId: currentRunId,
+        hasActiveRun: true,
+        message: {
+          content: [{ text: currentPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        messageId: "current-user",
+        messageSeq: 3,
+        session: {
+          activeRunIds: [currentRunId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "agent:main:main",
+      });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: currentPartial,
+        message: {
+          content: [{ text: currentPartial, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: currentRunId,
+        seq: 1,
+        sessionKey: "agent:main:main",
+        state: "delta",
+      });
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [currentRunId],
+        clientRunId: previousRunId,
+        hasActiveRun: true,
+        message: {
+          content: [{ text: previousFinal, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        messageId: "previous-final",
+        messageSeq: 2,
+        session: {
+          activeRunIds: [currentRunId],
+          hasActiveRun: true,
+          key: "agent:main:main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "agent:main:main",
+      });
+
+      const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
+      const expectVisibleOrder = async () => {
+        await expect
+          .poll(() =>
+            page.locator(".chat-thread-inner").evaluate((thread, texts) => {
+              const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
+              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+            }, visibleTexts),
+          )
+          .toEqual([0, 1, 2, 3]);
+      };
+      await expectVisibleOrder();
+
+      await gateway.emitChatFinal({ runId: previousRunId, text: previousFinal });
+      await expectVisibleOrder();
+      await expect
+        .poll(() => page.locator(".chat-group.assistant", { hasText: previousFinal }).count())
+        .toBe(1);
     });
   });
 
@@ -167,12 +302,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
       };
 
@@ -199,7 +334,7 @@ suite.define(() => {
       await gateway.setHistoryMessages(persistedMessages);
       await gateway.resolveDeferred("chat.history", {
         messages: [],
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         thinkingLevel: null,
       });
       await expectDistinctPeerBubbles();
@@ -255,7 +390,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -272,12 +407,12 @@ suite.define(() => {
           session: {
             activeRunIds: [runId],
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "running",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         };
         await gateway.emitGatewayEvent("session.message", sharedUserEvent);
 
@@ -386,7 +521,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor({
@@ -408,12 +543,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
 
         await expect
@@ -438,7 +573,7 @@ suite.define(() => {
           .toBe(true);
         await gateway.resolveDeferred("chat.history", {
           messages: includesPrompt ? [userMessage, assistantMessage] : [assistantMessage],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
         await expect
@@ -493,7 +628,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -508,7 +643,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
@@ -548,7 +683,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
@@ -572,12 +707,12 @@ suite.define(() => {
         session: {
           activeRunIds: [],
           hasActiveRun: false,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "done",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).length)
@@ -650,7 +785,7 @@ suite.define(() => {
     });
   });
 
-  it("sends /stop to the exact selected channel session and clears its working indicator", async () => {
+  it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     await withChatPage(async (page) => {
       const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
       const gateway = await installMockGateway(page, {
@@ -669,12 +804,33 @@ suite.define(() => {
           ]),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, channelSessionKey));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
       const workingIndicator = page.locator(".chat-working-indicator");
       await workingIndicator.waitFor({ state: "visible", timeout: 10_000 });
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:browser-annotation", {
+            cancelable: true,
+            detail: {
+              modelContext: "Review the annotated page",
+              dataUrl:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              fileName: "annotated-page.png",
+              card: {
+                title: "Annotated page",
+                displayUrl: "example.com",
+                markedRegionCount: 1,
+                inspectedElement: false,
+              },
+            },
+          }),
+        );
+      });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
       await composer.fill("/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
@@ -708,12 +864,13 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
       expect(await composer.inputValue()).toBe("");
       if (captureUiProofEnabled) {
-        await mkdir(channelStopProofDir, { recursive: true });
+        const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
         await page.screenshot({
           path: path.join(channelStopProofDir, "stopped.png"),
           fullPage: true,
@@ -772,9 +929,9 @@ suite.define(() => {
     });
   });
 
-  it("steers the exact run with the current leaf reported by the session row", async () => {
+  it("sends /steer for the selected session without resolving a run or leaf", async () => {
     await withChatPage(async (page) => {
-      const sessionKey = "main";
+      const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, {
         historyMessages: [
           {
@@ -813,8 +970,9 @@ suite.define(() => {
       expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
-      expect(params.expectedRunId).toBe("active-run");
-      expect(params.expectedLeafEntryId).toBe("leaf-before-steer");
+      expect(params.queueMode).toBe("steer");
+      expect(params).not.toHaveProperty("expectedRunId");
+      expect(params).not.toHaveProperty("expectedLeafEntryId");
 
       await page.getByText("Steered.", { exact: true }).waitFor({ timeout: 10_000 });
       expect(await page.getByText("No active run").count()).toBe(0);
@@ -832,7 +990,11 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params).toMatchObject({ sessionKey: "main", message: prompt, deliver: false });
+      expect(params).toMatchObject({
+        sessionKey: "agent:main:main",
+        message: prompt,
+        deliver: false,
+      });
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await gateway.emitChatFinal({

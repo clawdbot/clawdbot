@@ -1,6 +1,9 @@
 // Outbound channel bootstrap lazily loads runtime plugins for selected channels
 // when only setup-shell metadata is active.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,6 +13,7 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
@@ -19,12 +23,12 @@ const bootstrapRegistriesByConfig = new Map<string, Map<string, PluginRegistry |
 
 function cacheBootstrapOutcome(
   registries: Map<string, PluginRegistry | null>,
-  channel: string,
+  key: string,
   outcome: PluginRegistry | null,
 ): void {
   // Reinsert every outcome, including null, so reads and writes share LRU ordering.
-  registries.delete(channel);
-  registries.set(channel, outcome);
+  registries.delete(key);
+  registries.set(key, outcome);
   pruneMapToMaxSize(registries, MAX_BOOTSTRAP_CHANNEL_OUTCOMES_PER_CONFIG);
 }
 
@@ -83,28 +87,43 @@ function resolveSendCapableRegistry(
 export function bootstrapOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): PluginRegistry | undefined {
   const cfg = params.cfg;
   if (!cfg) {
     return undefined;
   }
 
-  const activeRegistry = getActivePluginRegistry();
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedEntry = findChannelEntry(scopedRegistry ?? null, params.channel);
+  const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
   const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
   if (activeSendRegistry) {
     return activeSendRegistry;
   }
 
-  const registries = resolveBootstrapRegistries(cfg);
-  const cachedRegistry = registries.get(params.channel);
-  if (cachedRegistry !== undefined) {
-    cacheBootstrapOutcome(registries, params.channel, cachedRegistry);
-    return resolveSendCapableRegistry(cachedRegistry, params.channel);
+  // Outbound callers already know the admitted run owner. Preserve it here so
+  // explicit fleets do not fall back to forbidden ambient-agent selection.
+  // Agent-less sends route through the configured ambient owner (systemAgent,
+  // then the legacy default); ownerless fleets never throw — startup
+  // delivery recovery runs this path — and bootstrap with global-scope
+  // plugin discovery only. Normalized agent ids never equal "", so "" is a
+  // collision-free ownerless cache slot.
+  const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
+  const outcomeKey = `${agentId ?? ""}\0${params.channel}`;
+  // Root-generation memoization cannot replace a selected scoped setup owner.
+  // Its activation uses the loader's own registry-handle cache instead.
+  const registries = scopedEntry ? undefined : resolveBootstrapRegistries(cfg);
+  if (registries) {
+    const cachedRegistry = registries.get(outcomeKey);
+    if (cachedRegistry !== undefined) {
+      cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
+      return resolveSendCapableRegistry(cachedRegistry, params.channel);
+    }
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled.config, defaultAgentId);
+  const workspaceDir = agentId === undefined ? undefined : resolveAgentWorkspaceDir(cfg, agentId);
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,
@@ -131,6 +150,8 @@ export function bootstrapOutboundChannelPlugin(params: {
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }
-  cacheBootstrapOutcome(registries, params.channel, sendRegistry ?? null);
+  if (registries) {
+    cacheBootstrapOutcome(registries, outcomeKey, sendRegistry ?? null);
+  }
   return sendRegistry;
 }

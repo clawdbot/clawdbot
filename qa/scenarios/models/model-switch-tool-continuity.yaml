@@ -52,6 +52,12 @@ flow:
                 expr: config.initialPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
+        - set: modelSwitchEvidence
+          value:
+            primary:
+              ref: primaryRun.waited.terminalReceipt
+            primaryDelivery:
+              ref: primaryRun.waited.terminalDelivery
         - assert:
             expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible'; })()"
             message: default-model run did not return owned successful read evidence
@@ -71,8 +77,20 @@ flow:
                 expr: expectedAlternate.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - set: modelSwitchEvidence
+          value:
+            primary:
+              ref: primaryRun.waited.terminalReceipt
+            primaryDelivery:
+              ref: primaryRun.waited.terminalDelivery
+            alternate:
+              ref: alternateRun.waited.terminalReceipt
+            terminalReply:
+              ref: alternateRun.waited.terminalReply
+            terminalDelivery:
+              ref: alternateRun.waited.terminalDelivery
         - assert:
-            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
+            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && Boolean(receipt.effective?.provider) && Boolean(receipt.effective?.model) && Boolean(receipt.effective?.responseModel) && receipt.rerouted === (receipt.effective.provider !== receipt.requested.provider || receipt.effective.model !== receipt.requested.model || receipt.effective.responseModel !== receipt.requested.model) && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible' && `${receipt.effective.provider}/${receipt.effective.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective.provider}/${primaryRun.waited.terminalReceipt.effective.responseModel}`; })()"
             message: alternate-model run did not return exact owned successful read evidence
         - assert:
             expr: "alternateRun?.waited?.terminalReply?.disposition === 'visible' && hasModelSwitchContinuitySignal(alternateRun.waited.terminalReply.text)"
@@ -80,14 +98,4 @@ flow:
         - assert:
             expr: "alternateRun?.waited?.terminalDelivery?.status === 'sent' && typeof alternateRun.waited.terminalDelivery.resultCount === 'number' && alternateRun.waited.terminalDelivery.resultCount > 0"
             message: alternate-model run did not return owned sent delivery evidence
-        - set: modelSwitchEvidence
-          value:
-            primary:
-              ref: primaryRun.waited.terminalReceipt
-            alternate:
-              ref: alternateRun.waited.terminalReceipt
-            terminalReply:
-              ref: alternateRun.waited.terminalReply
-            terminalDelivery:
-              ref: alternateRun.waited.terminalDelivery
       detailsExpr: alternateRun.waited.terminalReply.text

@@ -4,32 +4,29 @@ import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isHeartbeatEnabledForAgent } from "../../../infra/heartbeat-summary.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
-import { listAgentEntries } from "../../agent-scope-config.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "../../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 
 export function isHeartbeatEnabledForSessionAgent(params: {
   cfg: OpenClawConfig;
+  requesterAgentId?: string;
   sessionKey?: string;
 }): boolean {
   if (!areHeartbeatsEnabled()) {
     return false;
   }
-  const requesterAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
-  if (!requesterAgentId) {
+  if (!params.sessionKey?.trim()) {
     return true;
   }
+  const requesterAgentId = resolveSessionAgentIds({
+    config: params.cfg,
+    agentId: params.requesterAgentId,
+    sessionKey: params.sessionKey,
+  }).sessionAgentId;
 
-  const agentEntries = listAgentEntries(params.cfg);
-  const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
-  const enabledByPolicy = hasExplicitHeartbeatAgents
-    ? agentEntries.some(
-        (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === requesterAgentId,
-      )
-    : requesterAgentId === resolveDefaultAgentId(params.cfg);
-  if (!enabledByPolicy) {
+  if (!isHeartbeatEnabledForAgent(params.cfg, requesterAgentId)) {
     return false;
   }
 

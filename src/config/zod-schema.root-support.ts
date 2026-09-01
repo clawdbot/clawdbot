@@ -1,15 +1,30 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
-import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
+import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
+
+const EdgeAuthHeadersSchema = z
+  .record(z.string(), SecretInputSchema.register(sensitive))
+  .superRefine((headers, ctx) => {
+    const issue = findEdgeAuthIssue(headers);
+    if (!issue) {
+      return;
+    }
+    ctx.addIssue({
+      code: "custom",
+      message: issue.message,
+      ...(issue.headerName ? { path: [issue.headerName] } : {}),
+    });
+  });
 
 const GatewayRemoteSchemaShape = {
   url: z.string().optional(),
@@ -21,6 +36,7 @@ const GatewayRemoteSchemaShape = {
   token: SecretInputSchema.optional().register(sensitive),
 
   password: SecretInputSchema.optional().register(sensitive),
+  edgeAuth: EdgeAuthHeadersSchema.optional(),
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),
@@ -28,13 +44,6 @@ const GatewayRemoteSchemaShape = {
 } satisfies ConfigSchemaShape<GatewayRemoteConfig>;
 
 export const GatewayRemoteConfigSchema = z.strictObject(GatewayRemoteSchemaShape).optional();
-
-export const TailscaleServiceNameSchema = z
-  .string()
-  .regex(/^svc:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
-    message:
-      'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
-  });
 
 export const SecuritySchema = z
   .strictObject({
@@ -467,6 +476,7 @@ export const McpConfigSchema = z
 export const NodeHostSchema = z
   .strictObject({
     agentRuns: NodeHostAgentRunsSchema,
+    workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z
       .strictObject({
         enabled: z.boolean().optional(),

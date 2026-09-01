@@ -1,4 +1,6 @@
-import type { RfbAttachment } from "./attachment.js";
+import { randomUUID } from "node:crypto";
+import { createDeferredCore } from "../../shared/deferred.js";
+import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
 
 const DEFAULT_LINGER_MS = 60_000;
 const MAX_OBSERVERS = 8;
@@ -25,7 +27,7 @@ type DesktopSessionObserver = {
 };
 
 type DesktopSessionAcquireResult = {
-  attachment: RfbAttachment;
+  attachment: DesktopRfbAttachment;
   auth?: "vnc-password" | "ard-account";
   vncPassword?: string;
 };
@@ -37,22 +39,27 @@ type DesktopSessionAcquireRequest = {
   teardown?: () => Promise<void>;
 };
 
+type DesktopSessionActivateRequest = Omit<DesktopSessionAcquireRequest, "start">;
+type DesktopSessionStartResult = DesktopSessionAcquireResult | undefined;
+
 type ObserverEntry = DesktopSessionObserver & { released: boolean };
 type DesktopSessionEntry = {
   sourceKey: string;
   ownerEpoch: number;
   initialization?: Promise<void>;
   stopPromise?: Promise<void>;
-  ready: Promise<DesktopSessionAcquireResult>;
-  resolveReady: (result: DesktopSessionAcquireResult) => void;
+  ready: Promise<DesktopSessionStartResult>;
+  resolveReady: (result: DesktopSessionStartResult) => void;
   rejectReady: (error: Error) => void;
   readySettled: boolean;
   observers: Set<ObserverEntry>;
+  observerReservations: Set<symbol>;
   controller?: ObserverEntry;
   lingerTimer?: ReturnType<typeof setTimeout>;
   stopped: boolean;
-  start: DesktopSessionAcquireRequest["start"];
+  start: (isCurrent: () => boolean) => Promise<DesktopSessionStartResult>;
   teardown?: DesktopSessionAcquireRequest["teardown"];
+  pendingStreams: Map<string, { stream: ConnectedRfbStream; reservation: { release(): void } }>;
 };
 
 /** Owns per-source desktop sessions and their connected observer lifetimes. */
@@ -92,11 +99,11 @@ export function createDesktopSessionRegistry(
     if (entry.stopPromise) {
       return entry.stopPromise;
     }
-    entry.stopPromise = (async () => {
+    // Publish cleanup ownership before observer callbacks can reenter Stop.
+    const stopped = createDeferredCore();
+    entry.stopPromise = stopped.promise;
+    void (async () => {
       entry.stopped = true;
-      if (entries.get(entry.sourceKey) === entry) {
-        entries.delete(entry.sourceKey);
-      }
       clearTimeout(entry.lingerTimer);
       entry.lingerTimer = undefined;
       for (const observer of entry.observers) {
@@ -105,6 +112,12 @@ export function createDesktopSessionRegistry(
       }
       entry.observers.clear();
       entry.controller = undefined;
+      for (const pending of entry.pendingStreams.values()) {
+        pending.reservation.release();
+        pending.stream.destroy();
+      }
+      entry.pendingStreams.clear();
+      entry.observerReservations.clear();
       if (!entry.readySettled) {
         entry.readySettled = true;
         entry.rejectReady(new DesktopSessionStoppedError());
@@ -114,27 +127,52 @@ export function createDesktopSessionRegistry(
       await entry.teardown?.().catch(() => undefined);
       await entry.initialization?.catch(() => undefined);
       await entry.teardown?.().catch(() => undefined);
-    })();
+    })()
+      .finally(() => {
+        // Concurrent Stop and replacement acquisition must join the full teardown.
+        if (entries.get(entry.sourceKey) === entry) {
+          entries.delete(entry.sourceKey);
+        }
+      })
+      .then(stopped.resolve, stopped.reject);
     return entry.stopPromise;
   };
 
-  async function acquire(
-    request: DesktopSessionAcquireRequest,
-  ): Promise<DesktopSessionAcquireResult> {
+  const scheduleLinger = (entry: DesktopSessionEntry): void => {
+    if (!isCurrent(entry) || entry.observers.size > 0 || entry.observerReservations.size > 0) {
+      return;
+    }
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = setTimeout(() => void stopEntry(entry), lingerMs);
+    entry.lingerTimer.unref?.();
+  };
+
+  const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
+    const result = await entry.ready;
+    // Every observation gets an idle attachment window, including same-epoch reuse.
+    scheduleLinger(entry);
+    return result;
+  };
+
+  async function startSession(
+    request:
+      | DesktopSessionAcquireRequest
+      | (DesktopSessionActivateRequest & { start: () => Promise<undefined> }),
+  ): Promise<DesktopSessionStartResult> {
     claimOwnerEpoch(request.sourceKey, request.ownerEpoch);
     const current = entries.get(request.sourceKey);
     if (current) {
       if (request.ownerEpoch < current.ownerEpoch) {
         throw new DesktopSessionStaleOwnerError();
       }
-      if (request.ownerEpoch === current.ownerEpoch) {
-        return await current.ready;
+      if (request.ownerEpoch === current.ownerEpoch && !current.stopped) {
+        return await waitForReady(current);
       }
     }
 
-    let resolveReady!: (result: DesktopSessionAcquireResult) => void;
+    let resolveReady!: (result: DesktopSessionStartResult) => void;
     let rejectReady!: (error: Error) => void;
-    const ready = new Promise<DesktopSessionAcquireResult>((resolve, reject) => {
+    const ready = new Promise<DesktopSessionStartResult>((resolve, reject) => {
       resolveReady = resolve;
       rejectReady = reject;
     });
@@ -147,6 +185,8 @@ export function createDesktopSessionRegistry(
       rejectReady,
       readySettled: false,
       observers: new Set(),
+      observerReservations: new Set(),
+      pendingStreams: new Map(),
       stopped: false,
       start: request.start,
       ...(request.teardown ? { teardown: request.teardown } : {}),
@@ -173,12 +213,31 @@ export function createDesktopSessionRegistry(
       }
       void stopEntry(entry);
     });
-    return await ready;
+    return await waitForReady(entry);
+  }
+
+  async function acquire(
+    request: DesktopSessionAcquireRequest,
+  ): Promise<DesktopSessionAcquireResult> {
+    const result = await startSession(request);
+    if (!result) {
+      throw new Error("Desktop session attachment is unavailable");
+    }
+    return result;
+  }
+
+  async function activate(request: DesktopSessionActivateRequest): Promise<void> {
+    await startSession({ ...request, start: async () => undefined });
   }
 
   function attachObserver(sourceKey: string, observer: DesktopSessionObserver) {
     const entry = entries.get(sourceKey);
-    if (!entry || !entry.readySettled || entry.stopped || entry.observers.size >= MAX_OBSERVERS) {
+    if (
+      !entry ||
+      !entry.readySettled ||
+      entry.stopped ||
+      entry.observers.size + entry.observerReservations.size >= MAX_OBSERVERS
+    ) {
       return undefined;
     }
     // A token minted against a replaced entry must not reach this one; otherwise a stale
@@ -210,12 +269,100 @@ export function createDesktopSessionRegistry(
         if (entry.controller === attached) {
           entry.controller = undefined;
         }
-        if (entry.observers.size === 0 && isCurrent(entry)) {
-          entry.lingerTimer = setTimeout(() => void stopEntry(entry), lingerMs);
-          entry.lingerTimer.unref?.();
-        }
+        scheduleLinger(entry);
       },
     };
+  }
+
+  function reserveObserver(sourceKey: string, ownerEpoch: number) {
+    const entry = entries.get(sourceKey);
+    if (
+      !entry ||
+      entry.stopped ||
+      entry.ownerEpoch !== ownerEpoch ||
+      entry.observers.size + entry.observerReservations.size >= MAX_OBSERVERS
+    ) {
+      return undefined;
+    }
+    const reservationId = Symbol("desktop-observer");
+    entry.observerReservations.add(reservationId);
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = undefined;
+    let released = false;
+    return {
+      sourceKey,
+      ownerEpoch,
+      release() {
+        if (released) {
+          return;
+        }
+        released = true;
+        entry.observerReservations.delete(reservationId);
+        scheduleLinger(entry);
+      },
+    };
+  }
+
+  function publishStream(params: {
+    sourceKey: string;
+    ownerEpoch: number;
+    stream: ConnectedRfbStream;
+    reservation: NonNullable<ReturnType<typeof reserveObserver>>;
+  }) {
+    const entry = entries.get(params.sourceKey);
+    if (
+      !entry ||
+      entry.stopped ||
+      entry.ownerEpoch !== params.ownerEpoch ||
+      params.reservation.sourceKey !== params.sourceKey ||
+      params.reservation.ownerEpoch !== params.ownerEpoch
+    ) {
+      params.reservation.release();
+      params.stream.destroy();
+      return undefined;
+    }
+    if (params.stream.destroyed || params.stream.readableEnded || params.stream.writableEnded) {
+      params.reservation.release();
+      params.stream.destroy();
+      return undefined;
+    }
+    const streamId = randomUUID();
+    const pending = { stream: params.stream, reservation: params.reservation };
+    entry.pendingStreams.set(streamId, pending);
+    params.stream.once("close", () => {
+      if (entry.pendingStreams.get(streamId) === pending) {
+        entry.pendingStreams.delete(streamId);
+        params.reservation.release();
+      }
+    });
+    return { kind: "stream", streamId } as const;
+  }
+
+  function claimStream(attachment: { kind: "stream"; streamId: string }) {
+    for (const entry of entries.values()) {
+      const pending = entry.pendingStreams.get(attachment.streamId);
+      if (!pending) {
+        continue;
+      }
+      entry.pendingStreams.delete(attachment.streamId);
+      pending.reservation.release();
+      const stream = pending.stream;
+      if (stream.destroyed || stream.readableEnded || stream.writableEnded) {
+        stream.destroy();
+        return undefined;
+      }
+      return stream;
+    }
+    return undefined;
+  }
+
+  function hasPendingStream(attachment: { kind: "stream"; streamId: string }): boolean {
+    for (const entry of entries.values()) {
+      if (entry.pendingStreams.has(attachment.streamId)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async function stop(sourceKey: string, ownerEpoch?: number): Promise<void> {
@@ -242,7 +389,12 @@ export function createDesktopSessionRegistry(
 
   return {
     acquire,
+    activate,
     attachObserver,
+    publishStream,
+    claimStream,
+    hasPendingStream,
+    reserveObserver,
     claimOwnerEpoch,
     isOwnerEpochCurrent: (sourceKey: string, ownerEpoch: number) =>
       claimedOwnerEpochs.get(sourceKey) === ownerEpoch,

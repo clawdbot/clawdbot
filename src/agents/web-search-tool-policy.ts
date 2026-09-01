@@ -83,6 +83,7 @@ export function resolveWebSearchToolPolicy(
   const senderPolicyParams = {
     config: params.config,
     agentId,
+    sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
   };
   const requesterPolicies = resolveRequesterToolPolicies({

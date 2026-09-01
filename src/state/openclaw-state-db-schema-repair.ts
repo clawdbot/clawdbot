@@ -1,13 +1,14 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
@@ -20,7 +21,19 @@ import {
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
+import {
+  hasRecognizedRetiredCommitmentsSchema,
+  RETIRED_COMMITMENTS_SCHEMA_VERSION,
+  RETIRED_DEAD_STATE_TABLES_V10,
+  RETIRED_SKILL_CURATOR_TABLES_V11,
+} from "./openclaw-state-db-table-retirements.js";
+import {
+  resolveOpenClawAgentDatabaseStoredPath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "./openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
   // Unreleased transient history; drop, do not migrate.
@@ -28,6 +41,194 @@ export function dropLegacyStateTables(db: DatabaseSync): void {
   db.exec(`DROP TABLE IF EXISTS ${transientHistoryTable};`);
   // Retired node pairing tables never had a shipped writer.
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
+}
+
+export function migrateWorkerPlacementExecutionModeSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 8 || !tableExists(db, "worker_session_placements")) {
+    return false;
+  }
+  for (const definition of [
+    "execution_mode TEXT",
+    "terminal_reason TEXT",
+    "terminal_at_ms INTEGER",
+  ]) {
+    const column = definition.split(" ", 1)[0]!;
+    if (!tableHasColumn(db, "worker_session_placements", column)) {
+      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
+    }
+  }
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  );
+  const endMarker = "\n) STRICT;";
+  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+  if (start < 0 || end < 0) {
+    throw new Error("Canonical worker placement schema block is missing");
+  }
+  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
+  const canonical = openNodeSqliteDatabase(":memory:");
+  let canonicalColumns: string[];
+  try {
+    canonical.exec(placementSchema);
+    canonicalColumns = (
+      canonical.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+        hidden: number;
+        name: string;
+      }>
+    )
+      .filter((column) => column.hidden === 0)
+      .map((column) => column.name);
+  } finally {
+    canonical.close();
+  }
+  const currentColumns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0)
+    .map((column) => column.name);
+  const expected = new Set(canonicalColumns);
+  if (
+    currentColumns.length !== canonicalColumns.length ||
+    currentColumns.some((column) => !expected.has(column))
+  ) {
+    throw new Error("OpenClaw v7 worker placement columns are not canonical");
+  }
+  const unexpectedObjects = db
+    .prepare(
+      `SELECT type, name
+         FROM sqlite_schema
+        WHERE tbl_name = 'worker_session_placements'
+          AND type IN ('index', 'trigger')
+          AND sql IS NOT NULL
+          AND name NOT IN (
+            'idx_worker_session_placements_session_key',
+            'idx_worker_session_placements_reconcile'
+          )`,
+    )
+    .all();
+  if (unexpectedObjects.length > 0) {
+    throw new Error("OpenClaw v7 worker placement schema has unsupported attached objects");
+  }
+  const migrationTable = "worker_session_placements_migration_v8";
+  if (tableExists(db, migrationTable)) {
+    throw new Error(`OpenClaw worker placement migration table already exists: ${migrationTable}`);
+  }
+  const migrationSchema = placementSchema.replace(
+    "CREATE TABLE IF NOT EXISTS worker_session_placements",
+    `CREATE TABLE ${migrationTable}`,
+  );
+  const columns = canonicalColumns.map(quoteSqliteIdentifier).join(", ");
+  db.exec(migrationSchema);
+  db.exec(
+    `INSERT INTO ${migrationTable} (${columns}) SELECT ${columns} FROM worker_session_placements;`,
+  );
+  db.exec("DROP TABLE worker_session_placements;");
+  db.exec(`ALTER TABLE ${migrationTable} RENAME TO worker_session_placements;`);
+  return true;
+}
+
+function isDefaultAgentDatabasePath(pathname: string, agentId: string): boolean {
+  const agentDir = path.dirname(pathname);
+  const agentIdDir = path.dirname(agentDir);
+  return (
+    path.basename(pathname) === "openclaw-agent.sqlite" &&
+    path.basename(agentDir) === "agent" &&
+    path.basename(agentIdDir) === agentId &&
+    path.basename(path.dirname(agentIdDir)) === "agents"
+  );
+}
+
+export type AgentDatabasePathMigrationSummary = {
+  relativized: number;
+  reanchored: string[];
+  deleted: string[];
+  preserved: number;
+};
+
+export function migrateAgentDatabaseRelativePaths(
+  db: DatabaseSync,
+  previousVersion: number,
+  databasePath: string,
+): AgentDatabasePathMigrationSummary {
+  if (previousVersion >= 9 || !tableExists(db, "agent_databases")) {
+    return { relativized: 0, reanchored: [], deleted: [], preserved: 0 };
+  }
+  const rows = db.prepare("SELECT agent_id, path FROM agent_databases").all();
+  const updatePath = db.prepare(
+    "UPDATE agent_databases SET path = ? WHERE agent_id = ? AND path = ?",
+  );
+  const deletePath = db.prepare("DELETE FROM agent_databases WHERE agent_id = ? AND path = ?");
+  const hasPath = db.prepare(
+    "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
+  );
+  let relativized = 0;
+  const reanchored: string[] = [];
+  const deleted: string[] = [];
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (typeof agentId !== "string" || typeof registeredPath !== "string") {
+      throw new Error("OpenClaw v8 agent database registry paths are not canonical");
+    }
+    if (!path.isAbsolute(registeredPath)) {
+      continue;
+    }
+    const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
+    if (!path.isAbsolute(storedPath)) {
+      updatePath.run(storedPath, agentId, registeredPath);
+      relativized += 1;
+    }
+  }
+  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (
+      typeof agentId !== "string" ||
+      typeof registeredPath !== "string" ||
+      !path.isAbsolute(registeredPath) ||
+      !path.isAbsolute(resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath))
+    ) {
+      continue;
+    }
+    const absolutePath = path.resolve(registeredPath);
+    if (isDefaultAgentDatabasePath(absolutePath, agentId)) {
+      const counterpartAbsolute = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const counterpartStored = resolveOpenClawAgentDatabaseStoredPath(
+        databasePath,
+        counterpartAbsolute,
+      );
+      if (hasPath.get(agentId, counterpartStored)) {
+        // The same agent already owns its in-root canonical registration. Keeping a second
+        // default-layout registration guarantees duplicate canonical session keys on every list.
+        deletePath.run(agentId, registeredPath);
+        deleted.push(registeredPath);
+      } else if (existsSync(counterpartAbsolute)) {
+        // Re-anchor a copied or moved state directory onto its copied database instead of
+        // deleting the registration or leaving it dangling at the source root.
+        updatePath.run(counterpartStored, agentId, registeredPath);
+        reanchored.push(registeredPath);
+      }
+    }
+  }
+  return {
+    relativized,
+    reanchored,
+    deleted,
+    preserved: rows.length - relativized - reanchored.length - deleted.length,
+  };
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
@@ -108,43 +309,6 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
   `);
 }
 
-export function markCurrentStateSchemaVersion(
-  db: DatabaseSync,
-  options: { createMetadataIfMissing?: boolean } = {},
-): void {
-  // Pre-v2 databases can legitimately predate the audit table. Leave their
-  // version untouched so normal open can create the complete v2 schema first.
-  if (!tableExists(db, "audit_events")) {
-    return;
-  }
-  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
-  if (
-    tableExists(db, "schema_meta") &&
-    ["meta_key", "schema_version", "updated_at"].every((column) =>
-      tableHasColumn(db, "schema_meta", column),
-    )
-  ) {
-    const now = Date.now();
-    if (options.createMetadataIfMissing) {
-      // Recognized pre-metadata schemas may acquire the global owner row during
-      // doctor migration. Conflicting existing ownership is preserved so the
-      // final maintenance assertion rejects and rolls back the repair.
-      db.prepare(
-        `INSERT INTO schema_meta (
-           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-         ) VALUES ('primary', 'global', ?, NULL, NULL, ?, ?)
-         ON CONFLICT(meta_key) DO UPDATE SET
-           schema_version = excluded.schema_version,
-           updated_at = excluded.updated_at`,
-      ).run(OPENCLAW_STATE_SCHEMA_VERSION, now, now);
-      return;
-    }
-    db.prepare(
-      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
-    ).run(OPENCLAW_STATE_SCHEMA_VERSION, now);
-  }
-}
-
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
@@ -194,6 +358,57 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
   const userVersion = readSqliteUserVersion(db);
+  if (
+    userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
+    tableExists(db, "commitments") &&
+    hasRecognizedRetiredCommitmentsSchema(db)
+  ) {
+    migrations.push({ kind: "commitments-retirement-v7", path: pathname });
+  }
+  if (userVersion === 7 && tableExists(db, "worker_session_placements")) {
+    migrations.push({ kind: "worker-placement-execution-mode-v8", path: pathname });
+  }
+  if (userVersion === 8 && tableExists(db, "agent_databases")) {
+    migrations.push({ kind: "agent-databases-relative-paths-v9", path: pathname });
+  }
+  if (
+    userVersion < 10 &&
+    RETIRED_DEAD_STATE_TABLES_V10.some((tableName) => tableExists(db, tableName))
+  ) {
+    migrations.push({ kind: "state-table-retirement-v10", path: pathname });
+  }
+  if (
+    userVersion < 11 &&
+    RETIRED_SKILL_CURATOR_TABLES_V11.some((tableName) => tableExists(db, tableName))
+  ) {
+    migrations.push({ kind: "state-table-retirement-v11", path: pathname });
+  }
+  if (
+    userVersion < 12 &&
+    FOLDED_SINGLETON_STATE_TABLES_V12.some((tableName) => tableExists(db, tableName))
+  ) {
+    migrations.push({ kind: "singleton-state-foldin-v12", path: pathname });
+  }
+  if (
+    userVersion < 13 &&
+    (tableHasColumn(db, "cron_jobs", "schedule_kind") ||
+      tableHasColumn(db, "subagent_runs", "task") ||
+      tableExists(db, "workspace_attestations") ||
+      tableExists(db, "installed_plugin_index") ||
+      tableExists(db, "auth_profile_stores"))
+  ) {
+    migrations.push({ kind: "state-consolidation-v13", path: pathname });
+  }
+  if (userVersion < 14 && tableExists(db, "cron_jobs")) {
+    migrations.push({ kind: "creator-namespace-v14", path: pathname });
+  }
+  if (
+    userVersion < 15 &&
+    (tableHasColumn(db, "current_conversation_bindings", "target_agent_id") ||
+      tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
+  ) {
+    migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

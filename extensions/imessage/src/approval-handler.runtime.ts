@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
+  type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
   type PendingApprovalView,
   resolvePreparedApprovalAccountId,
@@ -68,6 +69,11 @@ type PreparedIMessageApprovalTarget = {
   to: string;
   accountId?: string;
 };
+type IMessageApprovalPromptBinding = {
+  approvalId: string;
+  approvalKind: ChannelApprovalKind;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
 type PendingIMessageApprovalEntry = {
   accountId?: string;
   to: string;
@@ -88,7 +94,7 @@ type IMessageFinalPayload = {
 
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
@@ -220,7 +226,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   question: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -363,12 +369,12 @@ async function recoverIMessageApprovalTextFallback(params: {
   target: PreparedIMessageApprovalTarget;
   promptMessageId?: string;
   fallbackText: string;
-  approvalKind: "exec" | "plugin";
+  approvalPrompt: IMessageApprovalPromptBinding;
 }): Promise<string | undefined> {
   try {
     const result = await sendMessageIMessage(params.target.to, params.fallbackText, {
       config: params.cfg,
-      approvalKind: params.approvalKind,
+      approvalPrompt: params.approvalPrompt,
       conversationReadOrigin: "direct-operator",
       ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
       ...(params.promptMessageId ? { replyToId: params.promptMessageId } : {}),
@@ -422,7 +428,7 @@ const eagerlyBoundApprovalEntries = new WeakSet<PendingIMessageApprovalEntry>();
 function bindIMessageApprovalEntry(params: {
   entry: PendingIMessageApprovalEntry;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
   pollTargetWasRegisteredDuringDelivery?: boolean;
@@ -543,9 +549,14 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         // fallback visible until the send receipt confirms the actual transport.
         const reactionFallbackVisible = !expectPoll || targetTransport !== "imessage";
         const promptText = reactionFallbackVisible ? pendingPayload.text : pendingPayload.pollText;
+        const approvalPrompt: IMessageApprovalPromptBinding = {
+          approvalId: view.approvalId,
+          approvalKind: view.approvalKind,
+          allowedDecisions: pendingPayload.allowedDecisions,
+        };
         const result = await sendMessageIMessage(preparedTarget.to, promptText, {
           config: cfg,
-          ...(reactionFallbackVisible ? { approvalKind: view.approvalKind } : {}),
+          ...(reactionFallbackVisible ? { approvalPrompt } : {}),
           // Approval delivery is host-originated: the target comes from the
           // approval's own routing (origin session or a configured approver),
           // never from model input. Attest that so #99905's conversation-read
@@ -587,7 +598,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                 target: preparedTarget,
                 promptMessageId: result.guid,
                 fallbackText: pendingPayload.text,
-                approvalKind: view.approvalKind,
+                approvalPrompt,
               })
             : undefined;
         const entry: PendingIMessageApprovalEntry = {

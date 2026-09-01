@@ -33,6 +33,9 @@ const profileContext = vi.hoisted(() => ({
     wsLookup: tabLookup,
   })),
 }));
+const browserRuntime = vi.hoisted(() => ({
+  profiles: new Map<string, { running: { headless?: boolean; headlessSource?: string } | null }>(),
+}));
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: cdpMocks.captureScreenshot,
@@ -59,6 +62,7 @@ vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
     buffer,
+    sourceDimensions: null,
     contentType: "image/png",
   })),
 }));
@@ -114,7 +118,7 @@ function getSnapshotHandler() {
 function getScreenshotHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({ resolved: { extraArgs: [] } }),
+    state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
   } as never);
   const handler = postHandlers.get("/screenshot");
   expect(handler).toBeTypeOf("function");
@@ -127,6 +131,8 @@ describe("browser agent snapshot timeout routing", () => {
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
     profileContext.ensureTabAvailable.mockClear();
+    profileContext.profile.headless = false;
+    browserRuntime.profiles.clear();
   });
 
   it("passes timeoutMs to direct CDP aria snapshots", async () => {
@@ -179,6 +185,55 @@ describe("browser agent snapshot timeout routing", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      name: "headed launched browser when its profile is configured headless",
+      configuredHeadless: true,
+      running: { headless: false, headlessSource: "request" },
+      expectedHeadless: false,
+    },
+    {
+      name: "headless request override when its profile is configured headed",
+      configuredHeadless: false,
+      running: { headless: true, headlessSource: "request" },
+      expectedHeadless: true,
+    },
+    {
+      name: "headless environment override when its profile is configured headed",
+      configuredHeadless: false,
+      running: { headless: true, headlessSource: "env" },
+      expectedHeadless: true,
+    },
+    {
+      name: "headless Linux no-display fallback when its profile is configured headed",
+      configuredHeadless: false,
+      running: { headless: true, headlessSource: "linux-display-fallback" },
+      expectedHeadless: true,
+    },
+    {
+      name: "untracked browser without authoritative launch state",
+      configuredHeadless: false,
+      running: null,
+      expectedHeadless: undefined,
+    },
+  ])(
+    "passes the actual launch mode for $name",
+    async ({ configuredHeadless, running, expectedHeadless }) => {
+      profileContext.profile.headless = configuredHeadless;
+      browserRuntime.profiles.set(profileContext.profile.name, { running });
+      cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+      const handler = getScreenshotHandler();
+      const response = createBrowserRouteResponse();
+
+      await handler?.({ params: {}, query: {}, body: { type: "png" } }, response.res);
+
+      expect(response.statusCode).toBe(200);
+      expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
+        expect.objectContaining({ headless: expectedHeadless }),
+      );
+    },
+  );
 
   it("rejects loose screenshot timeoutMs values before dispatching", async () => {
     const handler = getScreenshotHandler();

@@ -13,7 +13,7 @@ vi.mock("../../tool-search.js", () => ({
 vi.mock("../logger.js", () => ({
   log: { warn: hoisted.warn },
 }));
-vi.mock("./attempt-finalize.js", () => ({
+vi.mock("./attempt-trajectory-flush.js", () => ({
   flushEmbeddedAttemptTrajectoryRecorder: hoisted.flushEmbeddedAttemptTrajectoryRecorder,
 }));
 vi.mock("./attempt-subscription-cleanup.js", () => ({
@@ -94,6 +94,19 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     );
     expect(input.transcriptLifecycle.beginCleanup).toHaveBeenCalledOnce();
     expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
+  });
+
+  it("keeps compaction timeout observations abort-like only for cleanup", async () => {
+    const input = createInput();
+    const readState = input.readState;
+    input.readState = () => ({ ...readState(), timedOutDuringCompaction: true });
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({ aborted: true }),
+    );
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
 

@@ -1,16 +1,9 @@
 // Line tests cover durable webhook admission, replay, and core-drain recovery.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests as createChannelIngressQueue,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import {
@@ -18,80 +11,15 @@ import {
   LineWebhookTerminalDeliveryError,
   type LineWebhookTurnAdoptionLifecycle,
 } from "./webhook-spool.js";
-
-type SpoolPayload = {
-  version: number;
-  rawEvent: string;
-  destination: string;
-};
-
-const runtime = (): RuntimeEnv => ({ error: vi.fn(), exit: vi.fn(), log: vi.fn() });
-
-function createEvent(params: {
-  webhookEventId: string;
-  messageId?: string;
-  userId?: string;
-  text?: string;
-}): webhook.Event {
-  return {
-    type: "message",
-    message: {
-      id: params.messageId ?? `message-${params.webhookEventId}`,
-      type: "text",
-      text: params.text ?? "hello",
-    },
-    replyToken: "test-reply-token",
-    timestamp: Date.now(),
-    source: { type: "user", userId: params.userId ?? "user-1" },
-    mode: "active",
-    webhookEventId: params.webhookEventId,
-    deliveryContext: { isRedelivery: false },
-  } as webhook.MessageEvent;
-}
-
-function callback(event: webhook.Event): webhook.CallbackRequest {
-  return { destination: "destination-1", events: [event] };
-}
-
-function payloadFor(event: webhook.Event): SpoolPayload {
-  return { version: 1, rawEvent: JSON.stringify(event), destination: "destination-1" };
-}
-
-async function withQueue<T>(
-  fn: (queue: ChannelIngressQueue<SpoolPayload>) => Promise<T>,
-): Promise<T> {
-  const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-spool-"));
-  const stateDir = await fs.realpath(createdDir);
-  const queue = createChannelIngressQueue<SpoolPayload>({
-    channelId: "line",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    return await fn(queue);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
-
-async function waitForVerdict(
-  queue: ChannelIngressQueue<SpoolPayload>,
-  eventId: string,
-  expected: "completed" | "failed",
-): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const verdict = await queue.enqueue(eventId, {
-        version: 1,
-        rawEvent: "{}",
-        destination: "",
-      });
-      expect(verdict.kind).toBe(expected);
-    },
-    { timeout: 4_000 },
-  );
-}
+import {
+  callback,
+  createEvent,
+  payloadFor,
+  runtime,
+  type SpoolPayload,
+  waitForVerdict,
+  withQueue,
+} from "./webhook-spool.test-support.js";
 
 function createResponse(): ServerResponse & { body?: string } {
   const response = {
@@ -185,6 +113,7 @@ describe("LINE webhook spool", () => {
           activeDeliveries -= 1;
         }
       });
+      const listPending = vi.spyOn(queue, "listPending");
       const spool = createLineWebhookSpool({
         accountId: "default",
         runtime: runtime(),
@@ -203,15 +132,24 @@ describe("LINE webhook spool", () => {
       try {
         await spool.accept({ destination: "destination-1", events: firstBatch });
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(8));
-
-        await spool.accept(callback(ninth));
-        // Hold the eight adopted-but-unfinished deliveries across two timer pumps.
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1_100);
+          setImmediate(resolve);
         });
+
+        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await spool.accept(callback(ninth));
+        await vi.waitFor(() =>
+          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
+        );
 
         expect(deliver).toHaveBeenCalledTimes(8);
         expect(maxActiveDeliveries).toBe(8);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: "message:message-event-concurrency-8",
+            laneKey: "user:user-8",
+          }),
+        ]);
 
         releaseDeliveries();
         await vi.waitFor(() => expect(activeDeliveries).toBe(0));
@@ -502,6 +440,7 @@ describe("LINE webhook spool", () => {
 
   it("keeps a completion tombstone and rejects a repeated delivery", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const event = createEvent({ webhookEventId: "event-duplicate" });
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
@@ -518,8 +457,9 @@ describe("LINE webhook spool", () => {
         await waitForVerdict(queue, "message:message-event-duplicate", "completed");
 
         await spool.accept(callback(event));
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);
@@ -531,6 +471,7 @@ describe("LINE webhook spool", () => {
 
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
       const deliver = vi.fn(async (_event, _destination, control) => {
         await control.turnAdoptionLifecycle.onAdopted();
       });
@@ -550,8 +491,9 @@ describe("LINE webhook spool", () => {
         await spool.accept(
           callback(createEvent({ webhookEventId: "delivery-b", messageId: "shared-message" })),
         );
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 600);
+        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
+          kind: "completed",
+          duplicate: true,
         });
 
         expect(deliver).toHaveBeenCalledTimes(1);

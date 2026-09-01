@@ -36,7 +36,12 @@ vi.mock("../config/paths.js", () => ({
 
 const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const {
+  normalizeGatewayRestartDelayMs,
+  resetGatewayRestartStateForInProcessRestart,
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} = await import("./restart.js");
 
 const envSnapshot = captureFullEnv();
 
@@ -260,5 +265,36 @@ describe("triggerOpenClawRestart", () => {
         });
       },
     );
+  });
+});
+
+describe("gateway restart delay normalization", () => {
+  it.each([
+    { requested: undefined, effective: 2000 },
+    { requested: Number.NaN, effective: 2000 },
+    { requested: Number.POSITIVE_INFINITY, effective: 2000 },
+    { requested: -1, effective: 0 },
+    { requested: 1500.8, effective: 1500 },
+    { requested: 2_147_153_648, effective: 60_000 },
+  ])("normalizes $requested to $effective ms", ({ requested, effective }) => {
+    expect(normalizeGatewayRestartDelayMs(requested)).toBe(effective);
+  });
+
+  it("does not emit an overflow-sized restart before its effective 60-second delay", async () => {
+    vi.useFakeTimers();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: 2_147_153_648,
+        skipCooldown: true,
+      });
+
+      expect(restart.delayMs).toBe(60_000);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayRestartStateForInProcessRestart();
+      vi.useRealTimers();
+    }
   });
 });

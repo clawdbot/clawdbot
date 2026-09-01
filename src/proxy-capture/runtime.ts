@@ -2,7 +2,11 @@
 import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
-import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
+import {
+  isHeadersLike,
+  normalizeRequestInitHeadersForFetch,
+  type HeadersLike,
+} from "../infra/fetch-headers.js";
 import { readChunkWithIdleTimeout } from "../infra/http-body.js";
 import {
   hasRegisteredSecretValuesForRedaction,
@@ -61,7 +65,7 @@ async function readCapturedResponseBodyBounded(
   maxBytes: number,
 ): Promise<CapturedResponseBodyResult> {
   const clone = response.clone();
-  const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
+  const body = clone.body;
   if (!body || typeof body.getReader !== "function") {
     // A real null-body Response consumes as empty. Response-like objects without
     // a stream cannot be read under a byte cap, so never call arrayBuffer().
@@ -76,7 +80,7 @@ async function readCapturedResponseBodyBounded(
   let stalled = false;
   try {
     while (true) {
-      let next: Awaited<ReturnType<typeof reader.read>>;
+      let next: Awaited<ReturnType<typeof readChunkWithIdleTimeout>>;
       try {
         next = await readChunkWithIdleTimeout(
           reader,
@@ -475,7 +479,7 @@ export function captureHttpExchange(
   params: {
     url: string;
     method: string;
-    requestHeaders?: Headers | Record<string, string> | undefined;
+    requestHeaders?: HeadersLike | Record<string, string> | undefined;
     requestBody?: BodyInit | Buffer | string | null;
     response: Response;
     transport?: "http" | "sse";
@@ -498,10 +502,11 @@ export function captureHttpExchange(
     typeof params.requestBody === "string" || Buffer.isBuffer(params.requestBody)
       ? params.requestBody
       : null;
-  const rawRequestContentType =
-    params.requestHeaders instanceof Headers
+  const rawRequestContentType = params.requestHeaders
+    ? isHeadersLike(params.requestHeaders)
       ? (params.requestHeaders.get("content-type") ?? undefined)
-      : params.requestHeaders?.["content-type"];
+      : params.requestHeaders["content-type"]
+    : undefined;
   const requestContentType =
     rawRequestContentType === undefined ? undefined : redactCaptureText(rawRequestContentType);
   const rawResponseContentType =

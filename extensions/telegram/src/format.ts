@@ -16,6 +16,7 @@ import {
 } from "./format-assistant-transcript.js";
 import { decodeTelegramHtmlEntities, findTelegramHtmlEntityEnd } from "./format-html.js";
 import { renderTelegramMarkdownIR } from "./format-render.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export type TelegramFormattedChunk = {
   html: string;
@@ -636,13 +637,6 @@ function renderTelegramRichHtmlRawTableFallback(
   tableHtml: string,
   rows: readonly string[][],
 ): string {
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
-  for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
-    }
-  }
   const caption =
     rows.length > 0
       ? telegramHtmlToPlainTextFallback(
@@ -651,12 +645,7 @@ function renderTelegramRichHtmlRawTableFallback(
       : "";
   const tableText =
     rows.length > 0
-      ? rows
-          .map(
-            (row) =>
-              `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`,
-          )
-          .join("\n")
+      ? renderTelegramMonospaceGrid(rows)
       : stripTelegramHtmlForPlainText(tableHtml).trim();
   return `<pre><code>${escapeHtml([caption, tableText].filter(Boolean).join("\n"))}</code></pre>\n\n`;
 }

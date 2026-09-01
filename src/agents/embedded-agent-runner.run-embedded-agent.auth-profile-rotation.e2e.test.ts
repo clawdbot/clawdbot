@@ -7,7 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
-import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
@@ -116,7 +116,7 @@ const originalFetch = globalThis.fetch;
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  runEmbeddedAgent = wrapRunWithTestAdmission(
+  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
@@ -659,6 +659,42 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedAgent auth profile rotation", () => {
+  it("runs an agent-scoped session without an ambient default owner", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce({
+        ...makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            provider: "openai",
+            model: "mock-1",
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      });
+
+      await runEmbeddedAgentInline({
+        sessionId: "session:work",
+        sessionKey: "agent:work:dashboard:scoped-run",
+        workspaceDir,
+        agentDir,
+        config: {
+          ...makeConfig(),
+          agents: { entries: { main: {}, work: {} } },
+        },
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:work",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not persist auth profile bookkeeping for read-only probes", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

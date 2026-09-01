@@ -78,7 +78,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
-          entries: { main: { default: true, workspace } },
+          entries: { main: {} },
         },
         gateway: {
           mode: "local",
@@ -155,7 +155,8 @@ describe("setupCommand", () => {
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
-      expect(config.agents?.entries?.main?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.defaults?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.entries?.main).toEqual({});
     });
   });
 
@@ -391,7 +392,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.entries).toEqual({ main: { default: true } });
+      expect(config.agents?.entries).toEqual({ main: {} });
     });
   });
 
@@ -464,32 +465,50 @@ describe("setupCommand", () => {
     });
   });
 
-  it("preserves malformed config and stops before setup mutations", async () => {
-    await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const configDir = path.join(home, ".openclaw");
-      const configPath = path.join(configDir, "openclaw.json");
-      const deps = createSetupDeps(home);
-      const original = Buffer.from('{ "gateway": ', "utf-8");
+  it.each([false, true])(
+    "preserves malformed config and reports failure (json: %s)",
+    async (json) => {
+      await withTempHome(async (home) => {
+        const runtime = {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        };
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const deps = createSetupDeps(home);
+        const original = Buffer.from('{ "gateway": ', "utf-8");
 
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(configPath, original);
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, original);
 
-      await setupCommand(undefined, runtime, deps);
+        await setupCommand(json ? { json: true } : undefined, runtime, deps);
 
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
-      expect(await fs.readFile(configPath)).toStrictEqual(original);
-      expect(deps.replaceConfigFile).not.toHaveBeenCalled();
-      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-      expect(deps.mkdir).not.toHaveBeenCalled();
-    });
-  });
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+        if (json) {
+          expect(runtime.log).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message: "OpenClaw config is invalid: ~/.openclaw/openclaw.json",
+            },
+            issues: expect.arrayContaining([
+              expect.objectContaining({ path: "<root>", message: expect.any(String) }),
+            ]),
+          });
+        } else {
+          expect(runtime.log).not.toHaveBeenCalled();
+        }
+        expect(await fs.readFile(configPath)).toStrictEqual(original);
+        expect(deps.replaceConfigFile).not.toHaveBeenCalled();
+        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+        expect(deps.mkdir).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each([
     ["string", '"not-an-object"'],

@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
@@ -6,11 +7,12 @@ import {
   normalizeThinkingCatalogProviders,
 } from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -53,6 +55,7 @@ type ResolveCronModelSelectionResult =
       provider: string;
       model: string;
       modelSource: CronModelSelectionSource;
+      configuredProfileId?: string;
       cfgWithAgentDefaults: OpenClawConfig;
       owner: ResolvedPublishedModelCatalogOwner;
     }
@@ -97,6 +100,7 @@ export async function resolveCronModelSelectionOwner(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
     allowGatewaySubagentBinding: true,
   });
   if (
@@ -199,14 +203,10 @@ export async function resolveCronModelSelection(
       ? params.agentConfigOverride
       : resolveAgentConfig(owner.config, ownerAgentId)
     : undefined;
-  const ownerAgentDefaults = buildCronAgentDefaultsConfig({
-    defaults: owner.config.agents?.defaults,
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const cfgWithAgentDefaults: OpenClawConfig = {
-    ...owner.config,
-    agents: Object.assign({}, owner.config.agents, { defaults: ownerAgentDefaults }),
-  };
   const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,
@@ -216,6 +216,9 @@ export async function resolveCronModelSelection(
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
   let modelSource: CronModelSelectionSource = "default";
+  let configuredProfileId = splitTrailingAuthProfile(
+    resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model) ?? "",
+  ).profile;
 
   const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
     cfg: owner.config,
@@ -240,6 +243,7 @@ export async function resolveCronModelSelection(
       provider = resolvedSubagent.ref.provider;
       model = resolvedSubagent.ref.model;
       modelSource = subagentModelSource;
+      configuredProfileId = splitTrailingAuthProfile(subagentModelRaw).profile;
     }
   }
 
@@ -266,6 +270,9 @@ export async function resolveCronModelSelection(
       model = hooksGmailModelRef.model;
       hooksGmailModelApplied = true;
       modelSource = "hook";
+      configuredProfileId = splitTrailingAuthProfile(
+        owner.config.hooks?.gmail?.model ?? "",
+      ).profile;
     }
   }
 
@@ -296,6 +303,7 @@ export async function resolveCronModelSelection(
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;
     modelSource = "payload";
+    configuredProfileId = splitTrailingAuthProfile(modelOverride).profile;
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
@@ -317,6 +325,7 @@ export async function resolveCronModelSelection(
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
         modelSource = "session";
+        configuredProfileId = undefined;
       }
     }
   }
@@ -326,6 +335,7 @@ export async function resolveCronModelSelection(
     provider,
     model,
     modelSource,
+    ...(configuredProfileId ? { configuredProfileId } : {}),
     cfgWithAgentDefaults,
     owner,
   };

@@ -1,5 +1,6 @@
 // Tracks image attachments that belong to the current reply turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,7 +16,10 @@ import {
 import type { MediaAttachment } from "../../media-understanding/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
+import {
+  collectDescribedImageAttachmentIndexes,
+  resolveAgentTurnAttachments,
+} from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = MediaAttachment & { path: string };
 
@@ -26,35 +30,20 @@ type OrderedTurnImage = {
   sequence: number;
 };
 
+export type CurrentTurnImages = {
+  images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
+  unresolvedSourceIndexes?: number[];
+  /** Admission-owned slot-to-media identity used by later runtime adapters. */
+  mediaImageLayout?: MediaImageLayout;
+};
+
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
   return normalizeAttachments(ctx).flatMap((attachment) => {
     const mediaPath = normalizeOptionalString(attachment.path);
     return mediaPath && isImageAttachment(attachment) ? [{ ...attachment, path: mediaPath }] : [];
   });
-}
-
-function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
-  return new Set(
-    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
-      (output) => output.attachmentIndex,
-    ) ?? [],
-  );
-}
-
-function createUndescribedImageContext(
-  ctx: MsgContext,
-  undescribedAttachments: CurrentImageAttachment[],
-): MsgContext {
-  const media = undescribedAttachments.map((attachment) => ({
-    path: attachment.path,
-    contentType: attachment.mime,
-    kind: attachment.kind,
-    workspaceDir: attachment.workspaceDir,
-  }));
-  return {
-    ...ctx,
-    media,
-  };
 }
 
 function appendOrderedImages(params: {
@@ -107,9 +96,6 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
       return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
     }
-    if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-      return left.sequence - right.sequence;
-    }
     return left.sequence - right.sequence;
   });
   const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
@@ -130,12 +116,7 @@ export async function resolveCurrentTurnImages(params: {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   extractedFileImages?: ExtractedFileImage[];
-}): Promise<{
-  images?: ImageContent[];
-  imageOrder?: PromptImageOrderEntry[];
-  imageSourceIndexes?: Array<number | undefined>;
-  unresolvedSourceIndexes?: number[];
-}> {
+}): Promise<CurrentTurnImages> {
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({
     entries,
@@ -165,7 +146,7 @@ export async function resolveCurrentTurnImages(params: {
   try {
     // Only send undescribed current images natively; described images already exist as text context.
     const resolved = await resolveAgentTurnAttachments({
-      ctx: createUndescribedImageContext(params.ctx, undescribedImageAttachments),
+      ctx: params.ctx,
       cfg: params.cfg,
       includeRecentHistoryImages: false,
       includeAttachmentIndexes: true,
@@ -187,8 +168,8 @@ export async function resolveCurrentTurnImages(params: {
       resolvedIndexes.map((resolvedIndex, imageIndex) => [resolvedIndex, images[imageIndex]]),
     );
     const unresolvedSourceIndexes: number[] = [];
-    for (const [subsetIndex, attachment] of undescribedImageAttachments.entries()) {
-      const image = imageByResolvedIndex.get(subsetIndex);
+    for (const attachment of undescribedImageAttachments) {
+      const image = imageByResolvedIndex.get(attachment.index);
       if (image) {
         appendOrderedImages({
           entries,

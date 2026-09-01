@@ -37,7 +37,12 @@ export function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
-  return process.allowedNodeEnvironmentFlags.has("--permission");
+  // Electron advertises Node flags but process.execPath remains the host binary,
+  // so the isolated code child cannot be launched as a plain Node process.
+  return (
+    typeof process.versions.electron !== "string" &&
+    process.allowedNodeEnvironmentFlags.has("--permission")
+  );
 }
 
 function resolveMinCodeTimeoutMs(): number {

@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -105,6 +106,7 @@ export class SessionCatalogLiveState {
   progressive = true;
 
   private activationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private activationQueueIfActive = false;
   private connectionEpoch = 0;
   private refetchOwner: symbol | null = null;
   private presenceSignature: string | null = null;
@@ -253,7 +255,7 @@ export class SessionCatalogLiveState {
 
   warnRequestError(error: unknown) {
     const code = error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE";
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     const signature = `${code}\u0000${message}`;
     if (this.warnedRequestErrors.has(signature)) {
       return;
@@ -308,7 +310,15 @@ export class SessionCatalogLiveState {
       const rawId = typeof record.deviceId === "string" ? record.deviceId : record.instanceId;
       const id = typeof rawId === "string" ? rawId.trim().toLowerCase() : "";
       const mode = typeof record.mode === "string" ? record.mode.trim().toLowerCase() : "";
-      if (!id || mode === "gateway") {
+      // Catalog hosts are native nodes. Browser/operator churn cannot change that inventory;
+      // older nodes may omit mode, so only then does the authenticated role decide.
+      const isNodePresence = mode
+        ? mode === "node"
+        : Array.isArray(record.roles) &&
+          record.roles.some(
+            (role) => typeof role === "string" && role.trim().toLowerCase() === "node",
+          );
+      if (!id || !isNodePresence) {
         continue;
       }
       const reason = typeof record.reason === "string" ? record.reason.trim().toLowerCase() : "";
@@ -350,9 +360,11 @@ export class SessionCatalogLiveState {
     }
     const currentCatalog = params.catalogs.find((catalog) => catalog.id === event.catalog.id);
     let catalogs: SessionCatalog[];
+    let nextCatalog: SessionCatalog;
     if (!currentCatalog) {
-      catalogs = [...params.catalogs, { ...event.catalog, hosts: [freshHost] }].toSorted(
-        (left, right) => left.id.localeCompare(right.id),
+      nextCatalog = { ...event.catalog, hosts: [freshHost] };
+      catalogs = [...params.catalogs, nextCatalog].toSorted((left, right) =>
+        left.id.localeCompare(right.id),
       );
     } else {
       const currentHost = currentCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
@@ -363,20 +375,30 @@ export class SessionCatalogLiveState {
       const hosts = currentHost
         ? currentCatalog.hosts.map((host) => (host.hostId === freshHost.hostId ? mergedHost : host))
         : [...currentCatalog.hosts, mergedHost];
+      nextCatalog = {
+        ...event.catalog,
+        hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
+      };
       catalogs = params.catalogs.map((catalog) =>
-        catalog.id === event.catalog.id
-          ? {
-              ...event.catalog,
-              hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
-            }
-          : catalog,
+        catalog.id === event.catalog.id ? nextCatalog : catalog,
       );
     }
-    if (JSON.stringify(catalogs) === JSON.stringify(params.catalogs)) {
+    const currentHost = currentCatalog?.hosts.find((host) => host.hostId === freshHost.hostId);
+    const nextHost = nextCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
+    const sameCatalogMetadata =
+      currentCatalog !== undefined &&
+      currentCatalog.label === nextCatalog.label &&
+      JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
+    if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
     }
     const materialChange =
-      sessionCatalogMaterialSnapshot(catalogs) !== sessionCatalogMaterialSnapshot(params.catalogs);
+      !currentCatalog ||
+      !currentHost ||
+      !nextHost ||
+      sessionCatalogMaterialSnapshot([{ ...nextCatalog, hosts: [nextHost] }]) !==
+        sessionCatalogMaterialSnapshot([{ ...currentCatalog, hosts: [currentHost] }]);
     this.sawChange ||= materialChange;
     return { catalogs, catalogId: event.catalog.id, materialChange };
   }
@@ -396,14 +418,20 @@ export class SessionCatalogLiveState {
     visible: boolean;
     connected: boolean;
     generation: number;
+    queueIfActive: boolean;
     refresh: () => void;
   }) {
     if (!params.visible || !params.connected) {
       return;
     }
+    // Focus can fire without a hidden interval. Preserve the existing freshness poll and
+    // do not queue behind an active request unless a real visibility/presence change occurred.
+    if (!params.queueIfActive && this.timer !== null) {
+      return;
+    }
     this.cancelTimer();
     if (this.requestGeneration === params.generation) {
-      this.refreshPending = true;
+      this.refreshPending ||= params.queueIfActive;
       return;
     }
     params.refresh();
@@ -411,6 +439,7 @@ export class SessionCatalogLiveState {
 
   cancelActivation() {
     this.cancelTimer("activationTimer");
+    this.activationQueueIfActive = false;
   }
 
   cancelScheduledRefreshes() {
@@ -418,7 +447,8 @@ export class SessionCatalogLiveState {
     this.cancelActivation();
   }
 
-  scheduleActivation(refresh: () => void) {
+  scheduleActivation(queueIfActive: boolean, refresh: (queueIfActive: boolean) => void) {
+    this.activationQueueIfActive ||= queueIfActive;
     if (this.activationTimer !== null) {
       return;
     }
@@ -426,7 +456,9 @@ export class SessionCatalogLiveState {
     // One short window keeps the burst to a single fleet scan.
     this.activationTimer = globalThis.setTimeout(() => {
       this.activationTimer = null;
-      refresh();
+      const shouldQueue = this.activationQueueIfActive;
+      this.activationQueueIfActive = false;
+      refresh(shouldQueue);
     }, 50);
   }
 }

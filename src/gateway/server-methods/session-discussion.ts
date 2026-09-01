@@ -9,6 +9,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
@@ -20,12 +22,14 @@ const DISCUSSION_TITLE_TIMEOUT_MS = 10_000;
 async function maybeGenerateTitleBeforeDiscussionOpen(params: {
   context: GatewayRequestContext;
   sessionKey: string;
+  agentId?: string;
 }): Promise<void> {
   try {
     const cfg = params.context.getRuntimeConfig();
     const resolved = loadAccessorSessionEntryForGatewayTarget({
       cfg,
       key: params.sessionKey,
+      agentId: params.agentId,
     });
     const { entry } = resolved;
     const sessionId = entry?.sessionId;
@@ -95,7 +99,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
 }
 
 export const sessionDiscussionHandlers: GatewayRequestHandlers = {
-  "session.discussion.info": async ({ params, respond }) => {
+  "session.discussion.info": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -106,13 +110,27 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      params.sessionKey,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
     const provider = getSessionDiscussionProvider();
     if (!provider) {
       respond(true, { state: "none" }, undefined);
       return;
     }
     try {
-      const result = await provider.info({ sessionKey: params.sessionKey });
+      const sessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg: context.getRuntimeConfig(),
+        agentId: requestedAgent.agentId,
+        sessionKey: params.sessionKey,
+      });
+      const result = await provider.info({ sessionKey, agentId: requestedAgent.agentId });
       if (!validateSessionDiscussionInfoResult(result)) {
         respond(
           false,
@@ -150,6 +168,15 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      params.sessionKey,
+      params.agentId,
+    );
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
     const provider = getSessionDiscussionProvider();
     if (!provider) {
       respond(true, { state: "none" }, undefined);
@@ -159,8 +186,14 @@ export const sessionDiscussionHandlers: GatewayRequestHandlers = {
       await maybeGenerateTitleBeforeDiscussionOpen({
         context,
         sessionKey: params.sessionKey,
+        agentId: requestedAgent.agentId,
       });
-      const result = await provider.open({ sessionKey: params.sessionKey });
+      const sessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg: context.getRuntimeConfig(),
+        agentId: requestedAgent.agentId,
+        sessionKey: params.sessionKey,
+      });
+      const result = await provider.open({ sessionKey, agentId: requestedAgent.agentId });
       if (!validateSessionDiscussionOpenResult(result)) {
         respond(
           false,

@@ -24,6 +24,27 @@ describe("xai runtime model compat", () => {
     });
   });
 
+  it("preserves Grok 4.6 xhigh reasoning", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.6",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+    });
+  });
+
   it("maps Grok 4.5 thinking levels to its supported reasoning efforts", () => {
     const model = applyXaiRuntimeModelCompat({
       id: "grok-4.5",

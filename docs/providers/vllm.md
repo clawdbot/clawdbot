@@ -310,7 +310,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     curl http://127.0.0.1:8000/v1/models
     ```
 
-    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata/link-local origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
+    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
 
   </Accordion>
 

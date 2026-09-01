@@ -242,9 +242,3 @@ function buildParams(
 
   return params;
 }
-
-export const testing = {
-  isOpenAICompatibleAzureResponsesBaseUrl,
-  normalizeAzureBaseUrl,
-  resolveAzureConfig,
-};

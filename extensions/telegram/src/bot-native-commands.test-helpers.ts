@@ -4,9 +4,9 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  OpenClawConfig,
+  ChannelGroupPolicy,
   TelegramAccountConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
@@ -94,6 +94,7 @@ const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChan
                 const providerInfo = {
                   ...info,
                   onPlatformSendDispatch: async () => undefined,
+                  assertPlatformSendAuthorized: () => undefined,
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               }

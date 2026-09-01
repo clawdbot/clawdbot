@@ -1,13 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import {
-  measureEmbeddedAgentPreparation,
-  measureEmbeddedAgentPreparationSync,
-} from "./preparation-timing.js";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
+import { createEmbeddedAttemptPreparation } from "./attempt-preparation.js";
+import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
+
+afterEach(() => {
+  flushDiagnosticsTimeline();
+  tempDirs.cleanup();
+});
 
 async function createTimelineEnv() {
   const dir = tempDirs.make("openclaw-agent-preparation-");
@@ -21,6 +28,7 @@ async function createTimelineEnv() {
 }
 
 async function readTimeline(path: string) {
+  flushDiagnosticsTimeline();
   return (await readFile(path, "utf8"))
     .trim()
     .split("\n")
@@ -32,12 +40,11 @@ describe("embedded agent preparation timing", () => {
     const { env, path } = await createTimelineEnv();
 
     await measureEmbeddedAgentPreparation("runtime", async () => "async", { env });
-    expect(measureEmbeddedAgentPreparationSync("attempt.tool-base", () => "sync", { env })).toBe(
+    expect(await measureEmbeddedAgentPreparation("attempt.tool-base", () => "sync", { env })).toBe(
       "sync",
     );
 
     const events = await readTimeline(path);
-    expect(events).toHaveLength(4);
     expect(events.map((event) => event.name)).toEqual([
       "agent.prepare",
       "agent.prepare",
@@ -56,5 +63,77 @@ describe("embedded agent preparation timing", () => {
       { stage: "attempt.tool-base" },
       { stage: "attempt.tool-base" },
     ]);
+  });
+});
+
+const prepare = createEmbeddedAttemptPreparation({ assertCurrent: () => {} });
+
+describe("embedded attempt preparation dispatch", () => {
+  it("lets control callbacks advance before a burst of preparation stages finishes", async () => {
+    const started: number[] = [];
+    let observedStarts = -1;
+    const controlCallback = createDeferred();
+    await Promise.all(
+      Array.from({ length: 32 }, (_, index) =>
+        prepare("attempt.tool-catalog", () => {
+          started.push(index);
+          if (index === 0) {
+            setImmediate(() => {
+              observedStarts = started.length;
+              controlCallback.resolve();
+            });
+          }
+        }),
+      ),
+    );
+    await controlCallback.promise;
+    expect(started).toEqual(Array.from({ length: 32 }, (_, index) => index));
+    expect(observedStarts).toBe(1);
+  });
+
+  it("preserves caller context and overlaps asynchronous preparation", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const observed: Array<string | undefined> = [];
+    const firstWait = createDeferred();
+    const first = context.run("first", () =>
+      prepare("attempt.bootstrap", async () => {
+        observed.push(context.getStore());
+        await firstWait.promise;
+        observed.push(context.getStore());
+      }),
+    );
+    const second = context.run("second", () =>
+      prepare("attempt.bootstrap", async () => {
+        observed.push(context.getStore());
+        await yieldToEventLoop();
+        firstWait.resolve();
+      }),
+    );
+    await Promise.all([first, second]);
+    expect(observed).toEqual(["first", "second", "first"]);
+  });
+
+  it("rejects stale queued work before acquisition without blocking other attempts", async () => {
+    const controller = new AbortController();
+    const cancelled = createEmbeddedAttemptPreparation({
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
+    const acquire = vi.fn();
+    const pending = cancelled("attempt.bundle-tools", acquire);
+    const failure = new Error("cancelled before acquisition");
+    controller.abort(failure);
+    await expect(pending).rejects.toBe(failure);
+    expect(acquire).not.toHaveBeenCalled();
+    await expect(prepare("attempt.tool-catalog", () => "next attempt")).resolves.toBe(
+      "next attempt",
+    );
+    await expect(
+      prepare("attempt.tool-catalog", () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    await expect(prepare("attempt.tool-catalog", () => "after failure")).resolves.toBe(
+      "after failure",
+    );
   });
 });

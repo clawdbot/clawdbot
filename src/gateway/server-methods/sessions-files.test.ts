@@ -8,13 +8,13 @@ import { resolveOpenPathCommand } from "./open-path.js";
 import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
-  createSessionEntryFixture,
   createSessionFilesHandlerInvoker,
   createVisibleMessagesMock,
-  createWorkspaceFixture,
   expectError,
   expectOkPayload,
   hashContent,
+  prepareSessionFilesTest,
+  removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
 import { updateWorkspaceFile } from "./workspace-fs.js";
@@ -32,7 +32,8 @@ vi.mock("./open-path.js", async () => {
   return { ...actual, execOpenPath: hoisted.execOpenPath };
 });
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
@@ -66,24 +67,11 @@ describe("sessions.files RPC handlers", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
-    workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
-    hoisted.resolveDefaultAgentId.mockReturnValue("main");
-    hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
-    hoisted.execOpenPath.mockResolvedValue(undefined);
-    hoisted.loadSessionEntry.mockReturnValue(createSessionEntryFixture(workspaceRoot, "sess-main"));
-    mockVisibleMessages([
-      assistantToolCall("edit", { path: "ui/chat.ts" }),
-      assistantToolCall("read", { path: "src/readme.md" }),
-      assistantToolCall("apply_patch", {
-        input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-      }),
-    ]);
+    workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
   });
 
   afterEach(() => {
-    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    removeWorkspaceFixture(workspaceRoot);
   });
 
   it("reveals the same workspace root returned by sessions.files.list", async () => {
@@ -103,6 +91,76 @@ describe("sessions.files RPC handlers", () => {
     // every supported platform (open / xdg-open / PowerShell Start-Process).
     expect(hoisted.execOpenPath).toHaveBeenCalledWith(
       resolveOpenPathCommand(listPayload.root as string),
+    );
+  });
+
+  it("uses the persisted fixed-store owner for a bare session workspace", async () => {
+    const cfg = {
+      session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "ops",
+      canonicalKey: "global",
+      cfg,
+      storePath: cfg.session.store,
+      entry: { sessionId: "sess-owned-global" },
+    });
+    hoisted.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId: string) =>
+      agentId === "ops" ? workspaceRoot : path.join(workspaceRoot, "wrong-research"),
+    );
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler(
+        "sessions.files.list",
+        { sessionKey: "global" },
+        { getRuntimeConfig: () => cfg },
+      ),
+    );
+
+    expect(payload.root).toBe(workspaceRoot);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
+    const cfg = {
+      session: { store: path.join(workspaceRoot, "shared.sqlite"), scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+
+    const error = expectError(
+      await invokeSessionFilesHandler(
+        "sessions.files.set",
+        {
+          sessionKey: "global",
+          agentId: "research",
+          path: "ui/chat.ts",
+          content: "foreign write\n",
+          expectedHash: hashContent("export const chat = true;\n"),
+        },
+        { getRuntimeConfig: () => cfg },
+      ),
+    );
+
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'agent "research" does not match session key agent "ops"',
+    });
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui/chat.ts"), "utf8")).toBe(
+      "export const chat = true;\n",
     );
   });
 
@@ -887,119 +945,6 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
       "export default {};\n",
     );
-  });
-
-  it.each([
-    {
-      format: "AVIF",
-      mimeType: "image/avif",
-      bytes: Buffer.from([
-        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0x00, 0x00, 0x00,
-        0x00, 0x61, 0x76, 0x69, 0x66,
-      ]),
-    },
-    { format: "GIF", mimeType: "image/gif", bytes: Buffer.from("GIF89a", "ascii") },
-    {
-      format: "JPEG",
-      mimeType: "image/jpeg",
-      bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
-    },
-    {
-      format: "PNG",
-      mimeType: "image/png",
-      bytes: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-        "base64",
-      ),
-    },
-    {
-      format: "WebP",
-      mimeType: "image/webp",
-      bytes: Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP")]),
-    },
-  ])("previews sniffed $format bytes as a base64 image without a CAS hash", async (fixture) => {
-    const fileName = `preview-${fixture.format.toLowerCase()}.bin`;
-    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.bytes);
-
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.get", {
-        sessionKey: "agent:main:main",
-        path: fileName,
-      }),
-    );
-
-    expect(payload.file).toMatchObject({
-      content: fixture.bytes.toString("base64"),
-      contentEncoding: "base64",
-      mimeType: fixture.mimeType,
-      path: fileName,
-      previewKind: "image",
-    });
-    expect(payload.file.hash).toBeUndefined();
-  });
-
-  it.each([
-    { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
-    { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
-    { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
-    { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
-    {
-      format: "iCalendar",
-      mimeType: "text/calendar",
-      content: "BEGIN:VCALENDAR\nVERSION:2.0\nEND:VCALENDAR\n",
-    },
-    {
-      format: "registry",
-      mimeType: "application/x-ms-regedit",
-      content: "REGEDIT4\r\n\r\n[HKEY_CURRENT_USER\\Software]",
-    },
-    {
-      format: "ASCII STL",
-      mimeType: "model/stl",
-      content: "solid test\nfacet normal 0 0 0\nendfacet\nendsolid test\n",
-    },
-  ])("keeps detected $format text editable", async (fixture) => {
-    const fileName = `detected-${fixture.format.toLowerCase().replaceAll(" ", "-")}.bin`;
-    fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.content, "utf8");
-
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.get", {
-        sessionKey: "agent:main:main",
-        path: fileName,
-      }),
-    );
-
-    expect(payload.file).toMatchObject({
-      content: fixture.content,
-      contentEncoding: "utf8",
-      hash: hashContent(fixture.content),
-      mimeType: fixture.mimeType,
-      path: fileName,
-      previewKind: "text",
-    });
-  });
-
-  it("returns unsupported binary metadata without lossy inline content", async () => {
-    const binary = Buffer.concat([Buffer.from("SQLite format 3\0"), Buffer.alloc(64, 7)]);
-    fs.writeFileSync(path.join(workspaceRoot, "cache.db"), binary);
-
-    const payload = expectOkPayload(
-      await invokeSessionFilesHandler("sessions.files.get", {
-        sessionKey: "agent:main:main",
-        path: "cache.db",
-      }),
-    );
-
-    expect(payload.file).toMatchObject({
-      mimeType: "application/x-sqlite3",
-      missing: false,
-      path: "cache.db",
-      previewKind: "unsupported",
-      size: binary.length,
-    });
-    expect(payload.file.content).toBeUndefined();
-    expect(payload.file.contentEncoding).toBeUndefined();
-    expect(payload.file.hash).toBeUndefined();
   });
 
   it.each([

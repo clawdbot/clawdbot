@@ -73,14 +73,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           cfg,
           p: { sessionId: "sess-default-alias" },
         }),
-      ).resolves.toEqual({ ok: true, key: "agent:ops:main" });
+      ).resolves.toEqual({ ok: true, key: "agent:ops:main", agentId: "ops" });
 
       await expect(
         resolveSessionKeyFromResolveParams({
           cfg,
           p: { label: "default-alias" },
         }),
-      ).resolves.toEqual({ ok: true, key: "agent:ops:main" });
+      ).resolves.toEqual({ ok: true, key: "agent:ops:main", agentId: "ops" });
     });
   });
 
@@ -121,6 +121,36 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         error: {
           code: ErrorCodes.INVALID_REQUEST,
           message: "No session found with label: shared-label",
+        },
+      });
+    });
+  });
+
+  it("rejects an exact bare key scoped to a different fixed-store owner", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-owner-conflict-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "shared-sessions.sqlite");
+      const cfg = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } satisfies OpenClawConfig;
+      await seedSessionStore(storePath, {
+        global: { sessionId: "sess-owned-global", updatedAt: freshUpdatedAt() },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { key: "global", agentId: "research" },
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: 'agent "research" does not match session key agent "ops"',
         },
       });
     });
@@ -176,6 +206,48 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       );
       expect(labelResult.error.message).toContain("agent:main:main-target");
       expect(labelResult.error.message).toContain("agent:work:work-target");
+    });
+  });
+
+  it("resolves duplicate bare global rows with the selected row owner", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      };
+      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" }), {
+        global: { sessionId: "session-ops", updatedAt: freshUpdatedAt() },
+      });
+      await seedSessionStore(
+        resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
+        {
+          global: { sessionId: "session-research", updatedAt: freshUpdatedAt() },
+        },
+      );
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "session-research", includeGlobal: true },
+        }),
+      ).resolves.toEqual({ ok: true, key: "global", agentId: "research" });
+    });
+  });
+
+  it("selects the deterministic winner within one agent before cross-agent checks", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-same-agent-", async () => {
+      const cfg: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+      await seedSessionStore(storePath, {
+        "agent:main:older": { sessionId: "session-duplicate", updatedAt: 10 },
+        "agent:main:newer": { sessionId: "session-duplicate", updatedAt: 20 },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({ cfg, p: { sessionId: "session-duplicate" } }),
+      ).resolves.toEqual({ ok: true, key: "agent:main:newer", agentId: "main" });
     });
   });
 
@@ -286,21 +358,21 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           cfg,
           p: { key: acpKey },
         }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
+      ).resolves.toEqual({ ok: true, key: acpKey, agentId: "claude" });
 
       await expect(
         resolveSessionKeyFromResolveParams({
           cfg,
           p: { sessionId: "sess-acp-harness" },
         }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
+      ).resolves.toEqual({ ok: true, key: acpKey, agentId: "claude" });
 
       await expect(
         resolveSessionKeyFromResolveParams({
           cfg,
           p: { label: "claude-delegate" },
         }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
+      ).resolves.toEqual({ ok: true, key: acpKey, agentId: "claude" });
     });
   });
 
@@ -339,14 +411,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           cfg,
           p: { key: acpKey },
         }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
+      ).resolves.toEqual({ ok: true, key: acpKey, agentId: "claude" });
 
       await expect(
         resolveSessionKeyFromResolveParams({
           cfg,
           p: { key: acpKey },
         }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
+      ).resolves.toEqual({ ok: true, key: acpKey, agentId: "claude" });
     });
   });
 

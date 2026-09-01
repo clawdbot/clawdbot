@@ -46,8 +46,9 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts route binding session dmScope overrides", () => {
+  it("accepts global and route-binding session scope overrides", () => {
     const parsed = OpenClawSchema.safeParse({
+      session: { groupScope: "per-group" },
       bindings: [
         {
           type: "route",
@@ -59,6 +60,7 @@ describe("ACP binding cutover schema", () => {
           },
           session: {
             dmScope: "per-account-channel-peer",
+            groupScope: "main",
           },
         },
       ],

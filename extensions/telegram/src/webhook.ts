@@ -296,12 +296,15 @@ function resolveTelegramWebhookRateLimitKey(
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
+  ownerAgentId?: string;
   config?: OpenClawConfig;
   path?: string;
   port?: number;
   host?: string;
   secret?: string;
   runtime?: RuntimeEnv;
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
+  dispatchReplyFromConfig?: Parameters<typeof createTelegramBot>[0]["dispatchReplyFromConfig"];
   fetch?: typeof fetch;
   abortSignal?: AbortSignal;
   healthPath?: string;
@@ -313,6 +316,9 @@ export async function startTelegramWebhook(opts: {
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
+  if (path === healthPath) {
+    throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
+  }
   const port = opts.port ?? 8787;
   const host = opts.host ?? "127.0.0.1";
   const secret = normalizeOptionalString(opts.secret) ?? "";
@@ -355,11 +361,14 @@ export async function startTelegramWebhook(opts: {
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
+    buildContext: opts.buildContext,
+    dispatchReplyFromConfig: opts.dispatchReplyFromConfig,
     proxyFetch: opts.fetch,
     fetchAbortSignal: botFetchAbortSignal,
     accountAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
+    ownerAgentId: opts.ownerAgentId,
     telegramTransport,
   });
   const runShutdownPhase = async (

@@ -1,8 +1,8 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -17,7 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "operator-admin");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("operator-admin");
+  }
+});
 const viewport = { height: 960, width: 1440 };
 
 const agentRoster = [
@@ -116,9 +121,6 @@ async function waitForRequest(
 }
 
 async function createContext(): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -152,7 +154,18 @@ suite.define(() => {
     const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "skills.install", "skills.update"],
+      featureMethods: [
+        "agents.list",
+        "chat.metadata",
+        "chat.startup",
+        "config.get",
+        "device.pair.list",
+        "exec.approvals.get",
+        "node.list",
+        "skills.install",
+        "skills.status",
+        "skills.update",
+      ],
       methodResponses: {
         "agents.list": {
           agents: agentRoster,
@@ -240,7 +253,7 @@ suite.define(() => {
         gateway.waitForRequest("exec.approvals.get"),
       ]);
       await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      await expect.poll(() => page.getByText("connected", { exact: true }).isVisible()).toBe(true);
+      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(0);
       await page.getByText("Details", { exact: true }).click();
       await expect
         .poll(() => page.getByText(/Capabilities: browser, filesystem/).isVisible())
@@ -362,8 +375,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
+      await page.locator("#agents-tab-overview").click();
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      const identitySave = page.locator(".agent-identity-editor__actions button");
+      await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
+      await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await screenshot(page, "05-read-only-agents.png");
@@ -463,7 +480,7 @@ suite.define(() => {
     }
   });
 
-  it("retains legacy admin mutations when the Gateway omits method metadata", async () => {
+  it("disables admin mutations when the Gateway omits required method metadata", async () => {
     const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -486,9 +503,9 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
-      await expect.poll(() => setDefault.isEnabled()).toBe(true);
-      await setDefault.click();
-      await gateway.waitForRequest("config.set");
+      await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      await setDefault.click({ force: true });
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
@@ -496,9 +513,9 @@ suite.define(() => {
       const install = page
         .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
-      await expect.poll(() => install.isEnabled()).toBe(true);
-      await install.click();
-      await gateway.waitForRequest("skills.install");
+      await expect.poll(() => install.isDisabled()).toBe(true);
+      await install.click({ force: true });
+      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -546,6 +563,16 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "agents.list",
+        "chat.metadata",
+        "chat.startup",
+        "config.get",
+        "device.pair.list",
+        "exec.approvals.get",
+        "exec.approvals.set",
+        "node.list",
+      ],
       methodResponses: {
         "config.get": configResponse(),
         "device.pair.list": { paired: [], pending: [] },

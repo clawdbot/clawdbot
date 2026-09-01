@@ -155,7 +155,7 @@ function resolveRequiredHomeDir(
 ): string {
   const explicitHome = normalizeHomeValue(env.OPENCLAW_HOME);
   const rawHome = explicitHome
-    ? explicitHome.replace(/^~(?=$|[\\/])/, resolveRawOsHomeDir(env, homedir) ?? "")
+    ? explicitHome.replace(/^~(?=$|[\\/])/, () => resolveRawOsHomeDir(env, homedir) ?? "")
     : resolveRawOsHomeDir(env, homedir);
   return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
 }
@@ -171,7 +171,9 @@ function resolveMemoryHostUserPath(
     return trimmed;
   }
   if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveRequiredHomeDir(env, homedir)));
+    return path.resolve(
+      trimmed.replace(/^~(?=$|[\\/])/, () => resolveRequiredHomeDir(env, homedir)),
+    );
   }
   return path.resolve(trimmed);
 }
@@ -224,10 +226,17 @@ function resolveStateDir(
 
 /** Resolve the default agent workspace, partitioned by OPENCLAW_PROFILE when set. */
 function resolveDefaultAgentWorkspaceDir(env: NodeJS.ProcessEnv = process.env): string {
+  const workspaceDir = env.OPENCLAW_WORKSPACE_DIR?.trim();
+  if (workspaceDir) {
+    return resolveMemoryHostUserPath(workspaceDir, env);
+  }
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return path.join(resolveStateDir(env), "workspace");
+  }
   const home = resolveRequiredHomeDir(env, os.homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && normalizeLowercaseStringOrEmpty(profile) !== "default") {
-    return path.join(home, ".openclaw", `workspace-${profile}`);
+    return path.join(resolveStateDir(env), "workspace");
   }
   return path.join(home, ".openclaw", "workspace");
 }

@@ -96,7 +96,7 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
     createdAt: 1,
   };
 
-  it("rehydrates the durable token for capture and exact retry without runtime reconstruction", () => {
+  it("rehydrates the durable token across rotated operational recovery runs", () => {
     const sessionEntry = {
       ...matchingParams.sessionEntry,
       mainRestartRecovery: {
@@ -110,20 +110,20 @@ describe("resolveAgentRestartRecoveryExecutionIdentityAdmission", () => {
       collectionEnabled: true,
       isRestartRecoveryResumeRun: true,
       retryOnly: false,
-      runId: token.runId,
+      runId: "recovery-run-2",
       sessionEntry,
     });
     const retry = resolveAgentRestartRecoveryExecutionIdentityAdmission({
       collectionEnabled: true,
       isRestartRecoveryResumeRun: true,
       retryOnly: true,
-      runId: token.runId,
+      runId: "recovery-run-3",
       sessionEntry,
     });
     expect(first).toMatchObject({ retryOnly: false, consume: expect.any(Function) });
     expect(retry).toMatchObject({ retryOnly: true, consume: expect.any(Function) });
-    expect(first?.consume(token.runId)).toEqual({ accepted: true, token });
-    expect(retry?.consume(token.runId)).toEqual({ accepted: true, token });
+    expect(first?.consume("recovery-run-2")).toEqual({ accepted: true, token });
+    expect(retry?.consume("recovery-run-3")).toEqual({ accepted: true, token });
   });
 
   it("returns no token for ordinary runs and refuses lost recovery evidence", () => {

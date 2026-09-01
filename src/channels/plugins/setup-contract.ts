@@ -22,6 +22,8 @@ type ChannelSetupStringField = {
 type ChannelSetupBooleanField = {
   kind: "boolean";
   cli: ChannelSetupCliOption;
+  envVars?: readonly string[];
+  envVarMode?: "all" | "any";
 };
 
 type ChannelSetupIntegerField = {
@@ -48,9 +50,11 @@ type ChannelSetupField =
   | ChannelSetupStringListField
   | ChannelSetupChoiceField;
 
-export type ChannelSetupFieldMetadata = ChannelSetupField & {
-  key: string;
-};
+type ChannelSetupFieldMetadataFor<Field extends ChannelSetupField> = Field extends ChannelSetupField
+  ? Field & { key: string }
+  : never;
+
+export type ChannelSetupFieldMetadata = ChannelSetupFieldMetadataFor<ChannelSetupField>;
 
 export type ChannelSetupMetadata = {
   fields: readonly ChannelSetupFieldMetadata[];
@@ -112,6 +116,7 @@ type ChannelOwnedSetupAdapterShape<Input extends { name?: string }> = ChannelSet
 
 export type ChannelOwnedSetupContract = {
   kind: "channel-owned";
+  configPromotion?: ChannelSetupAdapter["configPromotion"];
   metadata: ChannelSetupMetadata;
   parseInput: (input: unknown) => ChannelSetupParseResult;
   resolveAccountId?: (params: {
@@ -333,6 +338,7 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
           },
         }
       : {}),
+    configPromotion: adapter.configPromotion,
     singleAccountKeysToMove: adapter.singleAccountKeysToMove,
     namedAccountPromotionKeys: adapter.namedAccountPromotionKeys,
     resolveSingleAccountPromotionTarget: adapter.resolveSingleAccountPromotionTarget,

@@ -19,6 +19,11 @@ export function sanitizeForPromptLiteral(value: string): string {
   return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 }
 
+/** True when the shared prompt sanitizer would strip any character. */
+export function hasPromptUnsafeControlCharacter(value: string): boolean {
+  return sanitizeForPromptLiteral(value) !== value;
+}
+
 type PromptDataBlockParams = {
   label: string;
   text: string;

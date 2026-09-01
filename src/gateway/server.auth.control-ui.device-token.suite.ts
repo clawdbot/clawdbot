@@ -125,6 +125,15 @@ export function registerControlUiDeviceTokenSuite(): void {
       const deviceOk = await connectReq(wsDevice, { token: deviceToken, deviceIdentityPath });
       expect(deviceOk.ok).toBe(true);
       wsDevice.close();
+
+      const wsSharedStillLocked = await openWs(port);
+      const sharedStillLocked = await connectReq(wsSharedStillLocked, {
+        token: "secret",
+        device: null,
+      });
+      expect(sharedStillLocked.ok).toBe(false);
+      expect(sharedStillLocked.error?.message ?? "").toContain("retry later");
+      wsSharedStillLocked.close();
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -174,7 +183,7 @@ export function registerControlUiDeviceTokenSuite(): void {
   });
 
   test("rejects revoked device token", async () => {
-    const { revokeDeviceToken } = await import("../infra/device-pairing.js");
+    const { revokeDeviceToken } = await import("../infra/device-pairing-tokens.js");
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     const { identity, deviceToken, deviceIdentityPath } =
       await ensurePairedDeviceTokenForCurrentIdentity(ws);

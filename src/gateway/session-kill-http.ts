@@ -16,6 +16,7 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 type SessionKeyPathResolution =
@@ -87,7 +88,18 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const { entry, canonicalKey } = loadSessionEntry(sessionKey);
+  const requestedAgent = resolveRequestedSessionAgentId(
+    cfg,
+    sessionKey,
+    url.searchParams.get("agentId") ?? undefined,
+  );
+  if (!requestedAgent.ok) {
+    sendInvalidRequest(res, requestedAgent.error.message);
+    return true;
+  }
+  const { entry, canonicalKey } = loadSessionEntry(sessionKey, {
+    agentId: requestedAgent.agentId,
+  });
   if (!entry) {
     sendJson(res, 404, {
       ok: false,
@@ -102,7 +114,16 @@ export async function handleSessionKillHttpRequest(
   const result = await killSubagentRunAdmin({
     cfg,
     sessionKey: canonicalKey,
+    agentId: requestedAgent.agentId,
   });
+
+  if (result.found && result.error) {
+    sendJson(res, 503, {
+      ok: false,
+      error: { type: "unavailable", message: result.error },
+    });
+    return true;
+  }
 
   sendJson(res, 200, {
     ok: true,

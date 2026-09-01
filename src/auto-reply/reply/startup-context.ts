@@ -6,7 +6,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { openRootFile } from "../../infra/boundary-file-read.js";
+import { openRootFile, readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -153,20 +153,6 @@ function fitStartupMemoryBlock(params: {
   return best;
 }
 
-async function readFromFd(params: { fd: number; maxFileBytes: number }): Promise<string> {
-  const buf = Buffer.alloc(params.maxFileBytes);
-  const bytesRead = await new Promise<number>((resolve, reject) => {
-    fs.read(params.fd, buf, 0, params.maxFileBytes, 0, (error, read) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(read);
-    });
-  });
-  return buf.subarray(0, bytesRead).toString("utf-8");
-}
-
 async function closeFd(fd: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     fs.close(fd, (error) => {
@@ -195,7 +181,7 @@ async function readStartupMemoryFile(params: {
     return null;
   }
   try {
-    return await readFromFd({ fd: opened.fd, maxFileBytes: params.maxFileBytes });
+    return (await readFileDescriptorBounded(opened.fd, params.maxFileBytes)).toString("utf-8");
   } finally {
     await closeFd(opened.fd);
   }

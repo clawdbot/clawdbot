@@ -5,7 +5,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseSqliteJsonValue<T>(raw: string | null): T | undefined {
+export function parseSqliteJsonValue<T>(raw: string | null): T | undefined {
   if (!raw?.trim()) {
     return undefined;
   }

@@ -222,7 +222,10 @@ describe("buildProviderReplayFamilyHooks", () => {
         ctx: {
           provider: "anthropic-vertex",
           modelApi: "anthropic-messages",
-          modelId: "claude-sonnet-4-6",
+          modelId: "prod-opus",
+          model: {
+            params: { canonicalModelId: "claude-opus-5" },
+          },
         },
         match: {
           validateAnthropicTurns: true,
@@ -461,8 +464,19 @@ describe("resolveClaudeThinkingProfile", () => {
         preserveWhenCatalogReasoningFalse: true,
       });
       expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
+      expect(readLevelIds(profile)).not.toContain("off");
     },
   );
+
+  it("keeps Mythos Preview mandatory adaptive without claiming the Claude 5 effort ladder", () => {
+    const profile = resolveClaudeThinkingProfile("claude-mythos-preview");
+
+    expectFields(profile, {
+      defaultLevel: "adaptive",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(readLevelIds(profile)).toEqual(["minimal", "low", "medium", "high", "adaptive"]);
+  });
 
   it("does not match longer unrelated Claude ids by prefix only", () => {
     expect(resolveClaudeThinkingProfile("vendor/claude-fable-500").defaultLevel).toBeUndefined();

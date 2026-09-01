@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
@@ -33,7 +33,10 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -65,10 +68,8 @@ type RunIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: ThinkLevel;
-  streamParams?: {
-    maxTokens?: number;
-    temperature?: number;
-  };
+  outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
+  streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
 export type IsolatedCompletionResult = {
@@ -144,14 +145,7 @@ function requireIsolatedAssistantText(assistant: AssistantMessage): string {
       "Isolated completion returned a tool call; the result was rejected.",
     );
   }
-  const text = textParts.join("").trim();
-  if (!text) {
-    throw new IsolatedCompletionError(
-      "output-rejected",
-      "Isolated completion returned empty output.",
-    );
-  }
-  return text;
+  return textParts.join("").trim();
 }
 
 function hasCliSideEffectEvidence(result: {
@@ -227,6 +221,7 @@ async function runCliIsolatedCompletion(params: {
           cleanupBundleMcpOnRunEnd: true,
           requireExplicitMessageTarget: true,
           isolatedCompletion: true,
+          outputTextPolicy: params.request.outputTextPolicy,
         });
         if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(
@@ -255,12 +250,6 @@ async function runCliIsolatedCompletion(params: {
           .map((payload) => payload.text ?? "")
           .join("\n")
           .trim();
-        if (!text) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned empty output.",
-          );
-        }
         const backend = resolveCliBackendConfig(params.provider, params.request.config, {
           agentId: params.agentId,
         });
@@ -396,6 +385,8 @@ async function prepareHostAuthorization(params: {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  workspaceDir: string;
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<Extract<AgentHarnessIsolatedCompletionAuthorization, { owner: "host" }>> {
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.config,
@@ -408,6 +399,8 @@ async function prepareHostAuthorization(params: {
     allowBundledStaticCatalogFallback: true,
     skipAgentDiscovery: true,
     bindAuthOwner: true,
+    workspaceDir: params.workspaceDir,
+    preparedModelRuntime: params.preparedModelRuntime,
   });
   if ("error" in prepared) {
     throw new Error(`Isolated completion preparation failed: ${prepared.error}`);
@@ -453,7 +446,7 @@ export async function runIsolatedCompletion(
         },
       ],
     },
-    { catalogMode: "static" },
+    { catalogMode: "static", abortSignal: request.abortSignal },
   );
   const pluginRegistry = lease.snapshot.pluginRegistry;
   try {
@@ -516,6 +509,7 @@ export async function runIsolatedCompletion(
         timeoutMs: request.timeoutMs,
         abortSignal: request.abortSignal,
         thinkLevel: request.thinkLevel,
+        outputTextPolicy: request.outputTextPolicy,
       };
       let result: AgentHarnessIsolatedCompletionResult | undefined;
       if (harness.runIsolatedCompletionV2) {
@@ -609,6 +603,8 @@ export async function runIsolatedCompletion(
                 modelId: request.model,
                 authProfileId:
                   attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
+                workspaceDir,
+                preparedModelRuntime: lease.snapshot,
               });
               modelMaxTokens = authorization.model.maxTokens;
             }
@@ -654,6 +650,8 @@ export async function runIsolatedCompletion(
           provider,
           modelId: request.model,
           authProfileId: request.authProfileId,
+          workspaceDir,
+          preparedModelRuntime: lease.snapshot,
         });
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
@@ -682,7 +680,14 @@ export async function runIsolatedCompletion(
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeRegistryScope(pluginRegistry, run);
+    const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
+    if (!result.text && request.outputTextPolicy !== "strict-visible") {
+      throw new IsolatedCompletionError(
+        "output-rejected",
+        "Isolated completion returned empty output.",
+      );
+    }
+    return result;
   } finally {
     lease.release();
   }

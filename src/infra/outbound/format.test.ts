@@ -37,7 +37,7 @@ describe("formatOutboundDeliverySummary", () => {
       result: {
         channel: "alpha" as const,
         messageId: "m1",
-        chatId: "c1",
+        target: { kind: "chat" as const, id: "c1" },
       },
       expected: "✅ Sent via Alpha. Message ID: m1 (chat c1)",
     },
@@ -46,7 +46,7 @@ describe("formatOutboundDeliverySummary", () => {
       result: {
         channel: "richchat" as const,
         messageId: "d1",
-        channelId: "chan",
+        target: { kind: "channel" as const, id: "chan" },
       },
       expected: "✅ Sent via Rich Chat. Message ID: d1 (channel chan)",
     },
@@ -55,7 +55,7 @@ describe("formatOutboundDeliverySummary", () => {
       result: {
         channel: "workspace" as const,
         messageId: "s1",
-        roomId: "room-1",
+        target: { kind: "room" as const, id: "room-1" },
       },
       expected: "✅ Sent via Workspace. Message ID: s1 (room room-1)",
     },
@@ -64,7 +64,7 @@ describe("formatOutboundDeliverySummary", () => {
       result: {
         channel: "teamchat" as const,
         messageId: "t1",
-        conversationId: "conv-1",
+        target: { kind: "conversation" as const, id: "conv-1" },
       },
       expected: "✅ Sent via Team Chat. Message ID: t1 (conversation conv-1)",
     },

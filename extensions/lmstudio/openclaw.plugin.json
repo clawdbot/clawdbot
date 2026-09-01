@@ -60,7 +60,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["lmstudio"]
+    "embeddingProviders": ["lmstudio"]
   },
   "configSchema": {
     "type": "object",

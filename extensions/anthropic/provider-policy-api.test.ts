@@ -3,6 +3,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-t
 import { describe, expect, it } from "vitest";
 import {
   applyConfigDefaults,
+  deprecatedProfileIds,
   normalizeConfig,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -39,6 +40,10 @@ function levelIds(levels: readonly { id: string }[] | undefined): string[] {
 }
 
 describe("anthropic provider policy public artifact", () => {
+  it("publishes native Claude profiles retired from generic auth", () => {
+    expect(deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
+  });
+
   it("normalizes Anthropic provider config", () => {
     const normalized = normalizeConfig({
       provider: "anthropic",
@@ -146,7 +151,6 @@ describe("anthropic provider policy public artifact", () => {
 
       expect(profile).toEqual({
         levels: [
-          { id: "off" },
           { id: "minimal" },
           { id: "low" },
           { id: "medium" },
@@ -192,7 +196,7 @@ describe("anthropic provider policy public artifact", () => {
     });
 
     expect(profile?.defaultLevel).toBe("adaptive");
-    expect(profile?.levels.map((level) => level.id)).toContain("max");
+    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
   });
 
   it("exposes native max without xhigh for direct Claude 4.6 routes", () => {

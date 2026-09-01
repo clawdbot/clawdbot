@@ -18,7 +18,11 @@ describe("new-session browser preferences", () => {
     patchNewSessionPreference("ws://one.example", "Main", {
       workspace: "/workspace",
       folder: "/workspace/project",
+      where: { kind: "cloud", id: "build-fleet" },
+      projectId: "openclaw",
       worktree: true,
+      baseRef: "main",
+      worktreeName: "picker-redesign",
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "high",
     });
@@ -26,7 +30,11 @@ describe("new-session browser preferences", () => {
     expect(loadNewSessionPreference("ws://one.example", "main")).toEqual({
       workspace: "/workspace",
       folder: "/workspace/project",
+      where: { kind: "cloud", id: "build-fleet" },
+      projectId: "openclaw",
       worktree: true,
+      baseRef: "main",
+      worktreeName: "picker-redesign",
       model: "openai/gpt-5.6-sol",
       thinkingLevel: "high",
     });
@@ -47,7 +55,17 @@ describe("new-session browser preferences", () => {
     expect(key).not.toBeNull();
     localStorage.setItem(
       key ?? "",
-      JSON.stringify({ agents: { main: { folder: 42, model: [], worktree: "yes" } } }),
+      JSON.stringify({
+        agents: {
+          main: {
+            folder: 42,
+            where: { kind: "node", id: [] },
+            projectId: {},
+            model: [],
+            worktree: "yes",
+          },
+        },
+      }),
     );
     expect(loadNewSessionPreference("ws://one.example", "main")).toBeNull();
   });

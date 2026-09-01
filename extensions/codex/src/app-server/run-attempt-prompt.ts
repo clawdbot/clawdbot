@@ -32,6 +32,8 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
+import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
   return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
@@ -50,6 +52,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,
+    codexContinuityProjectionMaxChars,
   } = context;
   const {
     connection,
@@ -78,11 +81,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: historyState.messages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
   };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: typeof mutable.startupBinding,
@@ -184,16 +188,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
-      developerInstructions: promptState.developerInstructions,
-      messages: structuredClone(historyState.messages),
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          if (isRestrictivePromptToolsAllow(toolsAllow)) {
+            throw new Error(
+              "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
+            );
+          }
+          return promptState.developerInstructions;
+        },
+      },
+      messages: historyState.messages,
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
+      toolAuthority: {
+        fingerprint: params.toolAuthorityFingerprint,
+        activeToolNames: () =>
+          flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+            .map((tool) => tool.name)
+            .filter(isNonEmptyString),
+        assertActive: params.hostCapabilities.assertActive,
+      },
     });
-    if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
-      throw new Error(
-        "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
-      );
-    }
     return result;
   };
   const resolveShiftedPromptInputRange = (
@@ -327,16 +343,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
       }
-      const record = message as unknown as Record<string, unknown>;
-      const meta = record["__openclaw"];
-      const mirrorIdentity =
-        meta && typeof meta === "object" && !Array.isArray(meta)
-          ? (meta as Record<string, unknown>).mirrorIdentity
-          : undefined;
-      const mirrorOrigin =
-        meta && typeof meta === "object" && !Array.isArray(meta)
-          ? (meta as Record<string, unknown>).mirrorOrigin
-          : undefined;
+      const mirrorIdentity = readMirrorIdentity(message);
       const timestamp =
         typeof message.timestamp === "number"
           ? message.timestamp
@@ -345,11 +352,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
             : Number.NaN;
       return (
         !(
-          typeof record.idempotencyKey === "string" &&
-          record.idempotencyKey.startsWith("codex-app-server:")
+          "idempotencyKey" in message &&
+          typeof message.idempotencyKey === "string" &&
+          message.idempotencyKey.startsWith("codex-app-server:")
         ) &&
-        mirrorOrigin !== "codex-app-server" &&
-        !(typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) &&
+        !hasCodexMirrorOrigin(message) &&
+        !mirrorIdentity?.startsWith("codex-app-server:") &&
         Number.isFinite(timestamp) &&
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );
@@ -366,11 +374,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: codexContinuityProjectionMaxChars,
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
+    promptState.noEngineContinuityProjectionApplied = true;
     return true;
   };
   const precomputeNoContextEngineStaleBindingProjection = () => {
@@ -392,7 +401,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    if (activeContextEngine || !historyState.messages.some((message) => message.role === "user")) {
+    // A fresh thread can inherit summaries after all prior user messages were compacted away.
+    // Resumed bindings keep their separate incremental user/assistant handoff contract.
+    const hasContinuity = historyState.messages.some(
+      (message) =>
+        message.role === "user" ||
+        (action === "started" &&
+          (message.role === "compactionSummary" || message.role === "branchSummary")),
+    );
+    if (activeContextEngine || !hasContinuity) {
       return false;
     }
     if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {

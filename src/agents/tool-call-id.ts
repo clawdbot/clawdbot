@@ -363,7 +363,7 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     changed = true;
-    return Object.assign({}, block as unknown as Record<string, unknown>, { id: nextId });
+    return Object.assign({}, block, { id: nextId });
   });
 
   if (!changed) {
@@ -372,7 +372,8 @@ function rewriteAssistantToolCallIds(params: {
   return { ...params.message, content: next as typeof params.message.content };
 }
 
-function rewriteToolResultIds(params: {
+/** Keeps every persisted tool-result ID alias aligned with its canonical call. */
+export function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {

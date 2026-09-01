@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 export const PROMOTION_JOURNAL_FILE = "onboarding-promotion.json";
 export const PROMOTION_JOURNAL_VERSION = 1;
@@ -66,7 +67,8 @@ export type SetupMigrationPromotionResume = {
   cleanup: () => Promise<void>;
 };
 
-async function pathExists(candidate: string): Promise<boolean> {
+/** Counts dangling leaf entries as present and propagates non-missing path errors. */
+export async function migrationPathEntryExists(candidate: string): Promise<boolean> {
   try {
     await fs.lstat(candidate);
     return true;
@@ -210,10 +212,10 @@ async function removeCreatedPromotionParents(components: PromotionComponent[]): 
 export async function rollbackComponents(components: PromotionComponent[]): Promise<boolean> {
   try {
     for (const component of components.toReversed()) {
-      const stagedExists = await pathExists(component.stagedPath);
-      const finalExists = await pathExists(component.finalPath);
+      const stagedExists = await migrationPathEntryExists(component.stagedPath);
+      const finalExists = await migrationPathEntryExists(component.finalPath);
       const backupExists = component.emptyTargetBackupPath
-        ? await pathExists(component.emptyTargetBackupPath)
+        ? await migrationPathEntryExists(component.emptyTargetBackupPath)
         : false;
       if (!stagedExists && !finalExists) {
         return false;
@@ -231,7 +233,7 @@ export async function rollbackComponents(components: PromotionComponent[]): Prom
         }
       }
       if (backupExists) {
-        if (await pathExists(component.finalPath)) {
+        if (await migrationPathEntryExists(component.finalPath)) {
           return false;
         }
         await fs.rename(component.emptyTargetBackupPath!, component.finalPath);
@@ -253,8 +255,8 @@ async function hasPublishedPromotionComponent(components: PromotionComponent[]):
       return true;
     }
     const [stagedExists, finalExists] = await Promise.all([
-      pathExists(component.stagedPath),
-      pathExists(component.finalPath),
+      migrationPathEntryExists(component.stagedPath),
+      migrationPathEntryExists(component.finalPath),
     ]);
     if (!stagedExists && finalExists) {
       return true;
@@ -286,9 +288,8 @@ export async function recoverSetupMigrationPromotion(params: {
     );
   }
   const currentConfigHash = hashSetupMigrationConfig(await params.readConfigFile());
-  const allFinal = (
-    await Promise.all(journal.components.map((component) => pathExists(component.finalPath)))
-  ).every(Boolean);
+  const finalPaths = journal.components.map((component) => component.finalPath);
+  const allFinal = (await Promise.all(finalPaths.map(migrationPathEntryExists))).every(Boolean);
   if (journal.status === "completed") {
     return createPromotionResume(found.path, journal);
   }
@@ -334,7 +335,7 @@ export async function recoverSetupMigrationPromotion(params: {
 async function listMissingPromotionParents(target: string): Promise<string[]> {
   const missing: string[] = [];
   let current = path.dirname(target);
-  while (!(await pathExists(current))) {
+  while (!(await migrationPathEntryExists(current))) {
     missing.push(current);
     const parent = path.dirname(current);
     if (parent === current) {
@@ -353,12 +354,14 @@ async function reserveEmptyTargetBackupPath(target: string): Promise<string> {
 
 export async function recordPromotionTargetState(component: PromotionComponent): Promise<void> {
   component.createdParentPaths = await listMissingPromotionParents(component.finalPath);
-  if (!(await pathExists(component.finalPath))) {
+  if (!(await migrationPathEntryExists(component.finalPath))) {
     return;
   }
   const stat = await fs.lstat(component.finalPath);
   if (!stat.isDirectory() || (await fs.readdir(component.finalPath)).length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   component.targetWasEmptyDirectory = true;
   component.emptyTargetBackupPath = await reserveEmptyTargetBackupPath(component.finalPath);
@@ -370,7 +373,9 @@ export async function moveRecordedEmptyTarget(component: PromotionComponent): Pr
   }
   const entries = await fs.readdir(component.finalPath);
   if (entries.length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   if (component.emptyTargetBackupPath) {
     await fs.rename(component.finalPath, component.emptyTargetBackupPath);
@@ -447,14 +452,6 @@ async function canonicalizePromotionPath(
   }
 }
 
-function pathsOverlap(left: string, right: string): boolean {
-  const relative = path.relative(left, right);
-  return (
-    relative.length === 0 ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 export async function assertSupportedStagedStateTree(params: {
   stagedStateDir: string;
   agentId: string;
@@ -513,7 +510,7 @@ export async function assertDisjointPromotionTargets(
       };
       const currentPath = normalizePath(current.path.path);
       const otherPath = normalizePath(other.path.path);
-      if (pathsOverlap(currentPath, otherPath) || pathsOverlap(otherPath, currentPath)) {
+      if (isPathInside(currentPath, otherPath) || isPathInside(otherPath, currentPath)) {
         throw new Error(
           `Migration promotion targets overlap: ${current.component.finalPath} and ${other.component.finalPath}.`,
         );

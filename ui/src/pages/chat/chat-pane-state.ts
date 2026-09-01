@@ -6,6 +6,7 @@ type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];
   selectedChatSessionArchived: boolean;
+  selectedChatSessionIncognito: boolean;
 };
 
 export function applySelectedSessionProjection(
@@ -16,6 +17,7 @@ export function applySelectedSessionProjection(
     return false;
   }
   state.selectedChatSessionArchived = session.archived === true;
+  state.selectedChatSessionIncognito = session.incognito === true;
   state.chatQueueModeOverride = session.queueMode;
   state.chatEffectiveQueueMode = session.effectiveQueueMode;
   return true;

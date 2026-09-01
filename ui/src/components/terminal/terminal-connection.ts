@@ -1,5 +1,6 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
+import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -24,12 +25,6 @@ type TerminalOpenResult = {
   cwd: string;
   confined: boolean;
   title?: string;
-};
-
-type TerminalCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
 };
 
 type TerminalAttachResult = TerminalOpenResult & {
@@ -97,6 +92,32 @@ export class TerminalOpenTimeoutError extends Error {
   }
 }
 
+/** A session opened without the fields the protocol guarantees cannot drive a
+ *  tab label, uploads, or a replay. Fail here so the panel reports an unusable
+ *  gateway instead of surfacing a downstream TypeError as its only content. */
+export class TerminalOpenUnusableSessionError extends Error {
+  constructor(readonly field: string) {
+    super(`terminal session response is missing ${field}`);
+    this.name = "TerminalOpenUnusableSessionError";
+  }
+}
+
+function nonEmptyStringField(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Names the first protocol-required field the payload failed to deliver.
+ *  `terminal.open`/`terminal.attach` responses reach the panel through a bare
+ *  cast, so every consumer downstream would otherwise trust unchecked data. */
+function missingTerminalSessionField(result: Partial<TerminalAttachResult>): string | null {
+  for (const field of ["sessionId", "agentId", "shell", "cwd"] as const) {
+    if (!nonEmptyStringField(result[field])) {
+      return field;
+    }
+  }
+  return null;
+}
+
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -119,6 +140,10 @@ export class TerminalConnection {
   // capped buffer becomes a detectable gap instead of silent output loss.
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
+  // Fence for replies that outlive dispose(): without it a late open/attach
+  // would resurrect stream state and re-arm the liveness loop on a connection
+  // whose panel is gone or was replaced by a reconnect.
+  private disposed = false;
   private pendingOpenCount = 0;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessProbeInFlight = false;
@@ -194,10 +219,7 @@ export class TerminalConnection {
   }
 
   /** Opens a session and registers its output/exit sinks before returning. */
-  async open(
-    params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
-    sink: SessionSink,
-  ): Promise<TerminalOpenResult> {
+  async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
@@ -216,6 +238,19 @@ export class TerminalConnection {
       }
       throw new TerminalOpenTimeoutError(error);
     }
+    const missingField = missingTerminalSessionField(result);
+    if (missingField) {
+      // The gateway already created the session. Without the fields the protocol
+      // guarantees it cannot be driven, so release it here instead of leaving a
+      // live server session that nothing owns and nothing can close.
+      if (nonEmptyStringField(result.sessionId)) {
+        void this.close(result.sessionId);
+      }
+      throw new TerminalOpenUnusableSessionError(missingField);
+    }
+    if (this.disposed) {
+      return result;
+    }
     const stream = this.setStream(result.sessionId, sink, {
       seqMode: "unknown",
       expectedSeq: 0,
@@ -231,8 +266,18 @@ export class TerminalConnection {
     const result = await this.requestWhileHoldingStream(() =>
       this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
     );
+    // Same unchecked cast as open(): a replay without its buffer would throw on
+    // `result.buffer.length` further down instead of reporting a bad response.
+    const missingAttachField =
+      missingTerminalSessionField(result) ?? (typeof result.buffer === "string" ? null : "buffer");
+    if (missingAttachField) {
+      throw new TerminalOpenUnusableSessionError(missingAttachField);
+    }
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
+    if (this.disposed) {
+      return result;
+    }
     const stream = this.setStream(sessionId, sink, {
       seqMode: offset === null ? "counter" : "offset",
       expectedSeq: offset,
@@ -569,11 +614,25 @@ export class TerminalConnection {
   }
 
   async input(sessionId: string, data: string): Promise<void> {
-    await this.client.request("terminal.input", { sessionId, data }).catch(() => undefined);
+    await this.requestAction("terminal.input", sessionId, { sessionId, data });
   }
 
   async resize(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.client.request("terminal.resize", { sessionId, cols, rows }).catch(() => undefined);
+    await this.requestAction("terminal.resize", sessionId, { sessionId, cols, rows });
+  }
+
+  private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
+    const stream = this.streams.get(sessionId);
+    const result = await this.client.request<{ ok: boolean }>(method, params).catch(() => null);
+    if (result?.ok !== false || !stream || this.streams.get(sessionId) !== stream) {
+      return;
+    }
+    this.deliverExit(sessionId, stream, {
+      exitCode: null,
+      signal: null,
+      reason: "disconnected",
+      error: "Terminal session is no longer available. Open a new terminal session.",
+    });
   }
 
   /** Closes a session server-side and drops its local stream state. */
@@ -591,6 +650,7 @@ export class TerminalConnection {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const stream of this.streams.values()) {
       stream.abort.abort();
     }

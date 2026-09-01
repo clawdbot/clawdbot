@@ -48,6 +48,7 @@ function pickPackageInstallCommonParams(
   return copyPluginInstallTransactionRequest(params, {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
@@ -59,6 +60,7 @@ function pickPackageInstallCommonParams(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
+    onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     onEffectiveMode: params.onEffectiveMode,
   });
 }
@@ -162,6 +164,7 @@ async function installBundleFromSourceDir(
     scan: async () =>
       await runtime.scanBundleInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         sourceDir: params.sourceDir,
         pluginId,
@@ -193,6 +196,7 @@ async function installBundleFromSourceDir(
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     }),
   );
   return installed.ok
@@ -291,6 +295,7 @@ async function installPluginFromPackageDir(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     installPolicyRequest: params.installPolicyRequest,
@@ -332,12 +337,14 @@ async function installPluginFromPackageDir(
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       afterInstall: async (installedDir) => {
         return await scanAndLinkInstalledPackage({
           runtime,
           installedDir,
           pluginId: plugin.pluginId,
           peerDependencies: plugin.peerDependencies,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           config: params.config,
           mode: effectiveMode,
@@ -386,6 +393,7 @@ export async function installPluginFromArchive(
         ...pickPackageInstallCommonParams(
           copyPluginInstallTransactionRequest(params, {
             dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
             extensionsDir: params.extensionsDir,
             timeoutMs,
             logger,
@@ -396,6 +404,7 @@ export async function installPluginFromArchive(
             trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
             requirePluginManifest: true,
             installPolicyRequest,
+            onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

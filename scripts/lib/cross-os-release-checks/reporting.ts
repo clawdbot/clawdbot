@@ -18,6 +18,10 @@ export function writeSummary(baseDir: string, summaryPayload: SummaryPayload) {
     `- Source SHA: \`${summaryPayload.sourceSha || "unknown"}\``,
     `- Candidate version: \`${summaryPayload.candidateVersion || "unknown"}\``,
     `- Baseline spec: \`${summaryPayload.baselineSpec}\``,
+    summaryPayload.runnerLabel ? `- Runner: \`${summaryPayload.runnerLabel}\`` : "",
+    summaryPayload.runnerOs ? `- Runner OS: \`${summaryPayload.runnerOs}\`` : "",
+    summaryPayload.nodeVersion ? `- Node: \`${summaryPayload.nodeVersion}\`` : "",
+    summaryPayload.npmVersion ? `- npm: \`${summaryPayload.npmVersion}\`` : "",
     result.status ? `- Result: \`${result.status}\`` : "",
     result.installTarget ? `- Install target: \`${result.installTarget}\`` : "",
     result.installVersion ? `- Install version: \`${result.installVersion}\`` : "",
@@ -29,6 +33,9 @@ export function writeSummary(baseDir: string, summaryPayload: SummaryPayload) {
     result.dashboardStatus ? `- Dashboard: \`${result.dashboardStatus}\`` : "",
     result.discordStatus ? `- Discord: \`${result.discordStatus}\`` : "",
     result.agentOutput ? `- Agent output: \`${trimForSummary(result.agentOutput)}\`` : "",
+    result.updateFallback
+      ? `- Updater fallback: \`${result.updateFallback.reason}/${result.updateFallback.action}\``
+      : "",
     result.error ? `- Error: \`${trimForSummary(result.error)}\`` : "",
   ].filter(Boolean);
   if (Array.isArray(result.phaseTimings) && result.phaseTimings.length > 0) {
@@ -36,6 +43,12 @@ export function writeSummary(baseDir: string, summaryPayload: SummaryPayload) {
     for (const phase of result.phaseTimings) {
       const suffix = phase.status === "pass" ? "" : ` (${phase.status})`;
       lines.push(`- \`${phase.name}\`: ${Math.round(phase.durationMs / 1000)}s${suffix}`);
+    }
+  }
+  if (Array.isArray(result.updateTimings) && result.updateTimings.length > 0) {
+    lines.push("", "### Updater timings");
+    for (const timing of result.updateTimings) {
+      lines.push(`- \`${timing.name}\`: ${Math.round(timing.durationMs / 1000)}s`);
     }
   }
   writeFileSync(summaryMarkdownPath, `${lines.join("\n")}\n`, "utf8");

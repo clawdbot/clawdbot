@@ -122,13 +122,17 @@ function normalizeAuthProfileSnapshot(value: unknown): QaAuthProfileSnapshot {
 
 export async function seedAuthProfiles(
   shape: QaAuthProfileShape,
-  agentDir: string,
+  params: { agentId: string; stateDir: string },
 ): Promise<QaAuthProfileSnapshot> {
   const snapshot = {
     version: QA_AUTH_PROFILE_STORE_VERSION,
     profiles: buildProfileMap(shape),
   };
-  await writeQaAuthProfiles({ agentDir, profiles: snapshot.profiles, replace: true });
+  await writeQaAuthProfiles({
+    ...params,
+    profiles: snapshot.profiles,
+    replace: true,
+  });
   return snapshot;
 }
 

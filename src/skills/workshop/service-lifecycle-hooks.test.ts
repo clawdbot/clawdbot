@@ -50,6 +50,25 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
+async function createOwnedSkill(workspaceDir: string, name: string): Promise<string> {
+  const proposal = await proposeCreateSkill({
+    workspaceDir,
+    agentId: "main",
+    name,
+    description: "Existing skill",
+    content: `# ${name}\n\nBefore.\n`,
+  });
+  await applySkillProposal({
+    workspaceDir,
+    agentId: "main",
+    proposalId: proposal.record.id,
+    expectedRevisionHash: proposal.revisionHash,
+  });
+  hookMocks.proposalChanged.mockClear();
+  hookMocks.skillChanged.mockClear();
+  return proposal.record.target.skillDir;
+}
+
 describe("Skill Workshop lifecycle hooks", () => {
   it("emits a committed live-skill artifact after apply", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-hooks-");
@@ -97,13 +116,7 @@ describe("Skill Workshop lifecycle hooks", () => {
 
   it("records and dispatches stale transitions detected during apply", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-stale-");
-    const skillDir = path.join(workspaceDir, "skills", "existing");
-    await writeSkill({
-      dir: skillDir,
-      name: "existing",
-      description: "Existing skill",
-      body: "# Existing\n\nBefore.\n",
-    });
+    const skillDir = await createOwnedSkill(workspaceDir, "existing");
     const proposal = await proposeUpdateSkill({
       workspaceDir,
       agentId: "main",
@@ -238,13 +251,7 @@ describe("Skill Workshop lifecycle hooks", () => {
 
   it("rejects apply when an untouched target asset changes after evaluation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-lifecycle-evaluation-race-");
-    const skillDir = path.join(workspaceDir, "skills", "existing");
-    await writeSkill({
-      dir: skillDir,
-      name: "existing",
-      description: "Existing skill",
-      body: "# Existing\n\nBefore.\n",
-    });
+    const skillDir = await createOwnedSkill(workspaceDir, "existing");
     const untouchedAsset = path.join(skillDir, "references", "untouched.txt");
     await fs.mkdir(path.dirname(untouchedAsset), { recursive: true });
     await fs.writeFile(untouchedAsset, "before\n");

@@ -6,8 +6,11 @@ import {
   pluginInstallPathMatchesRoot,
   type PluginVerificationFailureReason,
 } from "../../plugins/runtime-degraded-state.js";
-import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  isDefaultAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+  normalizeOptionalAgentRuntimeId,
+} from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { resolveAgentHarnessOwnerPluginIds } from "./runtime-plugin-load-plan.js";
@@ -131,6 +134,8 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   }
 
   if (!params.pluginRegistry?.agentHarnesses.some((entry) => entry.harness.id === runtime)) {
-    throw new Error(`Agent harness runtime "${runtime}" is not present in the prepared registry.`);
+    throw new Error(
+      `Agent harness runtime "${runtime}" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.`,
+    );
   }
 }

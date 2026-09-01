@@ -13,6 +13,7 @@ describe("registerTelegramHandlers", () => {
     const params: RegisterTelegramHandlerParams = {
       cfg: {},
       accountId: "default",
+      ownerAgentId: "main",
       bot,
       mediaMaxBytes: 1,
       opts: { token: "tok" },
@@ -31,6 +32,7 @@ describe("registerTelegramHandlers", () => {
     registerTelegramHandlers(params);
 
     expect(on.mock.calls.map(([trigger]) => trigger)).toEqual([
+      "my_chat_member",
       "message_reaction",
       "poll",
       "poll_answer",

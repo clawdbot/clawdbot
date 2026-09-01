@@ -14,6 +14,7 @@ import {
 import { isCoreSemanticRunProgressDiagnosticMetadata } from "../../../infra/diagnostic-semantic-run-progress.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
+  createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -203,6 +204,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
       sessionKey: "agent:main:semantic-order",
     };
     const runId = "run-semantic-order";
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
     const results = [
       assistantResult("error", [{ type: "text", text: "retry one" }]),
       assistantResult("error", [{ type: "text", text: "retry two" }]),
@@ -225,9 +227,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
         model: "gpt-5.4",
         trace: createDiagnosticTraceContext(),
         nextCallId: () => `${runId}:${(callSequence += 1)}`,
+        ownerGeneration: owner.generation,
       },
     );
-    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
 
     const repeatedRequestAges: Array<number | undefined> = [];
     for (let index = 0; index < 4; index += 1) {

@@ -51,6 +51,7 @@ export {
   repoInstallSpec,
 } from "./test-helpers/bundled-plugin-paths.js";
 export { importFreshModule } from "./test-helpers/import-fresh.js";
+export { runDirectImportSmoke } from "./test-helpers/direct-smoke.js";
 export {
   createGrayscaleAlphaPngBuffer,
   createNoisyPngBuffer,

@@ -84,7 +84,7 @@ function createBootstrap(selection: RunnerSelection): Bootstrap {
       status: "idle",
     },
     runnerCatalog: {
-      channels: ["matrix", "telegram"],
+      channels: ["buzz", "matrix", "telegram"],
       profiles: [
         { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline", categoryIds: [] },
         { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
@@ -205,6 +205,38 @@ afterEach(() => {
 });
 
 describe("QA Lab runner browser interactions", () => {
+  it("labels every execution configuration select", async () => {
+    const root = await mountRunner({
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      channel: null,
+      channelDriver: "qa-channel",
+      evidenceMode: "full",
+      fastMode: false,
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      profile: "all",
+      providerMode: "mock-openai",
+      runtimePair: null,
+      runtimePairLane: null,
+      scenarioIds: ["dm-chat-baseline"],
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
+    const selects = [...root.querySelectorAll<HTMLSelectElement>(".config-field select")];
+
+    expect(selects).toHaveLength(9);
+    expect(selects.map((select) => select.labels?.[0]?.textContent?.trim())).toEqual([
+      "Profile",
+      "Provider lane",
+      "Channel driver",
+      "Execution channel",
+      "Evidence mode",
+      "Runtime pair",
+      "Runtime-pair lane",
+      "Primary model",
+      "Alternate model",
+    ]);
+  });
+
   it("sends group conversation messages from the interactive chat composer", async () => {
     const root = await mountRunner(
       {
@@ -336,6 +368,12 @@ describe("QA Lab runner browser interactions", () => {
     });
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
+    expect(
+      Array.from(
+        root.querySelectorAll<HTMLSelectElement>("#execution-channel option"),
+        (option) => option.value,
+      ),
+    ).toEqual(["", "buzz", "matrix", "telegram"]);
     selectValue(root, "#channel-driver", "live");
     selectValue(root, "#execution-channel", "telegram");
     root.querySelector<HTMLButtonElement>("[data-action='run-suite']")?.click();

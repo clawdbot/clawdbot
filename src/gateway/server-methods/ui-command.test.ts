@@ -28,6 +28,7 @@ async function call(params: unknown, clients: GatewayClient[]) {
     respond,
     context: {
       broadcastToConnIds,
+      getRuntimeConfig: () => ({}),
       getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
         new Set(
           clients
@@ -75,7 +76,11 @@ describe("ui.command gateway method", () => {
 
     expect(result.broadcastToConnIds).toHaveBeenCalledWith(
       "ui.command",
-      params,
+      {
+        ...params,
+        agentId: "main",
+        sessionKey: "agent:main:other",
+      },
       new Set(["ui-one", "ui-two"]),
     );
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });

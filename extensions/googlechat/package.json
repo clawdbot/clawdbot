@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "google-auth-library": "10.9.1",
+    "google-auth-library": "11.0.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -122,7 +122,9 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use Google Chat environment credentials"
-            }
+            },
+            "envVars": ["GOOGLE_CHAT_SERVICE_ACCOUNT", "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"],
+            "envVarMode": "any"
           }
         ]
       }

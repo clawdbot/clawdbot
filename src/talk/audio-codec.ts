@@ -20,6 +20,14 @@ type ResampleKernel = {
   phaseCount: number;
 };
 
+type ResamplePlan = {
+  cutoffCyclesPerSample: number;
+  inputSampleRate: number;
+  kernel: ResampleKernel | undefined;
+  outputSampleRate: number;
+  ratio: number;
+};
+
 const HOST_IS_LITTLE_ENDIAN = new Uint16Array(new Uint8Array([1, 0]).buffer)[0] === 1;
 
 /** Clamp an intermediate sample to signed 16-bit PCM range. */
@@ -158,6 +166,70 @@ function sampleBandlimited(
   return weighted / weightSum;
 }
 
+function createResamplePlan(inputSampleRate: number, outputSampleRate: number): ResamplePlan {
+  const ratio = inputSampleRate / outputSampleRate;
+  const maxCutoff = 0.5;
+  const downsampleCutoff = ratio > 1 ? maxCutoff / ratio : maxCutoff;
+  const cutoffCyclesPerSample = Math.max(0.01, downsampleCutoff * RESAMPLE_CUTOFF_GUARD);
+  return {
+    cutoffCyclesPerSample,
+    inputSampleRate,
+    kernel: buildResampleKernel(inputSampleRate, outputSampleRate, cutoffCyclesPerSample),
+    outputSampleRate,
+    ratio,
+  };
+}
+
+function sampleResampledPcm(
+  input: Int16Array,
+  inputStartSample: number,
+  outputIndex: number,
+  plan: ResamplePlan,
+): number {
+  const sourcePosition = (outputIndex * plan.inputSampleRate) / plan.outputSampleRate;
+  return Math.round(
+    plan.kernel
+      ? sampleBandlimitedWithCoefficients(
+          input,
+          Math.floor(sourcePosition) - inputStartSample,
+          expectDefined(
+            plan.kernel.coefficients[
+              (outputIndex * plan.kernel.inputStep) % plan.kernel.phaseCount
+            ],
+            "coefficients entry at (output index * kernel input step) % kernel phase count",
+          ) ?? plan.kernel.coefficients[0],
+        )
+      : sampleBandlimited(
+          input,
+          outputIndex * plan.ratio - inputStartSample,
+          plan.cutoffCyclesPerSample,
+        ),
+  );
+}
+
+function renderResampledPcm(
+  input: Buffer,
+  inputStartSample: number,
+  firstOutputIndex: number,
+  outputSamples: number,
+  plan: ResamplePlan,
+): Buffer {
+  const output = Buffer.alloc(outputSamples * 2);
+  const inputView = readInt16Samples(input);
+  const outputView = canUseInt16View(output) ? int16View(output) : undefined;
+  for (let offset = 0; offset < outputSamples; offset += 1) {
+    const sample = clamp16(
+      sampleResampledPcm(inputView, inputStartSample, firstOutputIndex + offset, plan),
+    );
+    if (outputView) {
+      outputView[offset] = sample;
+    } else {
+      output.writeInt16LE(sample, offset * 2);
+    }
+  }
+  return output;
+}
+
 /** Resample little-endian signed 16-bit PCM to another integer sample rate. */
 export function resamplePcm(
   input: Buffer,
@@ -172,38 +244,93 @@ export function resamplePcm(
     return Buffer.alloc(0);
   }
 
-  const ratio = inputSampleRate / outputSampleRate;
-  const outputSamples = Math.floor(inputSamples / ratio);
-  const output = Buffer.alloc(outputSamples * 2);
-  const maxCutoff = 0.5;
-  const downsampleCutoff = ratio > 1 ? maxCutoff / ratio : maxCutoff;
-  const cutoffCyclesPerSample = Math.max(0.01, downsampleCutoff * RESAMPLE_CUTOFF_GUARD);
-  const kernel = buildResampleKernel(inputSampleRate, outputSampleRate, cutoffCyclesPerSample);
+  const plan = createResamplePlan(inputSampleRate, outputSampleRate);
+  const outputSamples = Math.floor(inputSamples / plan.ratio);
+  return renderResampledPcm(input, 0, 0, outputSamples, plan);
+}
 
-  const inputView = readInt16Samples(input);
-  const outputView = canUseInt16View(output) ? int16View(output) : undefined;
-
-  for (let i = 0; i < outputSamples; i += 1) {
-    const sample = Math.round(
-      kernel
-        ? sampleBandlimitedWithCoefficients(
-            inputView,
-            Math.floor((i * inputSampleRate) / outputSampleRate),
-            expectDefined(
-              kernel.coefficients[(i * kernel.inputStep) % kernel.phaseCount],
-              "coefficients entry at (i * kernel.input step) % kernel.phase count",
-            ) ?? kernel.coefficients[0],
-          )
-        : sampleBandlimited(inputView, i * ratio, cutoffCyclesPerSample),
-    );
-    if (outputView) {
-      outputView[i] = clamp16(sample);
-    } else {
-      output.writeInt16LE(clamp16(sample), i * 2);
-    }
+/** Create a chunk-safe PCM resampler that preserves filter and fractional phase state. */
+export function createStreamingPcmResampler(
+  inputSampleRate: number,
+  outputSampleRate: number,
+): {
+  process(chunk: Buffer): Buffer;
+  flush(): Buffer;
+} {
+  if (inputSampleRate === outputSampleRate) {
+    return {
+      process: (chunk) => Buffer.from(chunk),
+      flush: () => Buffer.alloc(0),
+    };
   }
 
-  return output;
+  const plan = createResamplePlan(inputSampleRate, outputSampleRate);
+  let bufferedInput = Buffer.alloc(0);
+  let inputStartSample = 0;
+  let totalInputSamples = 0;
+  let nextOutputIndex = 0;
+  let trailingByte = Buffer.alloc(0);
+  let flushed = false;
+
+  const renderAvailable = (includeRightEdge: boolean): Buffer => {
+    const targetOutputCount = Math.floor(totalInputSamples / plan.ratio);
+    let endOutputIndex = nextOutputIndex;
+    while (endOutputIndex < targetOutputCount) {
+      const center = Math.floor((endOutputIndex * plan.inputSampleRate) / plan.outputSampleRate);
+      if (!includeRightEdge && center + RESAMPLE_HALF_TAPS >= totalInputSamples) {
+        break;
+      }
+      endOutputIndex += 1;
+    }
+
+    const output = renderResampledPcm(
+      bufferedInput,
+      inputStartSample,
+      nextOutputIndex,
+      endOutputIndex - nextOutputIndex,
+      plan,
+    );
+    nextOutputIndex = endOutputIndex;
+
+    const nextCenter = Math.floor((nextOutputIndex * plan.inputSampleRate) / plan.outputSampleRate);
+    const retainFromSample = Math.max(0, nextCenter - RESAMPLE_HALF_TAPS);
+    const dropSamples = retainFromSample - inputStartSample;
+    if (dropSamples > 0) {
+      bufferedInput = Buffer.from(bufferedInput.subarray(dropSamples * 2));
+      inputStartSample = retainFromSample;
+    }
+    return output;
+  };
+
+  return {
+    process(chunk) {
+      if (flushed) {
+        throw new Error("Cannot process PCM after the streaming resampler was flushed");
+      }
+      const combined = trailingByte.length > 0 ? Buffer.concat([trailingByte, chunk]) : chunk;
+      const completeBytes = combined.length - (combined.length % 2);
+      trailingByte = Buffer.from(combined.subarray(completeBytes));
+      if (completeBytes > 0) {
+        const completePcm = combined.subarray(0, completeBytes);
+        bufferedInput =
+          bufferedInput.length > 0
+            ? Buffer.concat([bufferedInput, completePcm])
+            : Buffer.from(completePcm);
+        totalInputSamples += completeBytes / 2;
+      }
+      return renderAvailable(false);
+    },
+    flush() {
+      if (flushed) {
+        return Buffer.alloc(0);
+      }
+      flushed = true;
+      trailingByte = Buffer.alloc(0);
+      const output = renderAvailable(true);
+      bufferedInput = Buffer.alloc(0);
+      return output;
+    },
+  };
 }
 
 /** Resample little-endian signed 16-bit PCM to the telephony 8 kHz rate. */

@@ -4,7 +4,9 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
+import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
@@ -19,6 +21,7 @@ import {
 import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
@@ -96,22 +99,28 @@ function createPluginCandidate(params: {
   packageManifest?: OpenClawPackageManifest;
   format?: PluginCandidate["format"];
   bundleFormat?: PluginCandidate["bundleFormat"];
+  installOwner?: string;
 }): PluginCandidate {
-  return {
-    idHint: params.idHint ?? "demo",
-    source: params.format === "bundle" ? params.rootDir : path.join(params.rootDir, "index.ts"),
-    rootDir: params.rootDir,
-    origin: params.origin ?? "global",
-    format: params.format,
-    bundleFormat: params.bundleFormat,
-    packageName: params.packageName,
-    packageVersion: params.packageVersion,
-    packageDir: params.packageDir ?? params.rootDir,
-    packageManifest: params.packageManifest,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: params.idHint ?? "demo",
+      source: params.format === "bundle" ? params.rootDir : path.join(params.rootDir, "index.ts"),
+      rootDir: params.rootDir,
+      origin: params.origin ?? "global",
+      format: params.format,
+      bundleFormat: params.bundleFormat,
+      packageName: params.packageName,
+      packageVersion: params.packageVersion,
+      packageDir: params.packageDir ?? params.rootDir,
+      packageManifest: params.packageManifest,
+    },
+    params.installOwner,
+  );
 }
 
-function createRichPluginFixture(params: { id?: string; packageVersion?: string } = {}) {
+function createRichPluginFixture(
+  params: { id?: string; packageVersion?: string; installOwner?: string } = {},
+) {
   const rootDir = makeTempDir();
   const id = params.id ?? "demo";
   writeRuntimeEntry(rootDir);
@@ -180,6 +189,7 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
           defaultChoice: "npm",
         },
       },
+      installOwner: params.installOwner,
     }),
   };
 }
@@ -247,6 +257,7 @@ describe("installed plugin index", () => {
       path: "package.json",
     });
     expectSha256(packageJson.hash);
+    expect(resolveInstalledPluginIndexInstallOwner(plugin)).toBeUndefined();
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
   });
@@ -422,18 +433,20 @@ describe("installed plugin index", () => {
     });
 
     writeManifestlessClaudeBundle(rootDir, ["commands"]);
-    const second = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-          idHint: "workspace",
-          format: "bundle",
-          bundleFormat: "claude",
-          origin: "config",
-        }),
-      ],
-      env: hermeticEnv(),
-    });
+    const second = withPluginCache(createPluginCache(), () =>
+      loadInstalledPluginIndex({
+        candidates: [
+          createPluginCandidate({
+            rootDir,
+            idHint: "workspace",
+            format: "bundle",
+            bundleFormat: "claude",
+            origin: "config",
+          }),
+        ],
+        env: hermeticEnv(),
+      }),
+    );
 
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
@@ -574,7 +587,7 @@ describe("installed plugin index", () => {
     },
   );
 
-  it("keeps an index-disabled plugin disabled when config only enables another plugin", () => {
+  it("evaluates current enablement without retaining removed startup policy", () => {
     const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
     const index = loadInstalledPluginIndex({
@@ -604,11 +617,17 @@ describe("installed plugin index", () => {
           },
         },
       }),
+    ).toBe(true);
+    expect(isInstalledPluginEnabled(index, "disabled-demo")).toBe(false);
+    expect(
+      isInstalledPluginEnabled(index, "disabled-demo", {
+        plugins: { deny: ["disabled-demo"] },
+      }),
     ).toBe(false);
   });
 
   it("records explicit install records separately from package install intent", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
 
     const index = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
@@ -688,6 +707,7 @@ describe("installed plugin index", () => {
           rootDir: globalDir,
           idHint: "duplicate-demo",
           origin: "global",
+          installOwner: "duplicate-demo",
         }),
       ],
       installRecords: {
@@ -716,7 +736,7 @@ describe("installed plugin index", () => {
   });
 
   it("indexes npm plugin index records written before a process reload", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const cfg = recordPluginInstall(
       {},
       {
@@ -765,7 +785,7 @@ describe("installed plugin index", () => {
   });
 
   it("indexes persisted plugin index records from an explicit state directory", async () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndexInstallRecords(
       {
@@ -848,7 +868,7 @@ describe("installed plugin index", () => {
   });
 
   it("indexes local fallback plugin index records written before a process reload", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const cfg = recordPluginInstall(
       {},
       {
@@ -883,7 +903,7 @@ describe("installed plugin index", () => {
   });
 
   it("does not treat package install intent as source invalidation", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       installRecords: {
@@ -912,7 +932,7 @@ describe("installed plugin index", () => {
   });
 
   it("treats plugin index changes as source invalidation", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       installRecords: {
@@ -1092,7 +1112,7 @@ describe("installed plugin index", () => {
   });
 
   it("diffs invalidation reasons for manifest, package, source, host, compat, and migration changes", () => {
-    const fixture = createRichPluginFixture();
+    const fixture = createRichPluginFixture({ installOwner: "demo" });
     const previous = loadInstalledPluginIndex({
       candidates: [fixture.candidate],
       config: {
@@ -1118,21 +1138,23 @@ describe("installed plugin index", () => {
       providers: ["demo", "demo-next"],
     });
     const current = {
-      ...loadInstalledPluginIndex({
-        candidates: [
-          {
-            ...fixture.candidate,
-            packageVersion: "1.2.4",
+      ...withPluginCache(createPluginCache(), () =>
+        loadInstalledPluginIndex({
+          candidates: [
+            {
+              ...fixture.candidate,
+              packageVersion: "1.2.4",
+            },
+          ],
+          installRecords: {
+            demo: {
+              source: "npm",
+              resolvedVersion: "1.2.4",
+            },
           },
-        ],
-        installRecords: {
-          demo: {
-            source: "npm",
-            resolvedVersion: "1.2.4",
-          },
-        },
-        env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
-      }),
+          env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
+        }),
+      ),
       compatRegistryVersion: "different-compat-registry",
     };
 
@@ -1164,10 +1186,12 @@ describe("installed plugin index", () => {
     });
 
     fs.writeFileSync(contractPath, "export const stateMigrations = [{ id: 'changed' }];\n", "utf8");
-    const current = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      env: hermeticEnv(),
-    });
+    const current = withPluginCache(createPluginCache(), () =>
+      loadInstalledPluginIndex({
+        candidates: [fixture.candidate],
+        env: hermeticEnv(),
+      }),
+    );
 
     expect(current.plugins[0]?.manifestHash).toBe(previous.plugins[0]?.manifestHash);
     expect(current.plugins[0]?.packageJson?.hash).toBe(previous.plugins[0]?.packageJson?.hash);

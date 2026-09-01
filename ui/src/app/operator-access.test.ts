@@ -4,6 +4,7 @@ import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorPairingAccess,
+  hasOperatorReadAccess,
   readGatewayOperatorAccess,
 } from "./operator-access.ts";
 
@@ -69,6 +70,17 @@ describe("readGatewayOperatorAccess", () => {
       canReviewApprovals: expected[3],
       canGrantApprovals: expected[4],
     });
+  });
+});
+
+describe("hasOperatorReadAccess", () => {
+  it("accepts read, implied write/admin, and legacy access but rejects unrelated scopes", () => {
+    expect(hasOperatorReadAccess(null)).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.read"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.write"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.admin"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator" })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.pairing"] })).toBe(false);
   });
 });
 

@@ -2,6 +2,7 @@ import Observation
 import SwiftUI
 
 @MainActor
+// periphery:ignore - The macOS chat shell presents this public sheet across the package boundary.
 public struct ChatSessionsSheet: View {
     private enum SessionScope: String, CaseIterable, Identifiable {
         case active
@@ -308,6 +309,12 @@ public struct ChatSessionsSheet: View {
                 }
             }
             .contextMenu {
+                OpenClawSessionColorMenu(color: session.color) { color in
+                    Task {
+                        await self.viewModel.setSessionColor(key: session.key, color: color)
+                        await self.refreshScopedSessionsIfNeeded(debounce: false)
+                    }
+                }
                 Button {
                     self.inspectedSession = session
                 } label: {
@@ -344,10 +351,17 @@ public struct ChatSessionsSheet: View {
                     }
                 }
                 Button {
-                    Task { await self.viewModel.forkSession(key: session.key) }
+                    Task {
+                        await self.viewModel.forkSession(
+                            key: session.key,
+                            fromLastCompleted: session.hasActiveRun == true)
+                    }
                 } label: {
                     self.actionLabel(
-                        LocalizedStringKey(String(localized: "Fork")),
+                        LocalizedStringKey(
+                            session.hasActiveRun == true
+                                ? String(localized: "Fork from last completed message")
+                                : String(localized: "Fork")),
                         systemImage: "arrow.triangle.branch")
                 }
                 Button {
@@ -390,6 +404,10 @@ public struct ChatSessionsSheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Pinned")
             }
+        }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
         }
     }
 

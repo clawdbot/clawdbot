@@ -20,6 +20,7 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isTransientNetworkError } from "openclaw/plugin-sdk/retry-runtime";
 import { safeEqualSecret, SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { getSmsRuntime } from "./runtime.js";
 import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
@@ -249,7 +250,10 @@ export async function prepareHostedSmsMedia(
       mediaUrl: params.mediaUrl,
       routePath: route.localRoutePath,
       publicBaseUrl: route.publicBaseUrl,
-      maxBytes: aggregateMediaBudget,
+      maxBytes: Math.min(
+        params.account.mediaMaxBytes ?? aggregateMediaBudget,
+        aggregateMediaBudget,
+      ),
       mediaAccess,
     }),
   );
@@ -382,7 +386,7 @@ function isRetryableSmsInboundMediaError(error: unknown): boolean {
 export async function materializeSmsInboundMedia(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
-  mediaRuntime: Pick<PluginRuntime["channel"], "media">;
+  mediaRuntime: { media: Pick<PluginRuntime["channel"]["media"], "saveRemoteMedia"> };
   abortSignal?: AbortSignal;
   log?: { warn?: (message: string) => void };
 }): Promise<{ body: string; media: InboundMediaFacts[]; cleanup: () => Promise<void> }> {
@@ -413,13 +417,16 @@ export async function materializeSmsInboundMedia(params: {
       cleanup,
     };
   }
-
+  // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;
   let unavailableCount = declaredUnavailableCount;
   const batchTimeoutSignal = AbortSignal.timeout(TWILIO_MEDIA_BATCH_TIMEOUT_MS);
-  const abortSignal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, batchTimeoutSignal])
-    : batchTimeoutSignal;
+  const credentialAbortController = new AbortController();
+  const abortSignal = AbortSignal.any([
+    credentialAbortController.signal,
+    batchTimeoutSignal,
+    ...(params.abortSignal ? [params.abortSignal] : []),
+  ]);
   const savedMedia: Array<{ path: string; contentType?: string; messageId: string }> = [];
   try {
     for (const [index, media] of params.msg.media.entries()) {
@@ -434,6 +441,14 @@ export async function materializeSmsInboundMedia(params: {
             accountSid: callbackAccountSid,
             messageSid: params.msg.messageSid,
           }),
+          beforeRequest: () => {
+            try {
+              assertSmsCredentialOwnerAvailable(params.account);
+            } catch (error) {
+              credentialAbortController.abort(error);
+              throw error;
+            }
+          },
           requestInit: {
             headers: {
               authorization: `Basic ${Buffer.from(
@@ -444,7 +459,7 @@ export async function materializeSmsInboundMedia(params: {
           },
           filePathHint: inboundMediaFileName(media.contentType, index),
           fallbackContentType: media.contentType,
-          maxBytes: remainingBytes,
+          maxBytes: Math.min(params.account.mediaMaxBytes ?? remainingBytes, remainingBytes),
           ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME] },
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,

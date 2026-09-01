@@ -101,12 +101,16 @@ describe("fs.listDir", () => {
 
   it("reports missing directories as request errors", async () => {
     const root = tempDirs.make("openclaw-fs-listdir-");
+    const missing = path.join(root, "does-not-exist");
     const [ok, , error] = expectDefined(
-      await call({ path: path.join(root, "does-not-exist") }),
-      'await call({ path: path.join(root, "does-not-exist") }) test invariant',
+      await call({ path: missing }),
+      "missing directory response",
     );
     expect(ok).toBe(false);
-    expect((error as { message?: string })?.message).toContain("ENOENT");
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
   });
 
   it("allows write-scoped browsing inside a configured workspace", async () => {
@@ -174,7 +178,10 @@ describe("fs.listDir", () => {
     );
 
     expect(ok).toBe(false);
-    expect(error).toMatchObject({ message: expect.stringContaining("ENOENT") });
+    const message = (error as { message?: string })?.message ?? "";
+    expect(message).toContain(`ENOENT: no such file or directory, scandir '${missing}'`);
+    expect(message).toMatch(/ \| ENOENT$/u);
+    expect(message).not.toMatch(/^Error:/u);
   });
 
   it("routes node listings through the connected node capability", async () => {

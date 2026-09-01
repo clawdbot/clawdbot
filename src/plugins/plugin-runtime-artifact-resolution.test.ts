@@ -66,6 +66,15 @@ afterEach(() => {
 });
 
 describe("resolvePluginRuntimeArtifact", () => {
+  it("keeps the bundled root build ahead of adjacent source output", () => {
+    const fixture = createBundledPluginFixture();
+    fs.writeFileSync(path.join(fixture.rootDir, "index.js"), 'module.exports = { id: "stale" };\n');
+
+    expect(resolveFixture({ ...fixture, preferBuiltPluginArtifacts: true }).source).toBe(
+      fixture.builtSource,
+    );
+  });
+
   it.each([
     { firstPreference: false, firstArtifact: "source" },
     { firstPreference: true, firstArtifact: "built" },
@@ -84,6 +93,80 @@ describe("resolvePluginRuntimeArtifact", () => {
 
       expect(first.source).toBe(firstPreference ? fixture.builtSource : fixture.source);
       expect(second).toEqual(first);
+    },
+  );
+
+  it("prefers the root build for source-external plugins without using package-local output", () => {
+    const fixture = createBundledPluginFixture();
+    const packageLocalSource = path.join(fixture.rootDir, "dist", "index.js");
+    fs.mkdirSync(path.dirname(packageLocalSource), { recursive: true });
+    fs.writeFileSync(packageLocalSource, 'module.exports = { id: "stale" };\n');
+
+    const resolved = resolvePluginRuntimeArtifact({
+      pluginId: "fixture",
+      entryKind: "runtime",
+      rootDir: fixture.rootDir,
+      source: fixture.source,
+      origin: "bundled",
+      preferBuiltPluginArtifacts: true,
+      packageManifest: { build: { bundledDist: false } },
+    });
+
+    expect(resolved.source).toBe(fixture.builtSource);
+    expect(resolved.source).not.toBe(fs.realpathSync(packageLocalSource));
+  });
+
+  it.each([
+    { entryKind: "runtime" as const, sourceName: "index.ts", artifactName: "index.js" },
+    {
+      entryKind: "setup" as const,
+      sourceName: "setup-entry.ts",
+      artifactName: "setup-entry.js",
+    },
+  ])(
+    "keeps source-external $entryKind entries inside their selected root after packaging",
+    ({ entryKind, sourceName, artifactName }) => {
+      const fixture = createBundledPluginFixture();
+      const packageRoot = path.dirname(path.dirname(fixture.rootDir));
+      const source = path.join(fixture.rootDir, sourceName);
+      if (source !== fixture.source) {
+        fs.writeFileSync(source, "export default { register() {} };\n");
+      }
+      const stagingSource = path.join(
+        packageRoot,
+        "dist-runtime",
+        "extensions",
+        "fixture",
+        artifactName,
+      );
+      fs.mkdirSync(path.dirname(stagingSource), { recursive: true });
+      fs.writeFileSync(
+        stagingSource,
+        `export * from "../../../dist/extensions/fixture/${artifactName}";\n`,
+      );
+      fs.rmSync(path.dirname(fixture.builtSource), { recursive: true });
+      const packagedSource = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "fixture",
+        "dist",
+        artifactName,
+      );
+      fs.mkdirSync(path.dirname(packagedSource), { recursive: true });
+      fs.writeFileSync(packagedSource, 'module.exports = { id: "packed" };\n');
+
+      const resolved = resolvePluginRuntimeArtifact({
+        pluginId: "fixture",
+        entryKind,
+        rootDir: fixture.rootDir,
+        source,
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest: { build: { bundledDist: false } },
+      });
+
+      expect(resolved).toEqual({ source: fs.realpathSync(source), rootDir: fixture.rootDir });
     },
   );
 
