@@ -177,9 +177,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   // serializes its lane, so widening its ceiling would buy nothing and raise
   // concurrency for a channel that never asked.
   //
-  // The discount is bounded: past this many, a deferral keeps its slot, so the
-  // drain stops starting work instead of parking callbacks without a ceiling.
-  // Live deliveries therefore stay within startLimit + this budget.
+  // The discount is bounded: past this many, a deferral keeps its slot, so
+  // open delivery callbacks stay within startLimit + this budget. The bound's
+  // subject is open callbacks - a callback that defers and returns settles its
+  // borrow immediately, and how much handed-off deferred work may be pending at
+  // once is the drain owner's semantics, unchanged from before this discount.
   const deferredStartCapacityLimit =
     options.drain?.deferredLaneOccupancy === "release" ? (options.drain.startLimit ?? 0) : 0;
   let deferredStartCapacity = 0;
