@@ -651,7 +651,7 @@ suite.define(() => {
 
   it("renders and dismisses synthetic catalog-session hovercards", async () => {
     const selectedSessionKey = "agent:main:catalog-selected";
-    const catalogSessionKey = "catalog:codex:gateway%3Acodex:thread-1";
+    const catalogSessionKey = "agent:main:catalog:codex:gateway%3Acodex:thread-1";
 
     await suite.withPage(
       {
