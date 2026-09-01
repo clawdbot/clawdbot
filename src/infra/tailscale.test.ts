@@ -244,6 +244,39 @@ describe("tailscale helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "passes --https for a non-default tailnet port",
+    async () => {
+      // The fixture exits non-zero unless it receives exactly the expected argv,
+      // so a successful claim proves --https=8443 was emitted before the target.
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+
+      const claim = await claimTailscaleRoute("serve", 18789, 8443);
+      expect(claim.isActive()).toBe(true);
+
+      await claim.stop();
+      await expect(claim.exited).resolves.toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "omits --https when the tailnet port is the default",
+    async () => {
+      // The fixture only accepts the default-port argv without --https here.
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+      );
+
+      const claim = await claimTailscaleRoute("serve", 18789, 443);
+      expect(claim.isActive()).toBe(true);
+
+      await claim.stop();
+      await expect(claim.exited).resolves.toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "preserves route diagnostics when startup readiness times out",
     async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

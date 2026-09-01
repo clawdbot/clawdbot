@@ -262,6 +262,14 @@ export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
   /**
+   * Tailnet-facing HTTPS port for the managed Serve/Funnel route. Defaults to
+   * 443, which fails when another service already owns port 443 on the host
+   * (for example a reverse proxy bound to `0.0.0.0:443`). Funnel accepts only
+   * 443, 8443, and 10000; Serve accepts any port.
+   * @default 443
+   */
+  port?: number;
+  /**
    * Detect an external Funnel route left on the ordinary Gateway listener and
    * leave exposure unchanged with migration guidance. Gateway-authenticated
    * routes reject that ingress; plugin-authenticated webhooks keep their owner auth.

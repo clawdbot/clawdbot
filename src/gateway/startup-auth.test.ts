@@ -67,6 +67,20 @@ describe("mergeGatewayTailscaleConfig", () => {
       ),
     ).toEqual({ mode: "serve", preserveFunnel: true });
   });
+
+  it("carries a tailnet port override into the merged config", () => {
+    expect(mergeGatewayTailscaleConfig({ mode: "serve" }, { port: 8443 })).toEqual({
+      mode: "serve",
+      port: 8443,
+    });
+  });
+
+  it("keeps the base tailnet port when the override omits it", () => {
+    expect(mergeGatewayTailscaleConfig({ mode: "serve", port: 8443 }, { mode: "funnel" })).toEqual({
+      mode: "funnel",
+      port: 8443,
+    });
+  });
 });
 
 describe("ensureGatewayStartupAuth", () => {

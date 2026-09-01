@@ -24,6 +24,27 @@ Looking for the step-by-step setup? See [Give your Gateway a stable HTTPS URL](/
 
 Status and audit output use **Tailscale exposure** for this OpenClaw Serve/Funnel mode. `off` means OpenClaw is not managing Serve or Funnel; it does not mean the local Tailscale daemon is stopped or logged out.
 
+## Tailnet port
+
+`gateway.tailscale.port` sets the tailnet-facing HTTPS port for the managed route. It defaults to `443`.
+
+Change it when another service already owns port 443 on the host. A reverse proxy bound to `0.0.0.0:443` also covers the Tailscale IP, so the managed claim fails with `listener already exists for port 443` and the Gateway refuses to start. Moving the managed route to a free port lets both coexist:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    tailscale: { mode: "serve", port: 8443 },
+  },
+}
+```
+
+Open: `https://<magicdns>:8443/`
+
+Serve accepts any port. Funnel accepts only `443`, `8443`, and `10000`; other values are rejected at config validation.
+
+Keep the managed route rather than replacing it with a hand-made `tailscale serve` on another port: identity headers are only trusted on OpenClaw's own managed listener, so a manual route leaves Gateway-authenticated requests unattributable and they are rejected. See [Tailscale identity headers](#tailscale-identity-headers-serve-only).
+
 ## Config examples
 
 ### Tailnet-only (Serve)

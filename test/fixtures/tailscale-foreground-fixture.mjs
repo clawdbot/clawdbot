@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 const args = process.argv.slice(2);
 const serveArgs = ["serve", "--yes", "--bg=false", "18789"];
+const servePortArgs = ["serve", "--yes", "--bg=false", "--https=8443", "18789"];
 const stalledFunnelArgs = ["funnel", "--yes", "--bg=false", "18790"];
 if (
   JSON.stringify(args) !== JSON.stringify(serveArgs) &&
+  JSON.stringify(args) !== JSON.stringify(servePortArgs) &&
   JSON.stringify(args) !== JSON.stringify(stalledFunnelArgs)
 ) {
   process.stderr.write(`unexpected arguments: ${JSON.stringify(process.argv.slice(2))}\n`);
   process.exit(2);
 }
-if (JSON.stringify(args) === JSON.stringify(serveArgs)) {
+if (
+  JSON.stringify(args) === JSON.stringify(serveArgs) ||
+  JSON.stringify(args) === JSON.stringify(servePortArgs)
+) {
   process.stdout.write("Press Ctrl+C to exit.\n");
 } else {
   process.stderr.write("Funnel is not enabled on your tailnet.\n");

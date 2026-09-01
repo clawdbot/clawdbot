@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { TAILSCALE_DEFAULT_ROUTE_PORT } from "../shared/tailscale-ports.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
@@ -384,9 +385,16 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number | string,
+  exposedPort?: number,
 ): Promise<TailscaleRouteClaim> {
   const tailscaleBin = await getTailscaleBinary();
-  const args = [mode, "--yes", "--bg=false", `${target}`];
+  // Omit --https when the caller wants the default so the emitted command keeps
+  // matching what operators see documented for Serve and Funnel.
+  const portArgs =
+    exposedPort === undefined || exposedPort === TAILSCALE_DEFAULT_ROUTE_PORT
+      ? []
+      : [`--https=${exposedPort}`];
+  const args = [mode, "--yes", "--bg=false", ...portArgs, `${target}`];
   try {
     return await startTailscaleRouteOwner([tailscaleBin, ...args]);
   } catch (error) {

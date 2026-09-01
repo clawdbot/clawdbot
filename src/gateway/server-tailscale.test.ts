@@ -6,11 +6,13 @@ const mocks = vi.hoisted(() => {
   const stopRouteClaim = vi.fn(async () => undefined);
   return {
     stopRouteClaim,
-    claimTailscaleRoute: vi.fn(async (_mode: "serve" | "funnel", _target: number | string) => ({
-      exited: new Promise<void>(() => {}),
-      isActive: (): boolean => true,
-      stop: stopRouteClaim,
-    })),
+    claimTailscaleRoute: vi.fn(
+      async (_mode: "serve" | "funnel", _target: number | string, _exposedPort?: number) => ({
+        exited: new Promise<void>(() => {}),
+        isActive: (): boolean => true,
+        stop: stopRouteClaim,
+      }),
+    ),
     getTailnetHostname: vi.fn<() => Promise<string | null>>(async () => null),
     getTailnetHostnameAfterServe: vi.fn<() => Promise<string | null>>(async () => null),
     hasTailscaleFunnelRouteForPort: vi.fn(async (_port: number) => false),
@@ -95,7 +97,7 @@ describe("startGatewayTailscaleExposure", () => {
       logTailscale,
     });
 
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT, 443);
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
@@ -142,7 +144,7 @@ describe("startGatewayTailscaleExposure", () => {
 
       await cleanup?.();
 
-      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(mode, MANAGED_BACKEND_PORT);
+      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(mode, MANAGED_BACKEND_PORT, 443);
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
   );
@@ -197,7 +199,7 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT, 443);
   });
 
   it("prepares one tailnet-only Serve origin for the Gateway lifecycle", async () => {
@@ -215,6 +217,43 @@ describe("startGatewayTailscaleExposure", () => {
     });
     await cleanup?.();
     expect(getMcpAppChannelOrigin()).toBeUndefined();
+  });
+
+  it("claims the configured tailnet port instead of the default", async () => {
+    const logTailscale = createLogger();
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      tailscalePort: 8443,
+      logTailscale,
+    });
+
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT, 8443);
+  });
+
+  it("keeps a non-default tailnet port in the published origin and log line", async () => {
+    mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
+    const logTailscale = createLogger();
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      tailscalePort: 8443,
+      logTailscale,
+    });
+
+    expect(getMcpAppChannelOrigin()).toEqual({
+      origin: "https://node.tailnet.ts.net:8443",
+      reachability: "tailnet",
+    });
+    expect(logTailscale.info).toHaveBeenCalledWith(
+      expect.stringContaining("https://node.tailnet.ts.net:8443/"),
+    );
+    expect(logTailscale.info).toHaveBeenCalledWith(
+      expect.stringContaining("wss://node.tailnet.ts.net:8443"),
+    );
+    await cleanup?.();
   });
 
   it("clears the published origin and warns when the foreground claim exits", async () => {
@@ -269,6 +308,6 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("funnel", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("funnel", MANAGED_BACKEND_PORT, 443);
   });
 });

@@ -12,6 +12,7 @@ import {
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
+import { TAILSCALE_FUNNEL_PORTS } from "../shared/tailscale-ports.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
@@ -182,8 +183,16 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
+        port: z.number().int().min(1).max(65_535).optional(),
         preserveFunnel: z.boolean().optional(),
       })
+      .refine(
+        (value) =>
+          value.mode !== "funnel" ||
+          value.port === undefined ||
+          TAILSCALE_FUNNEL_PORTS.includes(value.port),
+        `gateway.tailscale.port must be one of ${TAILSCALE_FUNNEL_PORTS.join(", ")} when mode is "funnel"; Tailscale Funnel rejects other ports`,
+      )
       .optional(),
     remote: GatewayRemoteConfigSchema,
     reload: z

@@ -846,6 +846,14 @@ Gateway or node host and check `openclaw nodes pending` again.
   route is active and the route is released when the Gateway stops. Named
   Tailscale Services are unsupported because the Tailscale CLI permits them
   only as persistent background routes.
+- `tailscale.port`: tailnet-facing HTTPS port for the managed route. Defaults to
+  `443`. Set it when another service already owns 443 on the host: a reverse
+  proxy bound to `0.0.0.0:443` also covers the Tailscale IP, so the managed
+  claim fails and startup aborts. The chosen port is published in the URLs
+  clients dial, including the Control UI address, pairing setup codes, and
+  `openclaw qr` output (`https://<magicdns>:8443/`, `wss://<magicdns>:8443`).
+  Serve accepts any port; Funnel accepts only `443`, `8443`, and `10000`, and
+  other values are rejected at config validation.
 - `tailscale.preserveFunnel`: deprecated migration guard. When `true` and
   `tailscale.mode = "serve"`, OpenClaw checks `tailscale funnel status` before
   re-applying Serve at startup. If that status cannot be inspected, startup

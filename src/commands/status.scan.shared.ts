@@ -23,6 +23,7 @@ import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js"
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { formatTailscaleAuthority } from "../shared/tailscale-ports.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
@@ -367,6 +368,8 @@ export async function resolveGatewayProbeSnapshot(params: {
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
+  /** Tailnet-facing HTTPS port of the managed route. Defaults to 443. */
+  tailscalePort?: number;
   controlUiBasePath?: string;
 }): string | null {
   const host = resolveTailscalePublishedHost({
@@ -374,7 +377,7 @@ export function buildTailscaleHttpsUrl(params: {
     tailnetHost: params.tailscaleDns,
   });
   return params.tailscaleMode !== "off" && host
-    ? `https://${host}${normalizeControlUiBasePath(params.controlUiBasePath)}`
+    ? `https://${formatTailscaleAuthority(host, params.tailscalePort)}${normalizeControlUiBasePath(params.controlUiBasePath)}`
     : null;
 }
 

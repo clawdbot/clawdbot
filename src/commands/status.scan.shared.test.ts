@@ -593,6 +593,27 @@ describe("buildTailscaleHttpsUrl", () => {
       }),
     ).toBe("https://100.64.0.8");
   });
+
+  it("keeps a non-default tailnet port so the URL stays dialable", () => {
+    expect(
+      buildTailscaleHttpsUrl({
+        tailscaleMode: "serve",
+        tailscaleDns: "node.tailnet.ts.net",
+        tailscalePort: 8443,
+        controlUiBasePath: "/control",
+      }),
+    ).toBe("https://node.tailnet.ts.net:8443/control");
+  });
+
+  it("leaves the default port implicit", () => {
+    expect(
+      buildTailscaleHttpsUrl({
+        tailscaleMode: "serve",
+        tailscaleDns: "node.tailnet.ts.net",
+        tailscalePort: 443,
+      }),
+    ).toBe("https://node.tailnet.ts.net");
+  });
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {

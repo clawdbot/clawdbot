@@ -35,6 +35,7 @@ import {
   type PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
+import { formatTailscaleAuthority } from "../shared/tailscale-ports.js";
 import {
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -367,7 +368,14 @@ export async function resolvePairingGatewayUrl(
       tailscaleMode,
       tailnetHost: host,
     });
-    return { url: `wss://${publishedHost}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
+    if (!publishedHost) {
+      return {
+        error:
+          "Tailscale exposure is enabled, but its published tailnet host could not be resolved.",
+      };
+    }
+    const authority = formatTailscaleAuthority(publishedHost, cfg.gateway?.tailscale?.port);
+    return { url: `wss://${authority}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
   if (remoteUrl) {

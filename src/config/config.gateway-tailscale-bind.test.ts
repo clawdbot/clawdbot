@@ -35,6 +35,62 @@ describe("gateway tailscale bind validation", () => {
     expect(funnelRes.ok).toBe(true);
   });
 
+  it("accepts a custom tailnet port for serve", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "serve", port: 8443 },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts any port for serve because Serve has no port restriction", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "serve", port: 9443 },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects a port Funnel cannot expose", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "funnel", port: 9443 },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.path)).toContain("gateway.tailscale");
+    }
+  });
+
+  it("accepts the ports Funnel does expose", () => {
+    for (const port of [443, 8443, 10_000]) {
+      const res = validateConfigObject({
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "funnel", port },
+        },
+      });
+      expect(res.ok).toBe(true);
+    }
+  });
+
+  it("rejects an out-of-range tailnet port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "serve", port: 70_000 },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects the retired Tailscale serviceName key from canonical config", () => {
     const res = validateConfigObject({
       gateway: {

@@ -144,6 +144,7 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
       buildTailscaleHttpsUrl({
         tailscaleMode,
         tailscaleDns: await tailscaleDnsPromise,
+        tailscalePort: params.cfg.gateway?.tailscale?.port,
         controlUiBasePath: params.cfg.gateway?.controlUi?.basePath,
       }),
   };

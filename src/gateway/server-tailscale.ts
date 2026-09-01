@@ -7,6 +7,10 @@ import {
   getTailnetHostnameAfterServe,
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
+import {
+  formatTailscaleAuthority,
+  TAILSCALE_DEFAULT_ROUTE_PORT,
+} from "../shared/tailscale-ports.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
@@ -14,6 +18,8 @@ import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   port: number;
+  /** Tailnet-facing HTTPS port for the managed route. Defaults to 443. */
+  tailscalePort?: number;
   backend?: GatewayTailscaleIngressEndpoint;
   preserveFunnel?: boolean;
   controlUiBasePath?: string;
@@ -26,6 +32,8 @@ export async function startGatewayTailscaleExposure(params: {
     throw new Error("Managed Tailscale ingress failed to start");
   }
   const backendTarget = params.backend.port;
+  const exposedPort = params.tailscalePort ?? TAILSCALE_DEFAULT_ROUTE_PORT;
+
   const effectiveMode = params.tailscaleMode;
   let clearPublishedOrigin: (() => void) | undefined;
   if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
@@ -51,7 +59,7 @@ export async function startGatewayTailscaleExposure(params: {
 
   let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
   try {
-    claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget);
+    claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget, exposedPort);
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);
@@ -65,12 +73,13 @@ export async function startGatewayTailscaleExposure(params: {
         tailnetHost: host,
       });
       if (publicHost) {
+        const publicAuthority = formatTailscaleAuthority(publicHost, exposedPort);
         clearPublishedOrigin = prepareMcpAppChannelOrigin({
-          origin: `https://${publicHost}`,
+          origin: `https://${publicAuthority}`,
           reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
         });
         params.logTailscale.info(
-          `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
+          `${params.tailscaleMode} enabled: https://${publicAuthority}${uiPath} (WS via wss://${publicAuthority})`,
         );
       } else {
         params.logTailscale.info(`${params.tailscaleMode} enabled`);
