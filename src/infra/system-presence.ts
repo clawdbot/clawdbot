@@ -46,8 +46,7 @@ type SystemPresenceUpdate = {
   changedKeys: (keyof SystemPresence)[];
 };
 
-// Keep the gateway row outside the caller-controlled string keyspace so a remote
-// identifier cannot replace it or inherit its capacity exemption.
+// The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -118,15 +117,6 @@ function initSelfPresence() {
     ts: Date.now(),
   };
   entries.set(SELF_KEY, selfEntry);
-}
-
-function ensureSelfPresence() {
-  // If the map was somehow cleared (e.g., hot reload or a new worker spawn that
-  // skipped module evaluation), re-seed with a local entry so UIs always show
-  // at least the current gateway.
-  if (entries.size === 0) {
-    initSelfPresence();
-  }
 }
 
 function touchSelfPresence() {
@@ -208,7 +198,6 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
 }
 
 export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
-  ensureSelfPresence();
   const parsed = parsePresence(payload.text);
   const key =
     normalizePresenceKey(payload.deviceId) ||
@@ -265,7 +254,6 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 }
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
-  ensureSelfPresence();
   const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
@@ -301,12 +289,11 @@ export function touchPresence(key: string): boolean {
 }
 
 export function listSystemPresence(): SystemPresence[] {
-  ensureSelfPresence();
   touchSelfPresence();
   // prune expired
   const now = Date.now();
   for (const [k, v] of entries) {
-    if (now - v.ts > TTL_MS) {
+    if (k !== SELF_KEY && now - v.ts > TTL_MS) {
       entries.delete(k);
     }
   }
