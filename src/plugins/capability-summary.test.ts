@@ -146,6 +146,7 @@ describe("plugin capability summaries", () => {
       usageProviders: ["usage"],
       migrationProviders: ["migration"],
       gatewayMethodDispatch: ["gateway-method"],
+      memoryDreamingEngines: ["memory-dreaming"],
       tools: ["tool"],
     } satisfies Required<PluginManifestContracts>;
 

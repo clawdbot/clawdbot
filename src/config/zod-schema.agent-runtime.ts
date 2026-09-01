@@ -301,7 +301,7 @@ const ToolPolicyBaseSchema = z
   })
   .strict();
 
-export const AgentMemoryDreamingSchema = z
+const AgentMemoryDreamingSchema = z
   .object({
     enabled: z.boolean(),
   })
