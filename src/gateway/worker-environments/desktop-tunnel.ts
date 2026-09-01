@@ -48,6 +48,7 @@ type DesktopAcquireRequest = {
 };
 
 type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
+type WorkerDesktopTunnelFileSystem = Pick<typeof fs, "chmod" | "mkdtemp" | "rm">;
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
@@ -76,8 +77,10 @@ export function createWorkerDesktopTunnels(deps: {
   registry?: DesktopSessionRegistry;
   lingerMs?: number;
   platform?: NodeJS.Platform;
+  filesystem?: WorkerDesktopTunnelFileSystem;
 }) {
   const platform = deps.platform ?? process.platform;
+  const filesystem = deps.filesystem ?? fs;
   const sessions = deps.registry ?? createDesktopSessionRegistry({ lingerMs: deps.lingerMs });
   const appLaunches = new Map<string, DesktopAppLaunchEntry>();
 
@@ -138,8 +141,12 @@ export function createWorkerDesktopTunnels(deps: {
           prepared = undefined;
           throw new Error("Worker desktop tunnel stopped before connecting");
         }
-        socketDirectory = await fs.mkdtemp(path.join(WORKER_DESKTOP_SOCKET_ROOT, "oc-wd-"));
-        await fs.chmod(socketDirectory, 0o700);
+        socketDirectory = await filesystem.mkdtemp(path.join(WORKER_DESKTOP_SOCKET_ROOT, "oc-wd-"));
+        await filesystem.chmod(socketDirectory, 0o700);
+        // Socket setup yields to Stop/replacement; recheck ownership before publishing SSH.
+        if (!isCurrent()) {
+          throw new Error("Worker desktop tunnel stopped before connecting");
+        }
         const localSocketPath = path.join(socketDirectory, "desktop.sock");
         child = deps.runner.start(
           [
@@ -226,7 +233,9 @@ export function createWorkerDesktopTunnels(deps: {
         await child?.stop().catch(() => undefined);
       }
       if (socketDirectory) {
-        await fs.rm(socketDirectory, { recursive: true, force: true }).catch(() => undefined);
+        await filesystem
+          .rm(socketDirectory, { recursive: true, force: true })
+          .catch(() => undefined);
         socketDirectory = undefined;
       }
       await prepared?.dispose().catch(() => undefined);

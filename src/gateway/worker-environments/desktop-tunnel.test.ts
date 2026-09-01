@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import fs, { access } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
@@ -204,6 +204,43 @@ describe("worker desktop tunnels", () => {
     await vi.waitFor(async () => {
       await expect(access(path.dirname(socketPath))).rejects.toMatchObject({ code: "ENOENT" });
     });
+  });
+
+  it("does not start SSH after stop wins during socket setup", async ({ onTestFinished }) => {
+    const fake = fakeRunner();
+    const chmodStarted = deferred<void>();
+    const continueChmod = deferred<void>();
+    let socketDirectory = "";
+    const manager = createWorkerDesktopTunnels({
+      runner: fake.runner,
+      platform: "linux",
+      filesystem: {
+        async mkdtemp(prefix) {
+          socketDirectory = await fs.mkdtemp(prefix);
+          return socketDirectory;
+        },
+        rm: fs.rm.bind(fs),
+        async chmod(target, mode) {
+          await fs.chmod(target, mode);
+          chmodStarted.resolve();
+          await continueChmod.promise;
+        },
+      },
+    });
+    onTestFinished(async () => {
+      continueChmod.resolve();
+      await manager.stopAll();
+    });
+
+    const starting = acquire(manager);
+    await chmodStarted.promise;
+    const stopping = manager.stop("worker:one", 1);
+    continueChmod.resolve();
+
+    await expect(starting).rejects.toThrow("stopped before connecting");
+    await stopping;
+    expect(fake.starts).toEqual([]);
+    await expect(access(socketDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fences an older epoch before starting its replacement", async () => {
