@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+@testable import OpenClaw
 
 struct TestIsolationTests {
     private enum BodyFailure: Error {
