@@ -311,8 +311,6 @@ function matchesCachedToolSearchIndex(
 let schemaValidatorModulePromise:
   | Promise<typeof import("../plugins/schema-validator.js")>
   | undefined;
-const catalogSchemaCacheIds = new WeakMap<object, number>();
-let nextCatalogSchemaCacheId = 0;
 
 function getCatalogSchemaCacheKey(
   entry: ToolSearchCatalogEntry,
@@ -320,17 +318,8 @@ function getCatalogSchemaCacheKey(
   schema: unknown,
 ): string {
   const prefix = `tool-${schemaName === "inputSchema" ? "input" : "output"}:${entry.id}`;
-  if (typeof schema !== "object" || schema === null) {
-    return `${prefix}:${String(schema)}`;
-  }
-  let schemaCacheId = catalogSchemaCacheIds.get(schema);
-  if (schemaCacheId === undefined) {
-    schemaCacheId = nextCatalogSchemaCacheId++;
-    catalogSchemaCacheIds.set(schema, schemaCacheId);
-  }
-  // Trusted schemas can be edited in place, so object identity alone cannot
-  // safely reuse a compiled validator after its constraints have changed.
-  return `${prefix}:${schemaCacheId}:${JSON.stringify(schema)}`;
+  // Content keys reuse rebuilt tool schemas while invalidating in-place constraint changes.
+  return `${prefix}:${JSON.stringify(schema)}`;
 }
 
 async function validateCatalogSchemaValue(

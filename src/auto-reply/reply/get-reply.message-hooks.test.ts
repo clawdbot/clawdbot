@@ -111,6 +111,18 @@ function buildConfiguredAudioCfg() {
   });
 }
 
+function buildTextCtx(body: string, overrides: Partial<MsgContext> = {}): MsgContext {
+  return buildCtx({
+    Body: body,
+    BodyForAgent: body,
+    RawBody: body,
+    CommandBody: body,
+    BodyForCommands: body,
+    media: undefined,
+    ...overrides,
+  });
+}
+
 function hookEventCall(index: number): [string, string, string, Record<string, unknown>] {
   const call = mocks.createInternalHookEvent.mock.calls[index];
   if (!call) {
@@ -608,15 +620,7 @@ describe("getReplyFromConfig message hooks", () => {
     );
 
     await getReplyFromConfig(
-      buildCtx({
-        Body: body,
-        BodyForAgent: body,
-        RawBody: body,
-        CommandBody: body,
-        BodyForCommands: body,
-        SessionKey: sessionKey,
-        media: undefined,
-      }),
+      buildTextCtx(body, { SessionKey: sessionKey }),
       undefined,
       withFastReplyConfig({}),
     );
@@ -628,22 +632,13 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("fails closed before link understanding when the reserved session is missing", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-link";
-    const body = "read https://example.test/page";
     mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
       throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
     });
 
     await expect(
       getReplyFromConfig(
-        buildCtx({
-          Body: body,
-          BodyForAgent: body,
-          RawBody: body,
-          CommandBody: body,
-          BodyForCommands: body,
-          SessionKey: sessionKey,
-          media: undefined,
-        }),
+        buildTextCtx("read https://example.test/page", { SessionKey: sessionKey }),
         undefined,
         withFastReplyConfig({}),
       ),
@@ -957,16 +952,7 @@ describe("getReplyFromConfig message hooks", () => {
 
   it("skips media and link understanding on plain text without attachments or urls", async () => {
     await getReplyFromConfig(
-      buildCtx({
-        Body: "hello there",
-        BodyForAgent: "hello there",
-        RawBody: "hello there",
-        CommandBody: "hello there",
-        BodyForCommands: "hello there",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
+      buildTextCtx("hello there", { Sticker: undefined, StickerMediaIncluded: undefined }),
       undefined,
       withFastReplyConfig({}),
     );
@@ -1045,11 +1031,37 @@ describe("getReplyFromConfig message hooks", () => {
     expect(preprocessed[1]).toBe("preprocessed");
     expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
     expect(preprocessed[3]).toBeTypeOf("object");
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("media understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("media understanding failed, proceeding with raw content"),
+    );
+  });
+
+  it.each([false, true])("stops canceled replies when link work resolves: %s", async (resolves) => {
+    const controller = new AbortController();
+    const reason = resolves ? new Error("reply canceled") : undefined;
+    mocks.applyLinkUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const { signal } = args[0] as { signal?: AbortSignal };
+      controller.abort(reason);
+      if (!resolves) {
+        signal?.throwIfAborted();
+      }
+    });
+
+    await expect
+      .soft(
+        getReplyFromConfig(
+          buildTextCtx("read https://example.test/page"),
+          { abortSignal: controller.signal },
+          withFastReplyConfig({}),
+        ),
+      )
+      .rejects.toMatchObject({ name: "AbortError", ...(reason ? { cause: reason } : {}) });
+
+    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledOnce();
+    expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
+    expect.soft(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+    expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
   it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
@@ -1058,16 +1070,7 @@ describe("getReplyFromConfig message hooks", () => {
     );
 
     const reply = await getReplyFromConfig(
-      buildCtx({
-        Body: "read https://example.test/page",
-        BodyForAgent: "read https://example.test/page",
-        RawBody: "read https://example.test/page",
-        CommandBody: "read https://example.test/page",
-        BodyForCommands: "read https://example.test/page",
-        media: undefined,
-        Sticker: undefined,
-        StickerMediaIncluded: undefined,
-      }),
+      buildTextCtx("read https://example.test/page"),
       undefined,
       withFastReplyConfig({}),
     );
@@ -1077,10 +1080,8 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
-    expect(
-      verboseMessages().some((message) =>
-        message.includes("link understanding failed, proceeding with raw content"),
-      ),
-    ).toBe(true);
+    expect(verboseMessages()).toContainEqual(
+      expect.stringContaining("link understanding failed, proceeding with raw content"),
+    );
   });
 });

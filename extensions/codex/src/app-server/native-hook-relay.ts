@@ -13,6 +13,7 @@ import type {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerRetainedNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+import type { NativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
@@ -403,7 +404,7 @@ export function resolveCodexNativeHookRelayTtlMs(params: {
 }
 
 /** Builds a stable relay id scoped to the agent and session identity. */
-function buildCodexNativeHookRelayId(params: {
+export function buildCodexNativeHookRelayId(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
@@ -438,7 +439,7 @@ const CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS = [
 
 /** Builds the Codex config overlay that installs trusted command hooks for relay events. */
 export function buildCodexNativeHookRelayConfig(params: {
-  relay: NativeHookRelayRegistrationHandle;
+  relay: NativeHookRelayCommandPlan;
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;

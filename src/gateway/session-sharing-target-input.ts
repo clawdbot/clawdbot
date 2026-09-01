@@ -290,9 +290,9 @@ export function resolveTalkSessionTargetInput(
     const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
     return retained ? { kind: "relay", ...retained } : undefined;
   }
-  // Only these handlers consume the prepared target; legacy tool calls route through chat.send.
   if (
     method !== "talk.client.create" &&
+    method !== "talk.client.toolCall" &&
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&

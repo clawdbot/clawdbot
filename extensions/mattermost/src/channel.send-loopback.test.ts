@@ -198,7 +198,7 @@ describe("Mattermost send action loopback", () => {
         setMattermostRuntime(createPluginRuntimeMock());
         loadOutboundMediaFromUrl.mockReset();
         loadOutboundMediaFromUrl.mockResolvedValueOnce({
-          buffer: Buffer.from("unnamed-image"),
+          buffer: Buffer.from("!unnamed-image?").subarray(1, -1),
           contentType: "image/png",
           kind: "image",
         });
@@ -233,5 +233,6 @@ describe("Mattermost send action loopback", () => {
     expect(uploads).toHaveLength(1);
     expect(uploads[0]).toContain('filename="upload.png"');
     expect(uploads[0]).toContain("Content-Type: image/png");
+    expect(uploads[0]).toContain("\r\n\r\nunnamed-image\r\n");
   });
 });

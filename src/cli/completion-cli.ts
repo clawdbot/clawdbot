@@ -324,12 +324,7 @@ function escapeZshCompletionChoice(choice: string): string {
 function generateZshSubcmdList(cmd: Command): string {
   const list = visibleCompletionCommands(cmd)
     .flatMap((c) => {
-      const desc = c
-        .description()
-        .replace(/\\/g, "\\\\")
-        .replace(/'/g, "'\\''")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]");
+      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
       return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
     })
     .join(" ");

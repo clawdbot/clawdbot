@@ -177,51 +177,6 @@ async function findAdoptedSessionEntry(params: {
   );
 }
 
-async function clearCreatedAdoptionBinding(params: {
-  bindingStore: CodexAppServerBindingStore;
-  identity: ReturnType<typeof sessionBindingIdentity>;
-  sourceThreadId: string;
-  expectedPending: CodexAppServerPendingSupervisionBranch;
-  cause: unknown;
-}): Promise<void> {
-  let cleared = false;
-  let clearError: unknown;
-  try {
-    cleared = await params.bindingStore.mutate(params.identity, {
-      kind: "clear",
-      threadId: params.sourceThreadId,
-      expectedPendingSupervisionBranch: params.expectedPending,
-    });
-  } catch (error) {
-    clearError = error;
-  }
-  if (cleared) {
-    return;
-  }
-
-  let current: CodexAppServerThreadBinding | undefined;
-  try {
-    current = await params.bindingStore.read(params.identity);
-  } catch (readError) {
-    const cleanupFailure = new AggregateError(
-      [params.cause, ...(clearError ? [clearError] : []), readError],
-      `OpenClaw session creation failed and the Codex binding could not be verified for ${params.sourceThreadId}`,
-      { cause: readError },
-    );
-    throw cleanupFailure;
-  }
-  // Pending state is the cleanup CAS token. Once lifecycle work changes it,
-  // that successor owns every tracked native artifact and must survive here.
-  if (!matchesPendingSupervisionOwner(current, params.expectedPending)) {
-    return;
-  }
-  throw new AggregateError(
-    [params.cause, ...(clearError ? [clearError] : [])],
-    `OpenClaw session creation failed and the Codex binding could not be cleared for ${params.sourceThreadId}`,
-    { cause: params.cause },
-  );
-}
-
 function matchesPendingAdoptionBinding(
   binding: CodexAppServerThreadBinding | undefined,
   expected: {
@@ -248,26 +203,8 @@ function matchesPendingAdoptionBinding(
   );
 }
 
-function matchesPendingSupervisionOwner(
-  binding: CodexAppServerThreadBinding | undefined,
-  expected: CodexAppServerPendingSupervisionBranch,
-): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  const cleanupThreadIds = pending?.cleanupThreadIds ?? [];
-  const expectedCleanupThreadIds = expected.cleanupThreadIds ?? [];
-  return (
-    binding?.threadId === expected.sourceThreadId &&
-    binding.connectionScope === "supervision" &&
-    binding.supervisionSourceThreadId === expected.sourceThreadId &&
-    pending?.sourceThreadId === expected.sourceThreadId &&
-    pending.connectionFingerprint === expected.connectionFingerprint &&
-    pending.lastTurnId === expected.lastTurnId &&
-    cleanupThreadIds.length === expectedCleanupThreadIds.length &&
-    cleanupThreadIds.every((threadId, index) => threadId === expectedCleanupThreadIds[index])
-  );
-}
-
 async function ensurePendingAdoptionBinding(params: {
+  initialization: Parameters<Parameters<typeof createImportedCodexSession>[0]["afterImport"]>[1];
   bindingStore: CodexAppServerBindingStore;
   config: OpenClawConfig;
   identity: ReturnType<typeof sessionBindingIdentity>;
@@ -282,14 +219,17 @@ async function ensurePendingAdoptionBinding(params: {
     ...(params.lastTurnId ? { lastTurnId: params.lastTurnId } : {}),
   };
   const ownsGeneration = await reclaimCurrentCodexSessionGeneration({
+    assertCurrent: params.initialization.assertCurrent,
     bindingStore: params.bindingStore,
     identity: params.identity,
     config: params.config,
   });
+  params.initialization.assertCurrent();
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
   const existing = await params.bindingStore.read(params.identity);
+  params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
       return;
@@ -306,27 +246,7 @@ async function ensurePendingAdoptionBinding(params: {
     preserveNativeModel: true as const,
     pendingSupervisionBranch: pending,
   };
-  let stored: boolean;
-  try {
-    stored = await params.bindingStore.mutate(params.identity, {
-      kind: "set",
-      if: { kind: "absent" },
-      binding,
-    });
-  } catch (error) {
-    const committed = await params.bindingStore.read(params.identity);
-    if (matchesPendingAdoptionBinding(committed, params)) {
-      return;
-    }
-    throw error;
-  }
-  if (stored) {
-    return;
-  }
-  const raced = await params.bindingStore.read(params.identity);
-  if (!matchesPendingAdoptionBinding(raced, params)) {
-    throw new Error(`failed to bind OpenClaw session to Codex thread ${params.sourceThreadId}`);
-  }
+  await params.initialization.bind(binding);
 }
 
 async function createOrReuseAdoptedSession(params: {
@@ -345,8 +265,6 @@ async function createOrReuseAdoptedSession(params: {
   if (existing) {
     return existing;
   }
-  let createdBindingIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
-  let createdPendingBinding: CodexAppServerPendingSupervisionBranch | undefined;
   try {
     const spawnedCwd = params.sourceThread.cwd?.trim() || undefined;
     const pendingLastTurnId = codexLastTerminalTurnId(params.sourceThread, boundCatalogSessionId);
@@ -356,6 +274,7 @@ async function createOrReuseAdoptedSession(params: {
     };
     const created = await createImportedCodexSession({
       runtime: params.api.runtime,
+      bindingStore: params.bindingStore,
       config: params.config,
       key: adoptionSessionKey(params.sourceThread.id, params.sourceHomeId),
       agentId: params.agentId,
@@ -376,21 +295,17 @@ async function createOrReuseAdoptedSession(params: {
           },
         },
       },
-      afterImport: async (entry) => {
-        createdBindingIdentity = sessionBindingIdentity({
+      afterImport: async (entry, initialization) => {
+        const identity = sessionBindingIdentity({
           sessionId: entry.sessionId,
           sessionKey: entry.key,
           config: params.config,
         });
-        createdPendingBinding = {
-          sourceThreadId: params.sourceThread.id,
-          connectionFingerprint: params.connectionFingerprint,
-          ...(pendingLastTurnId ? { lastTurnId: pendingLastTurnId } : {}),
-        };
         await ensurePendingAdoptionBinding({
           bindingStore: params.bindingStore,
           config: params.config,
-          identity: createdBindingIdentity,
+          identity,
+          initialization,
           sourceThreadId: params.sourceThread.id,
           connectionFingerprint: params.connectionFingerprint,
           cwd: spawnedCwd ?? "",
@@ -414,22 +329,9 @@ async function createOrReuseAdoptedSession(params: {
   } catch (error) {
     // Concurrent/retried Continue calls converge on the same trusted marker.
     // An unrelated entry at the deterministic key is never overwritten.
-    let raced = await findAdoptedSessionEntry(lookup);
+    const raced = await findAdoptedSessionEntry(lookup);
     if (raced) {
       return raced;
-    }
-    if (createdBindingIdentity && createdPendingBinding) {
-      await clearCreatedAdoptionBinding({
-        bindingStore: params.bindingStore,
-        identity: createdBindingIdentity,
-        sourceThreadId: params.sourceThread.id,
-        expectedPending: createdPendingBinding,
-        cause: error,
-      });
-      raced = await findAdoptedSessionEntry(lookup);
-      if (raced) {
-        return raced;
-      }
     }
     throw error;
   }

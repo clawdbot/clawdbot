@@ -112,6 +112,14 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+function isEmptyDirPath(filePath: string): boolean {
+  try {
+    return fs.readdirSync(filePath).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
   let entries: fs.Dirent[];
   try {
@@ -291,10 +299,21 @@ export async function autoMigrateLegacyStateDir(params: {
         ...(notices.length > 0 ? { notices } : {}),
       };
     }
+    if (legacyDir && isEmptyDirPath(legacyDir)) {
+      try {
+        // Empty residue has no state to merge. Link it so old clients cannot recreate split state.
+        fs.rmdirSync(legacyDir);
+        fs.symlinkSync(targetDir, legacyDir, process.platform === "win32" ? "junction" : "dir");
+        changes.push(formatStateDirMigration(legacyDir, targetDir));
+      } catch (err) {
+        warnings.push(`Failed to retire empty legacy state dir (${legacyDir}): ${String(err)}`);
+      }
+    } else {
+      warnings.push(
+        `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+      );
+    }
     await migratePluginInstallIndex();
-    warnings.push(
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
-    );
     return {
       migrated: changes.length > 0,
       skipped: false,

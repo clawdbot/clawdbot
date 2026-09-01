@@ -55,6 +55,17 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
+to attach supplemental operator diagnostics to a thrown error without changing
+its identity, message, or failure classification. Mask opaque credentials first;
+the helper also redacts recognized secrets and retains at most 2,048 characters.
+`formatErrorMessageForDisplay(error)` includes the nearest attached diagnostic
+through nested causes and aggregates. Use it only at terminal display boundaries,
+never for retry or authentication decisions. Agent lifecycle errors and terminal
+CLI logs render these diagnostics automatically; successful runs remain quiet.
+Native RPC error messages retain their original text; `agent.wait` renders the
+supplemental diagnostic at its terminal result boundary.
+
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for
@@ -273,6 +284,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Creation holds the session lifecycle mutation fence through `afterCreate`, so new work waits for plugin-owned initialization to finish and pre-existing admitted work makes creation fail. The callback receives a clone of the created state. If it returns a patch, that patch may contain only `pluginExtensions`, and its value is the complete final `pluginExtensions` field. A callback or final-persistence failure rolls back the unchanged new row and transcript; guarded rollback preserves a row changed or claimed concurrently. `recoverMatchingInitialEntry: true` is only for retrying interrupted initialization when the persisted trusted fields match exactly, and recovery requires `afterCreate` to return a final patch.
 
+    The callback's optional `initialization` handle belongs to this exact pending child, source incarnation, registry and creation lifetime. Use `assertCurrent()` across awaited preparation and writes; retained handles reject after readiness or closure. Only the host's registered rollback path can use `assertRollbackCurrent()`. Older hosts may omit the handle, so features requiring creation authority must refuse that path rather than fabricate a run.
+
+    `initialization.prepareNativeToolPolicy(model)` checks the host-fixed child's native execution environment and harness policy, then returns its persistent web-search policy. The bounded native model selection is data, not authority to change the child or registry. This handle does not construct tools, invoke prompt hooks, provision requester resources or expose executors, approvals or credentials. Actual admitted runs own their available tools and live hooks; inherited native declarations remain metadata.
+
     Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run. A harness may explicitly name trusted execution delegates through its experimental `delegatedExecutionPluginIds` registration field. Delegates can admit and run only an exact existing model-locked session; all session mutations remain restricted to the harness owner. See [Agent harness plugins](/plugins/sdk-agent-harness#delegated-execution).
 
     Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
@@ -286,6 +301,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `readSessionTranscriptRawDelta(...)`, `readSessionTranscriptVisibleMessageDelta(...)`, `readVisibleSessionTranscriptMessageEntries(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read raw events or visible branch-safe message entries, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths. `readVisibleSessionTranscriptMessageEntries(...)` returns ordered read metadata; its `seq` field is not a resumable cursor.
 
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
+
+    A harness host may provide `hostCapabilities.annotateCurrentUserTurn(...)` for its already-admitted current prompt. The operation accepts only `mirrorIdentity`, `upstreamUserText`, `mirrorOrigin`, and `mirrorSourceFingerprint`; the host fixes diagnostic run correlation. Call it only after native prompt acceptance and outside transcript write locks. It cannot select an anchor, replace content, or annotate history. It revalidates the live host, exact recorder, active admission, session/writer ownership, unchanged message and source fingerprint at commit, then refreshes the recorder's generation and publishes the same event ID. Identical provenance does not rewrite or publish again. Missing capability, conflicts and stale owners must remain refusals; do not substitute a generic append or infer provenance. This optional capability adds no required host-version field and does not change transcript cursor invalidation.
 
     `readSessionTranscriptRawDelta(...)` returns a bounded `page`, `reset`, or `missing` result. Pass the opaque `page.cursor` into the next call. Pure appends preserve the cursor, while transcript replacement returns `reset` with a new bootstrap cursor. Pages default to 1,000 events and 1,000,000 serialized bytes; callers may request up to 10,000 events and 64 MiB. When the next event alone exceeds `maxBytes`, the page is empty and reports `requiredBytes`; retry with at least that byte limit when it is no greater than 64 MiB. Larger individual events require the complete-read API. A cursor identifies position only and never grants access to another session.
 

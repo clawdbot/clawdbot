@@ -224,7 +224,9 @@ export async function resetSessionEntryLifecycle(
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
         if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
           const event = buildSessionResetBoundaryEvent({
-            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
+            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId, {
+              projection: "reset-boundary",
+            }),
             ...params.resetBoundary,
           });
           const appended = appendTranscriptEventsInTransaction(

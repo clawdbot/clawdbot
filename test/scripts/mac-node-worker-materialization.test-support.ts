@@ -198,7 +198,7 @@ install_openclaw() { :; }
     destination,
     calls,
     tmp,
-    run(variant: string) {
+    run(variant: string, tempRoot = tmp) {
       return spawnSync(
         "/bin/bash",
         [path.join(scripts, "stage-mac-node-worker.sh"), destination, "arm64", "x86_64"],
@@ -206,7 +206,7 @@ install_openclaw() { :; }
           encoding: "utf8",
           env: {
             HOME: root,
-            TMPDIR: tmp,
+            TMPDIR: tempRoot,
             PATH: `${path.dirname(process.execPath)}:${systemPath}`,
             OPENCLAW_MAC_SIGNING_VARIANT: variant,
           },
@@ -219,11 +219,11 @@ install_openclaw() { :; }
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
     const it = createMacScriptTest();
-    it("preserves standard and derived elevation payloads through shared verification", () => {
+    it("provisions beside the destination when system temp is unavailable", () => {
       for (const variant of ["standard", "elevation-host"]) {
         const fixture = stagingFixture();
         const before = snapshot(path.join(fixture.root, "canonical"));
-        const result = fixture.run(variant);
+        const result = fixture.run(variant, path.join(fixture.tmp, "unavailable"));
         expect(result.status, result.stderr).toBe(0);
         expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
         const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
@@ -234,6 +234,9 @@ export function registerMacWorkerMaterializationTests() {
           expect(node).toBe(`${runtime}/bin/node`);
           expect(runtime).toContain(`/${arch}/${variant === "standard" ? "runtime" : "elevation"}`);
           expect(expected).toBe(path.join(fixture.root, "dist/build-info.json"));
+          const scratch = path.resolve(runtime!, "../..");
+          expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
+          expect(existsSync(scratch)).toBe(false);
           expect(snapshot(path.join(fixture.destination, arch))).toEqual(
             snapshot(path.join(fixture.root, "canonical", arch)).filter(
               (entry) => variant === "standard" || entry.path !== "foreign.node",
@@ -263,7 +266,11 @@ export function registerMacWorkerMaterializationTests() {
         const before = existsSync(fixture.destination) ? snapshot(fixture.destination) : [];
         const result = fixture.run(variant);
         expect(result.status, result.stderr).toBe(failure === "verification" ? 42 : 1);
-        expect(readFileSync(fixture.calls, "utf8").trim().split("\n")).toHaveLength(2);
+        const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
+        expect(calls).toHaveLength(2);
+        for (const call of calls) {
+          expect(existsSync(path.resolve(call.split("|")[1]!, "../.."))).toBe(false);
+        }
         expect(existsSync(path.join(fixture.destination, "arm64"))).toBe(false);
         expect(existsSync(fixture.destination) ? snapshot(fixture.destination) : []).toEqual(
           before,

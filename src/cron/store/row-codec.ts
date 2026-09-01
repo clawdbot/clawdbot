@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
@@ -199,6 +200,19 @@ export function loadCronRows(db: DatabaseSync, storeKey: string): CronJobRow[] {
   ).rows;
 }
 
+/** Fingerprints definition JSON and order while excluding runtime-owned state. */
+export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): string {
+  const rows = executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .select(["job_id", "job_json", "sort_order"])
+      .where("store_key", "=", storeKey)
+      .orderBy("job_id", "asc"),
+  ).rows;
+  return sha256Hex(JSON.stringify(rows));
+}
+
 /** Materializes retired ownership within the caller's write transaction. */
 export function materializeCronRowAgentOwners(
   db: DatabaseSync,
@@ -281,24 +295,46 @@ export function deleteStaleCronJobFamilyRows(
 }
 
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
+type CronRowReplaceOptions = {
+  preserveRuntimeState?: boolean;
+};
+
+type CronRowReplaceResult = {
+  existingJobIds: ReadonlySet<string>;
+  jobs: CronStoredJob[];
+  legacyAuthorityJobIds: ReadonlySet<string>;
+};
+
 export function replaceCronRows(
   db: DatabaseSync,
   storeKey: string,
   store: CronStoreFile,
-): CronStoredJob[] {
+  opts?: CronRowReplaceOptions,
+): CronRowReplaceResult {
   const existingRows = executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select("job_id")
+      .select(["job_id", "job_json"])
       .where("store_key", "=", storeKey),
   ).rows;
   const normalizedJobs: CronStoredJob[] = [];
   for (const [index, job] of store.jobs.entries()) {
-    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index));
+    normalizedJobs.push(upsertCronJobRow(db, storeKey, job, index, opts));
   }
   const nextJobIds = new Set(normalizedJobs.map((job) => job.id));
+  const existingJobIds = new Set<string>();
+  const legacyAuthorityJobIds = new Set<string>();
   for (const row of existingRows) {
+    existingJobIds.add(row.job_id);
+    const storedJob = tryParseJsonObject(row.job_json);
+    if (
+      storedJob &&
+      (Object.hasOwn(storedJob, "runtimeAuthority") ||
+        Object.hasOwn(storedJob, "runtimeAuthorityRecoveryRequired"))
+    ) {
+      legacyAuthorityJobIds.add(row.job_id);
+    }
     if (nextJobIds.has(row.job_id)) {
       continue;
     }
@@ -312,7 +348,7 @@ export function replaceCronRows(
         .where("job_id", "=", row.job_id),
     );
   }
-  return normalizedJobs;
+  return { existingJobIds, jobs: normalizedJobs, legacyAuthorityJobIds };
 }
 
 /** Upserts one persisted cron row without rewriting unrelated jobs in its store partition. */
@@ -321,18 +357,28 @@ export function upsertCronJobRow(
   storeKey: string,
   job: CronStoredJob,
   sortOrder: number,
+  opts?: CronRowReplaceOptions,
 ): CronStoredJob {
   const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }
   const values = bindCronJobRow(storeKey, normalized, sortOrder);
+  const {
+    state_json: _stateJson,
+    runtime_updated_at_ms: _runtimeUpdatedAtMs,
+    ...definitionValues
+  } = values;
   executeSqliteQuerySync(
     db,
     getCronStoreKysely(db)
       .insertInto("cron_jobs")
       .values(values)
-      .onConflict((conflict) => conflict.columns(["store_key", "job_id"]).doUpdateSet(values)),
+      .onConflict((conflict) =>
+        conflict
+          .columns(["store_key", "job_id"])
+          .doUpdateSet(opts?.preserveRuntimeState ? definitionValues : values),
+      ),
   );
   return normalized;
 }

@@ -246,6 +246,7 @@ export async function recoverEmbeddedRunAttempt(input: {
 
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
+    sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,
@@ -453,8 +454,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       advanceAuthProfile: failoverRetryController.advanceAuthProfile,
       advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeBackoffBeforeOverloadFailover:
-        failoverRetryController.maybeBackoffBeforeOverloadFailover,
+      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
+      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,

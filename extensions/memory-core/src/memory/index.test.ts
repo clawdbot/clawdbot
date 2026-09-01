@@ -354,7 +354,7 @@ describe("memory index", () => {
     }
   });
 
-  it("reindexes legacy curated provenance before the first automatic candidate read", async () => {
+  it("withholds legacy curated candidates until background provenance repair succeeds", async () => {
     const projectKey = "github.com/openclaw/openclaw";
     await fs.writeFile(
       path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -414,6 +414,13 @@ describe("memory index", () => {
         upgradedManager as unknown as { runSync: (params?: MemorySyncParams) => Promise<void> },
         "runSync",
       );
+      await expect(
+        Promise.all([
+          upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+          upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+        ]),
+      ).resolves.toEqual([[], []]);
+      await upgradedManager.sync({ reason: "test-repair-complete" });
       const [projectCandidates, triggerCandidates] = await Promise.all([
         upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
         upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),

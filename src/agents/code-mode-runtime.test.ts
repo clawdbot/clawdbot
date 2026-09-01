@@ -4,12 +4,9 @@ import {
   captureCodeModeValue,
   CodeModeOutputState,
 } from "./code-mode-json.js";
-import {
-  isCodeModeEngagedForModel,
-  prepareSource,
-  resolveCodeModeConfig,
-} from "./code-mode-runtime.js";
+import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
+import { prepareSource } from "./code-mode-source.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 

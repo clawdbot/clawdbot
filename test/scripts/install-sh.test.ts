@@ -2557,8 +2557,14 @@ EOF
         expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual(
           Array.from({ length: expectedCalls }, () => `openclaw@${requested}`),
         );
+        const output = `${result.stdout}\n${result.stderr}`;
+        const advertisedLogs = [...output.matchAll(/^\s*Installer log:\s*(.+)$/gm)]
+          .map((match) => match[1]?.trim())
+          .filter((logPath) => logPath !== undefined);
+        expect(advertisedLogs.filter((logPath) => !existsSync(logPath))).toEqual([]);
         if (expectedStatus !== 0) {
-          expect(`${result.stdout}\n${result.stderr}`).toContain(`${error} (attempt 2)`);
+          expect(output).toContain(`${error} (attempt 2)`);
+          expect(output).toContain("showing last log lines");
         }
         if (requested !== "next") {
           expect(`${result.stdout}\n${result.stderr}`).not.toContain("openclaw@next");

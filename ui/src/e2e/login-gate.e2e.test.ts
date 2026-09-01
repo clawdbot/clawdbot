@@ -357,8 +357,35 @@ suite.define(() => {
       expectedKind: "network",
       expectedTitle: "Could not connect",
     },
+    {
+      name: "profile verification",
+      error: {
+        code: "UNAVAILABLE",
+        message: "Authenticated profile verification is unavailable; retry the request.",
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+        retryable: true,
+      },
+      expectedKind: "profile-unavailable",
+      expectedTitle: "Profile verification unavailable",
+    },
+    {
+      name: "GitHub profile rate limit",
+      error: {
+        code: "UNAVAILABLE",
+        message:
+          "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+        retryable: true,
+      },
+      expectedKind: "profile-unavailable",
+      expectedTitle: "Profile verification unavailable",
+    },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const viewport = { height: 900, width: 1280 };
+    const context = await suite.browser.newContext({
+      viewport,
+      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
@@ -367,6 +394,12 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", fixture.error);
 
+      await page.locator(".login-gate__failure").waitFor();
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(

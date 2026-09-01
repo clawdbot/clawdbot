@@ -287,6 +287,13 @@ then refreshes service metadata, restarts the service, and verifies the
 restarted Gateway before reporting `Gateway: restarted and verified.`.
 Doctor repair and plugin validation run before restart; a verified restart
 does not run another Doctor from the old updater process.
+After plugin convergence, the updated CLI also runs any plugin-owned
+post-update readiness checks against an isolated state snapshot. An error keeps
+the Gateway stopped and returns the check's remediation before restart; this
+gate does not run interactive setup, download models, or change config.
+It selects readiness owners before loading their health APIs, so an unrelated
+optional Doctor check cannot interrupt the gate. Selected readiness checks
+remain mandatory, including when their required artifact is unavailable.
 Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.

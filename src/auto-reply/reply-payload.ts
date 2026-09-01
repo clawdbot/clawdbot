@@ -311,6 +311,8 @@ export type ReplyPayloadMetadata = {
   sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
+  /** One host-visible status gates a child-completion wake for this exact turn. */
+  continuationStatus?: true;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
     deliveryId: string;
@@ -354,6 +356,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** The warning owner observed this tool failure; presentation text is not evidence. */
+  toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */

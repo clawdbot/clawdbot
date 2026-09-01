@@ -13246,18 +13246,26 @@ public struct TalkClientToolCallParams: Codable, Sendable {
 public struct TalkClientToolCallResult: Codable, Sendable {
     public let runid: String
     public let idempotencykey: String
+    public let agentid: String
+    public let agentsessionkey: String
 
     public init(
         runid: String,
-        idempotencykey: String)
+        idempotencykey: String,
+        agentid: String,
+        agentsessionkey: String)
     {
         self.runid = runid
         self.idempotencykey = idempotencykey
+        self.agentid = agentid
+        self.agentsessionkey = agentsessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
         case idempotencykey = "idempotencyKey"
+        case agentid = "agentId"
+        case agentsessionkey = "agentSessionKey"
     }
 }
 
@@ -17223,19 +17231,192 @@ public struct CronAddParams: Codable, Sendable {
     }
 }
 
+public struct CronAddJobResult: Codable, Sendable {
+    public let id: String
+    public let declarationkey: String?
+    public let displayname: String?
+    public let owner: [String: AnyCodable]?
+    public let scheduledtoolpolicy: AnyCodable?
+    public let agentid: String?
+    public let sessionkey: String?
+    public let name: String
+    public let description: String?
+    public let enabled: Bool
+    public let deleteafterrun: Bool?
+    public let createdatms: Int
+    public let updatedatms: Int
+    public let configrevision: String?
+    public let schedule: AnyCodable
+    public let pacing: [String: AnyCodable]?
+    public let trigger: [String: AnyCodable]?
+    public let sessiontarget: AnyCodable
+    public let wakemode: AnyCodable
+    public let payload: AnyCodable
+    public let delivery: AnyCodable?
+    public let failurealert: AnyCodable?
+    public let state: [String: AnyCodable]
+    public let nextrunatms: Int?
+    public let lastrunatms: Int?
+    public let lastrunstatus: AnyCodable?
+    public let lastrunerror: String?
+    public let lastdelivered: Bool?
+    public let lastdeliverystatus: AnyCodable?
+    public let lastdeliveryerror: String?
+    public let deliverysuppressionreason: String?
+    public let lastfailurenotificationdelivered: Bool?
+    public let lastfailurenotificationdeliverystatus: AnyCodable?
+    public let lastfailurenotificationdeliveryerror: String?
+    public let deliverypreview: CronDeliveryPreview?
+
+    public init(
+        id: String,
+        declarationkey: String? = nil,
+        displayname: String? = nil,
+        owner: [String: AnyCodable]? = nil,
+        scheduledtoolpolicy: AnyCodable? = nil,
+        agentid: String? = nil,
+        sessionkey: String? = nil,
+        name: String,
+        description: String? = nil,
+        enabled: Bool,
+        deleteafterrun: Bool? = nil,
+        createdatms: Int,
+        updatedatms: Int,
+        configrevision: String? = nil,
+        schedule: AnyCodable,
+        pacing: [String: AnyCodable]? = nil,
+        trigger: [String: AnyCodable]? = nil,
+        sessiontarget: AnyCodable,
+        wakemode: AnyCodable,
+        payload: AnyCodable,
+        delivery: AnyCodable? = nil,
+        failurealert: AnyCodable? = nil,
+        state: [String: AnyCodable],
+        nextrunatms: Int? = nil,
+        lastrunatms: Int? = nil,
+        lastrunstatus: AnyCodable? = nil,
+        lastrunerror: String? = nil,
+        lastdelivered: Bool? = nil,
+        lastdeliverystatus: AnyCodable? = nil,
+        lastdeliveryerror: String? = nil,
+        deliverysuppressionreason: String? = nil,
+        lastfailurenotificationdelivered: Bool? = nil,
+        lastfailurenotificationdeliverystatus: AnyCodable? = nil,
+        lastfailurenotificationdeliveryerror: String? = nil,
+        deliverypreview: CronDeliveryPreview? = nil)
+    {
+        self.id = id
+        self.declarationkey = declarationkey
+        self.displayname = displayname
+        self.owner = owner
+        self.scheduledtoolpolicy = scheduledtoolpolicy
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.name = name
+        self.description = description
+        self.enabled = enabled
+        self.deleteafterrun = deleteafterrun
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+        self.configrevision = configrevision
+        self.schedule = schedule
+        self.pacing = pacing
+        self.trigger = trigger
+        self.sessiontarget = sessiontarget
+        self.wakemode = wakemode
+        self.payload = payload
+        self.delivery = delivery
+        self.failurealert = failurealert
+        self.state = state
+        self.nextrunatms = nextrunatms
+        self.lastrunatms = lastrunatms
+        self.lastrunstatus = lastrunstatus
+        self.lastrunerror = lastrunerror
+        self.lastdelivered = lastdelivered
+        self.lastdeliverystatus = lastdeliverystatus
+        self.lastdeliveryerror = lastdeliveryerror
+        self.deliverysuppressionreason = deliverysuppressionreason
+        self.lastfailurenotificationdelivered = lastfailurenotificationdelivered
+        self.lastfailurenotificationdeliverystatus = lastfailurenotificationdeliverystatus
+        self.lastfailurenotificationdeliveryerror = lastfailurenotificationdeliveryerror
+        self.deliverypreview = deliverypreview
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case declarationkey = "declarationKey"
+        case displayname = "displayName"
+        case owner
+        case scheduledtoolpolicy = "scheduledToolPolicy"
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case name
+        case description
+        case enabled
+        case deleteafterrun = "deleteAfterRun"
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+        case configrevision = "configRevision"
+        case schedule
+        case pacing
+        case trigger
+        case sessiontarget = "sessionTarget"
+        case wakemode = "wakeMode"
+        case payload
+        case delivery
+        case failurealert = "failureAlert"
+        case state
+        case nextrunatms = "nextRunAtMs"
+        case lastrunatms = "lastRunAtMs"
+        case lastrunstatus = "lastRunStatus"
+        case lastrunerror = "lastRunError"
+        case lastdelivered = "lastDelivered"
+        case lastdeliverystatus = "lastDeliveryStatus"
+        case lastdeliveryerror = "lastDeliveryError"
+        case deliverysuppressionreason = "deliverySuppressionReason"
+        case lastfailurenotificationdelivered = "lastFailureNotificationDelivered"
+        case lastfailurenotificationdeliverystatus = "lastFailureNotificationDeliveryStatus"
+        case lastfailurenotificationdeliveryerror = "lastFailureNotificationDeliveryError"
+        case deliverypreview = "deliveryPreview"
+    }
+}
+
 public struct CronDeclarativeAddResult: Codable, Sendable {
     public let created: Bool
     public let updated: Bool?
     public let job: CronJob
+    public let deliverypreview: CronDeliveryPreview?
 
     public init(
         created: Bool,
         updated: Bool? = nil,
-        job: CronJob)
+        job: CronJob,
+        deliverypreview: CronDeliveryPreview? = nil)
     {
         self.created = created
         self.updated = updated
         self.job = job
+        self.deliverypreview = deliverypreview
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case created
+        case updated
+        case job
+        case deliverypreview = "deliveryPreview"
+    }
+}
+
+public struct CronDeliveryPreview: Codable, Sendable {
+    public let label: String
+    public let detail: String
+
+    public init(
+        label: String,
+        detail: String)
+    {
+        self.label = label
+        self.detail = detail
     }
 }
 
@@ -21540,6 +21721,7 @@ public struct ChatErrorEvent: Codable, Sendable {
     public let message: AnyCodable?
     public let errormessage: String?
     public let errorkind: AnyCodable?
+    public let errordetail: [String: AnyCodable]?
     public let usage: AnyCodable?
     public let stopreason: String?
 
@@ -21553,6 +21735,7 @@ public struct ChatErrorEvent: Codable, Sendable {
         message: AnyCodable? = nil,
         errormessage: String? = nil,
         errorkind: AnyCodable? = nil,
+        errordetail: [String: AnyCodable]? = nil,
         usage: AnyCodable? = nil,
         stopreason: String? = nil)
     {
@@ -21565,6 +21748,7 @@ public struct ChatErrorEvent: Codable, Sendable {
         self.message = message
         self.errormessage = errormessage
         self.errorkind = errorkind
+        self.errordetail = errordetail
         self.usage = usage
         self.stopreason = stopreason
     }
@@ -21579,6 +21763,7 @@ public struct ChatErrorEvent: Codable, Sendable {
         case message
         case errormessage = "errorMessage"
         case errorkind = "errorKind"
+        case errordetail = "errorDetail"
         case usage
         case stopreason = "stopReason"
     }

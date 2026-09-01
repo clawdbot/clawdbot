@@ -576,18 +576,20 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
-  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", ({
-    workerArtifacts,
-  }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const owner = createVitestWorkerRun();
-      try {
-        const manifest = await prepareWorkers(owner);
-        console.log(
-          JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
-        );
-        for (const mode of ["source", "compiled"] as const) {
+  it.for(["source", "compiled"] as const)(
+    "preserves scoped and prepared provider hooks in %s TUI payloads",
+    (mode, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
+        // Each mode owns its cold-process budget; source probes need no compiled generation.
+        const owner = mode === "compiled" ? createVitestWorkerRun() : undefined;
+        try {
+          if (owner) {
+            const manifest = await prepareWorkers(owner);
+            console.log(
+              JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
+            );
+          }
           for (const scope of ["scoped", "prepared"] as const) {
             const directory = workerArtifacts.fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
@@ -712,24 +714,21 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           `,
             );
             const url = pathToFileURL(
-              mode === "source"
-                ? path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts")
-                : path.join(
+              owner
+                ? path.join(
                     owner.descriptor.directory,
                     "dist/agents/embedded-agent-runner/run/payloads.js",
-                  ),
+                  )
+                : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
               [
                 ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
-                  mode === "source"
-                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
-                    : path.join(
-                        owner.descriptor.directory,
-                        "dist/plugins/provider-hook-runtime.js",
-                      ),
+                  owner
+                    ? path.join(owner.descriptor.directory, "dist/plugins/provider-hook-runtime.js")
+                    : path.join(root, "src/plugins/provider-hook-runtime.ts"),
                 ).href,
               ],
               root,
@@ -742,12 +741,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             console.log(result.stdout);
             expect(result.code, result.stderr + result.stdout).toBe(0);
           }
+        } finally {
+          await owner?.dispose();
         }
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
+        if (owner) {
+          expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+        }
+      }),
+  );
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
@@ -887,7 +888,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           ]).result;
           expect(refused.code).not.toBe(0);
           expect(refused.stderr).toContain("ENOENT");
-          expect(refused.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+          expect(refused.stderr).not.toContain("FAILED (exit");
           expect(
             fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim().split("\n"),
           ).toHaveLength(1);
@@ -938,7 +939,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           expect(result.code).not.toBe(0);
           if (action === "owner disconnect") {
             expect(result.stderr).toContain("owner disconnected");
-            expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+            expect(result.stderr).not.toContain("FAILED (exit");
           }
           await owner.dispose();
           expect(fs.existsSync(new URL(generation))).toBe(false);
@@ -1061,6 +1062,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("Compiled subprocess artifact changed");
       expect(result.stderr).not.toContain("[test] passed");
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        "[test] FAILED (exit 1)",
+      ]);
       expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
     }));
 
@@ -1289,6 +1293,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           expect(failed.code).not.toBe(0);
           expect(failed.stderr).toContain("owner refused:");
           expect(failed.stderr).toContain(error!);
+          expect(failed.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+            "[test] FAILED (exit 1)",
+          ]);
           expect(failed.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
           expect(fs.readdirSync(parent).toSorted()).toEqual(before);
         }

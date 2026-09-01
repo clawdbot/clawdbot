@@ -11,6 +11,15 @@ export const cliProcessTestFiles = [
   "src/cli/plugins-authoring.process.test.ts",
   "src/cli/mcp-cli.import-boundary.test.ts",
   "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+  "src/cli/update-dry-run-state.process.test.ts",
+  "src/cli/doctor-output.process.test.ts",
+  "src/cli/update-cli/update-command-lease.test.ts",
+  "src/cli/one-shot-exit.test.ts",
+  "src/cli/update-finalization-output.process.test.ts",
+  "src/cli/cold-command-plugin-imports.process.test.ts",
+  "src/cli/mcp-cli.probe-exit.process.test.ts",
+  "src/cli/claws-authoring-state.process.test.ts",
+  "src/cli/program/subcli-descriptors.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

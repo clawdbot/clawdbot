@@ -15,7 +15,6 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { describe, expect } from "vitest";
-import { registerMacElevationArtifactTests } from "./mac-elevation-artifact.test-support.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
@@ -1486,8 +1485,6 @@ function createInstallRollbackHarness(
     },
   };
 }
-
-registerMacElevationArtifactTests(it);
 
 function createCodesignMetadataProbe(mac: MacScriptFixture) {
   const root = mac.createTempDir("openclaw-elevation-metadata-probe-");

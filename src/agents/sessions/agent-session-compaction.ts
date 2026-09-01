@@ -50,11 +50,14 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
   private onContextReplaced?: (tokensAfter: number) => void;
+  private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
     callback: ((tokensAfter: number) => void) | undefined,
+    assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
+    this.assertContextReplacementActive = assertActive;
   }
 
   // =========================================================================
@@ -304,6 +307,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       summary: capCompactionSummary(compactionResult.summary),
     };
 
+    // An in-memory transcript has no SQLite writer fence. Revalidate its
+    // captured owner after summarization, immediately before replacing context.
+    this.assertContextReplacementActive?.();
     const compactionEntryId = this.sessionManager.appendCompaction(
       compactionResult.summary,
       compactionResult.firstKeptEntryId,

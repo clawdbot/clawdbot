@@ -57,6 +57,28 @@ type LinkState = {
 
 const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
 
+const INLINE_STYLE_BY_TOKEN = new Map<string, MarkdownStyle>([
+  ["underline_open", "underline"],
+  ["underline_close", "underline"],
+  ["em_open", "italic"],
+  ["em_close", "italic"],
+  ["strong_open", "bold"],
+  ["strong_close", "bold"],
+  ["s_open", "strikethrough"],
+  ["s_close", "strikethrough"],
+  ["spoiler_open", "spoiler"],
+  ["spoiler_close", "spoiler"],
+]);
+
+const HEADING_STYLE_BY_TAG = new Map<string, MarkdownStyle>([
+  ["h1", "heading_1"],
+  ["h2", "heading_2"],
+  ["h3", "heading_3"],
+  ["h4", "heading_4"],
+  ["h5", "heading_5"],
+  ["h6", "heading_6"],
+]);
+
 type RenderEnv = {
   assistantTranscriptRoleHeaders?: boolean;
   assistantTranscriptRolePreserveLinks?: boolean;
@@ -799,25 +821,6 @@ function handleLinkClose(state: RenderState) {
   target.links.push(span);
 }
 
-function headingStyleFromToken(token: MarkdownToken): MarkdownStyle | null {
-  switch (token.tag) {
-    case "h1":
-      return "heading_1";
-    case "h2":
-      return "heading_2";
-    case "h3":
-      return "heading_3";
-    case "h4":
-      return "heading_4";
-    case "h5":
-      return "heading_5";
-    case "h6":
-      return "heading_6";
-    default:
-      return null;
-  }
-}
-
 function isInsideMarkdownHtmlTag(text: string): boolean {
   const openTagStart = text.lastIndexOf("<");
   if (openTagStart === -1) {
@@ -1106,6 +1109,17 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
     ? computeNextMappedBlockStarts(tokens)
     : [];
   for (const [tokenIndex, token] of tokens.entries()) {
+    const inlineStyle = INLINE_STYLE_BY_TOKEN.get(token.type);
+    if (inlineStyle) {
+      if (inlineStyle !== "spoiler" || state.enableSpoilers) {
+        if (token.type.endsWith("_open")) {
+          openStyle(state, inlineStyle);
+        } else {
+          closeStyle(state, inlineStyle);
+        }
+      }
+      continue;
+    }
     switch (token.type) {
       case "inline":
         if (token.children) {
@@ -1115,12 +1129,6 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "text":
         recordTaskMarker(state, token.content ?? "");
         appendText(state, token.content ?? "");
-        break;
-      case "underline_open":
-        openStyle(state, "underline");
-        break;
-      case "underline_close":
-        closeStyle(state, "underline");
         break;
       case ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE: {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
@@ -1132,36 +1140,8 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         break;
       }
-      case "em_open":
-        openStyle(state, "italic");
-        break;
-      case "em_close":
-        closeStyle(state, "italic");
-        break;
-      case "strong_open":
-        openStyle(state, "bold");
-        break;
-      case "strong_close":
-        closeStyle(state, "bold");
-        break;
-      case "s_open":
-        openStyle(state, "strikethrough");
-        break;
-      case "s_close":
-        closeStyle(state, "strikethrough");
-        break;
       case "code_inline":
         renderInlineCode(state, token.content ?? "");
-        break;
-      case "spoiler_open":
-        if (state.enableSpoilers) {
-          openStyle(state, "spoiler");
-        }
-        break;
-      case "spoiler_close":
-        if (state.enableSpoilers) {
-          closeStyle(state, "spoiler");
-        }
         break;
       case "link_open": {
         const target = resolveRenderTarget(state);
@@ -1208,7 +1188,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.headingStyle === "bold") {
           openStyle(state, "bold");
         } else if (state.headingStyle === "rich") {
-          const style = headingStyleFromToken(token);
+          const style = HEADING_STYLE_BY_TAG.get(token.tag ?? "");
           if (style) {
             openStyle(state, style);
           }
@@ -1218,7 +1198,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.headingStyle === "bold") {
           closeStyle(state, "bold");
         } else if (state.headingStyle === "rich") {
-          const style = headingStyleFromToken(token);
+          const style = HEADING_STYLE_BY_TAG.get(token.tag ?? "");
           if (style) {
             closeStyle(state, style);
           }
@@ -1254,35 +1234,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       }
       case "bullet_list_open":
-        // Add newline before nested list starts (so nested items appear on new line)
-        if (state.env.listStack.length > 0) {
-          appendNestedListSeparator(state);
-        }
-        state.env.listStack.push({
-          type: "bullet",
-          index: 0,
-          openLevel: token.level ?? 0,
-          id: state.nextListId++,
-          ...(state.env.listStack.at(-1)?.id !== undefined
-            ? { parentId: state.env.listStack.at(-1)?.id }
-            : {}),
-        });
-        break;
-      case "bullet_list_close":
-        state.env.listStack.pop();
-        if (state.env.listStack.length === 0) {
-          appendTopLevelListSeparator(state);
-        }
-        break;
       case "ordered_list_open": {
-        // Add newline before nested list starts (so nested items appear on new line)
         if (state.env.listStack.length > 0) {
           appendNestedListSeparator(state);
         }
-        const start = Number(getAttr(token, "start") ?? "1");
+        const ordered = token.type === "ordered_list_open";
         state.env.listStack.push({
-          type: "ordered",
-          index: start - 1,
+          type: ordered ? "ordered" : "bullet",
+          index: ordered ? Number(getAttr(token, "start") ?? "1") - 1 : 0,
           openLevel: token.level ?? 0,
           id: state.nextListId++,
           ...(state.env.listStack.at(-1)?.id !== undefined
@@ -1291,6 +1250,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         });
         break;
       }
+      case "bullet_list_close":
       case "ordered_list_close":
         state.env.listStack.pop();
         if (state.env.listStack.length === 0) {
@@ -1358,19 +1318,6 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       }
       case "code_block":
-        renderCodeBlock(
-          state,
-          token.content ?? "",
-          token.info,
-          sourceBlockNewlineCount(
-            state.preserveSourceBlockSpacing,
-            nextMappedBlockStarts[tokenIndex],
-            token.map?.[1],
-          ),
-          "indented",
-          token.map,
-        );
-        break;
       case "fence":
         renderCodeBlock(
           state,
@@ -1381,9 +1328,9 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
             nextMappedBlockStarts[tokenIndex],
             token.map?.[1],
           ),
-          "fenced",
+          token.type === "fence" ? "fenced" : "indented",
           token.map,
-          isFenceClosed(token),
+          token.type === "fence" ? isFenceClosed(token) : undefined,
         );
         break;
       case "html_block":

@@ -2,11 +2,11 @@
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import zlib from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { encodePngRgba } from "../../media/png-encode.js";
 
 /** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
@@ -289,48 +289,6 @@ function drawLabel(
   });
 }
 
-function crc32(buffer: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc ^= byte;
-    for (let i = 0; i < 8; i += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuffer = Buffer.from(type, "ascii");
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length, 0);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
-  return Buffer.concat([length, typeBuffer, data, crc]);
-}
-
-function encodePng(data: Buffer): Buffer {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(WIDTH, 0);
-  ihdr.writeUInt32BE(HEIGHT, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
-  const stride = WIDTH * 4;
-  const raw = Buffer.alloc((stride + 1) * HEIGHT);
-  for (let y = 0; y < HEIGHT; y += 1) {
-    const rowStart = y * (stride + 1);
-    raw[rowStart] = 0;
-    data.copy(raw, rowStart + 1, y * stride, (y + 1) * stride);
-  }
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", zlib.deflateSync(raw)),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
 function treemapGroup(params: { name: string; color: Rgba; leaves: TreemapLeaf[] }): TreemapGroup {
   return { ...params, value: totalValue(params.leaves) };
 }
@@ -505,7 +463,7 @@ export async function renderContextTreemapPng(params: {
     resolvePreferredOpenClawTmpDir(),
     `openclaw-context-map-${crypto.randomUUID()}.png`,
   );
-  await writeFile(outPath, encodePng(canvas.data));
+  await writeFile(outPath, encodePngRgba(canvas.data, WIDTH, HEIGHT));
   const caption = [
     "Context treemap",
     `Source: ${params.report.source}`,

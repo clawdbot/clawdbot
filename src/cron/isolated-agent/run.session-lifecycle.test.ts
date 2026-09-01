@@ -8,6 +8,7 @@ import {
   drainPendingContextEngineTurnsBeforeRun,
   type ContextEngineTurnAttemptFacts,
 } from "../../agents/harness/context-engine-turn-attempt.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import * as diagnostic from "../../logging/diagnostic.js";
@@ -487,7 +488,12 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         payloads: [
           { text: outcome === "silent" ? "NO_REPLY" : "Report" },
           ...(outcome === "presentation warning"
-            ? [{ text: "⚠️ ✉️ Message failed", isError: true }]
+            ? [
+                setReplyPayloadMetadata(
+                  { text: "⚠️ Message failed", isError: true },
+                  { toolErrorWarning: { toolName: "message" } },
+                ),
+              ]
             : []),
         ],
         meta: {

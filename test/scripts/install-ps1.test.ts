@@ -150,6 +150,45 @@ describe("install.ps1 failure handling", () => {
     const entrypointLines = extractEntrypointLines(source);
     const cases = [
       {
+        name: "native-npm-stderr",
+        source: [
+          scriptWithoutEntryPoint,
+          `$node = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
+          String.raw`
+$ErrorActionPreference = 'Stop'
+$beforeLocation = (Get-Location).Path
+$root = Join-Path ([IO.Path]::GetTempPath()) ('openclaw-native-stderr-' + [Guid]::NewGuid().ToString('N'))
+[void](New-Item -ItemType Directory -Path $root)
+$child = Join-Path $root 'child.cjs'
+[IO.File]::WriteAllText($child, 'if (process.argv[2] === "marker") { require("node:fs").writeFileSync(process.argv[3], "spawned"); process.exit(0); } if (process.argv[2] === "warning") process.stderr.write("npm warn proof\n"); process.stdout.write("native-complete\n"); process.exit(Number(process.argv[3]));')
+try {
+    foreach ($wrapper in @('Invoke-NpmCommand', 'Invoke-CommandFromWindowsSafeDirectory')) {
+        foreach ($stream in @('warning', 'quiet')) {
+            foreach ($code in @(0, 17)) {
+                $output = @(& $wrapper -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
+                if ($LASTEXITCODE -ne $code) { throw "$wrapper changed native exit $code" }
+                $text = ($output | ForEach-Object { $_.ToString() }) -join " "
+                if (-not $text.Contains('native-complete')) { throw "$wrapper lost stdout" }
+                if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw "$wrapper changed stderr" }
+                if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw "$wrapper leaked caller state" }
+            }
+        }
+    }
+    $marker = Join-Path $root 'unexpected-spawn'
+    foreach ($entry in @(
+        @{command=$node; directory=(Join-Path $root 'missing')},
+        @{command=(Join-Path $root 'missing.exe'); directory=$root}
+    )) {
+        $caught = $false
+        try { Invoke-NpmCommand -CommandPath $entry.command -Arguments @($child, 'marker', $marker) -WorkingDirectory $entry.directory 2>&1 | Out-Null } catch { $caught = $true }
+        if (-not $caught -or (Test-Path -LiteralPath $marker)) { throw 'PowerShell setup failure did not stop the child' }
+        if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw 'PowerShell failure leaked caller state' }
+    }
+} finally { Remove-Item -LiteralPath $root -Recurse -Force }
+`,
+        ].join("\n"),
+      },
+      {
         name: "openclaw-native-command-exit",
         source: [
           scriptWithoutEntryPoint,
@@ -430,7 +469,12 @@ describe("install.ps1 failure handling", () => {
           "  function Resolve-PortableGitDownload { return @{ Tag = 'test'; Name = 'MinGit.zip'; Url = 'https://example.test/MinGit.zip' } }",
           "  function Ensure-PortableGitOnUserPath { }",
           "  function Use-PortableGitIfPresent { return (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe')) }",
-          "  function Invoke-WebRequest { param($Uri, $OutFile) New-Item -ItemType File -Force -Path $OutFile | Out-Null }",
+          "  $script:usedBasicParsing = $false",
+          "  function Invoke-WebRequest {",
+          "    param($Uri, $OutFile, [switch]$UseBasicParsing)",
+          "    $script:usedBasicParsing = $UseBasicParsing.IsPresent",
+          "    New-Item -ItemType File -Force -Path $OutFile | Out-Null",
+          "  }",
           "  function Expand-Archive {",
           "    param($Path, $DestinationPath, [switch]$Force)",
           "    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'cmd') | Out-Null",
@@ -439,6 +483,7 @@ describe("install.ps1 failure handling", () => {
           "    New-Item -ItemType File -Force -Path (Join-Path $DestinationPath 'etc/gitconfig') | Out-Null",
           "  }",
           "  Install-PortableGit",
+          "  if (-not $script:usedBasicParsing) { throw 'MinGit download must use basic parsing' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'cmd/git.exe'))) { throw 'missing cmd/git.exe' }",
           "  if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'etc/gitconfig'))) { throw 'missing etc/gitconfig' }",
           "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter 'openclaw-portable-git-*').Count -ne 0) { throw 'temporary Git files remain' }",
@@ -1093,25 +1138,29 @@ try {
     for (const entry of parsed) {
       batchedPowerShellResults.set(entry.name, { error: entry.error, ok: entry.ok });
     }
-    // Repeat only the native bootstrap case under the other installed engine;
-    // the hosted install command still uses Windows PowerShell 5.1.
+    // The hosted installer supports Windows PowerShell 5.1 as well as PowerShell 7.
     for (const engine of bootstrapShells) {
-      const name = "pnpm-source-bootstrap-lifecycle";
       if (engine === powershell) {
         continue;
       }
-      const fixture = fixtures.find((entry) => entry.name === name);
-      if (!fixture) {
-        throw new Error("Missing native bootstrap fixture");
+      for (const name of [
+        "native-npm-stderr",
+        "pnpm-source-bootstrap-lifecycle",
+        "portable-git-layout",
+      ]) {
+        const fixture = fixtures.find((entry) => entry.name === name);
+        if (!fixture) {
+          throw new Error(`Missing PowerShell fixture ${name}`);
+        }
+        const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
+        const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
+          encoding: "utf8",
+        });
+        batchedPowerShellResults.set(`${name}:${engine}`, {
+          ok: result.status === 0,
+          error: result.status === 0 ? "" : result.stdout + result.stderr,
+        });
       }
-      const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
-      const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
-        encoding: "utf8",
-      });
-      batchedPowerShellResults.set(`${name}:${engine}`, {
-        ok: result.status === 0,
-        error: result.status === 0 ? "" : result.stdout + result.stderr,
-      });
     }
   });
 
@@ -1239,6 +1288,21 @@ try {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
   });
 
+  runIfPowerShell(
+    "preserves native stderr and exit codes without softening PowerShell failures",
+    () => {
+      if (process.platform === "win32") {
+        expect(bootstrapShells).toContain("powershell");
+      }
+      expectBatchedPowerShellCase("native-npm-stderr");
+      for (const engine of bootstrapShells) {
+        if (engine !== powershell) {
+          expectBatchedPowerShellCase(`native-npm-stderr:${engine}`);
+        }
+      }
+    },
+  );
+
   runIfPowerShell("preserves explicit pnpm prefer-offline settings for Git installs", () => {
     expectBatchedPowerShellCase("pnpm-prefer-offline-policy");
   });
@@ -1267,7 +1331,15 @@ try {
   });
 
   runIfPowerShell("installs portable Git from multiple archive roots without collisions", () => {
+    if (process.platform === "win32") {
+      expect(bootstrapShells).toContain("powershell");
+    }
     expectBatchedPowerShellCase("portable-git-layout");
+    for (const engine of bootstrapShells) {
+      if (engine !== powershell) {
+        expectBatchedPowerShellCase(`portable-git-layout:${engine}`);
+      }
+    }
   });
 
   runIfPowerShell("upgrades and validates Node installed by Windows package managers", () => {

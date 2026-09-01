@@ -110,6 +110,105 @@ it("recovers SQLite-only compacted history across every CLI reader", async () =>
 });
 
 describe("canonical CLI history", () => {
+  it.each(["compacted", "raw"] as const)(
+    "projects only %s caller memory without changing its entries or timestamps",
+    async (shape) => {
+      const { params, manager: durable } = await createSession(["BORROWED_RETAINED"]);
+      durable.appendCompaction("BORROWED_SUMMARY", "msg-0", 1000);
+      durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 1 });
+      const manager = SessionManager.inMemory();
+      const first = manager.appendMessage({ role: "user", content: "OWNED_PREFIX", timestamp: 11 });
+      const retained = manager.appendMessage({
+        role: "user",
+        content: "OWNED_RETAINED",
+        timestamp: 12,
+      });
+      if (shape === "compacted") {
+        manager.appendCompaction("OWNED_SUMMARY", retained, 1000, { source: "owned" });
+      }
+      const tail = manager.appendMessage({ role: "user", content: "OWNED_TAIL", timestamp: 13 });
+      const owned = { ...params, sessionManager: manager };
+      const before = structuredClone(manager.getEntries());
+      const hooks = await loadCliSessionHistoryMessages(owned);
+      const replay = await loadCliSessionContextEngineMessages(owned);
+      const reseed = await loadCliSessionReseedMessages(owned);
+      expect(hooks).toMatchObject([
+        { content: "OWNED_PREFIX", timestamp: 11 },
+        { content: "OWNED_RETAINED", timestamp: 12 },
+        { content: "OWNED_TAIL", timestamp: 13 },
+      ]);
+      for (const messages of [replay, reseed]) {
+        expect(messages).toMatchObject([
+          ...(shape === "compacted"
+            ? [{ role: "compactionSummary", summary: "OWNED_SUMMARY" }]
+            : [{ content: "OWNED_PREFIX" }]),
+          { content: "OWNED_RETAINED" },
+          { content: "OWNED_TAIL" },
+        ]);
+        expect(JSON.stringify(messages)).not.toContain("BORROWED_");
+      }
+      if (shape === "compacted") {
+        expect(replay[0]).toMatchObject({
+          firstKeptEntryId: retained,
+          details: { source: "owned" },
+        });
+      }
+      expect(manager.getEntries()).toEqual(before);
+      manager.appendResetBoundary("reset", tail);
+      manager.appendMessage({ role: "user", content: "OWNED_AFTER_RESET", timestamp: 14 });
+      for (const load of [
+        loadCliSessionHistoryMessages,
+        loadCliSessionContextEngineMessages,
+        loadCliSessionReseedMessages,
+      ]) {
+        await expect(load(owned)).resolves.toMatchObject([
+          { content: "OWNED_TAIL" },
+          { content: "OWNED_AFTER_RESET" },
+        ]);
+      }
+      const branchManager = SessionManager.fromEntries([manager.getHeader(), ...before]);
+      branchManager.branch(first);
+      branchManager.appendMessage({ role: "user", content: "OWNED_BRANCH", timestamp: 15 });
+      for (const load of [
+        loadCliSessionHistoryMessages,
+        loadCliSessionContextEngineMessages,
+        loadCliSessionReseedMessages,
+      ]) {
+        await expect(load({ ...params, sessionManager: branchManager })).resolves.toMatchObject([
+          { content: "OWNED_PREFIX" },
+          { content: "OWNED_BRANCH" },
+        ]);
+      }
+    },
+  );
+
+  it("bounds caller memory before replay and hook projection while retaining a compacted cut", async () => {
+    const manager = SessionManager.inMemory();
+    const retained = manager.appendMessage({
+      role: "user",
+      content: "older large " + "x".repeat(5 * 1024 * 1024),
+      timestamp: 1,
+    });
+    manager.appendCompaction("OWNED_SUMMARY", retained, 1000);
+    for (let index = 0; index < 125; index++) {
+      manager.appendMessage({ role: "user", content: `tail-${index}`, timestamp: index });
+    }
+    const params = { sessionManager: manager };
+    const before = structuredClone(manager.getEntries());
+    const hooks = await loadCliSessionHistoryMessages(params);
+    expect(hooks).toHaveLength(100);
+    expect(hooks[0]).toMatchObject({ content: "tail-25" });
+    const context = await loadCliSessionContextEngineMessages(params);
+    expect(context).toHaveLength(126);
+    expect(context[0]).toMatchObject({ role: "compactionSummary", summary: "OWNED_SUMMARY" });
+    expect(context[1]).toMatchObject({ content: "tail-0" });
+    const reseed = await loadCliSessionReseedMessages(params);
+    expect(reseed).toHaveLength(100);
+    expect(reseed[1]).toMatchObject({ content: "tail-26" });
+    expect(JSON.stringify(context)).not.toContain("older large");
+    expect(manager.getEntries()).toEqual(before);
+  });
+
   it("isolates explicit agent, session, and custom database targets", async () => {
     const first = await createSession(["first history"]);
     const second = await createSession(["second history"], "other");
@@ -216,10 +315,26 @@ describe("canonical CLI history", () => {
     await expect(loadCliSessionReseedMessages(params)).resolves.toEqual([]);
   });
 
-  it.each(["compaction", "reset"] as const)(
-    "retains real context when a %s cut starts at display-only activity",
-    async (boundary) => {
-      const { params, manager } = await createSession(["summarized"]);
+  it.each([
+    ["compaction", "durable"],
+    ["reset", "durable"],
+    ["compaction", "memory"],
+    ["reset", "memory"],
+  ] as const)(
+    "retains real context when a %s cut starts at display-only activity in %s",
+    async (boundary, owner) => {
+      const fixture = await createSession(["summarized"]);
+      const manager =
+        owner === "memory"
+          ? SessionManager.fromEntries([
+              fixture.manager.getHeader(),
+              ...fixture.manager.getEntries(),
+            ])
+          : fixture.manager;
+      const params = {
+        ...fixture.params,
+        ...(owner === "memory" ? { sessionManager: manager } : {}),
+      };
       const firstKept = manager.appendMessage({
         role: "custom",
         customType: "display-test",
