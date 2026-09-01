@@ -15,6 +15,14 @@ import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
 const MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS = 10_000;
 export const SHORT_TERM_LOCK_STALE_MS = 60_000;
+/**
+ * Store-level backstop for orphaned lock rows: a lock is registered with this
+ * TTL, and a row older than it is stealable even when its owner pid answers
+ * the liveness probe. Container pid namespaces reset across restarts, so a
+ * recycled pid (pid 1 in particular) can keep a dead holder's lock looking
+ * alive forever without this age bound.
+ */
+export const SHORT_TERM_LOCK_TTL_MS = 10 * 60_000;
 const MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS = 40;
 const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
 
@@ -99,6 +107,23 @@ export function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Decides whether a held lock row may be stolen. Beyond the pid-liveness
+ * rule, a row that has outlived the lock TTL is stealable unconditionally:
+ * container restarts reset pid namespaces, so a recycled owner pid can answer
+ * the liveness probe for a holder that died weeks ago.
+ */
+export function isShortTermLockStealable(existing: ShortTermLockEntry, nowMs: number): boolean {
+  if (nowMs - existing.acquiredAt > SHORT_TERM_LOCK_TTL_MS) {
+    return true;
+  }
+  if (nowMs - existing.acquiredAt <= SHORT_TERM_LOCK_STALE_MS) {
+    return false;
+  }
+  const ownerPid = parseLockOwnerPid(existing.owner);
+  return ownerPid === null || !isProcessLikelyAlive(ownerPid);
+}
+
 export async function deleteShortTermLockEntryIfCurrent(
   lockStore: PluginStateKeyedStore<ShortTermLockEntry>,
   lockKey: string,
@@ -142,7 +167,11 @@ export async function withMemoryWorkspaceLock<T>(
         owner: `${process.pid}:${Date.now()}`,
         acquiredAt: Date.now(),
       };
-      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry);
+      // The TTL is the durable backstop: an unclean exit leaves a row that
+      // self-expires instead of wedging every later sync behind a dead owner.
+      const acquired = await lockStore.registerIfAbsent(lockKey, lockEntry, {
+        ttlMs: SHORT_TERM_LOCK_TTL_MS,
+      });
       if (acquired) {
         const lease = { key: lockKey, active: true };
         try {
@@ -154,12 +183,9 @@ export async function withMemoryWorkspaceLock<T>(
       }
 
       const existing = await lockStore.lookup(lockKey);
-      if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
-        const ownerPid = parseLockOwnerPid(existing.owner);
-        if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-          if (await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, existing)) {
-            continue;
-          }
+      if (existing && isShortTermLockStealable(existing, Date.now())) {
+        if (await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, existing)) {
+          continue;
         }
       }
 
