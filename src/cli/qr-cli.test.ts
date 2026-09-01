@@ -153,6 +153,7 @@ describe("registerQrCli", () => {
       urlSource?: string;
       access?: "full" | "limited";
       accessDowngraded?: boolean;
+      requiresOwnerApproval?: boolean;
     };
   }
 
@@ -169,10 +170,16 @@ describe("registerQrCli", () => {
     expectLoggedSetupCode("ws://127.0.0.1:18789");
   }
 
-  function expectLimitedTransportWarning() {
+  function expectPlaintextTransportWarning(params: { accessDowngraded: boolean }) {
     const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("setup code was limited for safety");
+    if (params.accessDowngraded) {
+      expect(output).toContain("setup code was limited for safety");
+    } else {
+      expect(output).not.toContain("setup code was limited for safety");
+    }
     expect(output).toContain("Use wss:// or Tailscale Serve");
+    expect(output).toContain("first connection stays pending until an existing owner approves it");
+    expect(output).toContain("openclaw devices approve <requestId>");
   }
 
   function mockTailscaleStatusLookup() {
@@ -342,7 +349,41 @@ describe("registerQrCli", () => {
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
-    expectLimitedTransportWarning();
+    expectPlaintextTransportWarning({ accessDowngraded: true });
+  });
+
+  it("warns that explicitly limited plaintext setup requires owner approval", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "192.168.1.8",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--limited"]);
+
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+    );
+    expectPlaintextTransportWarning({ accessDowngraded: false });
+  });
+
+  it("reports plaintext owner approval in json output", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "192.168.1.8",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--json", "--limited"]);
+
+    const payload = parseLastLoggedQrJson();
+    expect(payload.access).toBe("limited");
+    expect(payload.accessDowngraded).toBeUndefined();
+    expect(payload.requiresOwnerApproval).toBe(true);
   });
 
   it("allows android emulator cleartext override urls", async () => {
@@ -359,7 +400,7 @@ describe("registerQrCli", () => {
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
-    expectLimitedTransportWarning();
+    expectPlaintextTransportWarning({ accessDowngraded: true });
   });
 
   it("rejects invalid override urls before printing setup codes", async () => {

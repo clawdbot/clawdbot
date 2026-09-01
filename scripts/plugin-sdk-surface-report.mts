@@ -330,7 +330,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      4355,
+      // +1: plaintext-LAN pairing profile lets device plugins preserve owner approval.
+      4356,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

@@ -40,7 +40,7 @@ openclaw devices approve <requestId>
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
 - `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, optional `requiresOwnerApproval`, `urlSource`)
 
 `--token` and `--password` are mutually exclusive. `--limited` and `--voice-node` are mutually exclusive.
 

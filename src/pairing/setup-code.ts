@@ -89,6 +89,7 @@ type PairingSetupResolution =
       urlSource: string;
       access: PairingSetupAccess;
       accessDowngraded: boolean;
+      requiresOwnerApproval: boolean;
       setupId: string;
       expiresAtMs: number;
     }
@@ -571,6 +572,7 @@ export async function resolvePairingSetupFromConfig(
     urlSource: urlResult.source ?? "unknown",
     access: resolvePairingSetupAccess(issuedBootstrapProfile),
     accessDowngraded,
+    requiresOwnerApproval,
     setupId: issued.setupId,
     expiresAtMs: issued.expiresAtMs,
   };

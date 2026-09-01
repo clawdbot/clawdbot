@@ -11,6 +11,7 @@ export {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
   type DeviceBootstrapPurpose,
