@@ -53,6 +53,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "agent_provenance",
   "cron_run_receipts",
+  "plugin_external_verification_attempts",
   "config_revision_keys",
   "secret_store_entries",
   "projects",
@@ -69,6 +70,9 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,
+  "idx_plugin_external_verification_active_approval",
+  "idx_plugin_external_verification_run_active",
+  "idx_plugin_external_verification_approval_created",
   "idx_cron_run_receipts_active_job",
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",

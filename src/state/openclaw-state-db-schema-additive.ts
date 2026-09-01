@@ -79,6 +79,33 @@ export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void 
   ); // sqlite-allow-raw -- Canonical additive DDL only.
 }
 
+const PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS plugin_external_verification_attempts (";
+const PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_END =
+  "WHERE approval_id = NEW.approval_id AND ended_at_ms IS NULL;\nEND;";
+
+/**
+ * Lazily install the additive external verification attempt ledger (table,
+ * indexes, and the operator-approval closing trigger) on first feature use.
+ * Registered in LAZY_ADDITIVE_STATE_TABLES so pre-feature databases stay valid.
+ */
+export function ensurePluginExternalVerificationSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_END,
+    start,
+  );
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw plugin external verification schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(
+      start,
+      endMarkerStart + PLUGIN_EXTERNAL_VERIFICATION_SCHEMA_END.length,
+    ),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
 /** Lazily installs the Gateway's installation-local config revision key owner. */
 export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CONFIG_REVISION_KEY_SCHEMA_START);
