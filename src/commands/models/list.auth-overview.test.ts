@@ -221,6 +221,8 @@ describe("resolveProviderAuthOverview", () => {
       cfg,
       createConfigResolutionFacts(
         [],
+        new Map(),
+        undefined,
         new Map([["models.providers.custom.apiKey", "CUSTOM_PROVIDER_KEY"]]),
       ),
     );

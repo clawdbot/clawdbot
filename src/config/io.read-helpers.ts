@@ -330,10 +330,12 @@ export function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env, { lowerPrecedenceEnv });
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
-  const authoredEnvSecretRefs = new Map<string, string>();
+  const pendingEnvSecretRefs = new Map<string, string>();
+  const resolvedEnvSecretRefs = new Map<string, string>();
   const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
     onMissing: (warning) => envWarnings.push(warning),
-    onAuthoredEnvSecretRef: (id, configPath) => authoredEnvSecretRefs.set(configPath, id),
+    onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+    onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
     resolvedConfigRaw,
@@ -341,8 +343,9 @@ export function resolveConfigForRead(
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(
       envWarnings,
-      authoredEnvSecretRefs,
+      pendingEnvSecretRefs,
       coerceConfig(resolvedConfigRaw).secrets?.defaults?.env,
+      resolvedEnvSecretRefs,
     ),
   };
 }

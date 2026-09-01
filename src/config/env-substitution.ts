@@ -88,8 +88,10 @@ export type EnvSubstitutionWarning = {
 type SubstituteOptions = {
   /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
   onMissing?: (warning: EnvSubstitutionWarning) => void;
-  /** Records exact env SecretRef shorthand before substitution materializes it. */
-  onAuthoredEnvSecretRef?: (id: string, configPath: string) => void;
+  /** Records exact env SecretRef shorthand that substitution did not materialize. */
+  onPendingEnvSecretRef?: (id: string, configPath: string) => void;
+  /** Records the source of an exact env SecretRef shorthand that substitution materialized. */
+  onResolvedEnvSecretRef?: (id: string, configPath: string) => void;
 };
 
 function substituteString(
@@ -103,8 +105,8 @@ function substituteString(
   }
 
   const authoredRef = parseEnvTemplateSecretRef(value);
-  if (authoredRef) {
-    opts?.onAuthoredEnvSecretRef?.(authoredRef.id, configPath);
+  if (authoredRef && !containsEnvVarReference(value)) {
+    opts?.onPendingEnvSecretRef?.(authoredRef.id, configPath);
   }
   const chunks: string[] = [];
 
@@ -127,7 +129,7 @@ function substituteString(
         if (opts?.onMissing) {
           opts.onMissing({ varName: token.name, configPath });
           if (authoredRef?.id === token.name) {
-            opts.onAuthoredEnvSecretRef?.(token.name, configPath);
+            opts.onPendingEnvSecretRef?.(token.name, configPath);
           }
           // Preserve the original placeholder so the value is visibly unresolved.
           chunks.push(`\${${token.name}}`);
@@ -135,6 +137,9 @@ function substituteString(
           continue;
         }
         throw new MissingEnvVarError(token.name, configPath);
+      }
+      if (authoredRef?.id === token.name) {
+        opts?.onResolvedEnvSecretRef?.(token.name, configPath);
       }
       chunks.push(envValue);
       i = token.end;
