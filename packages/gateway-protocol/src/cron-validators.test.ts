@@ -12,7 +12,7 @@ import {
   validateCronRunsParams,
   validateCronUpdateParams,
 } from "./index.js";
-import { CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
+import { CronAddResultSchema, CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
 
 /**
  * Cron validator regressions for public scheduler RPC payloads.
@@ -76,6 +76,22 @@ describe("cron protocol validators", () => {
       }),
     ).toBe(false);
     expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
+  });
+
+  it("accepts deliveryPreviews on both cron.add result variants", () => {
+    const job = {
+      ...minimalAddParams,
+      id: "job-1",
+      enabled: false,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      state: { consecutiveErrors: 0 },
+    };
+    const deliveryPreviews = {
+      "job-1": { label: "announce -> last", detail: "last -> no route, will fail-closed" },
+    };
+    expect(Value.Check(CronAddResultSchema, { ...job, deliveryPreviews })).toBe(true);
+    expect(Value.Check(CronAddResultSchema, { created: true, job, deliveryPreviews })).toBe(true);
   });
 
   it("models the delivery trace returned in cron run history", () => {
