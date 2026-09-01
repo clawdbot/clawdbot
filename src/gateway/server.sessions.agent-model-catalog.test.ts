@@ -252,28 +252,33 @@ describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => 
     const beforeConfig = await readConfigFileSnapshot();
     const loadGatewayModelCatalog = createAgentModelCatalogLoader();
     const configMutations = vi.spyOn(configModule, "mutateConfigFileWithRetry");
-    const result = await directSessionReq<{ entry?: SessionEntry }>(
-      method,
-      {
-        key,
-        ...(scenario.explicitAgent ? { agentId: "work" } : {}),
-        model: scenario.model,
-        label: "Updated label",
-      },
-      {
-        context: { loadGatewayModelCatalog },
-        ...(scenario.error ? { client: { connect: { scopes: ["operator.admin"] } } as never } : {}),
-      },
-    ).finally(async () => {
+    let result: Awaited<ReturnType<typeof directSessionReq<{ entry?: SessionEntry }>>>;
+    try {
+      result = await directSessionReq<{ entry?: SessionEntry }>(
+        method,
+        {
+          key,
+          ...(scenario.explicitAgent ? { agentId: "work" } : {}),
+          model: scenario.model,
+          label: "Updated label",
+        },
+        {
+          context: { loadGatewayModelCatalog },
+          ...(scenario.error
+            ? { client: { connect: { scopes: ["operator.admin"] } } as never }
+            : {}),
+        },
+      );
+    } finally {
       // Admin patches persist defaults in the background; join their writes before
       // the shared config fixture resets for the next case.
       await Promise.allSettled(
         configMutations.mock.results
-          .filter((result) => result.type === "return")
-          .map((result) => result.value),
+          .filter((mutation) => mutation.type === "return")
+          .map((mutation) => mutation.value),
       );
       configMutations.mockRestore();
-    });
+    }
 
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
     if (fixture) {
