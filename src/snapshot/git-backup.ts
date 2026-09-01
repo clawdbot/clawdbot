@@ -451,12 +451,23 @@ export async function readGitBackupLog(params: {
   limit: number;
 }): Promise<Array<{ commit: string; date: string; message: string }>> {
   await assertGitRepository(params.repositoryPath);
-  const head = await runGit(params.repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-  if (head.code === 1) {
-    return [];
-  }
-  if (head.code !== 0) {
-    throw new Error(formatGitBackupCommandResult("git rev-parse HEAD", head));
+  const symbolicHead = await runGit(params.repositoryPath, ["symbolic-ref", "--quiet", "HEAD"]);
+  if (symbolicHead.code === 0) {
+    const headRef = symbolicHead.stdout.trim();
+    const headExists = await runGit(params.repositoryPath, [
+      "show-ref",
+      "--verify",
+      "--quiet",
+      headRef,
+    ]);
+    if (headExists.code === 1) {
+      return [];
+    }
+    if (headExists.code !== 0) {
+      throw new Error(formatGitBackupCommandResult(`git show-ref ${headRef}`, headExists));
+    }
+  } else if (symbolicHead.code !== 1) {
+    throw new Error(formatGitBackupCommandResult("git symbolic-ref HEAD", symbolicHead));
   }
   const result = await runGit(params.repositoryPath, [
     "log",

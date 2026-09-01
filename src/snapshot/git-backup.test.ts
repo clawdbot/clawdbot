@@ -570,14 +570,24 @@ describe("Git-backed SQLite snapshots", () => {
 
   it("returns an empty log without matching localized Git diagnostics", async () => {
     const root = await tempRoot();
-    const stateDir = path.join(root, "state");
     const repositoryPath = path.join(root, "empty-repository");
-    await fs.mkdir(stateDir);
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    await requireGit(root, ["init", repositoryPath]);
     mocks.logDiagnostic = "fatal: el historial no contiene confirmaciones";
 
     await expect(readGitBackupLog({ repositoryPath, limit: 10 })).resolves.toEqual([]);
     expect(mocks.logCalls).toBe(0);
+  });
+
+  it("does not treat a symbolic HEAD with a missing object as an empty log", async () => {
+    const root = await tempRoot();
+    const repositoryPath = path.join(root, "broken-repository");
+    await requireGit(root, ["init", repositoryPath]);
+    const headRef = await requireGit(repositoryPath, ["symbolic-ref", "HEAD"]);
+    const headRefPath = path.join(repositoryPath, ".git", ...headRef.split("/"));
+    await fs.mkdir(path.dirname(headRefPath), { recursive: true });
+    await fs.writeFile(headRefPath, `${"a".repeat(40)}\n`);
+
+    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).rejects.toThrow(/git show-ref/u);
   });
 
   it("refuses adopted non-backup ancestry and records local push degradation", async () => {
