@@ -470,7 +470,7 @@ function renderCatalogSessionRow(
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
-  const key = session.sessionKey ?? identityKey;
+  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
   const menuOpen = params.isMenuOpen(catalogKey);
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
