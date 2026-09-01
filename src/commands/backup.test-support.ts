@@ -14,6 +14,7 @@ type ResolveBackupPlanFromPathsParams = {
   configPath: string;
   oauthDir: string;
   workspaceDirs?: string[];
+  workspaceExclusions?: readonly string[];
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   configInsideState?: boolean;

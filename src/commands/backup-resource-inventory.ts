@@ -101,6 +101,8 @@ export async function createBackupResourceInventory(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs: readonly string[];
+  /** Workspace roots requested out of scope; they prune from broader assets instead of becoming assets. */
+  excludedWorkspaceDirs?: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
@@ -180,10 +182,15 @@ export async function createBackupResourceInventory(params: {
       }),
   );
   const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
+  // Out-of-scope workspace roots prune with the same subtree semantics as
+  // regenerable roots so a broad state asset cannot swallow a nested workspace,
+  // but they are not regenerable: keep them out of regenerableRoots so the
+  // manifest never records a workspace as a disposable resource.
   const excludedPaths = Object.freeze(
-    uniqueRegenerableRoots
-      .map((resource) => resource.sourcePath)
-      .toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
+    [
+      ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
+      ...(params.excludedWorkspaceDirs ?? []).map((workspaceDir) => path.resolve(workspaceDir)),
+    ].toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
   );
 
   const isIncluded = (sourcePath: string): boolean => {

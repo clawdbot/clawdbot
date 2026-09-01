@@ -173,6 +173,7 @@ async function resolveBackupPlanFromPaths(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs?: string[];
+  workspaceExclusions?: readonly string[];
   agentRoots?: readonly BackupAgentRoot[];
   pluginInventory?: ActivatedPluginBackupInventory;
   unresolvedOwnership?: boolean;
@@ -194,6 +195,16 @@ async function resolveBackupPlanFromPaths(params: {
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  // A workspace root that contains the state directory would prune the whole
+  // state asset; that layout leaves includeWorkspace=false without a meaningful
+  // scope, so keep state backup intact and drop such an exclusion instead.
+  const workspaceExclusions = (
+    await Promise.all(
+      (params.workspaceExclusions ?? []).map((workspaceDir) =>
+        canonicalizePathForContainment(workspaceDir),
+      ),
+    )
+  ).filter((workspaceDir) => !isPathWithin(canonicalStateDir, workspaceDir));
   const inventory = await createBackupResourceInventory({
     stateDir: canonicalStateDir,
     configPath: await canonicalizePathForContainment(configPath),
@@ -201,6 +212,7 @@ async function resolveBackupPlanFromPaths(params: {
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
+    excludedWorkspaceDirs: workspaceExclusions,
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
@@ -555,20 +567,24 @@ export async function resolveBackupPlanFromDisk(
   const agentRoots = unresolvedOwnership
     ? []
     : await resolveBackupAgentRoots(discoverySnapshot.config);
-  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
+  const workspaceDirs = cleanupPlan.workspaceDirs;
+  // Plugin resources follow the requested scope: an excluded workspace is not
+  // an include anchor for workspace-scoped plugin resources.
+  const workspaceIncludes = includeWorkspace ? workspaceDirs : [];
   const pluginInventory = unresolvedOwnership
     ? undefined
     : resolveActivatedPluginBackupInventory({
         config: discoverySnapshot.config,
         env: process.env,
         stateDir,
-        workspaceDirs,
+        workspaceDirs: workspaceIncludes,
       });
   return await resolveBackupPlanFromPaths({
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs,
+    workspaceDirs: workspaceIncludes,
+    workspaceExclusions: includeWorkspace ? [] : workspaceDirs,
     agentRoots,
     pluginInventory,
     unresolvedOwnership,

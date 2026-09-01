@@ -202,6 +202,63 @@ describe("backup commands", () => {
     expectWorkspaceCoveredByState(plan);
   });
 
+  it("prunes a workspace nested inside the state asset when workspace inclusion is disabled", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const oauthDir = path.join(stateDir, "credentials");
+    const workspaceDir = path.join(stateDir, "workspace");
+    await fs.writeFile(configPath, JSON.stringify({}), "utf8");
+    await fs.mkdir(oauthDir, { recursive: true });
+    await fs.writeFile(path.join(oauthDir, "oauth.json"), "{}", "utf8");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+
+    const plan = await resolveBackupPlanFromPaths({
+      stateDir,
+      configPath,
+      oauthDir,
+      workspaceDirs: [workspaceDir],
+      workspaceExclusions: [workspaceDir],
+      includeWorkspace: false,
+      configInsideState: true,
+      oauthInsideState: true,
+      nowMs: 123,
+    });
+    expect(plan.workspaceDirs).toStrictEqual([]);
+    expect(plan.included.map((asset) => asset.kind)).toStrictEqual(["state"]);
+    // The archive filter asks the inventory for every entry under the state
+    // asset, so the exclusion must hold at inventory level, not just in assets.
+    expect(plan.inventory.isIncluded(path.join(workspaceDir, "SOUL.md"))).toBe(false);
+    expect(plan.inventory.isIncluded(workspaceDir)).toBe(false);
+    expect(plan.inventory.isIncluded(configPath)).toBe(true);
+    expect(plan.inventory.isTraversable(path.join(stateDir, "agents"))).toBe(true);
+  });
+
+  it("keeps the state asset intact when a configured workspace contains the state directory", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const oauthDir = path.join(stateDir, "credentials");
+    await fs.writeFile(configPath, JSON.stringify({}), "utf8");
+    await fs.mkdir(oauthDir, { recursive: true });
+    await fs.writeFile(path.join(oauthDir, "oauth.json"), "{}", "utf8");
+
+    const plan = await resolveBackupPlanFromPaths({
+      stateDir,
+      configPath,
+      oauthDir,
+      // A workspace that contains the state directory leaves
+      // includeWorkspace=false without a meaningful scope; excluding it would
+      // prune the entire state asset.
+      workspaceExclusions: [tempHome.home],
+      includeWorkspace: false,
+      configInsideState: true,
+      oauthInsideState: true,
+      nowMs: 123,
+    });
+    expect(plan.included.map((asset) => asset.kind)).toStrictEqual(["state"]);
+    expect(plan.inventory.isIncluded(path.join(stateDir, "agents", "state.txt"))).toBe(true);
+  });
+
   it("orders coverage checks by canonical path so symlinked workspaces do not duplicate state", async () => {
     if (process.platform === "win32") {
       return;
