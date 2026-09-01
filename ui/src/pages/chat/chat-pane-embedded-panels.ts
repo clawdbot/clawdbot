@@ -57,6 +57,7 @@ type SidebarPanelDefinitionParams = {
   connected: boolean;
   pendingQuestion: string | null;
   onClearCompanion: () => void;
+  onRefreshTasks: () => void;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -234,7 +235,21 @@ export function sidebarPanelDefinitions(
           }
         : undefined,
     ),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
+      headerAction: params
+        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+            <button
+              class="rail-header__action chat-tasks-rail__refresh"
+              type="button"
+              aria-label=${t("chat.backgroundTasks.refresh")}
+              ?disabled=${!params.connected}
+              @click=${params.onRefreshTasks}
+            >
+              ${icons.refresh}
+            </button>
+          </openclaw-tooltip>`
+        : undefined,
+    }),
     definePanel("desktop", "desktop", icons.monitor, desktop, {
       available: desktopAvailable,
       ...(desktopFocusHref

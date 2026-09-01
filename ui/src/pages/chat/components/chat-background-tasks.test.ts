@@ -1,6 +1,6 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderBackgroundTasksRail } from "./chat-background-tasks-render.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
@@ -164,6 +164,76 @@ describe("background tasks rail state", () => {
     const rail = renderTaskRail({ ...props, collapsed: false });
     expect(rail.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
     expect(rail.textContent).not.toContain("sk-1234567890abcdef");
+  });
+
+  it("retries a transient task snapshot without publishing an error", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = makeTask({ id: "task-retried" });
+      let requestCount = 0;
+      const { host, request } = createHost({
+        request: () => {
+          requestCount += 1;
+          if (requestCount === 1) {
+            return Promise.reject(
+              new GatewayRequestError({
+                code: "UNAVAILABLE",
+                message: "task registry changed during tasks.list; retry",
+                retryable: true,
+                retryAfterMs: 10,
+              }),
+            );
+          }
+          return Promise.resolve({ tasks: [running] });
+        },
+      });
+
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(10);
+
+      const props = createBackgroundTasksProps(host);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(props.error).toBeNull();
+      expect(props.tasks?.map((task) => task.id)).toEqual([running.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows exhausted retry guidance and recovers on manual refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = makeTask({ id: "task-recovered" });
+      let unavailable = true;
+      const error = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+        retryable: true,
+        retryAfterMs: 10,
+      });
+      const { host, request } = createHost({
+        request: () =>
+          unavailable ? Promise.reject(error) : Promise.resolve({ tasks: [running] }),
+      });
+
+      createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(20);
+
+      let props = createBackgroundTasksProps(host);
+      expect(request).toHaveBeenCalledTimes(6);
+      expect(props.error).toBe(error.message);
+      const rail = renderTaskRail({ ...props, collapsed: false });
+      expect(rail.querySelector('[role="alert"]')?.textContent).toContain(error.message);
+
+      unavailable = false;
+      props.onRefresh();
+      await vi.runAllTimersAsync();
+      props = createBackgroundTasksProps(host);
+      expect(props.error).toBeNull();
+      expect(props.tasks?.map((task) => task.id)).toEqual([running.id]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("loads session-scoped tasks eagerly while the rail is collapsed", async () => {

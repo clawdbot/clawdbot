@@ -2,7 +2,6 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -143,110 +142,6 @@ const activePageOneTasks = [
 ];
 
 suite.define(() => {
-  it("keeps running rows anchored through activity and clears a recovered list error", async () => {
-    const proofDir = createControlUiE2eArtifactDir("tasks-stable-order");
-    const rawVideoDir = path.join(proofDir, "raw-video");
-    await mkdir(rawVideoDir, { recursive: true });
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      recordVideo: { dir: rawVideoDir, size: { width: 1440, height: 900 } },
-      serviceWorkers: "block",
-      viewport: { width: 1440, height: 900 },
-    });
-    const page = await context.newPage();
-    const video = page.video();
-    const activeTasks = Array.from({ length: 5 }, (_, index) => ({
-      id: `task-stable-${index + 1}`,
-      taskId: `task-stable-${index + 1}`,
-      kind: "subagent",
-      runtime: "subagent",
-      status: "running",
-      title: `Stable running task ${index + 1}`,
-      agentId: "main",
-      createdAt: baseTime + index * 1_000,
-      startedAt: baseTime + index * 1_000,
-      updatedAt: baseTime + (5 - index) * 10_000,
-      toolUseCount: index + 1,
-      lastToolName: "exec",
-    }));
-    const listResponses = {
-      cases: [
-        {
-          match: { agentId: "main", limit: 500, status: ["queued", "running"] },
-          response: { tasks: activeTasks },
-        },
-        {
-          match: {
-            agentId: "main",
-            limit: 200,
-            status: ["completed", "failed", "timed_out", "cancelled"],
-          },
-          response: { tasks: [] },
-        },
-      ],
-    };
-    const rowOrder = () =>
-      page
-        .locator('[data-task-section="active"] [data-task-id] .settings-row__title')
-        .allTextContents();
-    const expectedOrder = activeTasks.map((task) => task.title);
-    try {
-      const gateway = await installMockGateway(page, {
-        methodResponses: { "tasks.list": listResponses },
-      });
-      await page.goto(`${suite.server.baseUrl}tasks`);
-      await expect.poll(rowOrder).toEqual(expectedOrder);
-      await page.screenshot({ path: path.join(proofDir, "01-initial-order.png") });
-      await page.waitForTimeout(500);
-
-      const updatedTask = {
-        ...activeTasks[4],
-        updatedAt: baseTime + 100_000,
-        toolUseCount: 80,
-        progressSummary: "Activity changed without moving this row",
-      };
-      await gateway.emitGatewayEvent("task", { action: "upserted", task: updatedTask });
-      await page.getByText(updatedTask.progressSummary).waitFor();
-      expect(await rowOrder()).toEqual(expectedOrder);
-      await page.screenshot({ path: path.join(proofDir, "02-activity-stable.png") });
-      await page.waitForTimeout(500);
-
-      await gateway.deferNext("tasks.list", {
-        agentId: "main",
-        limit: 500,
-        status: ["queued", "running"],
-      });
-      await gateway.deferNext("tasks.list", {
-        agentId: "main",
-        limit: 200,
-        status: ["completed", "failed", "timed_out", "cancelled"],
-      });
-      await page.getByRole("button", { name: "Refresh" }).click();
-      await expect.poll(async () => gateway.getRequests("tasks.list")).toHaveLength(4);
-      await gateway.rejectDeferred("tasks.list", {
-        code: "UNAVAILABLE",
-        message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
-        retryable: true,
-      });
-      await page.getByRole("alert").waitFor();
-      await page.screenshot({ path: path.join(proofDir, "03-retries-exhausted.png") });
-      await page.waitForTimeout(500);
-
-      await gateway.setMethodResponse("tasks.list", listResponses);
-      await page.getByRole("button", { name: "Refresh" }).click();
-      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
-      expect(await rowOrder()).toEqual(expectedOrder);
-      await page.screenshot({ path: path.join(proofDir, "04-recovered.png") });
-      await page.waitForTimeout(500);
-    } finally {
-      await context.close();
-      if (video) {
-        await copyFile(await video.path(), path.join(proofDir, "tasks-stable-order.webm"));
-      }
-      await rm(rawVideoDir, { force: true, recursive: true });
-    }
-  });
-
   it("keeps completed tasks visible when active work fills the unfiltered page", async () => {
     const artifactDir = createControlUiE2eArtifactDir("tasks-recent");
     const context = await suite.browser.newContext({

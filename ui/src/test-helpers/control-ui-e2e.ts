@@ -585,7 +585,13 @@ export type MockGatewayControls = {
   getSocketUrls: () => Promise<string[]>;
   rejectDeferred: (
     method: string,
-    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    error?: {
+      code?: string;
+      message?: string;
+      details?: unknown;
+      retryable?: boolean;
+      retryAfterMs?: number;
+    },
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   suspendLatest: () => Promise<void>;
@@ -1076,7 +1082,13 @@ export type ControlUiMockGateway = {
   findRequests: (method?: string) => MockGatewayRequest[];
   rejectDeferred: (
     method: string,
-    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    error?: {
+      code?: string;
+      message?: string;
+      details?: unknown;
+      retryable?: boolean;
+      retryAfterMs?: number;
+    },
   ) => void;
   requests: MockGatewayRequest[];
   resolveDeferred: (method: string, payload?: unknown) => void;
@@ -2528,6 +2540,7 @@ function installControlUiMockGateway(
             message: error?.message ?? "mock Gateway rejected request",
             ...(error?.details ? { details: error.details } : {}),
             ...(error?.retryable ? { retryable: true } : {}),
+            ...(error?.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
           },
           id: response.id,
           ok: false,

@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -79,6 +83,9 @@ export type BackgroundTasksHost = {
 // from hiding behind newer terminal records here.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
+const TASK_LIST_MAX_ATTEMPTS = 3;
+const TASK_LIST_RETRY_DEFAULT_MS = 250;
+const TASK_LIST_RETRY_MAX_MS = 30_000;
 
 let nextStatusRowId = 0;
 
@@ -209,6 +216,54 @@ function scheduleSubagentActivityExpiry(
   );
 }
 
+function taskListRetryDelayMs(error: unknown): number | undefined {
+  if (!(error instanceof GatewayRequestError) || !error.retryable) {
+    return undefined;
+  }
+  return Math.min(
+    TASK_LIST_RETRY_MAX_MS,
+    Math.max(
+      0,
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : TASK_LIST_RETRY_DEFAULT_MS,
+    ),
+  );
+}
+
+async function requestBackgroundTaskSnapshot(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  client: GatewayBrowserClient,
+) {
+  const { sessionKey, agentId } = state;
+  for (let attempt = 0; attempt < TASK_LIST_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await Promise.all([
+        client.request("tasks.list", {
+          sessionKey,
+          agentId,
+          status: ["queued", "running"],
+          limit: ACTIVE_TASKS_LIMIT,
+        }),
+        client.request("tasks.list", { sessionKey, agentId, limit: RECENT_TASKS_LIMIT }),
+      ]);
+    } catch (error) {
+      const retryDelayMs = taskListRetryDelayMs(error);
+      if (retryDelayMs === undefined || attempt === TASK_LIST_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, retryDelayMs);
+      });
+      if (!host.connected || host.client !== client || getBackgroundTasksState(host) !== state) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("unreachable task list retry state");
+}
+
 function loadBackgroundTasks(
   host: BackgroundTasksHost,
   state: BackgroundTasksState,
@@ -235,18 +290,13 @@ function loadBackgroundTasks(
   state.loading = true;
   state.error = null;
   state.pendingReload = false;
-  const { sessionKey, agentId } = state;
   void (async () => {
     try {
-      const [activePayload, recentPayload] = await Promise.all([
-        client.request("tasks.list", {
-          sessionKey,
-          agentId,
-          status: ["queued", "running"],
-          limit: ACTIVE_TASKS_LIMIT,
-        }),
-        client.request("tasks.list", { sessionKey, agentId, limit: RECENT_TASKS_LIMIT }),
-      ]);
+      const [activePayload, recentPayload] = await requestBackgroundTaskSnapshot(
+        host,
+        state,
+        client,
+      );
       const active = normalizeTasksListResult(activePayload)?.tasks.map((task) =>
         prepareTaskSnapshot(state, task),
       );
