@@ -423,6 +423,20 @@ function* recoverSuspiciousConfigRead(
   if (!backup.gatewayMode) {
     return returnOriginalConfigRead(params);
   }
+  // A metadata-free accepted baseline can only be hand-authored (product
+  // writers always stamp `meta`), so a `.bak` holding different bytes predates
+  // the operator's file. Restoring it would silently revert that config;
+  // recovery for this state stays on the explicit doctor path.
+  if (
+    entry.lastKnownGood &&
+    !entry.lastKnownGood.hasMeta &&
+    backup.hash !== entry.lastKnownGood.hash
+  ) {
+    deps.logger.warn(
+      `Config auto-restore from backup skipped: ${configPath} (${suspicious.join(", ")}); accepted baseline is hand-authored`,
+    );
+    return returnOriginalConfigRead(params);
+  }
   if (params.allowBackupRecovery) {
     const allowed = (yield {
       sync: () => true,

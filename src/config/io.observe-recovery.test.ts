@@ -538,6 +538,45 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("loadConfig keeps a later clobber from reverting an accepted hand-authored baseline", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      // Read 1: a fresh hand-authored config is accepted and recorded as the
+      // last-known-good baseline. Product writers always stamp `meta`, so a
+      // metadata-free fingerprint can only come from an operator-authored file.
+      const handAuthoredRaw = `${JSON.stringify(
+        { update: { channel: "beta" }, gateway: { mode: "local" } },
+        null,
+        2,
+      )}\n`;
+      await seedConfig(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+      });
+      io.loadConfig();
+      const lastKnownGood = readConfigHealthRow(home, configPath)?.last_known_good_json;
+      expect(lastKnownGood).toBeTruthy();
+      expect(JSON.parse(String(lastKnownGood)).hasMeta).toBe(false);
+
+      // Read 2: an older update-channel `.bak` predates the accepted baseline,
+      // so restoring it would silently revert the operator's hand-authored file.
+      await fsp.writeFile(
+        `${configPath}.bak`,
+        `${JSON.stringify(recoverableCoreConfig, null, 2)}\n`,
+        "utf-8",
+      );
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+      expect(clobbered.raw).not.toBe(handAuthoredRaw);
+
+      io.loadConfig();
+
+      // The stale `.bak` is not restored; recovery for this state stays explicit.
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(clobberedUpdateChannelRaw);
+      expectWarnContaining(warn, "accepted baseline is hand-authored");
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
   it("loadConfig skips health observation when observation is disabled", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });

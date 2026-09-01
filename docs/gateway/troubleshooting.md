@@ -659,7 +659,7 @@ Look for:
     - Gateway startup leaves `openclaw.json` unchanged and fails closed when safe legacy-key migration cannot produce a fully valid config.
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
-    - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy; on a successful recovery it preserves the replaced payload as `.clobbered.*`.
+    - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy; a recovery attempts to preserve the replaced payload as `.clobbered.*` (best effort, the snapshot can be skipped under disk or rotation limits).
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
@@ -678,8 +678,8 @@ Look for:
     - `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
     - `config reload skipped (invalid config):` → a direct edit failed validation and was ignored by the running Gateway.
     - `Invalid config at ...` → startup failed before Gateway services booted.
-    - `gateway-mode-missing-vs-last-good`, `update-channel-only-root`, or `size-drop-vs-last-good:*` → the active config lost `gateway.mode`, was reduced to a bare `update.channel` root, or shrank to under half of the last-known-good size; the next config read restores last-known-good, and on a successful recovery it preserves the current payload as `.clobbered.*`.
-    - `missing-meta-vs-last-good` → a valid config lost its `meta` block. On its own nothing is restored: the file is left in place and OpenClaw warns `Config observe anomaly: <path> (missing-meta-vs-last-good)`, since OpenClaw-owned writes always stamp `meta` and a valid file without it was authored outside OpenClaw. When it appears alongside one of the recoverable signals above, that signal still drives last-known-good restoration.
+    - `gateway-mode-missing-vs-last-good`, `update-channel-only-root`, or `size-drop-vs-last-good:*` → the active config lost `gateway.mode`, was reduced to a bare `update.channel` root, or shrank to under half of the last-known-good size; the next config read restores last-known-good and attempts to preserve the current payload as `.clobbered.*` (best effort). When the accepted baseline is itself a hand-authored config (no `meta`), a `.bak` holding different bytes predates that file, so automatic restore is skipped with a `Config auto-restore from backup skipped:` warning and recovery stays with `openclaw doctor --fix`.
+    - `missing-meta-vs-last-good` → a valid config lost its `meta` block. On its own nothing is restored: the file is left in place and OpenClaw warns `Config observe anomaly: <path> (missing-meta-vs-last-good)`, since OpenClaw-owned writes always stamp `meta` and a valid file without it was authored outside OpenClaw. When it appears alongside one of the recoverable signals above, that signal still drives last-known-good restoration unless the accepted baseline is hand-authored (see above).
     - `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
 
   </Accordion>
