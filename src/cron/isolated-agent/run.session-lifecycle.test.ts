@@ -463,7 +463,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   });
 
   it("removes the idle exact-run continuation only after releasing its admission", async () => {
-    const sessionKey = "agent:main:cron:test-job";
     const sessionId = "isolated-session";
     const storePath = inMemoryStorePath;
     resolveCronSessionMock.mockReturnValue(
@@ -475,7 +474,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       }),
     );
     loadSessionEntryMock.mockReturnValue(undefined);
-    let continuationRowExists = true;
     let admissionActiveDuringRemoval: boolean | undefined;
     removeCronRunContinuationSessionIfIdleMock.mockImplementationOnce(
       async (exactRunSessionKey: string) => {
@@ -484,9 +482,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
           exactRunSessionKey,
           sessionId,
         ]);
-        if (!admissionActiveDuringRemoval) {
-          continuationRowExists = false;
-        }
       },
     );
 
@@ -505,7 +500,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
     expect(removeCronRunContinuationSessionIfIdleMock).toHaveBeenCalledTimes(1);
     expect(admissionActiveDuringRemoval).toBe(false);
-    expect(continuationRowExists).toBe(false);
   });
 
   it.each(["none", "silent", "best-effort", "execution error", "presentation warning"])(

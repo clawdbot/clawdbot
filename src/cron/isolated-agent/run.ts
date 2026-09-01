@@ -373,38 +373,35 @@ export async function runCronIsolatedAgentTurn(params: {
           });
         }
       } finally {
-        // Release runtime and admission ownership before deleting the exact-run alias.
-        // Deleting while this turn still owns session work deterministically reports
-        // "competing work is in flight" and leaks every otherwise-unused continuation.
+        // Release admission before exact-run alias deletion starts its own lifecycle mutation.
         try {
-          await disposeCronRunContext({
-            sessionId: initialSessionId,
-            cronSession: prepared.context.cronSession,
-            ownsRunContext,
-            runContextOwnerToken,
-          });
-        } finally {
-          prepared.context.sessionWorkAdmission.release();
           try {
-            if (prepared.context.runContinuationSession) {
-              try {
-                await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
-              } catch (error) {
-                logWarn(
-                  `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-                );
-              }
-            }
+            await disposeCronRunContext({
+              sessionId: initialSessionId,
+              cronSession: prepared.context.cronSession,
+              ownsRunContext,
+              runContextOwnerToken,
+            });
           } finally {
-            // Only run-scoped browser identities end with this invocation.
-            // Persistent cron targets keep the session and its tracked tabs alive.
-            if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
-              await cleanupBrowserSessionsForLifecycleEnd({
-                cfg: prepared.context.cfgWithAgentDefaults,
-                sessionKeys: [prepared.context.runSessionKey],
-                onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
-              });
+            prepared.context.sessionWorkAdmission.release();
+          }
+          if (prepared.context.runContinuationSession) {
+            try {
+              await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
+            } catch (error) {
+              logWarn(
+                `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+              );
             }
+          }
+        } finally {
+          // Only run-scoped browser identities end here; persistent targets keep tracked tabs.
+          if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
+            await cleanupBrowserSessionsForLifecycleEnd({
+              cfg: prepared.context.cfgWithAgentDefaults,
+              sessionKeys: [prepared.context.runSessionKey],
+              onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+            });
           }
         }
       }
