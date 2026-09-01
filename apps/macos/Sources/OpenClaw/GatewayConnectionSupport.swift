@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LocalAuthentication
 import Security
 
 struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
@@ -55,16 +56,18 @@ enum GatewayActivationBindingKeyStore {
     }
 
     static func loadExistingWithoutAuthenticationUI() -> SymmetricKey? {
-        guard let data = load(authenticationUI: kSecUseAuthenticationUIFail) else { return nil }
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        guard let data = load(authenticationContext: context) else { return nil }
         return SymmetricKey(data: data)
     }
 
-    private static func load(authenticationUI: CFString? = nil) -> Data? {
+    private static func load(authenticationContext: LAContext? = nil) -> Data? {
         var query = self.baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        if let authenticationUI {
-            query[kSecUseAuthenticationUI as String] = authenticationUI
+        if let authenticationContext {
+            query[kSecUseAuthenticationContext as String] = authenticationContext
         }
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
