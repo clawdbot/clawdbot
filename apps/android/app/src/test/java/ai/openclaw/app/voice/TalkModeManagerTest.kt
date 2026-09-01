@@ -78,6 +78,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAudioEffect
 import org.robolectric.shadows.ShadowAudioRecord
 import org.robolectric.shadows.ShadowAudioTrack
+import org.robolectric.shadows.ShadowLog
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowTextToSpeech
 import java.time.Duration
@@ -87,6 +88,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
@@ -1575,6 +1577,138 @@ class TalkModeManagerTest {
     setRealtimeAecEnabled(manager, true)
     assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
   }
+
+  // ---- playback-time uplink observation ------------------------------------------------------
+
+  @Test
+  fun aFrameForwardedWhilePlayingReportsTheQualifiedFullDuplexState() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+
+    observeForwarded(manager)
+
+    assertEquals("a frame crossing the uplink while playing is the full-duplex state", "FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertTrue("the echo capability that allowed it must be reported", uplinkAec(manager))
+    assertTrue("the communication-audio eligibility that allowed it must be reported", uplinkComm(manager))
+  }
+
+  @Test
+  fun anEchoCancellerThatIsNotEnabledReportsSuppressionRatherThanForwarding() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, false)
+    startPlaybackForTest(manager)
+
+    observeHeldBack(manager)
+
+    assertEquals("SUPPRESSED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertFalse("the reason must name the capability that was missing", uplinkAec(manager))
+  }
+
+  @Test
+  fun communicationAudioThatIsNotHeldReportsSuppressionEvenWithAnEnabledCanceller() {
+    // The other half of the gate: an enabled effect is not enough if this app no longer owns the
+    // mode and the focus, and the reported reason has to say which one was missing.
+    val manager = createManager()
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+
+    observeHeldBack(manager)
+
+    assertEquals("SUPPRESSED_DURING_PLAYBACK", uplinkPhaseName(manager))
+    assertTrue("the canceller was enabled and must not be blamed", uplinkAec(manager))
+    assertFalse("communication-audio eligibility is the missing fact here", uplinkComm(manager))
+  }
+
+  @Test
+  fun aSessionThatStaysInOneStateReportsItOnceRatherThanPerFrame() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+
+    val before = uplinkObservations()
+    repeat(200) { observeForwarded(manager) }
+
+    assertEquals("200 frames in one state must not become 200 observations", 1, uplinkObservations() - before)
+  }
+
+  @Test
+  fun forwardingAndSuppressionRemainVisibleEachTimeTheDecisionChanges() {
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    startPlaybackForTest(manager)
+
+    setRealtimeAecEnabled(manager, true)
+    val before = uplinkObservations()
+    observeForwarded(manager)
+    assertEquals("FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+
+    // The route loses its canceller mid-playback.
+    setRealtimeAecEnabled(manager, false)
+    repeat(5) { observeHeldBack(manager) }
+    assertEquals("SUPPRESSED_DURING_PLAYBACK", uplinkPhaseName(manager))
+
+    // And gets it back.
+    setRealtimeAecEnabled(manager, true)
+    repeat(5) { observeForwarded(manager) }
+    assertEquals("FORWARDED_DURING_PLAYBACK", uplinkPhaseName(manager))
+
+    assertEquals("each edge is reported exactly once", 3, uplinkObservations() - before)
+  }
+
+  @Test
+  fun aFencedFrameIsNotReportedAsAnEchoGateRefusal() {
+    // The cancellation fence and the echo gate drop frames for unrelated reasons. Reporting a
+    // fenced frame as a suppression would send a reader looking at the device's audio state for a
+    // decision that was really about which turn owned the uplink.
+    val manager = createManager()
+    enterCommunicationModeForTest(manager, audioManagerForTest())
+    setRealtimeAecEnabled(manager, true)
+    startPlaybackForTest(manager)
+    setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+
+    observeHeldBack(manager)
+
+    assertEquals("HELD_BY_CANCELLATION_FENCE", uplinkPhaseName(manager))
+    assertTrue("the fence must not be reported as a missing canceller", uplinkAec(manager))
+  }
+
+  private fun startPlaybackForTest(manager: TalkModeManager) {
+    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 5_000)
+  }
+
+  private fun observeForwarded(manager: TalkModeManager) = invokeUplinkObserver(manager, "observeRealtimeFrameForwarded")
+
+  private fun observeHeldBack(manager: TalkModeManager) = invokeUplinkObserver(manager, "observeRealtimeCaptureHeldBack")
+
+  private fun invokeUplinkObserver(
+    manager: TalkModeManager,
+    name: String,
+  ) {
+    val method = manager.javaClass.getDeclaredMethod(name)
+    method.isAccessible = true
+    method.invoke(manager)
+  }
+
+  private fun uplinkPhaseValue(manager: TalkModeManager): Int = (readPrivateField(manager, "realtimeUplinkPhase") as AtomicInteger).get()
+
+  private fun uplinkPhaseName(manager: TalkModeManager): String =
+    when (uplinkPhaseValue(manager) and 3) {
+      2 -> "FORWARDED_DURING_PLAYBACK"
+      1 -> "SUPPRESSED_DURING_PLAYBACK"
+      3 -> "HELD_BY_CANCELLATION_FENCE"
+      else -> "IDLE_NO_PLAYBACK"
+    }
+
+  private fun uplinkAec(manager: TalkModeManager): Boolean = uplinkPhaseValue(manager) and (1 shl 2) != 0
+
+  private fun uplinkComm(manager: TalkModeManager): Boolean = uplinkPhaseValue(manager) and (1 shl 3) != 0
+
+  /** What an operator would actually see: the count of emitted uplink observations. */
+  private fun uplinkObservations(): Int = ShadowLog.getLogsForTag("TalkMode").count { it.msg.startsWith("realtime uplink ") }
 
   @Test
   fun aCommunicationAudioRetryThatLosesToTeardownUnwindsItsOwnClaim() {
