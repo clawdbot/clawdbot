@@ -1,8 +1,10 @@
 // Docs link audit tests cover documentation link validation behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const {
@@ -20,40 +22,99 @@ describe("docs-link-audit", () => {
     return new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith(prefix)));
   }
 
+  it.each([
+    {
+      name: "component and list fences",
+      source: [
+        "<Accordion>",
+        "    ~~~md",
+        "    [example](/hidden-tilde)",
+        "    ~~~not-a-closing-fence",
+        "    [example](/hidden-after-false-close)",
+        "    ~~~",
+        "</Accordion>",
+        "",
+        "- Example",
+        "",
+        "    ````md",
+        "    ```text",
+        "    [example](/hidden-nested)",
+        "    ```",
+        "    ````",
+        "",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "legacy malformed MDX",
+      source: [
+        "<!doctype html>",
+        "~~~md",
+        "[example](/hidden-fallback)",
+        "~~~",
+        "[real](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 1,
+    },
+    {
+      name: "indented component prose",
+      source: ["<Accordion>", "    [real](/missing-page)", "</Accordion>", "[valid](/page)"],
+      broken: 1,
+    },
+    { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
+  ])("audits real CLI links after $name", ({ source, broken }) => {
+    const tempDirs: string[] = [];
+    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
+    const docsRoot = path.join(fixtureRoot, "docs");
+    const clawHubRoot = path.join(fixtureRoot, "clawhub");
+    const home = path.join(fixtureRoot, "home");
+    fs.mkdirSync(docsRoot);
+    fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
+    fs.mkdirSync(home);
+    fs.writeFileSync(path.join(docsRoot, "docs.json"), JSON.stringify({ navigation: [] }));
+    fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${source.join("\n")}\n`);
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url))],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            HOME: home,
+            USERPROFILE: home,
+            TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+            OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+          },
+          timeout: 30_000,
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(broken ? 1 : 0);
+      expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+      expect(result.stdout).toContain(`broken_links=${broken}\n`);
+      expect(result.stdout).not.toContain("/hidden-");
+      if (broken) {
+        expect(result.stdout).toContain(
+          `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
+        );
+      }
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
       "/plugins/building-plugins",
     );
     expect(normalizeRoute("/plugins/building-plugins?tab=all")).toBe("/plugins/building-plugins");
-  });
-
-  it("ignores fences nested in MDX and lists but audits links after code", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-fence-");
-    const docsRoot = path.join(fixtureRoot, "docs");
-    fs.mkdirSync(docsRoot, { recursive: true });
-    fs.writeFileSync(path.join(docsRoot, "docs.json"), '{"navigation":[]}', "utf8");
-    fs.writeFileSync(
-      path.join(docsRoot, "page.mdx"),
-      "# Page\n\n<Accordion>\n    ~~~bash\n    [not a real link](/not-a-published-route)\n    ~~~not-a-closer\n    [still not a real link](/still-not-a-published-route)\n    ~~~\n</Accordion>\n\n- List example\n\n    ````md\n    ```text\n    [not another real link](/another-not-published-route)\n    ```\n    ````\n\n[after nested code](/must-be-reported)\n\n[page](/page)\n",
-      "utf8",
-    );
-
-    try {
-      const output: string[] = [];
-      const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
-        output.push(args.join(" "));
-      });
-      try {
-        expect(runDocsLinkAuditCli({ args: [], docsDir: docsRoot })).toBe(1);
-        expect(output).toContain("broken_links=1");
-        expect(output.some((line) => line.includes("/must-be-reported"))).toBe(true);
-      } finally {
-        logSpy.mockRestore();
-      }
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
   });
 
   it("prepares every external-link input without exposing code literals", () => {

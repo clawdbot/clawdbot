@@ -51,7 +51,6 @@ type ScriptSpawn = (
 type RunDocsLinkAuditOptions = {
   args?: string[];
   comSpec?: string;
-  docsDir?: string;
   env?: NodeJS.ProcessEnv;
   nodeExecPath?: string;
   nodeVersion?: string;
@@ -109,6 +108,39 @@ function escapeHtmlAttribute(value: string) {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function collectMarkdownCodeLines(tokens: MarkdownToken[]): Set<number> {
+  const lines = new Set<number>();
+  for (const token of tokens) {
+    if ((token.type === "fence" || token.type === "code_block") && token.map) {
+      for (let line = token.map[0]; line < token.map[1]; line++) {
+        lines.add(line);
+      }
+    }
+  }
+  return lines;
+}
+
+function collectCodeLines(raw: string): Set<number> {
+  try {
+    const lines = new Set<number>();
+    const visit = (node: Nodes): void => {
+      if (node.type === "code" && node.position) {
+        for (let line = node.position.start.line; line <= node.position.end.line; line++) {
+          lines.add(line - 1);
+        }
+      }
+      if ("children" in node) {
+        node.children.forEach(visit);
+      }
+    };
+    visit(MDX_PROCESSOR.parse(raw));
+    return lines;
+  } catch {
+    // Legacy malformed MDX still needs the same tolerant code ranges as external-link auditing.
+    return collectMarkdownCodeLines(MARKDOWN_PARSER.parse(raw, {}));
+  }
 }
 
 /**
@@ -183,14 +215,7 @@ function projectExternalLinkMarkdown(raw: string) {
     const inlineVerbatimLinks = new Map<string, number>();
     const transparentEnv: Record<string, unknown> = {};
     const transparentTokens = MARKDOWN_PARSER.parse(raw, transparentEnv);
-    const fallbackCodeLines = new Set<number>();
-    for (const token of transparentTokens) {
-      if ((token.type === "fence" || token.type === "code_block") && token.map) {
-        for (let line = token.map[0]; line < token.map[1]; line += 1) {
-          fallbackCodeLines.add(line);
-        }
-      }
-    }
+    const fallbackCodeLines = collectMarkdownCodeLines(transparentTokens);
     const childUrl = (child: MarkdownToken): string | undefined => {
       const value =
         child.type === "link_open"
@@ -487,46 +512,6 @@ function collectNavPageEntries(node: unknown): string[] {
 
 const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
 
-/**
- * Derive code ranges from the MDX tree so container-relative fences keep their
- * indentation context. Fall back to tolerant Markdown token ranges for legacy
- * malformed pages that the MDX parser cannot read.
- */
-function collectCodeLines(rawText: string): Set<number> {
-  const codeLines = new Set<number>();
-  const addRange = (startLine: number, endLine: number) => {
-    for (let line = startLine; line <= endLine; line += 1) {
-      codeLines.add(line - 1);
-    }
-  };
-
-  try {
-    const tree = MDX_PROCESSOR.parse(rawText);
-    const visit = (node: Nodes): void => {
-      if (node.type === "code" && node.position) {
-        addRange(node.position.start.line, node.position.end.line);
-      }
-      if ("children" in node) {
-        for (const child of node.children) {
-          visit(child);
-        }
-      }
-    };
-    visit(tree);
-    return codeLines;
-  } catch {
-    const tokens = MARKDOWN_PARSER.parse(rawText, {});
-    for (const token of tokens) {
-      if ((token.type === "fence" || token.type === "code_block") && token.map) {
-        for (let line = token.map[0]; line < token.map[1]; line += 1) {
-          codeLines.add(line);
-        }
-      }
-    }
-    return codeLines;
-  }
-}
-
 export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value
@@ -760,6 +745,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
     const baseDir = normalizeSlashes(path.dirname(rel));
     const rawText = fs.readFileSync(abs, "utf8");
     const lines = rawText.split("\n");
+
     const codeLines = collectCodeLines(rawText);
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
@@ -934,7 +920,7 @@ export function runDocsLinkAuditCli(options: RunDocsLinkAuditOptions = {}) {
     }
   }
 
-  const mirroredDocsDir = prepareMirroredDocsDir(options.docsDir ?? DOCS_DIR);
+  const mirroredDocsDir = prepareMirroredDocsDir(DOCS_DIR);
   try {
     const { checked, broken } = auditDocsLinks({
       docsDir: mirroredDocsDir.dir,
