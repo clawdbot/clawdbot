@@ -25,6 +25,7 @@
  * Everything here reads the manifest metadata snapshot, which is built WITHOUT importing any
  * plugin — so computing the scope costs nothing and cannot itself trigger the bug.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -58,6 +59,8 @@ export type ModelCatalogPluginScope = {
   excludedPluginIds: string[];
   /** Provider ids the manifests say the catalog should be able to produce. */
   expectedProviderIds: string[];
+  /** Manifest aliases mapped to the canonical provider ids emitted by the catalog. */
+  catalogProviderAliases: ReadonlyMap<string, string>;
 };
 
 function nonEmpty(value: unknown): boolean {
@@ -147,6 +150,7 @@ export function resolveModelCatalogPluginScope(
 
   const keptReasons = new Map<string, ModelScopeReason[]>();
   const expectedProviderIds = new Set<string>();
+  const catalogProviderAliases = new Map<string, string>();
 
   for (const record of records) {
     const reasons = scoreRecord(record);
@@ -154,24 +158,31 @@ export function resolveModelCatalogPluginScope(
       keptReasons.set(record.id, reasons);
     }
     for (const providerId of record.providers ?? []) {
-      expectedProviderIds.add(providerId);
+      expectedProviderIds.add(normalizeProviderId(providerId));
     }
     for (const providerId of Object.keys(record.modelCatalog?.providers ?? {})) {
-      expectedProviderIds.add(providerId);
+      expectedProviderIds.add(normalizeProviderId(providerId));
+    }
+    for (const [aliasId, target] of Object.entries(record.modelCatalog?.aliases ?? {})) {
+      const alias = normalizeProviderId(aliasId);
+      const canonical = normalizeProviderId(target.provider);
+      if (alias && canonical) {
+        catalogProviderAliases.set(alias, canonical);
+        expectedProviderIds.add(canonical);
+      }
     }
   }
 
-  // Belt and braces: the snapshot's own owner maps are keyed by provider/backend id with the
-  // OWNING PLUGIN IDS as values (plugin-metadata-snapshot.ts appendOwner(map, id, plugin.id)).
-  // Getting that direction backwards would silently produce a nonsense set, so we union the
-  // values in rather than trusting the manifest sweep alone.
+  // Belt and braces: the snapshot's owner maps retain every plugin that owns a provider-facing
+  // surface, including aliases and setup-only ids. Those surface keys are deliberately NOT
+  // output expectations: the catalog emits canonical provider ids, while aliases exist only to
+  // select their owner. Canonical expectations come from the manifest records above.
   const owners = metadataSnapshot.owners;
   for (const map of [owners?.providers, owners?.modelCatalogProviders, owners?.setupProviders]) {
     if (!map) {
       continue;
     }
-    for (const [surfaceId, ownerIds] of map.entries()) {
-      expectedProviderIds.add(surfaceId);
+    for (const ownerIds of map.values()) {
       for (const ownerId of ownerIds) {
         if (!keptReasons.has(ownerId)) {
           keptReasons.set(ownerId, ["owner-map"]);
@@ -208,6 +219,7 @@ export function resolveModelCatalogPluginScope(
       keptReasons,
       excludedPluginIds: [],
       expectedProviderIds: [...expectedProviderIds],
+      catalogProviderAliases,
     };
   }
 
@@ -216,6 +228,7 @@ export function resolveModelCatalogPluginScope(
     keptReasons,
     excludedPluginIds,
     expectedProviderIds: [...expectedProviderIds],
+    catalogProviderAliases,
   };
 }
 
@@ -255,8 +268,12 @@ function assertModelCatalogCoversExpectedProviders(params: {
   producedProviderIds: Iterable<string>;
   allowMissingProviderIds?: Iterable<string>;
 }): void {
-  const produced = new Set(params.producedProviderIds);
-  const allowed = new Set(params.allowMissingProviderIds ?? []);
+  const canonicalize = (providerId: string) => {
+    const normalized = normalizeProviderId(providerId);
+    return params.scope.catalogProviderAliases.get(normalized) ?? normalized;
+  };
+  const produced = new Set([...params.producedProviderIds].map(canonicalize));
+  const allowed = new Set([...(params.allowMissingProviderIds ?? [])].map(canonicalize));
   const missing = params.scope.expectedProviderIds
     .filter((id) => !produced.has(id) && !allowed.has(id))
     .toSorted();
@@ -297,7 +314,12 @@ export function assertPreparedModelCatalogWorkerCoverage(params: {
   for (const outcome of params.snapshot.providerOutcomes ?? []) {
     producedProviderIds.add(outcome.provider);
   }
-  const activeProviderIds = new Set(params.activeProviderIds);
+  const activeProviderIds = new Set(
+    [...params.activeProviderIds].map((providerId) => {
+      const normalized = normalizeProviderId(providerId);
+      return params.scope.catalogProviderAliases.get(normalized) ?? normalized;
+    }),
+  );
   assertModelCatalogCoversExpectedProviders({
     scope: params.scope,
     producedProviderIds,

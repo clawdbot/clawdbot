@@ -3,6 +3,7 @@ import path from "node:path";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
+export const PROVIDER_ALIAS_ID = "worker-catalog-fixture-alias";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 const UNRELATED_SYNTHETIC_AUTH_ID = `${PROVIDER_ID}-unrelated-harness`;
 export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
@@ -174,7 +175,11 @@ module.exports = {
       providerCatalogEntry: "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
-      modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
+      modelCatalog: {
+        aliases: { [PROVIDER_ALIAS_ID]: { provider: PROVIDER_ID } },
+        discovery: { [PROVIDER_ID]: "runtime" },
+        runtimeAugment: true,
+      },
     }),
     "utf8",
   );

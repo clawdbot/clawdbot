@@ -28,6 +28,7 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import {
   PROVIDER_ID,
+  PROVIDER_ALIAS_ID,
   HARNESS_ID,
   SHARED_AUTH_PROVIDER_ID,
   PLUGIN_ID,
@@ -97,6 +98,7 @@ function createCatalogFixture(
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
+    modelProviderId?: string;
   },
 ) {
   const root = makeTempDir("openclaw-model-catalog-worker-");
@@ -122,12 +124,13 @@ function createCatalogFixture(
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  const modelProviderId = options?.modelProviderId ?? PROVIDER_ID;
   const config = {
     agents: {
       defaults: {
-        model: `${PROVIDER_ID}/sqlite-model`,
+        model: `${modelProviderId}/sqlite-model`,
         models: {
-          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+          [`${modelProviderId}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
         },
       },
     },
@@ -207,6 +210,7 @@ async function createStaticSnapshot(
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
     metadataWorkspace?: "gateway" | "none" | "activation";
+    modelProviderId?: string;
     provideMetadataToWorker?: boolean;
   },
 ) {
@@ -504,6 +508,17 @@ describe("prepared model catalog worker boundary", () => {
 
   it("returns the actual scoped worker catalog without importing an unrelated plugin", async () => {
     const fixture = await createStaticSnapshot(0);
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+    expect(fs.existsSync(fixture.unrelatedWorkerMarker)).toBe(false);
+  });
+
+  it("accepts an active manifest alias when the worker emits its canonical provider", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { modelProviderId: PROVIDER_ALIAS_ID });
 
     const catalog = await fixture.snapshot.loadFullModelCatalog?.();
 
