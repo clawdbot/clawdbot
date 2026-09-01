@@ -1240,12 +1240,16 @@ jobs:
           const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";
-          // Control UI E2E is serial Chromium work: 2114s of measured body plus a
-          // ~116s median per-shard floor (checkout, pnpm install, Vitest transform)
-          // that every added row pays again. Sharding is the only lever on the
-          // tallest row -- duration-weighted packing already lands within ~10% of
-          // ideal -- so the count is set from that floor, not from packing slack.
-          const uiE2eShardCount = usesHostedRunnerProfile ? 14 : 4;
+          const supportsUiE2eProjects =
+            existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
+            readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
+              .includes("ui-e2e-projects-contract-v1");
+          // The registration envelope already charges 14 UI rows on every backend.
+          // Private source servers and resource-sensitive files retain one worker
+          // across two weighted shards beside the browser-extension row.
+          const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
+          const uiE2eBundledShardCount = 11;
+          const uiE2eSerialShardCount = 2;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1527,17 +1531,37 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
-            ui_e2e_matrix: createMatrix(
-              Array.from({ length: uiE2eShardCount }, (_, index) => {
-                const shard = index + 1;
-                return {
-                  shard,
-                  shard_count: uiE2eShardCount,
-                  task: shard === uiE2eShardCount ? "browser-extension" : "control-ui",
-                  vitest_shard_count: uiE2eShardCount - 1,
-                };
-              }),
-            ),
+            ui_e2e_matrix: createMatrix(supportsUiE2eProjects ? [
+              ...Array.from({ length: uiE2eBundledShardCount }, (_, index) => ({
+                shard: index + 1,
+                shard_count: uiE2eJobCount,
+                task: "control-ui",
+                vitest_project: "ui-e2e-bundled",
+                vitest_shard: index + 1,
+                vitest_shard_count: uiE2eBundledShardCount,
+              })),
+              ...Array.from({ length: uiE2eSerialShardCount }, (_, index) => ({
+                shard: uiE2eBundledShardCount + index + 1,
+                shard_count: uiE2eJobCount,
+                task: "control-ui",
+                vitest_project: "ui-e2e-serial",
+                vitest_shard: index + 1,
+                vitest_shard_count: uiE2eSerialShardCount,
+              })),
+              {
+                shard: uiE2eJobCount,
+                shard_count: uiE2eJobCount,
+                task: "browser-extension",
+              },
+            ] : Array.from({ length: uiE2eJobCount }, (_, index) => {
+              const shard = index + 1;
+              return {
+                shard,
+                shard_count: uiE2eJobCount,
+                task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
+                vitest_shard_count: uiE2eJobCount - 1,
+              };
+            })),
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -2375,13 +2399,13 @@ jobs:
     # Hybrid attempt 1 uses Blacksmith; github mode, hybrid retries, manual
     # dispatches, forks, and same-repo PR retries use GitHub-hosted capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    # Keep Chromium ownership serial within each independently required shard.
+    # Source-server and runtime-budget owners retain serial Chromium execution.
     timeout-minutes: 25
     env:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}
+      max-parallel: 14
       matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2401,13 +2425,19 @@ jobs:
         if: matrix.task == 'control-ui'
         env:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_PROJECT: ${{ matrix.vitest_project }}
+          VITEST_SHARD_INDEX: ${{ matrix.vitest_shard || matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
-          --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
+        run: |
+          project_args=()
+          if [[ -n "$VITEST_PROJECT" ]]; then
+            project_args=(--project "$VITEST_PROJECT")
+          fi
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e.config.ts \
+            --configLoader runner \
+            "${project_args[@]}" \
+            --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics
         if: failure() && matrix.task == 'control-ui'
