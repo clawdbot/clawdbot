@@ -37,7 +37,6 @@ import {
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
   collectSessionEntryLookupKeys,
-  createSessionIdentitySnapshot,
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
@@ -545,7 +544,8 @@ async function patchSqliteSessionEntrySnapshot(
         result = cloneSessionEntry(writeBase);
         return;
       }
-      previousIdentity = createSessionIdentitySnapshot(fresh);
+      // Commit reads own these entries; update callbacks only receive detached copies.
+      previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
         previousEntry: selectedPreviousEntry,

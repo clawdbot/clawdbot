@@ -61,27 +61,29 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // CI shard planning uses measured wall time rather than raw file count.
   // These ratios come from Blacksmith extension batch timings; import-heavy
   // suites vary widely, and file count alone leaves long tail shards.
+  // Codex/Matrix/Memory/providers/QA/Telegram use summed test-step walls from
+  // run 33449014227, rounded up to 0.01s per counting file; checkout/build are separate.
   "test/vitest/vitest.extension-acpx.config.ts": 0.75,
   "test/vitest/vitest.extension-browser.config.ts": 0.5,
-  "test/vitest/vitest.extension-codex.config.ts": 1.3,
+  "test/vitest/vitest.extension-codex.config.ts": 3.38,
   "test/vitest/vitest.extension-diffs.config.ts": 0.6,
   "test/vitest/vitest.extension-discord.config.ts": 0.62,
   "test/vitest/vitest.extension-feishu.config.ts": 0.18,
   "test/vitest/vitest.extension-imessage.config.ts": 1.7,
   "test/vitest/vitest.extension-irc.config.ts": 1,
   "test/vitest/vitest.extension-line.config.ts": 1.1,
-  "test/vitest/vitest.extension-matrix.config.ts": 0.28,
+  "test/vitest/vitest.extension-matrix.config.ts": 0.86,
   "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
   "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 1,
+  "test/vitest/vitest.extension-memory.config.ts": 1.15,
   "test/vitest/vitest.extension-messaging.config.ts": 0.4,
   "test/vitest/vitest.extension-misc.config.ts": 0.7,
   "test/vitest/vitest.extension-msteams.config.ts": 0.5,
   "test/vitest/vitest.extension-provider-openai.config.ts": 1.35,
-  "test/vitest/vitest.extension-providers.config.ts": 0.5,
-  "test/vitest/vitest.extension-qa.config.ts": 0.65,
+  "test/vitest/vitest.extension-providers.config.ts": 0.99,
+  "test/vitest/vitest.extension-qa.config.ts": 0.86,
   "test/vitest/vitest.extension-slack.config.ts": 0.45,
-  "test/vitest/vitest.extension-telegram.config.ts": 0.72,
+  "test/vitest/vitest.extension-telegram.config.ts": 5.4,
   "test/vitest/vitest.extension-voice-call.config.ts": 0.27,
   "test/vitest/vitest.extension-whatsapp.config.ts": 0.8,
   "test/vitest/vitest.extension-zalo.config.ts": 0.7,
@@ -117,6 +119,10 @@ const EXTENSION_TEST_JOB_FILE_LIMITS = new Map<string, number>([
   // The 468-file catch-all took 528–829s on two detected CPUs. Six jobs leave
   // room for checkout/setup without changing its non-isolated worker lifecycle.
   ["test/vitest/vitest.extensions.config.ts", 90],
+  // Run 33449014227: QA took 203s and isolated providers 271s on two detected
+  // CPUs. Reuse the job-only bound; Vitest keeps each config's file lifecycle.
+  ["test/vitest/vitest.extension-qa.config.ts", 90],
+  ["test/vitest/vitest.extension-providers.config.ts", 90],
   // Bound Telegram CI jobs so isolate recycling stays inside one job instead
   // of minting one runner per test file. Ten files keeps the worst job near
   // 3 minutes (observed 2026-08: ~45s runner setup + ~7-24s per file) while
@@ -272,7 +278,7 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   return chunks;
 }
 
-export function resolveExtensionTestJobFileLimit(config: string) {
+function resolveExtensionTestJobFileLimit(config: string) {
   return (
     EXTENSION_TEST_JOB_FILE_LIMITS.get(config) ?? EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config)
   );
@@ -325,7 +331,7 @@ function countTestFiles(rootPath: string) {
   return listFilesystemTestFiles(rootPath).length;
 }
 
-function estimatePlanCost(config: string, testFileCount: number) {
+export function estimateExtensionTestCost(config: string, testFileCount: number) {
   const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
   return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
@@ -394,7 +400,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
   );
-  const estimatedCost = estimatePlanCost(config, testFileCount);
+  const estimatedCost = estimateExtensionTestCost(config, testFileCount);
 
   return {
     config,

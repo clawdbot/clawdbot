@@ -1911,10 +1911,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
       if (failure === "merge") {
         expect(result.status, output).toBe(1);
         expect(output).toContain("fixture merge failed");
-        expect(events).toBe(`invocation\t${worktreeDir}\n`);
+        expect(events).toBe(`invocation\t${repoDir}\n`);
       } else {
         const completedEvents =
-          command === "gc" ? "removed\n" : `invocation\t${worktreeDir}\nmerged\ncomment\nremoved\n`;
+          command === "gc" ? "removed\n" : `invocation\t${repoDir}\nmerged\ncomment\nremoved\n`;
         expect(events, output).toBe(completedEvents + (failure === "none" ? "released\n" : ""));
         expect(readFileSync(releaseCwd, "utf8").trim(), output).toBe(repoDir);
         expect(result.status, output).toBe(failure === "none" ? 0 : 1);

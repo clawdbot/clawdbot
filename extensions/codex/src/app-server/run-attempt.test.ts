@@ -22,7 +22,7 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
@@ -7137,89 +7137,108 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("starts sequential ephemeral generations that share a stable session key", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionKey = "agent:main:ephemeral-helper";
-    const storePath = path.join(tempDir, "ephemeral-sessions.json");
-    let generation = 0;
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "thread/start") {
-        generation += 1;
-        return threadStartResult(`thread-ephemeral-${generation}`);
-      }
-      if (method === "turn/start") {
-        return turnStartResult(`turn-ephemeral-${generation}`);
-      }
-      return undefined;
-    });
-
-    for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
-      const params = createParams(sessionFile, workspaceDir);
-      params.sessionId = sessionId;
-      params.sessionKey = sessionKey;
-      params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
-      params.config = { ...params.config, session: { store: storePath } };
-
-      const run = runCodexAppServerAttempt(params);
-      let startupError: unknown;
-      void run.catch((error: unknown) => {
-        startupError = error;
-      });
-      const expectedGeneration = index + 1;
-      await vi.waitFor(() => {
-        if (startupError) {
-          throw startupError instanceof Error
-            ? startupError
-            : new Error("Codex attempt failed.", { cause: startupError });
+  it.each(["default", "config", "target"] as const)(
+    "starts sequential ephemeral generations with the %s session store",
+    async (storeSelection) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const sessionKey = "agent:main:ephemeral-helper";
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "ephemeral-state"));
+      const storePath = path.join(tempDir, "ephemeral-sessions.json");
+      let generation = 0;
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "thread/start") {
+          generation += 1;
+          return threadStartResult(`thread-ephemeral-${generation}`);
         }
-        expect(harness.requests.filter((request) => request.method === "turn/start")).toHaveLength(
-          expectedGeneration,
-        );
-      }, fastWait);
-      const threadId = `thread-ephemeral-${expectedGeneration}`;
-      const turnId = `turn-ephemeral-${expectedGeneration}`;
-      await harness.completeTurn({ threadId, turnId });
-      await expect(run).resolves.toBeDefined();
-    }
-    expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(2);
-  });
+        if (method === "turn/start") {
+          return turnStartResult(`turn-ephemeral-${generation}`);
+        }
+        return undefined;
+      });
 
-  it("rejects a run whose physical generation mismatches its durable session row", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionKey = "agent:main:durable-generation";
-    const durableSessionId = "session-durable-current";
-    const storePath = path.join(tempDir, "durable-sessions.json");
-    registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-durable-current",
-      cwd: workspaceDir,
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: { sessionId: durableSessionId, updatedAt: Date.now() },
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.sessionId = "session-durable-stale";
-    params.sessionKey = sessionKey;
-    params.sessionTarget = {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey,
-      storePath,
-    };
-    params.config = { ...params.config, session: { store: storePath } };
-    const clientFactory = vi.fn(async () => {
-      throw new Error("client must not start");
-    });
+      for (const [index, sessionId] of ["session-ephemeral-1", "session-ephemeral-2"].entries()) {
+        const params = createParams(sessionFile, workspaceDir);
+        params.sessionId = sessionId;
+        params.sessionKey = sessionKey;
+        if (storeSelection === "target") {
+          params.sessionTarget = { agentId: "main", sessionId, sessionKey, storePath };
+        } else if (storeSelection === "config") {
+          params.config = { ...params.config, session: { store: storePath } };
+        }
 
-    await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
-      name: "AgentHarnessSessionSupersededError",
-      message: "Codex session generation is no longer current: session-durable-stale",
-    });
-    expect(clientFactory).not.toHaveBeenCalled();
-  });
+        const run = runCodexAppServerAttempt(params);
+        let startupError: unknown;
+        void run.catch((error: unknown) => {
+          startupError = error;
+        });
+        const expectedGeneration = index + 1;
+        await vi.waitFor(() => {
+          if (startupError) {
+            throw startupError instanceof Error
+              ? startupError
+              : new Error("Codex attempt failed.", { cause: startupError });
+          }
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(expectedGeneration);
+        }, fastWait);
+        const threadId = `thread-ephemeral-${expectedGeneration}`;
+        const turnId = `turn-ephemeral-${expectedGeneration}`;
+        await harness.completeTurn({ threadId, turnId });
+        await expect(run).resolves.toBeDefined();
+      }
+      expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(
+        2,
+      );
+    },
+  );
+
+  it.each(["default", "config", "target"] as const)(
+    "rejects a superseded generation in the %s session store",
+    async (storeSelection) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const sessionKey = "agent:main:durable-generation";
+      const durableSessionId = "session-durable-current";
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "durable-state"));
+      const storePath =
+        storeSelection === "default"
+          ? resolveStorePath(undefined, { agentId: "main" })
+          : path.join(tempDir, "durable-sessions.json");
+      registerCodexTestSessionIdentity(sessionFile, durableSessionId, sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-durable-current",
+        cwd: workspaceDir,
+      });
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: { sessionId: durableSessionId, updatedAt: Date.now() },
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.sessionId = "session-durable-stale";
+      params.sessionKey = sessionKey;
+      if (storeSelection === "target") {
+        params.sessionTarget = {
+          agentId: "main",
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath,
+        };
+      } else if (storeSelection === "config") {
+        params.config = { ...params.config, session: { store: storePath } };
+      }
+      const clientFactory = vi.fn(async () => {
+        throw new Error("client must not start");
+      });
+
+      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toMatchObject({
+        name: "AgentHarnessSessionSupersededError",
+        message: "Codex session generation is no longer current: session-durable-stale",
+      });
+      expect(clientFactory).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

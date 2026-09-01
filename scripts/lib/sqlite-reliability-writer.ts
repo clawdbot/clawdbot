@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   COMMITTED_WAL_SENTINEL,
+  formatReliabilityStderr,
   STRESS_TABLE_SQL,
   type ProfileConfig,
 } from "./sqlite-reliability-contract.js";
@@ -92,7 +93,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
       cleanup();
       reject(
         new Error(
-          `SQLite reliability writer timed out waiting for ${kind}.${formatWriterStderr(writer)}`,
+          `SQLite reliability writer timed out waiting for ${kind}.${formatReliabilityStderr(writer.stderr.join(""))}`,
         ),
       );
     }, WRITER_MESSAGE_TIMEOUT_MS);
@@ -116,7 +117,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
       cleanup();
       reject(
         new Error(
-          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatWriterStderr(writer)}`,
+          `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
         ),
       );
     };
@@ -131,11 +132,6 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
     writer.child.on("exit", onExit);
     action?.();
   });
-}
-
-function formatWriterStderr(writer: WriterHandle): string {
-  const text = writer.stderr.join("").trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
 }
 
 export async function stopWriter(writer: WriterHandle): Promise<WriterResultMessage> {

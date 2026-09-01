@@ -97,21 +97,21 @@ export function createGatewayChatUserTurnController(params: {
     input: baseInput,
     resolveInput: () => inputPromise,
     target: () => {
-      const { storePath, store, entry } = loadSessionEntry(
-        session.sessionKey,
-        session.sessionLoadOptions,
-      );
-      const targetEntry = entry ?? admission.initialSessionEntry;
-      if (!targetEntry?.sessionId || targetEntry.sessionId !== admission.sessionBinding.sessionId) {
+      // Retain only the current binding; transcript writers recheck it at commit.
+      const { storePath, entry } = loadSessionEntry(session.sessionKey, {
+        ...session.sessionLoadOptions,
+        clone: false,
+      });
+      const sessionId = (entry ?? admission.initialSessionEntry)?.sessionId;
+      if (!sessionId || sessionId !== admission.sessionBinding.sessionId) {
         return undefined;
       }
       return {
-        sessionId: targetEntry.sessionId,
-        expectedSessionId: targetEntry.sessionId,
+        sessionId,
+        expectedSessionId: sessionId,
         initialSessionEntry: admission.initialSessionEntry,
         sessionKey: session.sessionKey,
-        sessionEntry: targetEntry,
-        sessionStore: store,
+        sessionEntry: undefined,
         storePath,
         agentId: session.agentId,
         config: session.cfg,

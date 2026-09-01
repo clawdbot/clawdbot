@@ -657,7 +657,6 @@ extensions/matrix/src/matrix/actions/summary.ts	2
 extensions/matrix/src/matrix/actions/verification.ts	1
 extensions/matrix/src/matrix/client-bootstrap.ts	1
 extensions/matrix/src/matrix/client/config.ts	5
-extensions/matrix/src/matrix/client/file-sync-store.ts	5
 extensions/matrix/src/matrix/client/logging.ts	3
 extensions/matrix/src/matrix/client/runtime.ts	1
 extensions/matrix/src/matrix/config-update.ts	4
@@ -2058,7 +2057,7 @@ src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4
 src/agents/tools/heartbeat-response-tool.ts	1
-src/agents/tools/image-generate-tool.ts	15
+src/agents/tools/image-generate-tool.ts	14
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
@@ -2104,7 +2103,7 @@ src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
-src/agents/workspace-legacy-state.ts	3
+src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	9
 src/agents/worktrees/git.ts	2
@@ -2493,7 +2492,7 @@ src/commands/doctor-skill-workshop-sqlite.ts	1
 src/commands/doctor-skills.ts	1
 src/commands/doctor-sqlite-compact.ts	3
 src/commands/doctor-sqlite-maintenance-lock.ts	2
-src/commands/doctor-state-integrity.ts	2
+src/commands/doctor-state-integrity.ts	1
 src/commands/doctor-state-sqlite-compact.ts	1
 src/commands/doctor-telegram-general-topic-conversations.ts	2
 src/commands/doctor-tools-md-migration.ts	5
@@ -3075,7 +3074,6 @@ src/infra/delivery-queue-sqlite-namespace.ts	3
 src/infra/delivery-queue-sqlite.ts	4
 src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
-src/infra/device-identity.ts	1
 src/infra/device-pairing-store.ts	6
 src/infra/diagnostic-event-listener-presence.ts	3
 src/infra/diagnostic-events.ts	13
@@ -3093,7 +3091,6 @@ src/infra/exec-approval-reply.ts	2
 src/infra/exec-approvals-allowlist.ts	7
 src/infra/exec-approvals-config.ts	4
 src/infra/exec-approvals-effective.ts	3
-src/infra/exec-approvals-migration-gate.ts	1
 src/infra/exec-approvals-resolver.ts	2
 src/infra/exec-approvals-socket.ts	1
 src/infra/exec-approvals-store.ts	1
@@ -3175,7 +3172,7 @@ src/infra/provider-usage.fetch.minimax.ts	2
 src/infra/push-apns-http2.ts	1
 src/infra/push-apns.relay.ts	1
 src/infra/push-apns.ts	7
-src/infra/push-web.ts	3
+src/infra/push-web.ts	2
 src/infra/question-gateway-resolver.ts	3
 src/infra/question-reaction-runtime.ts	3
 src/infra/restart-coordinator.ts	1
@@ -3217,7 +3214,6 @@ src/infra/state-migrations.channel-pairing.ts	5
 src/infra/state-migrations.config-machine-state.ts	1
 src/infra/state-migrations.cron-run-logs.ts	4
 src/infra/state-migrations.debug-proxy.ts	5
-src/infra/state-migrations.device-identity-repair.ts	1
 src/infra/state-migrations.doctor.ts	7
 src/infra/state-migrations.exec-approvals.ts	1
 src/infra/state-migrations.fs.ts	1
@@ -3233,7 +3229,6 @@ src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	12
 src/infra/state-migrations.shared-auth-store.ts	1
-src/infra/state-migrations.source-snapshot.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.storage.ts	21
 src/infra/state-migrations.task-sidecar-rows.ts	8
@@ -3260,7 +3255,6 @@ src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	2
-src/llm/model-runtime-binding.ts	2
 src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.ts	3
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/minimax.ts	3
@@ -3572,7 +3566,7 @@ src/plugins/trusted-tool-policy.ts	1
 src/plugins/uninstall-config.ts	3
 src/plugins/uninstall-package-config.ts	2
 src/plugins/uninstall-package-plan.ts	1
-src/plugins/uninstall.ts	4
+src/plugins/uninstall.ts	3
 src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
@@ -3868,7 +3862,6 @@ ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/theme.ts	4
 ui/src/app/update-schedule-dto.ts	2
-ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	2
 ui/src/components/agent-select.ts	3
@@ -4043,7 +4036,6 @@ ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
 ui/src/pages/chat/components/chat-model-picker.ts	7
 ui/src/pages/chat/components/chat-pane-header.ts	2
-ui/src/pages/chat/components/chat-question-card.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-rail.ts	4
 ui/src/pages/chat/components/chat-session-sharing.ts	1

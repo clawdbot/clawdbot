@@ -45,6 +45,7 @@ import {
   listPluginSdkDistArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
+import { listStaticExtensionAssetOutputs } from "./lib/static-extension-assets.mts";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -55,7 +56,6 @@ import {
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
-import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -206,8 +206,10 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "--shell",
   "zsh",
 ] as const;
-const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
-  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+// The checker owns fixture bytes; the target checkout supplies package metadata.
+const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
+  "./fixtures/packed-plugin-sdk-type-smoke.ts",
+  import.meta.url,
 );
 
 export function runReleaseCheckCommand(
@@ -1395,14 +1397,7 @@ async function main() {
   const files = results.flatMap((entry) => entry.files ?? []);
   const paths = new Set(files.map((file) => file.path));
 
-  const missing = requiredPathGroups
-    .flatMap((group) => {
-      if (Array.isArray(group)) {
-        return group.some((path) => paths.has(path)) ? [] : [group.join(" or ")];
-      }
-      return paths.has(group) ? [] : [group];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  const missing = collectMissingPackPaths(paths);
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);

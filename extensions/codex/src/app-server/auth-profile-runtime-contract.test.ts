@@ -8,6 +8,7 @@ import {
   createCodexRuntimePlanFixture,
   createParams as createSharedParams,
   runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -113,8 +114,14 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 });
 const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
 
-function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+async function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
   const [sessionFile, binding, lookup] = args;
+  await seedRunSessionOwnerForTest(
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
+  );
   return writeRawCodexAppServerBinding(
     sessionFile,
     {

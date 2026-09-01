@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -18,6 +21,68 @@ function step(job: string, name: string) {
   }
   return match;
 }
+
+describe("full release metadata checkouts", () => {
+  it.each([
+    {
+      job: "resolve_target",
+      targetCheckout: "Checkout target package manifest",
+      imports: [
+        "release-tooling-identity.mjs",
+        "full-release-candidate-contract.mjs",
+        "full-release-validation-policy.mjs",
+      ],
+    },
+    {
+      job: "evidence_reuse",
+      targetCheckout: "Checkout target SHA",
+      imports: ["release-ci-summary.mjs"],
+    },
+  ])("runs $job tooling from only its sparse files", ({ job, targetCheckout, imports }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
+    try {
+      for (const name of ["Checkout trusted workflow helper", targetCheckout]) {
+        const checkout = step(job, name).with as Record<string, unknown>;
+        expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
+        const paths = String(checkout["sparse-checkout"] ?? "")
+          .split("\n")
+          .map((path) => path.trim())
+          .filter(Boolean);
+        expect(paths.length).toBeGreaterThan(0);
+        for (const path of paths) {
+          const destination = join(root, String(checkout.path), path);
+          mkdirSync(dirname(destination), { recursive: true });
+          copyFileSync(path, destination);
+        }
+      }
+
+      const runNode = (args: string[], cwd = root) =>
+        execFileSync(process.execPath, args, {
+          cwd,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
+        });
+      expect(
+        runNode([
+          "--input-type=module",
+          "-e",
+          imports.map((file) => `await import("./workflow/scripts/${file}");`).join("\n"),
+        ]),
+      ).toBe("");
+      if (job === "evidence_reuse") {
+        expect(
+          runNode(
+            [join(root, "workflow/scripts/release-preflight.mjs"), "--macos-versions-only"],
+            join(root, "target"),
+          ),
+        ).toContain("macOS app version metadata OK");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("full release same-parent recovery workflow", () => {
   it("has no continuation payload and dispatches child work only on attempt one", () => {

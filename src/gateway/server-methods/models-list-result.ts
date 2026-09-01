@@ -211,6 +211,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     preparedAuthStore: params.preparedAuthStore,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
+    preparedSyntheticAuthComplete: isPreparedModelCatalogFull(params.snapshot),
     workspaceDir,
     routeResolverFactory: params.routeResolverFactory,
   });
@@ -566,6 +567,9 @@ export async function prepareModelsListResult(
     : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
+  // A complete catalog and its synthetic-auth probe results cross the worker boundary together.
+  // Only that paired generation may turn an absent synthetic credential into missing-auth.
+  const preparedSyntheticAuthComplete = ownerSnapshot?.catalogComplete === true;
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
@@ -650,6 +654,7 @@ export async function prepareModelsListResult(
         preparedAuthStore,
         preparedRuntimeAuthModes,
         preparedRuntimeAuthMaterializations,
+        preparedSyntheticAuthComplete,
         workspaceDir,
         routeResolverFactory: params.routeResolverFactory,
       }),

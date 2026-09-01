@@ -1,10 +1,10 @@
 // Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getShellConfig } from "../../agents/shell-utils.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -306,24 +306,17 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     };
 
     try {
-      if (input.mode === "child" && input.argv.length === 0) {
+      if (input.mode !== "anchored-shell" && input.argv.length === 0) {
         throw new Error("spawn argv cannot be empty");
       }
       const adapter =
         input.mode === "pty"
-          ? await (async () => {
-              const { shell, args: shellArgs } = getShellConfig();
-              const ptyCommand = input.ptyCommand.trim();
-              if (!ptyCommand) {
-                throw new Error("PTY command cannot be empty");
-              }
-              return await createPtyAdapter({
-                shell,
-                args: [...shellArgs, ptyCommand],
-                cwd: input.cwd,
-                env: input.env,
-              });
-            })()
+          ? await createPtyAdapter({
+              shell: expectDefined(input.argv[0], "spawn executable"),
+              args: input.argv.slice(1),
+              cwd: input.cwd,
+              env: input.env,
+            })
           : input.mode === "anchored-shell"
             ? await createChildAdapter({
                 anchoredShellCommand: input.command,

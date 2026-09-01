@@ -19,7 +19,7 @@ backup.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts a managed Gateway service.
 
 ```bash
 openclaw update
@@ -42,6 +42,12 @@ openclaw update --dry-run   # preview without applying
 when the beta tag is missing or its version is older than the latest stable
 release. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
+
+A saved `update.channel` remains the channel for future updates, automatic
+checks, and update status. For example, a one-off beta package on a saved stable
+channel keeps checking stable afterward. Use `--channel beta` to subscribe to
+beta updates. Plugins still follow the installed core version where required
+for compatibility.
 
 `--channel extended-stable` is package-only, and installation remains
 foreground-only. OpenClaw reads the public npm `extended-stable` selector,
@@ -366,6 +372,10 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+**Check for updates** controls the existing `update.checkOnStart` setting.
+When it is off, **Automatic updates** is disabled but keeps your saved preference;
+turning checks back on resumes discovery and any enabled automatic-update policy.
+This does not change your separate feature-statistics preference.
 Recorded failures on that page include typed **Check status** and **Retry
 update** actions when the connected Gateway supports them. See [Update
 troubleshooting](/install/update-troubleshooting) for reason codes, guided
@@ -375,6 +385,13 @@ shows whether the checkout is current, ahead, diverged, unavailable, or a
 specific number of commits behind. It also shows exact and relative build,
 verified install, and last-commit times. Existing checkouts show an unknown
 install time until their next verified successful update.
+
+Automatic installation requires a managed Gateway service that can hand off
+the update and restart safely. A Gateway running directly in a terminal can
+still show update hints, but it does not automatically replace its running
+installation. Stop that Gateway, run `openclaw update`, and launch it again
+afterward, or [install a managed service](/cli/gateway#manage-the-gateway-service) for
+unattended updates.
 
 | Channel           | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -401,8 +418,7 @@ fixed target and does not move if upstream `main` advances during the countdown.
 
 Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
-in the restart sentinel and surface after the Gateway returns; direct
-unsupervised failures remain in the running Gateway's logs.
+in the restart sentinel and surface after the Gateway returns.
 
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
@@ -411,6 +427,9 @@ External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information
 sent by the daily check and optional anonymous feature statistics.
+
+Disabling checks also cancels unfinished discovery and its campaign; a late
+response from the previous settings cannot start an update afterward.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

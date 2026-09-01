@@ -13,19 +13,19 @@ import {
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./src/account-selection.js";
 import {
-  hasMatrixSyncCacheStateInStore,
-  openMatrixSyncCacheStoreOptions,
-  readLegacyMatrixSyncCacheState,
-  writeMatrixSyncCacheStateToStore,
-  type MatrixSyncCacheRecord,
-} from "./src/matrix/client/file-sync-store.js";
-import {
   hasMatrixStorageMetaStateInStore,
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
   writeMatrixStorageMetaStateToStore,
   type MatrixStorageMetadata,
 } from "./src/matrix/client/storage.js";
+import {
+  hasMatrixSyncCacheStateInStore,
+  openMatrixSyncCacheStoreOptions,
+  readLegacyMatrixSyncCacheState,
+  writeMatrixSyncCacheStateToStore,
+  type MatrixSyncCacheRecord,
+} from "./src/matrix/client/sync-cache-state.js";
 import {
   MATRIX_CREDENTIALS_MAX_ENTRIES,
   MATRIX_CREDENTIALS_NAMESPACE,

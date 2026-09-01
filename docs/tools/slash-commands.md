@@ -160,6 +160,11 @@ An applicable `commands.allowFrom` policy remains authoritative: a denied
 sender or an explicitly empty list cannot fall back to channel admission.
 Reset access does not grant other command or owner-only authority. Internal
 Gateway callers with explicit scopes still need `operator.admin` to reset.
+When both the request and reply stay in WebChat, rejected `/new` and `/reset`
+commands show a permission denial. A denied command does not perform the
+requested reset or run its follow-up text; normal idle/daily rollover still
+applies. Ask your Gateway administrator to reset the session, or send your
+message without the command.
 
 ## Command list
 
@@ -545,8 +550,8 @@ Unlike a normal message:
 - Does **not** change future session context.
 - Is not written to transcript history.
 
-In the Control UI, `/btw` and `/side` open the session rail and ask its
-read-only companion instead of starting the detached BTW path. The TUI and
+In the Control UI, `/btw` and `/side` open Side chat instead of starting the
+detached BTW path. The TUI and
 external-channel behavior above is unchanged.
 
 See [BTW side questions](/tools/btw) for the full behavior.
@@ -575,7 +580,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
-    - Unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text.
+    - On external channels, unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Reset denials show a permission reply only when the request and reply stay in WebChat.
 
   </Accordion>
   <Accordion title="Argument notes">

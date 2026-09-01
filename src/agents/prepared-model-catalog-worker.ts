@@ -33,6 +33,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  preferBuiltPluginArtifacts: boolean;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
@@ -94,6 +95,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  preferBuiltPluginArtifacts?: boolean;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
 }): string {
   return fingerprintPreparedRuntimeFacts({
@@ -103,6 +105,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
     sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
     authStore: params.authStore,
     providerIds: params.providerIds,
+    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
   });
 }
@@ -110,6 +113,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
 export function createPreparedModelCatalogWorkerInput(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
+  preferBuiltPluginArtifacts?: boolean;
 }): PreparedModelCatalogWorkerInput {
   const source = params.agentFacts.input;
   // Registries and closures stay process-local. The worker reconstructs them from this exact
@@ -148,6 +152,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
       sourceConfigResolutionFacts,
       authStore,
       providerIds,
+      preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     }),
     input,
@@ -156,6 +161,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
     sourceConfigResolutionFacts,
     authStore,
     providerIds,
+    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
     pluginMetadataSnapshot,
   };
 }

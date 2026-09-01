@@ -235,6 +235,9 @@ export function deleteMaterializedSessionStatePlans(
   protectedSessionIds?: ReadonlySet<string>,
   excludedSessionKeys?: ReadonlySet<string>,
 ): SessionLifecycleArchivedTranscript[] {
+  if (plans.length === 0) {
+    return [];
+  }
   const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
   const referencedSessionIds = readReferencedSessionIds(database, excludedSessionKeys);
   for (const sessionId of protectedSessionIds ?? []) {
@@ -323,7 +326,6 @@ export async function projectSessionEntryLifecycleMutation(
   const store = readSessionEntryStore(removalDatabase, {
     allowCanonicalRepair: params.allowCanonicalRepair === true,
   });
-  const removedEntries: Array<{ archiveTranscript: boolean; entry: SessionEntry }> = [];
   const removedKeysToArchive = new Set<string>();
   const changedSessionKeys = new Set<string>();
   const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
@@ -357,13 +359,11 @@ export async function projectSessionEntryLifecycleMutation(
       }
     }
     projectedRemovals.push({
+      // Capture each archive decision before an async builder can change its input.
+      archiveTranscript: removal.archiveRemovedTranscript === true,
       expectedEntry: cloneSessionEntry(entry),
       removal,
       sessionKey,
-    });
-    removedEntries.push({
-      archiveTranscript: removal.archiveRemovedTranscript === true,
-      entry,
     });
     if (removal.archiveRemovedTranscript === true) {
       removedKeysToArchive.add(sessionKey);
@@ -413,6 +413,9 @@ export async function projectSessionEntryLifecycleMutation(
       ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
     });
   }
+  if (projectedRemovals.length === 0) {
+    return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
+  }
   // openclaw-agent-db.ts cache rule: LRU eviction may close idle handles during buildEntry awaits.
   const database = openOpenClawAgentDatabase(databaseOptions);
   const referencedSessionIds = collectProjectedReferencedSessionIds({
@@ -420,7 +423,7 @@ export async function projectSessionEntryLifecycleMutation(
     excludedSessionKeys: changedSessionKeys,
     projectedStore: store,
   });
-  const deletePlans = removedEntries.flatMap(({ archiveTranscript, entry }) =>
+  const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
     planSessionStateAfterEntryRemoval({
       archiveDirectory: params.archiveDirectory,
       archiveTranscript,

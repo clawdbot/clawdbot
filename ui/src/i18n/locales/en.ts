@@ -214,6 +214,9 @@ export const en: TranslationMap = {
   },
   sessionHovercard: {
     ariaLabel: "Session information",
+    agentNotepad: "Agent Notepad",
+    attributionOther: "& {count} other",
+    attributionOthers: "& {count} others",
     moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
@@ -557,6 +560,8 @@ export const en: TranslationMap = {
       policyTitle: "Update policy",
       channel: "Release channel",
       channelDescription: "Choose which OpenClaw release track this Gateway follows.",
+      checkForUpdates: "Check for updates",
+      checkForUpdatesDescription: "Periodically check for new versions and show update notices.",
       automaticUpdates: "Automatic updates",
       automaticUpdatesDescription:
         "Schedule available updates automatically. Dev auto-updates apply to git checkouts.",
@@ -564,6 +569,7 @@ export const en: TranslationMap = {
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
         "Extended stable reports available releases but never installs them automatically.",
+      checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
       commits: "Commits",
@@ -580,8 +586,8 @@ export const en: TranslationMap = {
       updateNowDescription: "Install the available update and restart the Gateway.",
       latestAttempt: "Latest update attempt",
       attemptedAt: "Attempted",
-      attemptTarget: "Target",
-      installedIdentity: "Installed",
+      beforeUpdate: "Before update",
+      afterAttempt: "After attempt",
       attemptInstallKind: "Attempt install type",
       attemptReason: "Reason code",
       failedStep: "Failure details",
@@ -604,9 +610,9 @@ export const en: TranslationMap = {
     verificationFailedWithIdentity:
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
-      "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     outcomeUnknown:
-      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -634,6 +640,8 @@ export const en: TranslationMap = {
       alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
+      managedServiceHandoffUnavailable:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
       managedServiceHandoffFailed:
         "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
@@ -2813,11 +2821,6 @@ export const en: TranslationMap = {
       title: "No AI provider configured",
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
       action: "Connect an AI provider",
-    },
-    connectionFailure: {
-      title: "Configured AI needs attention",
-      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
-      action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
     testing: "Testing — asking the selected model for a quick reply…",
@@ -5285,9 +5288,12 @@ export const en: TranslationMap = {
     togglePasswordVisibility: "Toggle password visibility",
     failure: {
       rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      profileUnavailable: {
+        title: "Profile verification unavailable",
+        stepRetry: "Retry shortly.",
+        stepAdmin:
+          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
       authRequired: {
         title: "Auth required",
         summary:
@@ -5966,6 +5972,8 @@ export const en: TranslationMap = {
     },
     questions: {
       other: "Type your own answer here",
+      answer: "Answer",
+      answerPlaceholder: "{label}",
       submit: "Submit",
       next: "Next",
       back: "Back",
@@ -6061,6 +6069,9 @@ export const en: TranslationMap = {
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       onlyForSession: "Only for this session",
+      selectionTargetSession: "Selection target: This session only",
+      selectionTargetAgent: "Selection target: This agent's default",
+      selectionTargetGlobal: "Selection target: Global default",
       useDefaultModel: "Use default ({model})",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
@@ -6109,14 +6120,13 @@ export const en: TranslationMap = {
       },
     },
     rail: {
-      title: "Session companion",
+      title: "Side chat",
       subtitle: "Ask about this session or its project",
-      expand: "Expand session companion",
-      collapse: "Collapse session companion",
-      close: "Close session companion",
-      show: "Show session companion",
-      moreActions: "More companion actions",
-      clear: "Clear companion session",
+      expand: "Expand side chat",
+      collapse: "Collapse side chat",
+      close: "Close side chat",
+      show: "Show side chat",
+      clear: "Clear side chat",
       pullRequests: "Pull requests",
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",
@@ -6128,16 +6138,16 @@ export const en: TranslationMap = {
         stopped: "Why did it stop?",
         remaining: "What's left?",
       },
-      askLabel: "Ask the session companion",
+      askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
-      askBusy: "The companion is already answering a question.",
+      askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
-      askRateLimited: "The companion reached its question limit. Try again shortly.",
-      askUnavailable: "The companion cannot answer right now.",
+      askRateLimited: "Side chat reached its question limit. Try again shortly.",
+      askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
       asOf: "as of {time}",
       health: {

@@ -1,7 +1,4 @@
-// Migrate Hermes helper module supports config behavior.
 import {
-  applyMigrationConfigPatchItem,
-  applyMigrationManualItem,
   createMigrationConfigPatchItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
@@ -61,24 +58,27 @@ export function buildConfigItems(params: {
   hasMemoryFiles?: boolean;
 }): MigrationItem[] {
   const items: MigrationItem[] = [];
+  const addConfigPatch = (patch: Parameters<typeof createMigrationConfigPatchItem>[0]) => {
+    items.push(
+      createMigrationConfigPatchItem({
+        ...patch,
+        conflict:
+          !params.ctx.overwrite &&
+          hasMigrationConfigPatchConflict(params.ctx.config, patch.path, patch.value),
+      }),
+    );
+  };
   const memory = childRecord(params.config, "memory");
   const memoryProvider = normalizeOptionalString(memory.provider);
 
   if (params.hasMemoryFiles || memoryProvider) {
-    items.push(
-      createMigrationConfigPatchItem({
-        id: "config:memory-plugin-slot",
-        target: "plugins.slots",
-        path: ["plugins", "slots"],
-        value: { memory: "memory-core" },
-        message: "Select the default OpenClaw memory plugin for imported file memory.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "slots"], {
-            memory: true,
-          }),
-      }),
-    );
+    addConfigPatch({
+      id: "config:memory-plugin-slot",
+      target: "plugins.slots",
+      path: ["plugins", "slots"],
+      value: { memory: "memory-core" },
+      message: "Select the default OpenClaw memory plugin for imported file memory.",
+    });
   }
 
   if (memoryProvider === "honcho") {
@@ -88,18 +88,13 @@ export function buildConfigItems(params: {
         config: childRecord(memory, "honcho"),
       },
     };
-    items.push(
-      createMigrationConfigPatchItem({
-        id: "config:memory-plugin:honcho",
-        target: "plugins.entries.honcho",
-        path: ["plugins", "entries"],
-        value,
-        message: "Preserve Hermes Honcho memory settings as a plugin entry for manual activation.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "entries"], value),
-      }),
-    );
+    addConfigPatch({
+      id: "config:memory-plugin:honcho",
+      target: "plugins.entries.honcho",
+      path: ["plugins", "entries"],
+      value,
+      message: "Preserve Hermes Honcho memory settings as a plugin entry for manual activation.",
+    });
     items.push(
       createMigrationManualItem({
         id: "manual:memory-provider:honcho",
@@ -129,19 +124,14 @@ export function buildConfigItems(params: {
   addSelectedModelToProvider(providers, params.modelRef);
   for (const provider of providers) {
     const value = { [provider.id]: providerConfig(provider) };
-    items.push(
-      createMigrationConfigPatchItem({
-        id: `config:model-provider:${sanitizeName(provider.id)}`,
-        target: `models.providers.${provider.id}`,
-        path: ["models", "providers"],
-        value,
-        message: `Import Hermes provider and custom endpoint config for "${provider.id}".`,
-        sensitive: provider.sensitive,
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, ["models", "providers"], value),
-      }),
-    );
+    addConfigPatch({
+      id: `config:model-provider:${sanitizeName(provider.id)}`,
+      target: `models.providers.${provider.id}`,
+      path: ["models", "providers"],
+      value,
+      message: `Import Hermes provider and custom endpoint config for "${provider.id}".`,
+      sensitive: provider.sensitive,
+    });
   }
   items.push(
     ...providerManualItems(params.config, params.env ?? {}, Boolean(params.ctx.includeSecrets)),
@@ -167,19 +157,14 @@ export function buildConfigItems(params: {
       const server = mapMcpServer(rawServer, Boolean(params.ctx.includeSecrets), mcpEnv);
       if (Object.keys(server).length > 0) {
         const value = { [name]: server };
-        items.push(
-          createMigrationConfigPatchItem({
-            id: `config:mcp-server:${sanitizeName(name)}`,
-            target: `mcp.servers.${name}`,
-            path: ["mcp", "servers"],
-            value,
-            message: `Import Hermes MCP server definition "${name}".`,
-            sensitive: importsMcpSensitiveValues(rawServer, Boolean(params.ctx.includeSecrets)),
-            conflict:
-              !params.ctx.overwrite &&
-              hasMigrationConfigPatchConflict(params.ctx.config, ["mcp", "servers"], value),
-          }),
-        );
+        addConfigPatch({
+          id: `config:mcp-server:${sanitizeName(name)}`,
+          target: `mcp.servers.${name}`,
+          path: ["mcp", "servers"],
+          value,
+          message: `Import Hermes MCP server definition "${name}".`,
+          sensitive: importsMcpSensitiveValues(rawServer, Boolean(params.ctx.includeSecrets)),
+        });
       }
       items.push(
         ...mcpManualItems({
@@ -195,30 +180,14 @@ export function buildConfigItems(params: {
 
   for (const [skillKey, value] of Object.entries(mapSkillEntries(params.config))) {
     const configPath = ["skills", "entries", skillKey];
-    items.push(
-      createMigrationConfigPatchItem({
-        id: `config:skill-entry:${sanitizeName(skillKey)}`,
-        target: configPath.join("."),
-        path: configPath,
-        value,
-        message: "Import Hermes skill config values and global disabled state.",
-        conflict:
-          !params.ctx.overwrite &&
-          hasMigrationConfigPatchConflict(params.ctx.config, configPath, value),
-      }),
-    );
+    addConfigPatch({
+      id: `config:skill-entry:${sanitizeName(skillKey)}`,
+      target: configPath.join("."),
+      path: configPath,
+      value,
+      message: "Import Hermes skill config values and global disabled state.",
+    });
   }
 
   return items;
-}
-
-export async function applyConfigItem(
-  ctx: MigrationProviderContext,
-  item: MigrationItem,
-): Promise<MigrationItem> {
-  return applyMigrationConfigPatchItem(ctx, item);
-}
-
-export function applyManualItem(item: MigrationItem): MigrationItem {
-  return applyMigrationManualItem(item);
 }

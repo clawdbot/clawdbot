@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   acquireBuildArtifactLock,
   portableRelativePath,
@@ -20,8 +20,8 @@ const native: string = require(
     "lib/getExePath.js",
   ),
 ).default();
-function fixture(noEmit = false, outputRoot = "dist") {
-  const root = fs.realpathSync(roots.make("native-boundary-cache-"));
+function fixture(noEmit = false, outputRoot = "dist", tempRoots = roots) {
+  const root = fs.realpathSync(tempRoots.make("native-boundary-cache-"));
   const write = (file: string, bytes: string) => {
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -416,78 +416,97 @@ describe("native owner content records", () => {
     },
   );
 
-  it.each([
-    "addition",
-    "deletion",
-    "rename",
-    "higher-priority module",
-    "local package scope",
-    "config",
-    "extends",
-    "lockfile",
-    "generator",
-    "compiler policy",
-    "missing output",
-    "tampered output",
-    "orphan output",
-  ])("rejects %s against a real native record", (mutation) => {
-    const f = fixture();
-    f.write("scripts/run-tsgo.mts", "export {};");
-    f.write("scripts/lib/local-check-runtime.mts", "export const policy = 1;");
-    const record = f.seal(f.prepare());
-    switch (mutation) {
-      case "addition":
-        f.write("src/added.ts", "export const added = 1;");
-        break;
-      case "deletion":
-        fs.rmSync(path.join(f.root, "nested/value.js"));
-        break;
-      case "rename":
-        fs.renameSync(path.join(f.root, "nested/value.js"), path.join(f.root, "nested/renamed.js"));
-        break;
-      case "higher-priority module":
-        f.write("nested/value.ts", "export const value = 'new resolution';");
-        break;
-      case "local package scope":
-        f.write("nested/package.json", '{"type":"commonjs"}');
-        break;
-      case "config":
-        f.write(
-          "tsconfig.json",
-          '{"extends":"./base.json","include":["src/*.ts"],"compilerOptions":{"strict":true}}',
+  describe("native record invalidation", () => {
+    const invalidationRoots = useAutoCleanupTempDirTracker(afterAll);
+    let f: ReturnType<typeof fixture>;
+    let record: ReturnType<ReturnType<typeof fixture>["seal"]>;
+    let baseline: string;
+
+    beforeAll(() => {
+      f = fixture(false, "dist", invalidationRoots);
+      f.write("scripts/run-tsgo.mts", "export {};");
+      f.write("scripts/lib/local-check-runtime.mts", "export const policy = 1;");
+      record = f.seal(f.prepare());
+      baseline = invalidationRoots.make("native-boundary-pristine-");
+      fs.cpSync(f.root, baseline, { recursive: true });
+    });
+
+    it.each([
+      "addition",
+      "deletion",
+      "rename",
+      "higher-priority module",
+      "local package scope",
+      "config",
+      "extends",
+      "lockfile",
+      "generator",
+      "compiler policy",
+      "missing output",
+      "tampered output",
+      "orphan output",
+    ])("rejects %s against a real native record", (mutation) => {
+      // Restore the same native generation before each independent invalidation.
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.cpSync(baseline, f.root, { recursive: true });
+      const matches = () =>
+        new BoundaryInputSnapshot(f.root).matches(
+          record,
+          f.config,
+          f.args,
+          ["dist/src/api.d.ts"],
+          "dist",
         );
-        break;
-      case "extends":
-        f.write("base.json", '{"compilerOptions":{"target":"es2022"}}');
-        break;
-      case "lockfile":
-        f.write("pnpm-lock.yaml", "changed lock");
-        break;
-      case "generator":
-        f.write("scripts/run-tsgo.mts", "export const changed = true;");
-        break;
-      case "compiler policy":
-        f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
-        break;
-      case "missing output":
-        fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
-        break;
-      case "tampered output":
-        f.write("dist/nested/value.d.ts", "truncated");
-        break;
-      case "orphan output":
-        f.write("dist/nested/orphan.d.ts", "export {};");
-        break;
-    }
-    expect(
-      new BoundaryInputSnapshot(f.root).matches(
-        record,
-        f.config,
-        f.args,
-        ["dist/src/api.d.ts"],
-        "dist",
-      ),
-    ).toBe(false);
+      expect(matches(), "pristine native generation").toBe(true);
+      switch (mutation) {
+        case "addition":
+          f.write("src/added.ts", "export const added = 1;");
+          break;
+        case "deletion":
+          fs.rmSync(path.join(f.root, "nested/value.js"));
+          break;
+        case "rename":
+          fs.renameSync(
+            path.join(f.root, "nested/value.js"),
+            path.join(f.root, "nested/renamed.js"),
+          );
+          break;
+        case "higher-priority module":
+          f.write("nested/value.ts", "export const value = 'new resolution';");
+          break;
+        case "local package scope":
+          f.write("nested/package.json", '{"type":"commonjs"}');
+          break;
+        case "config":
+          f.write(
+            "tsconfig.json",
+            '{"extends":"./base.json","include":["src/*.ts"],"compilerOptions":{"strict":true}}',
+          );
+          break;
+        case "extends":
+          f.write("base.json", '{"compilerOptions":{"target":"es2022"}}');
+          break;
+        case "lockfile":
+          f.write("pnpm-lock.yaml", "changed lock");
+          break;
+        case "generator":
+          f.write("scripts/run-tsgo.mts", "export const changed = true;");
+          break;
+        case "compiler policy":
+          f.write("scripts/lib/local-check-runtime.mts", "export const policy = 2;");
+          break;
+        case "missing output":
+          fs.rmSync(path.join(f.root, "dist/nested/value.d.ts"));
+          break;
+        case "tampered output":
+          f.write("dist/nested/value.d.ts", "truncated");
+          break;
+        case "orphan output":
+          f.write("dist/nested/orphan.d.ts", "export {};");
+          break;
+      }
+      expect(matches()).toBe(false);
+    });
   });
 
   it.each(["nested/value.js", "package.json", "base.json", "pnpm-lock.yaml"])(
