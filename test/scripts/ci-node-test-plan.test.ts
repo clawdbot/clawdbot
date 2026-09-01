@@ -403,8 +403,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runnerBackend: "hybrid",
     };
     const fallback = createNodeTestShardBundles(options);
-    // CLI process and Doctor config/state each need a runtime build before their workers.
-    // Keep them separate; other non-dist fallback jobs remain within 150s.
+    // Doctor config/state retains its runtime-build floor. The complete CLI
+    // catalog splits without measurements; its slow gateway file stays alone.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
@@ -416,7 +416,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }))
         .toSorted((a, b) => a.groups.join(",").localeCompare(b.groups.join(","))),
     ).toEqual([
-      { groups: ["agentic-cli-process"], pretestBuildMode: "runtime", predictedSeconds: 210 },
+      {
+        groups: ["agentic-cli-process-hosted-1"],
+        pretestBuildMode: undefined,
+        predictedSeconds: 200,
+      },
       {
         groups: ["agentic-commands-doctor-config-state"],
         pretestBuildMode: "runtime",
@@ -597,17 +601,54 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(selected, largeFile).toHaveLength(1);
           expect(selected[0]?.runner, largeFile).toBe(DEFAULT_NODE_TEST_RUNNER);
         }
+        const cliProcessJobs = plan.filter((shard) =>
+          shard.groups.some((group) =>
+            group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
+          ),
+        );
+        expect(cliProcessJobs, profile.name).toHaveLength(5);
+        const gatewayJob = cliProcessJobs.find((shard) =>
+          shard.groups.some((group) =>
+            group.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts"),
+          ),
+        );
+        expect(gatewayJob?.groups, profile.name).toEqual([
+          expect.objectContaining({
+            includePatterns: ["src/cli/gateway-backed-exit.process.test.ts"],
+          }),
+        ]);
+        expect(cliProcessJobs.filter((shard) => shard.pretestBuildMode)).toEqual([
+          expect.objectContaining({
+            pretestBuildMode: "runtime",
+            groups: expect.arrayContaining([
+              expect.objectContaining({
+                pretestBuildMode: "runtime",
+                includePatterns: expect.arrayContaining([
+                  "src/cli/update-dry-run-state.process.test.ts",
+                ]),
+              }),
+            ]),
+          }),
+        ]);
+        for (const shard of cliProcessJobs) {
+          // The indivisible gateway file takes 200s. Hosted runtime preparation
+          // alone costs 160s; other groups retain the 150s admission budget.
+          const budget =
+            shard === gatewayJob ||
+            (profile.name === "GitHub-hosted" && shard.pretestBuildMode === "runtime")
+              ? 200
+              : 150;
+          expect(shard.predictedSeconds, profile.name).toBeLessThanOrEqual(budget);
+        }
         expect(plan.every((shard) => shard.groups.length > 0 && shard.groups.length <= 10)).toBe(
           true,
         );
         expect(plan.every((shard) => Number.isFinite(shard.predictedSeconds))).toBe(true);
         const names = plan.flatMap((shard) => shard.groups.map((group) => group.shard_name));
         expect(new Set(names).size).toBe(names.length);
-        if (profile.name !== "Blacksmith") {
-          expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(
-            profile.name === "GitHub-hosted" ? 112 : 96,
-          );
-        }
+        expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(
+          profile.name === "GitHub-hosted" ? 112 : 96,
+        );
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
@@ -708,7 +749,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(compactOwnerNames(hybridPullRequestCompact)).toEqual(
       compactOwnerNames(githubPullRequestCompact),
     );
-    for (const plan of [pullRequestCompact, githubPullRequestCompact, hybridPullRequestCompact]) {
+    for (const plan of [
+      compact,
+      pullRequestCompact,
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
       for (const owner of base) {
         const groups = plan
           .flatMap((shard) => shard.groups)
@@ -817,18 +865,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(distJobs).toHaveLength(1);
     expect(largeJobs.every((shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(true);
     expect(smallJobs.every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER)).toBe(true);
-    const cliProcessJobs = pullRequestCompact.filter((shard) =>
-      shard.groups.some((group) =>
-        group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
-      ),
-    );
-    expect(cliProcessJobs).toHaveLength(2);
-    expect(cliProcessJobs.every((shard) => (shard.predictedSeconds ?? Infinity) <= 200)).toBe(true);
-    expect(cliProcessJobs.filter((shard) => shard.pretestBuildMode === "runtime")).toHaveLength(1);
     for (const shard of [
       ...compact,
       ...pullRequestCompact,
+      ...githubCompact,
       ...githubPullRequestCompact,
+      ...hybridCompact,
       ...hybridPullRequestCompact,
     ]) {
       for (const group of shard.groups) {

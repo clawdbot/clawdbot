@@ -72,13 +72,22 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/acp-cli-exit.process.test.ts", 6],
   ["src/cli/cli-process-child.test-helpers.test.ts", 2],
   ["src/cli/cron-output.process.test.ts", 23],
-  ["src/cli/gateway-backed-exit.process.test.ts", 105],
+  // The cold source proof in run 33492093127 took 198.88s; keep it alone.
+  ["src/cli/gateway-backed-exit.process.test.ts", 200],
   ["src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts", 4],
   ["src/cli/gateway-cli/shutdown-hard-exit.process.test.ts", 1],
   ["src/cli/help-exit.process.test.ts", 27],
   ["src/cli/hooks-cli.process.test.ts", 12],
   ["src/cli/mcp-cli.import-boundary.test.ts", 4],
   ["src/cli/plugins-authoring.process.test.ts", 10],
+  // Body sums from run 33492093127, rounded up with startup/import allowance.
+  ["src/cli/claws-authoring-state.process.test.ts", 6],
+  ["src/cli/cold-command-plugin-imports.process.test.ts", 20],
+  ["src/cli/doctor-output.process.test.ts", 90],
+  ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],
+  ["src/cli/one-shot-exit.test.ts", 25],
+  ["src/cli/update-cli/update-command-lease.test.ts", 86],
+  ["src/cli/update-finalization-output.process.test.ts", 25],
   // The few CI-derived slow-file hints needed for the three new stripes are
   // rounded checkmark durations from canonical-main run 31691151297.
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
