@@ -568,14 +568,14 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       upserts: [
         {
           sessionKey: isolatedSessionKey,
-          buildEntry: ({ store }) => {
+          buildEntry: ({ currentEntry }) => {
             const cronSession = resolveCronSession({
               cfg,
               sessionKey: isolatedSessionKey,
               agentId,
               nowMs: startedAt,
               forceNew: true,
-              store,
+              store: currentEntry ? { [isolatedSessionKey]: currentEntry } : {},
             });
             const nextEntry = {
               ...cronSession.sessionEntry,

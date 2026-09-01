@@ -1,4 +1,5 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
@@ -13,6 +14,10 @@ import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+
+// Gateway shutdown preparation and CLI command imports load this before turns.
+// The process-owned sweep must not retain its first requesting turn.
+const runInMcpManagerContext = AsyncLocalStorage.snapshot();
 
 type ManagerCreateInFlight = {
   promise: Promise<SessionMcpRuntime>;
@@ -279,7 +284,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
     if (!store.enableIdleSweepTimer || store.idleSweepIntervalMs <= 0 || store.idleSweepTimer) {
       return;
     }
-    store.idleSweepTimer = setInterval(queueIdleSweep, store.idleSweepIntervalMs);
+    store.idleSweepTimer = runInMcpManagerContext(() =>
+      setInterval(queueIdleSweep, store.idleSweepIntervalMs),
+    );
     store.idleSweepTimer.unref?.();
   };
 

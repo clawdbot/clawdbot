@@ -1,4 +1,5 @@
 // Skill runtime refresh helpers reload active skill state and notify subscribers.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +54,9 @@ type FileStabilitySnapshot = {
 };
 
 const log = createSubsystemLogger("gateway/skills");
+// Gateway startup imports this owner before serving turns. Shared watcher handles,
+// including later rebuilds, must inherit that lifetime rather than the triggering turn.
+const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 const GROUPED_SKILLS_WATCH_DEPTH = 6;
 const CONFIGURED_ROOT_WATCH_DEPTH = 2;
 const MAX_SYMLINK_WATCH_TARGETS_PER_ROOT = 100;
@@ -503,23 +507,25 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   // Chokidar's missing-root fallback retains only the final basename, so it
   // misses creation through multiple absent parents. Watch the existing prefix
   // and restrict traversal to the logical root and its ancestor chain.
-  const watcher = chokidar.watch(target.watchRoot, {
-    ignoreInitial: true,
-    followSymlinks: false,
-    usePolling,
-    // Skill root precedence and grouped discovery use the same bounded depth,
-    // so watcher invalidation must observe that whole decision surface.
-    depth:
-      target.depth +
-      path.relative(target.watchRoot, target.path).split(path.sep).filter(Boolean).length,
-    awaitWriteFinish: {
-      stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS,
-      pollInterval: 100,
-    },
-    ignored: (watchPath, stats) =>
-      (!isPathInside(target.path, watchPath) && !isPathInside(watchPath, target.path)) ||
-      shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
-  });
+  const watcher = runInSkillsWatcherContext(() =>
+    chokidar.watch(target.watchRoot, {
+      ignoreInitial: true,
+      followSymlinks: false,
+      usePolling,
+      // Skill root precedence and grouped discovery use the same bounded depth,
+      // so watcher invalidation must observe that whole decision surface.
+      depth:
+        target.depth +
+        path.relative(target.watchRoot, target.path).split(path.sep).filter(Boolean).length,
+      awaitWriteFinish: {
+        stabilityThreshold: SKILLS_WATCH_DEBOUNCE_MS,
+        pollInterval: 100,
+      },
+      ignored: (watchPath, stats) =>
+        (!isPathInside(target.path, watchPath) && !isPathInside(watchPath, target.path)) ||
+        shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
+    }),
+  );
 
   const state: SkillsPathWatchState = {
     watcher,
