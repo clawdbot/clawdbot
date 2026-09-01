@@ -196,18 +196,19 @@ class ComposerDictationSession {
 
   async finish(waitForTerminal = false): Promise<string> {
     await this.stopCapture();
-    await this.startPromise?.catch((error: unknown) => {
+    const startPromise = this.startPromise?.catch((error: unknown) => {
       if (!isAbortError(error)) {
         this.reportFailure(messageFromError(error));
       }
     });
-    await this.appendChain;
     if (waitForTerminal) {
-      // Start the close RPC independently so a slow or disconnected Gateway
-      // cannot hold the composer; the bounded drain timeout governs finalization.
+      // The late-final wait and close start independently of create/audio append,
+      // so a stalled create or append request cannot prevent the bounded Stop.
       void this.closeRemote();
       await this.waitForCloseEvent();
     } else {
+      await startPromise;
+      await this.appendChain;
       await this.closeRemote();
     }
     this.unsubscribe?.();
@@ -390,6 +391,8 @@ export class ComposerDictationController {
   private pointerBounds: DOMRect | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private session: ComposerDictationSession | null = null;
+  /** Owns a drained late final; a newer session retires it. */
+  private pendingFinalOwner: unknown = null;
   private suppressClick = false;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -616,6 +619,8 @@ export class ComposerDictationController {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     this.setPhase("connecting");
+    // A newer session retires any pending late final from a drained session.
+    this.pendingFinalOwner = null;
     const session = new ComposerDictationSession(client, {
       onError: (message, preservesText) => {
         if (this.session !== session) {
@@ -679,11 +684,13 @@ export class ComposerDictationController {
     // for the bounded final drain and commit the transcript exactly once.
     this.session = null;
     this.reset();
+    // Own the pending late final; a newer session retires this owner, so a
+    // drained stale final can never overwrite it.
+    const pendingOwner = {};
+    this.pendingFinalOwner = pendingOwner;
     const finalTranscript = await session.finish(true).catch(() => "");
-    // A new session may have started while the old one drained; only commit the
-    // late final if this controller still owns no newer session.
     const finalCommitted = Boolean(
-      finalTranscript && wasActive && !this.disposed && this.session === null,
+      finalTranscript && wasActive && !this.disposed && this.pendingFinalOwner === pendingOwner,
     );
     if (finalCommitted) {
       this.options.onCommit(finalTranscript);
