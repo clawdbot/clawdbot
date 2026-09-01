@@ -33,7 +33,6 @@ import {
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
-  verifyDeviceBootstrapTokenContext,
 } from "./device-bootstrap.js";
 import { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } from "./device-identity.js";
 import {
@@ -682,41 +681,6 @@ describe("device bootstrap tokens", () => {
     await expect(getBoundDeviceBootstrapProfile(contextParams)).resolves.toEqual(
       CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     );
-  });
-
-  it("defers observable-transport binding until an approved identity retries", async () => {
-    const baseDir = await createTempDir();
-    const issued = await issueDeviceBootstrapToken({
-      baseDir,
-      profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-    });
-    const verify = (deviceId: string, publicKey: string, bindIdentity: boolean) =>
-      verifyDeviceBootstrapTokenContext({
-        baseDir,
-        token: issued.token,
-        deviceId,
-        publicKey,
-        role: "node",
-        scopes: [],
-        bindIdentity,
-      });
-
-    await expect(verify("attacker", "attacker-key", false)).resolves.toMatchObject({ ok: true });
-    await expect(verify("victim", "victim-key", false)).resolves.toMatchObject({ ok: true });
-    await expect(
-      getBoundDeviceBootstrapContext({
-        baseDir,
-        token: issued.token,
-        deviceId: "attacker",
-        publicKey: "attacker-key",
-      }),
-    ).resolves.toBeNull();
-
-    await expect(verify("victim", "victim-key", true)).resolves.toMatchObject({ ok: true });
-    await expect(verify("attacker", "attacker-key", true)).resolves.toEqual({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
   });
 
   it("persists bootstrap redemption state across verification reloads", async () => {

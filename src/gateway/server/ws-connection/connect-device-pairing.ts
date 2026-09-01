@@ -159,7 +159,7 @@ export async function authorizeGatewayConnectDevice(
           requestedScopes,
           allowedScopes: resolvePairedAccessScopes(pairedCandidate),
         });
-      const plan = await resolvePairingApprovalPlan({
+      const plan = resolvePairingApprovalPlan({
         reason,
         existingPairedDevice,
         state,

@@ -89,6 +89,7 @@ export function isGatewayIngressConfidential(params: {
     case "direct-remote":
       return socketEncrypted;
   }
+  return false;
 }
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
