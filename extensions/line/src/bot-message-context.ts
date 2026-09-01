@@ -45,7 +45,6 @@ type StickerEventMessage = webhook.StickerMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
-/** Mention facts an event's admission resolved, as the turn context records them. */
 export type LineInboundMentionAccess = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
@@ -60,7 +59,6 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
@@ -510,14 +508,12 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     messageSid: messageId,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
@@ -548,7 +544,6 @@ export async function buildLinePostbackContext(params: {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
@@ -596,14 +591,12 @@ export async function buildLinePostbackContext(params: {
     messageSid,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId: messageSid,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: messageSid,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },

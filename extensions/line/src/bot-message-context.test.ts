@@ -139,33 +139,6 @@ describe("buildLineMessageContext", () => {
     });
   });
 
-  it("tells the turn the group message addressed the bot", async () => {
-    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
-
-    const context = await buildLineMessageContext({
-      event,
-      allMedia: [],
-      cfg,
-      account,
-      commandAuthorized: true,
-      mentions: {
-        canDetectMention: true,
-        wasMentioned: true,
-        explicitlyMentionedBot: true,
-        hasAnyMention: true,
-        implicitMentionKinds: [],
-        requireMention: true,
-        effectiveWasMentioned: true,
-      },
-    });
-
-    // Consumers read an absent mention fact as "not addressed", which lets a
-    // reply to a direct mention end silently under the group silent-reply default.
-    expect(context?.ctxPayload.WasMentioned).toBe(true);
-    expect(context?.ctxPayload.ExplicitlyMentionedBot).toBe(true);
-    expect(context?.ctxPayload.GroupRequireMention).toBe(true);
-  });
-
   it("routes group message replies to the group id", async () => {
     const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
 

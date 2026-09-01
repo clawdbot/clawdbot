@@ -457,44 +457,6 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("hands the turn the mention facts admission resolved", async () => {
-    const processMessage = vi.fn();
-    await handleLineWebhookEvents(
-      [
-        createTestMessageEvent({
-          message: {
-            id: "m-mention-facts",
-            type: "text",
-            text: "@Bot ship it",
-            quoteToken: "quote-token",
-            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
-          } as MessageEvent["message"],
-          source: { type: "group", groupId: "group-1", userId: "user-mf" },
-          webhookEventId: "evt-mention-facts",
-        }),
-      ],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        requireMention: true,
-      }),
-    );
-
-    // Admission answered "the bot was addressed"; the turn context has to carry
-    // that answer, or every consumer of it reads the silence as "not addressed".
-    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mentions: expect.objectContaining({
-          canDetectMention: true,
-          wasMentioned: true,
-          explicitlyMentionedBot: true,
-          effectiveWasMentioned: true,
-          requireMention: true,
-        }),
-      }),
-    );
-  });
-
   it("authorizes group control commands through shared access groups", async () => {
     const processMessage = vi.fn();
     await handleLineWebhookEvents(

@@ -197,18 +197,9 @@ async function resolveLineEventAdmission(
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
-  // LINE marks mentions only on group text messages, so admission resolves the
-  // mention facts exactly there and records the same ones on the turn context.
-  const resolvesLineMentions = isGroup && event.type === "message";
   const mentionFacts = (() => {
-    if (!resolvesLineMentions || event.type !== "message") {
-      return {
-        canDetectMention: false,
-        wasMentioned: false,
-        explicitlyMentionedBot: false,
-        hasAnyMention: false,
-        implicitMentionKinds: [],
-      };
+    if (!isGroup || event.type !== "message") {
+      return undefined;
     }
     const peerId = groupId ?? roomId ?? userId ?? "unknown";
     const { agentId } = resolveAgentRoute({
@@ -254,7 +245,7 @@ async function resolveLineEventAdmission(
       ...(isGroup && groupConfig?.enabled === false
         ? { route: { id: "line:group-config", enabled: false } }
         : {}),
-      mentionFacts: resolvesLineMentions ? mentionFacts : undefined,
+      mentionFacts,
       event: { kind: event.type === "join" ? "system" : event.type },
       dmPolicy,
       groupPolicy,
@@ -302,12 +293,14 @@ async function resolveLineEventAdmission(
       access.ingress.admission === "observe" ||
       access.ingress.admission === "skip")
   ) {
-    // The turn answering this event reads "was the bot addressed" from its own
-    // context. Carry admission's answer there: consumers read the missing fact
-    // as "not addressed", which lets a reply to a mention end silently.
-    const wasMentioned = access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned;
-    const mentions: LineInboundMentionAccess | undefined = resolvesLineMentions
-      ? { ...mentionFacts, wasMentioned, effectiveWasMentioned: wasMentioned, requireMention }
+    // Quotes and authorized commands can address the bot without a native LINE
+    // mention. Preserve that effective result separately from explicit evidence.
+    const mentions = mentionFacts
+      ? {
+          ...mentionFacts,
+          wasMentioned: access.activationAccess.effectiveWasMentioned ?? mentionFacts.wasMentioned,
+          requireMention,
+        }
       : undefined;
     return { access, resolveBoundAccess: resolveAccess, mentions };
   }
