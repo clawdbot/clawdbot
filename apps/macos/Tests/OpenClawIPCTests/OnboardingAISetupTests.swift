@@ -777,13 +777,27 @@ private func setupAdmissionBusyResponse(id: String, confirmed: Bool = true) -> D
 @MainActor
 private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
-    colorScheme: ColorScheme = .light) async -> (labels: [String], buttons: [String: Bool], size: NSSize)
+    colorScheme: ColorScheme = .light) -> (labels: [String], buttons: [String: Bool], size: NSSize)
 {
-    let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model).environment(\.colorScheme, colorScheme))
+    var appeared = false
+    let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
+        .environment(\.colorScheme, colorScheme)
+        .onAppear { appeared = true })
     hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
+    // SwiftUI needs a window-backed hierarchy to expose the rendered accessibility tree.
+    let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = hosting
+    defer {
+        window.orderOut(nil)
+        window.contentView = nil
+        window.close()
+    }
+    window.orderFront(nil)
     hosting.layoutSubtreeIfNeeded()
-    await settleQueuedAISetupTasks()
+    window.displayIfNeeded()
     hosting.layoutSubtreeIfNeeded()
+    #expect(appeared)
     var labels: [String] = []
     var buttons: [String: Bool] = [:]
     var visited = Set<ObjectIdentifier>()
@@ -802,6 +816,7 @@ private func inspectAISetupSheet(
         }
     }
     visit(hosting)
+    #expect(buttons["Cancel"] != nil)
     return (labels, buttons, hosting.fittingSize)
 }
 
@@ -1069,7 +1084,7 @@ struct OnboardingAISetupTests {
         #expect(model.activeAuthOption?.label == (manual ? "OpenAI API key" : "Codex CLI"))
         #expect(model.activeAuthOption?.brandId == "openai")
         #expect(model.activeAuthOption?.icon == (manual ? "fixture-key-icon" : "fixture-candidate-icon"))
-        let reviewSheet = await inspectAISetupSheet(model)
+        let reviewSheet = inspectAISetupSheet(model)
         #expect(reviewSheet.labels.contains(reviewMessage))
         #expect(reviewSheet.size.height <= 500)
         if manual { #expect(reviewSheet.size.height > 260) }
@@ -1088,7 +1103,7 @@ struct OnboardingAISetupTests {
         if decision == "error-replaced" {
             markPending(defaults, owner: replacementOwner)
         }
-        let consentSheet = await inspectAISetupSheet(model)
+        let consentSheet = inspectAISetupSheet(model)
         #expect(consentSheet.labels.contains("Confirm"))
         #expect(consentSheet.buttons["Submit"] == true)
         if decision == "retry-cancel" {
@@ -1098,7 +1113,7 @@ struct OnboardingAISetupTests {
             }
             #expect(model.authError != nil)
             #expect(model.authBusy)
-            let retrySheet = await inspectAISetupSheet(model)
+            let retrySheet = inspectAISetupSheet(model)
             #expect(retrySheet.buttons["Cancel"] == true)
             #expect(!retrySheet.labels.contains("Requesting cancellation…"))
             #expect(retrySheet.labels.contains("Cancellation not confirmed"))
@@ -1255,7 +1270,7 @@ struct OnboardingAISetupTests {
         model.cancelProviderAuth()
         if !terminalReply, !confirmedCancellation {
             await cancellation.waitUntilStarted()
-            let pendingSheet = await inspectAISetupSheet(model)
+            let pendingSheet = inspectAISetupSheet(model)
             #expect(pendingSheet.labels.contains("Requesting cancellation…"))
             #expect(pendingSheet.buttons["Cancel"] == false)
             #expect(pendingSheet.buttons["Submit"] == nil)
@@ -1427,7 +1442,7 @@ struct OnboardingAISetupTests {
 
         #expect(model.selectedKind == "codex-cli")
         #expect(model.activeAuthOption?.label == "Codex CLI")
-        let startingSheet = await inspectAISetupSheet(model)
+        let startingSheet = inspectAISetupSheet(model)
         #expect(startingSheet.labels.contains("Preparing your AI connection…"))
         #expect(startingSheet.buttons["Submit"] == nil)
         #expect(startingSheet.size.width == 500)
@@ -1527,7 +1542,7 @@ struct OnboardingAISetupTests {
         #expect(model.isPreparingModel)
         #expect(model.authStep.map(wizardStepType) == "progress")
         #expect(model.authStep?.message == "Downloading model: 80%")
-        let progressSheet = await inspectAISetupSheet(model, colorScheme: colorScheme)
+        let progressSheet = inspectAISetupSheet(model, colorScheme: colorScheme)
         #expect(progressSheet.labels.contains("Downloading model: 80%"))
         #expect(progressSheet.labels.contains(option.label))
         #expect(progressSheet.buttons["Submit"] == nil)

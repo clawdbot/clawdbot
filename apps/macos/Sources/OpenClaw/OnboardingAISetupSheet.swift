@@ -15,7 +15,7 @@ struct OnboardingAISetupSheet: View {
                     brandCandidates: [self.model.activeAuthOption?.brandId, self.model.activeAuthOption?.id],
                     fallbackSymbol: "key.fill")
                     .accessibilityHidden(true)
-                Text(self.model.activeAuthOption?.label ?? "Provider setup")
+                Text(self.model.activeAuthOption?.label ?? String(localized: "Provider setup"))
                     .font(.title3.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -60,7 +60,7 @@ struct OnboardingAISetupSheet: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             if self.model.providerAuthCancellation == .requesting {
-                self.activity("Requesting cancellation…")
+                self.activity(String(localized: "Requesting cancellation…"))
             } else if let step = self.model.authStep {
                 let deviceCode = parseWizardDeviceCode(step.devicecode)
                 if deviceCode == nil,
@@ -72,7 +72,7 @@ struct OnboardingAISetupSheet: View {
                 if let deviceCode {
                     self.deviceCodeStep(deviceCode)
                 } else if wizardStepExecutor(step) == "gateway" {
-                    self.activity(step.message ?? "Working…")
+                    self.activity(step.message ?? String(localized: "Working…"))
                 } else if let message = step.message, !message.isEmpty {
                     Text(message)
                         .textSelection(.enabled)
@@ -89,21 +89,21 @@ struct OnboardingAISetupSheet: View {
                 }
             } else if self.model.authBusy {
                 self.activity(self.model.providerWizardKind == .activation
-                    ? "Preparing your AI connection…"
+                    ? String(localized: "Preparing your AI connection…")
                     : self.model.isPreparingModel
-                    ? "Starting local model setup…"
-                    : "Starting secure sign-in…")
+                    ? String(localized: "Starting local model setup…")
+                    : String(localized: "Starting secure sign-in…"))
             }
 
             if let error = self.model.authError {
                 OnboardingErrorCard(
                     title: self.model.providerAuthCancellation == .unconfirmed
-                        ? "Cancellation not confirmed"
+                        ? String(localized: "Cancellation not confirmed")
                         : self.model.providerWizardKind == .activation
-                        ? "AI setup didn’t complete"
+                        ? String(localized: "AI setup didn’t complete")
                         : self.model.isPreparingModel
-                        ? "Model setup didn’t complete"
-                        : "Sign-in didn’t complete",
+                        ? String(localized: "Model setup didn’t complete")
+                        : String(localized: "Sign-in didn’t complete"),
                     message: error.summary,
                     details: error.detail,
                     docsSlug: "concepts/model-providers")
@@ -131,7 +131,8 @@ struct OnboardingAISetupSheet: View {
         if parseWizardDeviceCode(step.devicecode) != nil {
             return String(localized: "I've signed in")
         }
-        return ["text", "select", "confirm"].contains(wizardStepType(step)) ? "Submit" : "Continue"
+        return ["text", "select", "confirm"].contains(wizardStepType(step))
+            ? String(localized: "Submit") : String(localized: "Continue")
     }
 
     private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
@@ -139,7 +140,8 @@ struct OnboardingAISetupSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Finish in your browser")
                     .font(.headline)
-                Text(deviceCode.message ?? "Enter this one-time code on the provider's sign-in page.")
+                Text(deviceCode
+                    .message ?? String(localized: "Enter this one-time code on the provider's sign-in page."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -162,7 +164,7 @@ struct OnboardingAISetupSheet: View {
 
             HStack(spacing: 12) {
                 if let minutes = deviceCode.expiresInMinutes {
-                    Label("Expires in \(minutes) minutes", systemImage: "clock")
+                    Label(String(format: String(localized: "Expires in %lld minutes"), minutes), systemImage: "clock")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -190,10 +192,10 @@ struct OnboardingAISetupSheet: View {
         switch wizardStepType(step) {
         case "text":
             if step.sensitive == true {
-                SecureField(step.placeholder ?? "Value", text: self.$model.authText)
+                SecureField(step.placeholder ?? String(localized: "Value"), text: self.$model.authText)
                     .textFieldStyle(.roundedBorder)
             } else {
-                TextField(step.placeholder ?? "Value", text: self.$model.authText)
+                TextField(step.placeholder ?? String(localized: "Value"), text: self.$model.authText)
                     .textFieldStyle(.roundedBorder)
             }
         case "select":
