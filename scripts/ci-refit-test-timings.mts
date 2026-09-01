@@ -140,10 +140,10 @@ async function main() {
     : [];
   const runs: CiTimingRun[] = [];
   const sampledRuns = [
-    ...listed.slice(0, count).map((run) => ({ ...run, source: "ci" as const })),
-    ...releaseRuns.map((run) => ({ ...run, source: "release" as const })),
+    ...listed.slice(0, count).map((run) => ({ run, source: "ci" as const })),
+    ...releaseRuns.map((run) => ({ run, source: "release" as const })),
   ];
-  for (const run of sampledRuns) {
+  for (const { run, source } of sampledRuns) {
     const logs: CiTimingRun["logs"] = [];
     let seenJobs = 0;
     for (let page = 1; page <= 25; page += 1) {
@@ -162,7 +162,7 @@ async function main() {
           continue;
         }
         const kind =
-          run.source === "release"
+          source === "release"
             ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
               ? "repoE2e"
               : undefined
