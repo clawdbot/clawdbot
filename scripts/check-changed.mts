@@ -131,6 +131,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
 ]);
+const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
@@ -162,11 +163,14 @@ function hasAndroidVersionSyncPath(paths: string[]) {
 }
 
 function hasMacosAppCiPath(paths: string[]) {
-  // Native-source policy stays local; script and test owners share the CI selector.
+  // The metadata test has its own command; production edits still need native app proof.
   // Swift test-target sources do not feed the packaged app; native CI still covers them.
   return paths.some((changedPath) => {
     const normalized = normalizeChangedPath(changedPath);
-    return MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized);
+    return (
+      normalized !== SWIFT_BUILD_CACHE_METADATA_TEST_PATH &&
+      (MACOS_APP_CI_PATH_RE.test(normalized) || isMacosToolingPath(normalized))
+    );
   });
 }
 
@@ -679,6 +683,19 @@ export function createChangedCheckPlan(
     add(
       "appcast owner tests",
       ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      baseEnv,
+    );
+  }
+  if (
+    result.paths.some(
+      (changedPath) =>
+        changedPath === "scripts/swift-build-cache-metadata.py" ||
+        changedPath === SWIFT_BUILD_CACHE_METADATA_TEST_PATH,
+    )
+  ) {
+    add(
+      "Swift build cache metadata tests",
+      ["test:serial", SWIFT_BUILD_CACHE_METADATA_TEST_PATH],
       baseEnv,
     );
   }
