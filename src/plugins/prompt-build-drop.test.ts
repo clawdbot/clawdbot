@@ -113,6 +113,17 @@ describe("prompt-build drop marker", () => {
     expect(marker).not.toContain("more");
   });
 
+  it("counts distinct raw plugin ids that collapse to the same safe label", () => {
+    const sharedPrefix = "p".repeat(64);
+    const marker = buildPromptBuildDropResult([
+      { pluginId: `${sharedPrefix}-one`, reason: "handler-failed" },
+      { pluginId: `${sharedPrefix}-two`, reason: "handler-failed" },
+    ])?.appendContext;
+
+    expect(marker?.match(new RegExp(`${sharedPrefix} \\(handler-failed\\)`, "gu"))).toHaveLength(1);
+    expect(marker).toContain("+1 more");
+  });
+
   it("counts multi-byte plugin ids against the byte cap", () => {
     const drops = Array.from({ length: 20 }, (_unused, index) => ({
       pluginId: `${"日".repeat(60)}${index}`,

@@ -215,6 +215,13 @@ describe("model override pipeline wiring", () => {
       };
       const runner = createHookRunner(registry, { logger });
       let nested: PluginHookBeforePromptBuildResult | undefined;
+      registry.typedHooks.push({
+        pluginId: "authority-only-plugin",
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "authorized" }),
+        requiresToolAuthority: true,
+        source: "test",
+      });
       addBeforePromptBuildHook(registry, "nesting-plugin", async () => {
         // A plugin that starts an agent run from inside its own handler: the
         // nested prompt build hits the re-entrancy guard.
@@ -227,6 +234,7 @@ describe("model override pipeline wiring", () => {
       expect(outer?.prependContext).toBe("outer");
       expect(outer?.appendContext).toBeUndefined();
       expect(nested?.appendContext).toContain("nesting-plugin (nested-prompt-build)");
+      expect(nested?.appendContext).not.toContain("authority-only-plugin");
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining("[hooks] before_prompt_build skipped for a nested prompt build"),
       );

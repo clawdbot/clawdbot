@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createTestAdmittedRunContext } from "../src/agents/admitted-run-context.test-support.js";
 import { buildDefaultTestCliBackend } from "../src/agents/cli-runner.test-helpers.js";
 import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
-import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 /**
  * Real-runtime proof for openclaw-beads-201: "Runtime can still drop the
  * plans_and_tasks contribution without the agent knowing."
@@ -32,7 +33,7 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *          fully assembled prompt string, so scenarios driven through it prove
  *          the marker reaches the text handed to the model.
  *       2. `resolvePromptBuildHookResult`
- *          (src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts) —
+ *          (src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts) —
  *          the embedded runner's call site; attempt-prompt-assembly.ts appends
  *          `appendContext` to the prompt verbatim
  *          (`effectivePrompt = ...appendContext`), so asserting on
@@ -282,6 +283,7 @@ async function runCliPromptBuild(
   setActivePluginRegistry(runtimeRegistry);
   initializeGlobalHookRunner(buildRegistry(specs));
 
+  const runId = `proof-cli-${specs.length}${options.failBeforeDispatch ? "-predispatch" : ""}`;
   const runParams: Record<string, unknown> = {
     sessionId: "proof-session",
     sessionFile,
@@ -290,29 +292,29 @@ async function runCliPromptBuild(
     provider: "test-cli",
     model: "test-model",
     timeoutMs: 1_000,
-    runId: `proof-cli-${specs.length}${options.failBeforeDispatch ? "-predispatch" : ""}`,
+    runId,
+    admittedRunContext: createTestAdmittedRunContext(runId),
     config: {},
   };
   if (options.failBeforeDispatch) {
     // The CLI catch spans EVERY pre-dispatch preparation step, not just the
     // dispatcher, so the proof has to make one of those steps fail. It does that
-    // through real production code and real input: the hook context is assembled
-    // by `buildAgentHookContextChannelFields(params)`, which reads
-    // `params.currentChannelId` while resolving the channel id — inside the same
-    // try, strictly before `resolvePromptBuildHookResult` dispatches anything.
-    // (`loadCliSessionHistoryMessages`, ClawSweeper's suggested trigger, cannot
-    // be used here: it swallows its own IO errors and returns []. The unit
-    // regression in prepare.test.ts covers that trigger by stubbing it; this
-    // proof keeps every function real and moves the throw one step later. Same
-    // catch, same boundary.)
+    // through real production code and real input: the lazy history loader reads
+    // `params.sessionTarget` inside the same try, strictly before
+    // `resolvePromptBuildHookResult` dispatches anything.
     // Non-enumerable so the failure lands exactly once, at the hook-context
     // read inside the try. `prepareCliRunContext` re-spreads `params` in later
     // stages; an enumerable throwing getter would fire again there and mask
     // what this scenario is measuring.
-    Object.defineProperty(runParams, "currentChannelId", {
+    let firstSessionTargetRead = true;
+    Object.defineProperty(runParams, "sessionTarget", {
       enumerable: false,
-      get(): string {
-        throw new Error(`pre-dispatch preparation failed: ${SECRET}`);
+      get(): undefined {
+        if (firstSessionTargetRead) {
+          firstSessionTargetRead = false;
+          throw new Error(`pre-dispatch preparation failed: ${SECRET}`);
+        }
+        return undefined;
       },
     });
   }

@@ -1079,7 +1079,11 @@ export function createHookRunner(
       // the plugins whose contributions this prompt is missing rather than
       // returning a prompt that reads as if they had nothing to add.
       const skippedPluginIds = [
-        ...new Set(getHooksForName(registry, "before_prompt_build").map((hook) => hook.pluginId)),
+        ...new Set(
+          getHooksForName(registry, "before_prompt_build")
+            .filter((hook) => hook.requiresToolAuthority !== true)
+            .map((hook) => hook.pluginId),
+        ),
       ];
       if (skippedPluginIds.length === 0) {
         return undefined;
@@ -1158,6 +1162,7 @@ export function createHookRunner(
       },
       assertActive,
     });
+    const drops: PromptBuildDrop[] = [];
     try {
       const result = await runModifyingHook<
         "before_prompt_build",
@@ -1170,15 +1175,19 @@ export function createHookRunner(
           mergeResults: mergeBeforePromptBuild,
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
           assertHandlerBoundaryActive: assertActive,
+          onHandlerDropped: ({ pluginId }) => {
+            drops.push({ pluginId, reason: "handler-failed" });
+          },
         },
       );
-      if (!result) {
-        return undefined;
-      }
-      return {
-        ...(result.prependContext ? { prependContext: result.prependContext } : {}),
-        ...(result.appendContext ? { appendContext: result.appendContext } : {}),
-      };
+      const projectedResult = result
+        ? {
+            ...(result.prependContext ? { prependContext: result.prependContext } : {}),
+            ...(result.appendContext ? { appendContext: result.appendContext } : {}),
+          }
+        : undefined;
+      const dropMarker = buildPromptBuildDropResult(drops);
+      return dropMarker ? mergeBeforePromptBuild(projectedResult, dropMarker) : projectedResult;
     } finally {
       token.active = false;
     }

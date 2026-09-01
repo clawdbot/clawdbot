@@ -98,31 +98,41 @@ function formatPromptBuildDropMarker(drops: readonly PromptBuildDrop[]): string 
   if (drops.length === 0) {
     return undefined;
   }
-  // Identical (plugin, reason) pairs carry no extra information and would spend
-  // the entry cap, so collapse them before counting anything.
-  const unique: string[] = [];
-  const seen = new Set<string>();
+  // Collapse exact raw identities before sanitizing them. Distinct plugin ids
+  // can share the same bounded display label, and that collision still counts
+  // as a distinct lost contribution in the overflow summary.
+  const uniqueDrops: PromptBuildDrop[] = [];
+  const seenDrops = new Set<string>();
   for (const drop of drops) {
-    const entry = formatDrop(drop);
-    if (seen.has(entry)) {
+    const identity = JSON.stringify([drop.pluginId, drop.reason]);
+    if (seenDrops.has(identity)) {
       continue;
     }
-    seen.add(entry);
-    unique.push(entry);
+    seenDrops.add(identity);
+    uniqueDrops.push(drop);
+  }
+  const uniqueEntries: string[] = [];
+  const seenEntries = new Set<string>();
+  for (const drop of uniqueDrops) {
+    const entry = formatDrop(drop);
+    if (!seenEntries.has(entry)) {
+      seenEntries.add(entry);
+      uniqueEntries.push(entry);
+    }
   }
   const listed: string[] = [];
-  for (const entry of unique.slice(0, MAX_LISTED_DROPS)) {
+  for (const entry of uniqueEntries.slice(0, MAX_LISTED_DROPS)) {
     // Cost the candidate WITH its overflow summary so the byte cap always
     // leaves room for "+N more" instead of silently dropping the count.
     const candidate = renderMarker(
-      joinEntries([...listed, entry], unique.length - (listed.length + 1)),
+      joinEntries([...listed, entry], uniqueDrops.length - (listed.length + 1)),
     );
     if (listed.length > 0 && markerByteLength(candidate) > MAX_MARKER_BYTES) {
       break;
     }
     listed.push(entry);
   }
-  return renderMarker(joinEntries(listed, unique.length - listed.length));
+  return renderMarker(joinEntries(listed, uniqueDrops.length - listed.length));
 }
 
 /**
