@@ -10,9 +10,9 @@
 // claims, so the set reaches the handler as one delivery whose ownership spans
 // every claim behind it.
 //
-// `index` and `total` are optional in LINE's own contract - older Android clients
-// omit them - so completion can never be assumed and the timer, not the count, is
-// what guarantees a set is always delivered.
+// `index` and `total` are both optional in LINE's own contract, and `index` is
+// documented absent for senders on LINE 11.15 or earlier for Android - so completion
+// can never be assumed and the timer, not the count, guarantees a set is delivered.
 const IMAGE_SET_FLUSH_DELAY_MS = 4_000;
 
 type PendingImageSetPart<TEvent, TLifecycle> = {
@@ -30,7 +30,7 @@ type PendingImageSet<TEvent, TLifecycle> = {
   /** Wakes the holder once the set is whole or its wait has expired. */
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
-  /** Restarted on every arrival, so it is kept for the parts after the first. */
+  /** Restarted on each arrival once the wait exists, so later parts need it too. */
   flushDelayMs: number;
 };
 
