@@ -211,7 +211,7 @@ describe("AppSidebar session mutation feedback", () => {
       Array.from(
         assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
       ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Me", "Ada", "Bob"]);
+    ).toEqual(["Me", "Bob"]);
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,

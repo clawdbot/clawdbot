@@ -473,7 +473,7 @@ describe("chat header session menu", () => {
     ).toEqual(["Assign to…"]);
     expect(
       Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
-    ).toEqual(["Me", "Ada", "Research"]);
+    ).toEqual(["Me", "Research"]);
     const selected = item(menu, "Research");
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
@@ -619,7 +619,7 @@ describe("chat header session menu", () => {
       Array.from(
         menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
-    ).toEqual(["Back", "Me", "Ada", "Research"]);
+    ).toEqual(["Back", "Me", "Research"]);
     select(menu, "assign-owner:human:profile-ada");
     expect(onAction).toHaveBeenCalledWith({
       kind: "assign-owner",

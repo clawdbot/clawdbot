@@ -30,6 +30,9 @@ export function renderSessionOwnerAssignmentOptions(
 ) {
   const title = params.disabledReason ?? nothing;
   const selfChecked = params.selfOwner?.id === params.currentOwnerId;
+  const ownerOptions = params.ownerOptions.filter(
+    (owner) => owner.type !== params.selfOwner?.type || owner.id !== params.selfOwner.id,
+  );
   return html`
     ${params.selfOwner
       ? html`<wa-dropdown-item
@@ -51,7 +54,7 @@ export function renderSessionOwnerAssignmentOptions(
             : nothing}
         </wa-dropdown-item>`
       : nothing}
-    ${params.ownerOptions.map((owner) => {
+    ${ownerOptions.map((owner) => {
       const checked = owner.id === params.currentOwnerId;
       return html`
         <wa-dropdown-item

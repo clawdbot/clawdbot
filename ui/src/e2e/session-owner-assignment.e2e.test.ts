@@ -104,6 +104,35 @@ async function chooseMe(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it("marks exactly one target when the session is assigned to self", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        await installOwnerGateway(page);
+        const row = page.locator('[data-session-key="agent:main:ada-research"]');
+        await row.hover();
+        await row
+          .getByRole("button", { name: "Open session menu: Ada research", exact: true })
+          .click();
+        const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
+        await assignTo.hover();
+
+        const checked = assignTo.locator(
+          ':scope > wa-dropdown-item[slot="submenu"][aria-checked="true"]',
+        );
+        await expectBrowser(checked).toHaveCount(1);
+        await expectBrowser(checked.locator(":scope > .session-menu__text")).toHaveText("Me");
+        await expectBrowser(
+          assignTo.locator(':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text'),
+        ).toHaveText(["Me", "OpenClaw", "Bob", "Carol"]);
+      },
+    );
+  });
+
   it("assigns named and self owners through one keyboard-accessible submenu", async () => {
     await suite.withPage(
       {
@@ -136,7 +165,7 @@ suite.define(() => {
         const ownerItems = assignTo.locator(
           ':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text',
         );
-        await expectBrowser(ownerItems).toHaveText(["Me", "OpenClaw", "Ada", "Bob", "Carol"]);
+        await expectBrowser(ownerItems).toHaveText(["Me", "OpenClaw", "Bob", "Carol"]);
         await captureProof(page, "assignment-submenu");
 
         await assignTo.getByRole("menuitemradio", { name: "Carol", exact: true }).click();
