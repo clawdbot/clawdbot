@@ -2309,7 +2309,7 @@ src/cli/capability-cli/video.ts	7
 src/cli/capability-cli/web.ts	6
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
-src/cli/channels-cli.ts	7
+src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
 src/cli/command-config-resolution.ts	2
