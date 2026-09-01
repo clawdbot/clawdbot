@@ -20,6 +20,7 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { callGateway } from "./call.js";
@@ -530,6 +531,133 @@ describe("delete-cleanup archive retention through a real gateway", () => {
         parentChildToggle: parentRow?.childSessions ?? null,
         deletedRevisions,
         persistedDispatchTarget: dispatched.deleteCleanupTarget,
+      },
+    };
+    console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);
+  });
+
+  test("does not delete a successor when restoring a stamp-only pre-upgrade dispatch", async () => {
+    testState.sessionStorePath = gatewaySuite.sessionStorePath;
+    const parentSessionId = "sess-gw-stamp-only-parent";
+    const successorSessionId = "sess-gw-stamp-only-successor";
+    const successorRevision = "rev-gw-stamp-only-successor";
+    const childSessionKey = `${CHILD_SESSION_KEY}-stamp-only`;
+    const runId = `${RUN_ID}-stamp-only`;
+    const now = Date.now();
+    const deletedRevisions: string[] = [];
+
+    await writeSessionStore({
+      entries: {
+        [REQUESTER_SESSION_KEY]: {
+          sessionId: parentSessionId,
+          updatedAt: now,
+        },
+        [childSessionKey]: {
+          sessionId: successorSessionId,
+          updatedAt: now,
+          spawnedBy: REQUESTER_SESSION_KEY,
+          lifecycleRevision: successorRevision,
+        },
+      },
+    });
+
+    const stampOnlyRun: SubagentRunRecord = {
+      runId,
+      childSessionKey,
+      requesterSessionKey: REQUESTER_SESSION_KEY,
+      requesterDisplayKey: "main",
+      task: "keep successor after stamp-only restore",
+      cleanup: "delete",
+      createdAt: now - 100,
+      expectsCompletionMessage: false,
+      cleanupHandled: true,
+      deleteCleanupDispatchedAt: now,
+      archiveAtMs: now + 60_000,
+      execution: {
+        status: "terminal",
+        startedAt: now - 50,
+        endedAt: now,
+        outcome: { status: "ok" },
+      },
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    };
+    saveSubagentRegistryToSqlite(new Map([[runId, stampOnlyRun]]));
+
+    const callLiveGateway = async (options: { method: string; params?: unknown }) => {
+      if (options.method === "sessions.delete") {
+        const expectedRevision = (
+          options.params as { expectedLifecycleRevision?: string } | undefined
+        )?.expectedLifecycleRevision;
+        if (expectedRevision) {
+          deletedRevisions.push(expectedRevision);
+        }
+      }
+      const res = await rpcReq<Record<string, unknown>>(
+        gatewaySuite.ws,
+        options.method,
+        options.params,
+      );
+      if (!res.ok) {
+        throw new Error(`gateway ${options.method} failed: ${JSON.stringify(res.error)}`);
+      }
+      return res.payload;
+    };
+    resetSubagentRegistryForTests({ persist: false });
+    subagentRegistryTesting.setDepsForTest({
+      callGateway: callLiveGateway as unknown as typeof callGateway,
+    });
+    initSubagentRegistry();
+    expect(getSubagentRunByRunId(runId)?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+    expect(getSubagentRunByRunId(runId)?.deleteCleanupTarget).toBeUndefined();
+    activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime: {
+            dispatchAgent: vi.fn(),
+            waitForAgent: vi.fn(),
+            sendRecoveryNotice: vi.fn(),
+          },
+        }) as never,
+    );
+
+    const recovered = await vi.waitFor(
+      () => {
+        const entry = getSubagentRunByRunId(runId);
+        expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(entry?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+        expect(entry?.deleteCleanupTarget).toBeUndefined();
+        return entry!;
+      },
+      { timeout: 10_000, interval: 25 },
+    );
+
+    const listed = await vi.waitFor(async () => {
+      const res = await rpcReq<{
+        sessions: Array<{ key: string; childSessions?: string[] }>;
+      }>(gatewaySuite.ws, "sessions.list", { includeUnknown: true });
+      expect(res.ok).toBe(true);
+      const keys = res.payload?.sessions.map((row) => row.key) ?? [];
+      expect(keys).toContain(childSessionKey);
+      return res.payload?.sessions ?? [];
+    });
+    const parentRow = listed.find((row) => row.key === REQUESTER_SESSION_KEY);
+    expect(parentRow).toBeDefined();
+    // Stamp-only is a pre-upgrade no-delete fence. The leftover stamp
+    // hides the registry child link; the live successor still lists.
+    expect(parentRow?.childSessions).toBeUndefined();
+    expect(shouldKeepSubagentRunChildLink(recovered)).toBe(false);
+    expect(deletedRevisions).toEqual([]);
+
+    const verdict = {
+      surface: "isolated-gateway",
+      path: "delete-cleanup stamp-only upgrade restart",
+      sessionNavigation: {
+        childSessionDeleted: false,
+        childSessionListed: true,
+        parentChildToggle: parentRow?.childSessions ?? null,
+        deletedRevisions,
+        persistedDispatchTarget: recovered.deleteCleanupTarget ?? null,
       },
     };
     console.log(`OPENCLAW_ISOLATED_GATEWAY_VERDICT ${JSON.stringify(verdict)}`);

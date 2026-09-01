@@ -317,6 +317,58 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("does not delete a live successor when restoring a stamp-only dispatch", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    await withRegistryState(stateDir, async () => {
+      const now = Date.now();
+      const childSessionKey = "agent:main:subagent:stamp-only-successor";
+      const run: SubagentRunRecord = {
+        runId: "run-stamp-only-successor",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "keep successor after stamp-only restore",
+        cleanup: "delete",
+        createdAt: now - 100,
+        expectsCompletionMessage: false,
+        cleanupHandled: true,
+        deleteCleanupDispatchedAt: now,
+        archiveAtMs: now + 60_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 50,
+          endedAt: now,
+          outcome: { status: "ok" },
+        },
+        completion: { required: false },
+        delivery: { status: "not_required" },
+      };
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: "sess-stamp-only-successor",
+        defaultSessionId: "sess-stamp-only-successor",
+        lifecycleRevision: "rev-stamp-only-successor",
+      });
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+      await vi.waitFor(
+        () => {
+          expect(mod.getSubagentRunByRunId(run.runId)?.cleanupCompletedAt).toBeTypeOf("number");
+        },
+        { timeout: 5_000, interval: 10 },
+      );
+      expect(callGatewayModule.callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+      expect(mod.getSubagentRunByRunId(run.runId)?.deleteCleanupDispatchedAt).toBeTypeOf("number");
+      expect(mod.getSubagentRunByRunId(run.runId)?.deleteCleanupTarget).toBeUndefined();
+    });
+  });
+
   it("replays one required completion after restart without the child session", async () => {
     await withRegistryState(async () => {
       const run = createOrphanedRequiredDelivery("pending");

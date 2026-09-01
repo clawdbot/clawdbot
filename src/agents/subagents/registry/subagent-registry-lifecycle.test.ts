@@ -2411,6 +2411,55 @@ describe("subagent registry lifecycle hardening", () => {
     expect(shouldKeepSubagentRunChildLink(entry)).toBe(true);
   });
 
+  it.each([
+    { name: "direct", expectsCompletionMessage: false as const },
+    { name: "announce", expectsCompletionMessage: true as const },
+  ])(
+    "does not delete a live successor from a legacy stamp-only $name dispatch",
+    async ({ name, expectsCompletionMessage }) => {
+      const now = Date.now();
+      const successorRevision = "successor-lifecycle-revision";
+      const entry = createRunEntry({
+        cleanup: "delete",
+        expectsCompletionMessage,
+        archiveAtMs: now + 30 * 60_000,
+        createdAt: now - 120_000,
+        startedAt: now - 90_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+        deleteCleanupDispatchedAt: now - 5_000,
+      });
+      sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockImplementation(() => ({
+        sessionId: "child-session-id",
+        lifecycleRevision: successorRevision,
+      }));
+      const controller = createLifecycleController({
+        entry,
+        ...(name === "announce"
+          ? {
+              runSubagentAnnounceFlow: vi.fn(async (announceParams) => {
+                expect(announceParams.expectedDeleteTarget).toBeUndefined();
+                expect(announceParams.onBeforeDeleteChildSession?.()).toBe(false);
+                return "delivered" as const;
+              }),
+            }
+          : {}),
+      });
+
+      expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+      await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.delete" }),
+      );
+      expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number");
+      expect(entry.deleteCleanupTarget).toBeUndefined();
+      if (name === "direct") {
+        expect(entry.execution.suppressSessionEffects).toBe(true);
+      }
+    },
+  );
+
   it("does not resubmit delete when the persisted dispatch target is already gone", async () => {
     const now = Date.now();
     const entry = createRunEntry({

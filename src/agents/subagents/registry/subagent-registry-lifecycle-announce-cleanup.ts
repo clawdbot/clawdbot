@@ -427,10 +427,13 @@ export const startSubagentAnnounceCleanupFlow = (
           lifecycleRevision: cleanupSessionEntry.lifecycleRevision,
         }
       : undefined;
-  // A persisted dispatch target outranks the live session row. Restart must
-  // not resolve a successor that reused this child key after session-changed.
+  // A persisted dispatch target outranks the live session row. A stamp
+  // without a target is a pre-upgrade record: the live same-key row may
+  // be a successor, so do not backfill it as the delete identity.
   const persistedCleanupSessionIdentity = normalizeDeleteCleanupTarget(entry.deleteCleanupTarget);
-  const cleanupSessionIdentity = persistedCleanupSessionIdentity ?? liveCleanupSessionIdentity;
+  const cleanupSessionIdentity =
+    persistedCleanupSessionIdentity ??
+    (entry.deleteCleanupDispatchedAt === undefined ? liveCleanupSessionIdentity : undefined);
   // A dispatch that already removed the original child leaves no live row.
   // Retrying that identity is unnecessary; resolving the current key would
   // be a successor delete.
