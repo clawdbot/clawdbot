@@ -296,7 +296,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
 
-    const readScopedMcpEnv = (sessionKey: string, serverName: string, model?: string) => {
+    const readScopedMcpServer = (sessionKey: string, serverName: string, model?: string) => {
       const delegate = (
         runtime as unknown as {
           resolveManagedToolsDelegateForSession(target: {
@@ -307,34 +307,35 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ).resolveManagedToolsDelegateForSession({ sessionKey, model }) as {
         options: {
           mcpServers?: Array<{
+            args?: string[];
             env?: Array<{ name: string; value: string }>;
             name: string;
           }>;
         };
       };
-      return delegate.options.mcpServers?.find((server) => server.name === serverName)?.env;
+      return delegate.options.mcpServers?.find((server) => server.name === serverName);
     };
 
-    const pluginEnv = readScopedMcpEnv(
+    const pluginServer = readScopedMcpServer(
       "agent:worker:main",
       "openclaw-plugin-tools",
       "openai/gpt-5.6",
     );
-    expect(pluginEnv).toContainEqual({
+    expect(pluginServer?.env).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:worker:main",
     });
-    expect(pluginEnv).toContainEqual({
-      name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
-      value: "openai/gpt-5.6",
-    });
-    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).toContainEqual({
+    expect(pluginServer?.args).toEqual([
+      "dist/mcp/plugin-tools-serve.js",
+      "--openclaw-model-ref",
+      "openai/gpt-5.6",
+    ]);
+    const openClawServer = readScopedMcpServer("agent:research:main", "openclaw-tools");
+    expect(openClawServer?.env).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:research:main",
     });
-    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).not.toContainEqual(
-      expect.objectContaining({ name: "OPENCLAW_TOOLS_MCP_MODEL_REF" }),
-    );
+    expect(openClawServer?.args).toEqual(["dist/mcp/openclaw-tools-serve.js"]);
   });
 
   it("rejects cached model changes and rebuilds after closing a fresh reset", async () => {
@@ -363,7 +364,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         close: AcpRuntime["close"];
         ensureSession: AcpRuntime["ensureSession"];
         options?: {
-          mcpServers?: Array<{ env?: Array<{ name: string; value: string }>; name: string }>;
+          mcpServers?: Array<{ args?: string[]; name: string }>;
         };
       };
     };
@@ -405,10 +406,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai/gpt-5.6",
     });
     expect(secondDelegate).not.toBe(firstDelegate);
-    expect(secondDelegate.options?.mcpServers?.[0]?.env).toContainEqual({
-      name: "OPENCLAW_TOOLS_MCP_MODEL_REF",
-      value: "openai/gpt-5.6",
-    });
+    expect(secondDelegate.options?.mcpServers?.[0]?.args).toEqual([
+      "dist/mcp/plugin-tools-serve.js",
+      "--openclaw-model-ref",
+      "openai/gpt-5.6",
+    ]);
   });
 
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {

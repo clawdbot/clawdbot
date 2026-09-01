@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
+import {
+  resolveToolsMcpAgentId,
+  resolveToolsMcpModelRef,
+  resolveToolsMcpSessionContext,
+} from "./agent-session-env.js";
 import { resolveOpenClawToolsForMcp } from "./openclaw-tools-serve.js";
 const { callGatewayTool } = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
 vi.mock("../config/config.js", async (original) => ({
@@ -36,9 +40,24 @@ it("carries the private argv owner and exact logical key into the real automatio
   ).toThrow("matching explicit");
 });
 
-it("rejects missing or duplicate private argv owners", () => {
-  expect(() => resolveToolsMcpAgentId(["--openclaw-agent-id"])).toThrow("requires one");
-  expect(() =>
-    resolveToolsMcpAgentId(["--openclaw-agent-id", "work", "--openclaw-agent-id", "main"]),
-  ).toThrow("requires one");
-});
+it.each([
+  {
+    label: "agent owner",
+    option: "--openclaw-agent-id",
+    resolve: resolveToolsMcpAgentId,
+    value: "work",
+  },
+  {
+    label: "model ref",
+    option: "--openclaw-model-ref",
+    resolve: resolveToolsMcpModelRef,
+    value: "openai/gpt-5.6",
+  },
+])(
+  "reads one private $label argv value and rejects missing or duplicate values",
+  ({ resolve, option, value }) => {
+    expect(resolve([option, value])).toBe(value);
+    expect(() => resolve([option])).toThrow("requires one");
+    expect(() => resolve([option, value, option, value])).toThrow("requires one");
+  },
+);

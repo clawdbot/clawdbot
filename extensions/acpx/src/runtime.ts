@@ -77,7 +77,7 @@ type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
-const TOOLS_MCP_MODEL_REF_ENV = "OPENCLAW_TOOLS_MCP_MODEL_REF";
+const TOOLS_MCP_MODEL_REF_ARG = "--openclaw-model-ref";
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
@@ -765,7 +765,7 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
-function withManagedToolsMcpSessionEnv(params: {
+function withManagedToolsMcpSessionContext(params: {
   pluginToolsEnabled: boolean;
   openclawToolsEnabled: boolean;
   mcpServers: AcpRuntimeOptions["mcpServers"];
@@ -791,24 +791,24 @@ function withManagedToolsMcpSessionEnv(params: {
       return server;
     }
     changed = true;
-    const managedEnvNames = new Set([
-      OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
-      ...(isManagedPluginTools ? [TOOLS_MCP_MODEL_REF_ENV] : []),
-    ]);
     const env = [
-      ...server.env.filter((entry) => !managedEnvNames.has(entry.name)),
+      ...server.env.filter((entry) => entry.name !== OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV),
       {
         name: OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
         value: sessionKey,
       },
+    ];
+    const args = [
+      ...server.args,
+      ...(params.agentId ? ["--openclaw-agent-id", params.agentId] : []),
       ...(isManagedPluginTools && params.model?.trim()
-        ? [{ name: TOOLS_MCP_MODEL_REF_ENV, value: params.model.trim() }]
+        ? [TOOLS_MCP_MODEL_REF_ARG, params.model.trim()]
         : []),
     ];
     return {
       ...server,
       env,
-      args: params.agentId ? [...server.args, "--openclaw-agent-id", params.agentId] : server.args,
+      args,
     };
   });
   return changed ? nextServers : params.mcpServers;
@@ -936,7 +936,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const delegate = new BaseAcpxRuntime(
       {
         ...this.delegateOptions,
-        mcpServers: withManagedToolsMcpSessionEnv({
+        mcpServers: withManagedToolsMcpSessionContext({
           pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
           openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
           mcpServers: this.delegateOptions.mcpServers,
