@@ -207,12 +207,15 @@ async function resolveBackupPlanFromPaths(params: {
     // Walker sees lexical state-tree names. A workspace-root symlink's
     // canonical target does not contain that entry; keep both so
     // --no-include-workspace still excludes it before the symlink guard.
+    // Drop any alias that is the state root or contains it — otherwise
+    // ordinary state/config/credential files disappear from the archive.
     excludedWorkspaceDirs: (
       await Promise.all(
-        excludedWorkspaceDirs.map(async (workspaceDir) => [
-          path.resolve(workspaceDir),
-          await canonicalizePathForContainment(workspaceDir),
-        ]),
+        excludedWorkspaceDirs.map(async (workspaceDir) =>
+          [path.resolve(workspaceDir), await canonicalizePathForContainment(workspaceDir)].filter(
+            (dir) => dir !== canonicalStateDir && !isPathWithin(canonicalStateDir, dir),
+          ),
+        ),
       )
     ).flat(),
     agentRoots,

@@ -902,6 +902,41 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it.each([
+    ["the state directory", (state: OpenClawTestState) => state.stateDir],
+    ["a parent of the state directory", (state: OpenClawTestState) => path.dirname(state.stateDir)],
+  ] as const)(
+    "keeps ordinary state files when the excluded workspace is %s",
+    async (_label, resolveWorkspace) => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-workspace-contains-state-",
+          scenario: "minimal",
+        },
+        async (state) => {
+          const sentinel = state.statePath("sentinel-state.json");
+          await fs.writeFile(sentinel, '{"ok":true}\n', "utf8");
+          await state.writeConfig({
+            agents: {
+              defaults: { workspace: resolveWorkspace(state) },
+            },
+          });
+
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 8, 1, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(archive.archivePath);
+
+          expect(archive.assets.map((asset) => asset.kind)).not.toContain("workspace");
+          expect(entries.some((entry) => entry.endsWith("/sentinel-state.json"))).toBe(true);
+        },
+      );
+    },
+  );
+
   it("includes a configured external agent directory when workspaces are excluded", async () => {
     await withOpenClawTestState(
       {
