@@ -35,12 +35,14 @@ import {
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   registerManagedSystemdHandoffConvergenceTests,
-  registerManagedRecoveryOutcomeTests,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
-import { registerManagedTerminalResultTests } from "./update-managed-service-handoff-result.test-support.js";
+import {
+  registerManagedRecoveryOutcomeTests,
+  registerManagedTerminalResultTests,
+} from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 

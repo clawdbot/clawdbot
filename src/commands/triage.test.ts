@@ -489,7 +489,7 @@ describe("triageCommand", () => {
       const writeFile = fs.writeFile.bind(fs);
       const write = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
         await writeFile(...args);
-        if (String(args[0]).includes("openclaw-triage-prompt-")) {
+        if (typeof args[0] === "string" && args[0].includes("openclaw-triage-prompt-")) {
           current = false;
         }
       });

@@ -111,8 +111,9 @@ export async function finishUpdate(params: {
   const reportResult = async (
     result: UpdateRunResult,
     recoverService = false,
-    restoreFailure?: { cause: unknown },
+    initialRestoreFailure?: { cause: unknown },
   ) => {
+    let restoreFailure = initialRestoreFailure;
     const finalResult = completedResult({
       ...result,
       ...(result.status === "error" && !recoverService
