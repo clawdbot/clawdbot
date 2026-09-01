@@ -19,10 +19,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
-import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
+import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 
 const mocks = vi.hoisted(() => ({
-  pushDiagnostic: undefined as string | undefined,
+  logDiagnostic: undefined as string | undefined,
+  logCalls: 0,
+  pushDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
   snapshotRepositoryError: undefined as Error | undefined,
 }));
 
@@ -36,8 +38,19 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
       if (args[1][0] === "push" && mocks.pushDiagnostic) {
         return {
           code: 1,
+          ...mocks.pushDiagnostic,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
+        };
+      }
+      if (args[1][0] === "log" && mocks.logDiagnostic) {
+        mocks.logCalls += 1;
+        return {
+          code: 1,
           stdout: "",
-          stderr: mocks.pushDiagnostic,
+          stderr: mocks.logDiagnostic,
           signal: null,
           killed: false,
           termination: "exit",
@@ -73,6 +86,8 @@ async function tempRoot(): Promise<string> {
 }
 
 afterEach(async () => {
+  mocks.logDiagnostic = undefined;
+  mocks.logCalls = 0;
   mocks.pushDiagnostic = undefined;
   mocks.snapshotRepositoryError = undefined;
   vi.restoreAllMocks();
@@ -529,7 +544,10 @@ describe("Git-backed SQLite snapshots", () => {
     const username = ["synthetic", "user"].join("-");
     const password = ["synthetic", "password"].join("-");
     const remote = `https://${username}:${password}@example.invalid/repository`;
-    mocks.pushDiagnostic = `fatal: unable to access '${remote}': ${"x".repeat(600)}`;
+    mocks.pushDiagnostic = {
+      stderr: `fatal: unable to access '${remote}': ${"x".repeat(600)}🦞`,
+      stdout: `remote: rejected '${remote}' after validation`,
+    };
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
     await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
@@ -541,10 +559,25 @@ describe("Git-backed SQLite snapshots", () => {
       push: true,
     });
 
+    expect(result.pushWarning).toContain("stderr:");
+    expect(result.pushWarning).toContain("stdout:");
     expect(result.pushWarning).toContain("https://***@example.invalid/repository");
     expect(result.pushWarning).not.toContain(username);
     expect(result.pushWarning).not.toContain(password);
-    expect(result.pushWarning?.length).toBeLessThanOrEqual(500);
+    expect(Buffer.from(result.pushWarning ?? "", "utf8").toString("utf8")).toBe(result.pushWarning);
+    expect(result.pushWarning?.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("returns an empty log without matching localized Git diagnostics", async () => {
+    const root = await tempRoot();
+    const stateDir = path.join(root, "state");
+    const repositoryPath = path.join(root, "empty-repository");
+    await fs.mkdir(stateDir);
+    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    mocks.logDiagnostic = "fatal: el historial no contiene confirmaciones";
+
+    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).resolves.toEqual([]);
+    expect(mocks.logCalls).toBe(0);
   });
 
   it("refuses adopted non-backup ancestry and records local push degradation", async () => {

@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
   executeGitCommand as runGit,
   requireGitCommand as requireGit,
   requireGitCommandBuffer as requireGitBuffer,
 } from "../infra/git-exec.js";
+import { formatCommandResult } from "../process/command-error.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -38,7 +40,21 @@ type GitBackupCreateResult = {
 };
 
 function sanitizeGitBackupDiagnostic(value: string): string {
-  return value.replace(/:\/\/[^@\s]+@/gu, "://***@").slice(0, GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+  return truncateUtf16Safe(
+    value.replace(/:\/\/[^@\s]+@/gu, "://***@"),
+    GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH,
+  );
+}
+
+function formatGitBackupCommandResult(
+  command: string,
+  result: Awaited<ReturnType<typeof runGit>>,
+): string {
+  return formatCommandResult(command, {
+    ...result,
+    stderr: result.stderr.replace(/:\/\/[^@\s]+@/gu, "://***@"),
+    stdout: result.stdout.replace(/:\/\/[^@\s]+@/gu, "://***@"),
+  });
 }
 
 function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: unknown): string {
@@ -312,9 +328,7 @@ export async function createGitBackup(params: {
       if (pushedResult.code === 0) {
         pushed = true;
       } else {
-        pushWarning = sanitizeGitBackupDiagnostic(
-          (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
-        );
+        pushWarning = formatGitBackupCommandResult("git push", pushedResult);
       }
     }
   }
@@ -437,16 +451,20 @@ export async function readGitBackupLog(params: {
   limit: number;
 }): Promise<Array<{ commit: string; date: string; message: string }>> {
   await assertGitRepository(params.repositoryPath);
+  const head = await runGit(params.repositoryPath, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (head.code === 1) {
+    return [];
+  }
+  if (head.code !== 0) {
+    throw new Error(formatGitBackupCommandResult("git rev-parse HEAD", head));
+  }
   const result = await runGit(params.repositoryPath, [
     "log",
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
   if (result.code !== 0) {
-    if (result.stderr.includes("does not have any commits yet")) {
-      return [];
-    }
-    throw new Error((result.stderr || result.stdout).trim());
+    throw new Error(formatGitBackupCommandResult("git log", result));
   }
   return result.stdout
     .split("\n")
