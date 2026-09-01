@@ -10123,7 +10123,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it("keeps private Control UI servers and resource-sensitive files under one serial owner", () => {
     const trackedUiE2eFiles = execFileSync(
       "git",
-      ["ls-files", "--", ":(glob)ui/src/**/*.e2e.test.ts"],
+      [
+        "ls-files",
+        "--",
+        ":(glob)ui/src/**/*.e2e.test.ts",
+        "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+      ],
       { encoding: "utf8" },
     )
       .trim()
@@ -10203,7 +10208,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
     const rootTest = config.test as { exclude: string[]; include: string[] };
     expect(config.test?.globalSetup).toEqual(["test/vitest/vitest.ui-e2e.global-setup.ts"]);
-    expect(config.test?.include).toEqual(["ui/src/**/*.e2e.test.ts"]);
+    expect(config.test?.include).toEqual([
+      "ui/src/**/*.e2e.test.ts",
+      "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+    ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",
       "ui-e2e-serial",
@@ -10661,42 +10669,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(jobContract).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
     }
 
-    const realGatewayRuns = uiE2eRealGateway.steps
-      .filter((step: WorkflowStep) => step.name?.includes("with a real Gateway"))
-      .map((step: WorkflowStep) => step.run);
-    expect(realGatewayRuns).toEqual([
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-    ]);
-    const realGatewayRunContract = realGatewayRuns.join("\n");
-    expect(realGatewayRunContract).not.toContain("--retry");
-    expect(realGatewayRunContract).not.toContain("--hookTimeout");
-    expect(realGatewayRunContract).not.toContain("--testTimeout");
+    const realGatewaySteps = uiE2eRealGateway.steps.filter((step: WorkflowStep) =>
+      step.name?.includes("with a real Gateway"),
+    );
+    expect(realGatewaySteps).toHaveLength(1);
+    const realGatewayStep = expectDefined(
+      realGatewaySteps[0],
+      "combined real-Gateway Control UI E2E suite",
+    );
+    expect(
+      realGatewayStep.run.startsWith(
+        "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ",
+      ),
+    ).toBe(true);
+    expect(
+      realGatewayStep.run
+        .split(" ")
+        .filter((argument: string) => argument.endsWith(".e2e.test.ts"))
+        .toSorted(),
+    ).toEqual(uiE2eRealGatewayTestFiles.toSorted());
+    expect(realGatewayStep.run).not.toContain("--retry");
+    expect(realGatewayStep.run).not.toContain("--hookTimeout");
+    expect(realGatewayStep.run).not.toContain("--testTimeout");
 
     const proofUploadIndex = uiE2eRealGateway.steps.findIndex(
       (step: WorkflowStep) => step.name === "Upload sanitized Control UI real-Gateway proof",
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
-    for (const name of [
-      "Test Control UI auth transports with a real Gateway",
-      "Test Control UI usage sessions owner attribution with a real Gateway",
-      "Test Control UI agent file lifecycle with a real Gateway",
-      "Test Control UI media transcript replay with a real Gateway",
-    ]) {
-      const captureIndex = uiE2eRealGateway.steps.findIndex(
-        (step: WorkflowStep) => step.name === name,
-      );
-      expect(uiE2eRealGateway.steps[captureIndex].env, name).toEqual({
-        OPENCLAW_CAPTURE_UI_PROOF:
-          "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",
-        OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
-      });
-      expect(proofUploadIndex, name).toBeGreaterThan(captureIndex);
-    }
+    const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
+    expect(realGatewayStep.env).toEqual({
+      OPENCLAW_CAPTURE_UI_PROOF:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",
+      OPENCLAW_UI_E2E_ARTIFACT_DIR: proofUpload.with.path,
+    });
+    expect(proofUploadIndex).toBeGreaterThan(realGatewayIndex);
   });
 
   it("builds artifacts once and smoke-tests the built CLI with Node and Bun", () => {

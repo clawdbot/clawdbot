@@ -76,7 +76,7 @@ export function createUiE2eVitestConfig(
     includeFromEnv ??
     narrowIncludePatternsForCli(uiE2eIncludePatterns, argv) ??
     uiE2eIncludePatterns;
-  const serialInclude = intersectIncludePatterns(uiE2eSerialTestFiles, include) ?? [];
+  const serialInclude = (intersectIncludePatterns(uiE2eSerialTestFiles, include) ?? []).toSorted();
   // Vitest resolves dependency directories per project even though ProjectConfig
   // narrows that type. Keep the shared cached dependency roots intact.
   const projectTest: TestUserConfig = {
