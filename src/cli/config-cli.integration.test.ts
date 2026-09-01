@@ -222,6 +222,53 @@ describe("config cli integration", () => {
     );
   });
 
+  it("writes Workshop limits with an explicit Gateway restart requirement", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-workshop-restart-",
+      "{ skills: { workshop: { maxPending: 50 } } }\n",
+      async ({ configPath }) => {
+        const output = createTestRuntime();
+
+        await runConfigSet({
+          path: "skills.workshop.maxPending",
+          value: "51",
+          cliOptions: {},
+          runtime: output.runtime,
+        });
+
+        expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+          skills: { workshop: { maxPending: 51 } },
+        });
+        expect(output.errors).toStrictEqual([]);
+        expect(output.logs).toStrictEqual([
+          "Updated skills.workshop.maxPending. Restart the gateway to apply.",
+        ]);
+      },
+    );
+  });
+
+  it.each([
+    ["skills.workshop.maxPending", "201"],
+    ["skills.workshop.maxSkillBytes", "1023"],
+    ["skills.workshop.maxSkillBytes", "200001"],
+  ])("rejects out-of-contract Workshop value %s=%s", async (configPath, value) => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-workshop-bounds-",
+      "{ skills: { workshop: { maxPending: 50, maxSkillBytes: 40000 } } }\n",
+      async ({ configPath: filePath }) => {
+        const before = fs.readFileSync(filePath, "utf8");
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigSet({ path: configPath, value, cliOptions: {}, runtime: output.runtime }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(filePath, "utf8")).toBe(before);
+        expect(output.errors.join("\n")).toContain("Config validation failed");
+      },
+    );
+  });
+
   it("accepts plugin hook conversation-access policy via config set", async () => {
     await withConfigFileHarness(
       "openclaw-config-cli-plugin-hooks-",

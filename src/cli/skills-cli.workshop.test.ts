@@ -278,6 +278,46 @@ describe("skills workshop cli", () => {
     ).resolves.toContain("Use current conditions");
   });
 
+  it("archives a quarantined proposal while retaining CLI inspection", async () => {
+    const draftPath = path.join(mocks.workspaceDir, "archive-proposal.md");
+    await fs.writeFile(draftPath, "# Superseded Draft\n\nRetain this evidence.\n", "utf8");
+
+    await runCommand([
+      "skills",
+      "workshop",
+      "propose-create",
+      "--name",
+      "Superseded Draft",
+      "--description",
+      "Superseded proposal evidence",
+      "--proposal",
+      draftPath,
+    ]);
+    const proposalId = mocks.runtimeStdout.at(-1);
+    await runCommand([
+      "skills",
+      "workshop",
+      "quarantine",
+      proposalId!,
+      "--reason",
+      "newer revision is active",
+    ]);
+    await runCommand([
+      "skills",
+      "workshop",
+      "archive",
+      proposalId!,
+      "--reason",
+      "superseded; evidence retained",
+    ]);
+
+    expect(mocks.runtimeStdout.at(-1)).toBe(`Archived ${proposalId}`);
+    await runCommand(["skills", "workshop", "list"]);
+    expect(mocks.runtimeStdout.at(-1)).toContain(`${proposalId}  stale  create`);
+    await runCommand(["skills", "workshop", "inspect", proposalId!]);
+    expect(mocks.runtimeStdout.at(-1)).toContain("Retain this evidence.");
+  });
+
   it("lists and inspects an agent proposal after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const draftPath = path.join(firstWorkspaceDir, "proposal-draft.md");

@@ -374,7 +374,7 @@ See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,
 proposal-only permissions, and troubleshooting.
 
 <ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"auto"'>
-  `auto` allows agent-initiated apply, reject, or quarantine without an
+  `auto` allows agent-initiated apply, reject, quarantine, or archive without an
   additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
@@ -386,9 +386,18 @@ proposal-only permissions, and troubleshooting.
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace (allowed
-  range: 1-200).
+  Maximum pending proposals retained per workspace (allowed range: 1-200).
+  Quarantined proposals remain inspectable but do not consume this authoring
+  budget.
 </ParamField>
+
+Except for `skills.workshop.autonomous.mode`, Workshop configuration is captured
+when Gateway runs are constructed. Supported config writes therefore report
+`Restart the gateway to apply`; they never claim the file-only value is live.
+With automatic reload disabled, run `openclaw gateway restart --safe`. Compare
+`configRevisionHash` and `appliedConfigHash` from
+`openclaw gateway call config.get --params '{}' --json`: equality confirms the
+running Gateway has applied the authored revision.
 
 <ParamField path="skills.workshop.maxSkillBytes" type="number" default="40000">
   Maximum proposal body size in bytes (allowed range: 1024-200000). Proposal

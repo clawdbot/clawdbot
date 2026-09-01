@@ -2,7 +2,7 @@
 summary: "Create and update workspace skills through Skill Workshop review"
 read_when:
   - You want the agent to create or update a skill from chat
-  - You need to review, apply, reject, or quarantine a generated skill draft
+  - You need to review, apply, reject, quarantine, or archive a generated skill draft
   - You are configuring Skill Workshop approval, autonomy, storage, or limits
   - You want to understand where self-learning proposals are reviewed
 title: "Skill Workshop"
@@ -50,10 +50,14 @@ evaluate      -> pending
 apply         -> applied
 reject        -> rejected
 quarantine    -> quarantined
+archive       -> stale (evidence retained)
 target change -> stale
 ```
 
 Only a `pending` proposal can be revised, applied, rejected, or quarantined.
+Only a `quarantined` proposal can be archived. Archive is a retained terminal
+transition: the record, event history, `PROPOSAL.md`, and support files remain
+available to `list` and `inspect`; no proposal evidence is deleted.
 
 ## Collection review
 
@@ -161,7 +165,7 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
+Agent-initiated `apply`, `reject`, `quarantine`, and `archive` run without an additional
 approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
 to require operator approval before those actions.
 
@@ -169,8 +173,8 @@ When approval is required, the prompt identifies the proposal id and target
 skill, and shows the proposal description, support-file count, and body size.
 Approval requests are bounded to finish before the agent tool watchdog. If no
 decision arrives before the prompt expires, the lifecycle action does not run:
-the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
-`openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
+the proposal stays unchanged. Decide later in the Skill Workshop UI or run
+`openclaw skills workshop apply|reject|quarantine|archive <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
 ## CLI
@@ -199,6 +203,7 @@ openclaw skills workshop evaluate <proposal-id>
 openclaw skills workshop apply <proposal-id>
 openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop archive <proposal-id> --reason "Superseded; evidence retained"
 ```
 
 Every subcommand takes `--agent <id>` (target workspace; defaults to
@@ -278,25 +283,25 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | history | restore_collection`.
+`create | read | prepare_patch | patch | update | revise | list | inspect | evaluate | apply | reject | quarantine | archive | history | restore_collection`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                                          | Notes                                                                 |
-| -------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise  |
-| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                         |
-| `skill_name`               | `read`, `prepare_patch`, `patch`, `update`                       | Existing skill name or key                                            |
-| `old_string`               | `prepare_patch`, `patch`                                         | Exact current text; prepare it when the complete skill cannot be read |
-| `new_string`               | `patch`                                                          | Replacement for the exact current text                                |
-| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body       |
-| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                          |
-| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                     |
-| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                       |
-| `artifact_path`            | `inspect`                                                        | `PROPOSAL.md` or one listed support-file path                         |
-| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                    |
-| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                                |
-| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                              |
-| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                           |
+| Parameter                  | Used by                                                                     | Notes                                                                 |
+| -------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                                               | Required for `create`; resolves a pending proposal by name otherwise  |
+| `description`              | `create`, `update`, `revise`                                                | Max 160 bytes                                                         |
+| `skill_name`               | `read`, `prepare_patch`, `patch`, `update`                                  | Existing skill name or key                                            |
+| `old_string`               | `prepare_patch`, `patch`                                                    | Exact current text; prepare it when the complete skill cannot be read |
+| `new_string`               | `patch`                                                                     | Replacement for the exact current text                                |
+| `proposal_content`         | `create`, `update`, `revise`                                                | Required for create/update; omit on revise to preserve the body       |
+| `support_files`            | `create`, `update`, `revise`                                                | Array of `{ path, content }`                                          |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                                | Free-text context                                                     |
+| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine`, `archive` | Target proposal                                                       |
+| `artifact_path`            | `inspect`                                                                   | `PROPOSAL.md` or one listed support-file path                         |
+| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`, `archive`                      | Rejects a stale orchestration step                                    |
+| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`, `archive`            | External run or experiment correlation                                |
+| `reason`                   | `apply`, `reject`, `quarantine`, `archive`                                  | Optional                                                              |
+| `query`, `status`, `limit` | `list`                                                                      | Filter/paginate; `limit` max 50, default 20                           |
 
 Only one prepared patch span may be active per skill. A second
 `prepare_patch` is rejected until a `patch` attempt consumes or invalidates the
@@ -391,8 +396,8 @@ the proposal threshold, and troubleshooting.
 | -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autonomous.mode`          | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
 | `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                              |
-| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
-| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                                    |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, `quarantine`, or `archive` (the agent still has to call the action). `"pending"` requires approval.   |
+| `maxPending`               | `50`     | Caps pending proposals per workspace (1-200). Quarantined proposals remain available for triage without blocking authoring.                                                      |
 | `maxSkillBytes`            | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
@@ -492,14 +497,14 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 
 ## Limits
 
-| Limit                           | Value                                                                        |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                                    |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
-| Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
-| Support files                   | 64 per proposal                                                              |
-| Support file size               | 256 KiB each, 2 MiB total                                                    |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
+| Limit                 | Value                                                                        |
+| --------------------- | ---------------------------------------------------------------------------- |
+| Description           | 160 bytes                                                                    |
+| Proposal body         | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Autonomous `SKILL.md` | 10,000 characters, or strictly shorter when already over the cap             |
+| Support files         | 64 per proposal                                                              |
+| Support file size     | 256 KiB each, 2 MiB total                                                    |
+| Pending proposals     | `skills.workshop.maxPending` per workspace (default 50)                      |
 
 ## Troubleshooting
 
@@ -512,6 +517,8 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
 | `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
 | Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
+| `pending proposal limit reached`               | Run `openclaw skills workshop list`, then apply, reject, or quarantine one pending proposal. Quarantined proposals do not consume the pending limit.                                                        |
+| Quarantined proposal is obsolete               | Run `openclaw skills workshop archive <proposal-id> --reason "..."`. The proposal becomes retained `stale` evidence and remains inspectable.                                                                |
 | Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
 ### Tool-policy diagnostic

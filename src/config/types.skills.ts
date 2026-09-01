@@ -67,7 +67,7 @@ export type SkillsWorkshopConfig = {
   allowSymlinkTargetWrites?: boolean;
   /** Whether proposal lifecycle actions need explicit approval. */
   approvalPolicy?: "pending" | "auto";
-  /** Maximum pending/quarantined proposals retained per workspace. */
+  /** Maximum pending proposals retained per workspace. */
   maxPending?: number;
   /** Maximum generated skill proposal size in bytes. */
   maxSkillBytes?: number;

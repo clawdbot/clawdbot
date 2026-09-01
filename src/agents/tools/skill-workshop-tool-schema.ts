@@ -21,6 +21,7 @@ export const SKILL_WORKSHOP_ACTIONS = [
   "apply",
   "reject",
   "quarantine",
+  "archive",
   "history",
   "restore_collection",
   "complete",
@@ -59,13 +60,13 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
             ? "inspect = read the exact operator-reviewed proposal; revise = update only that proposal with the run-bound expected revision hash."
             : collectionOnly
               ? SKILL_COLLECTION_ACTION_DESCRIPTION
-              : "create = new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions; complete = finish an internal review when available.",
+              : "create = new skill; read = existing live skill when complete content fits; prepare_patch = authorize one exact non-empty span and return bounded context, with only one prepared span active per skill; patch = targeted find-and-replace after read or prepare_patch; update = full-body rewrite; history = show up to 20 recent collection review outcomes and drop reasons; restore_collection = restore the collection backup retained by the last cleanup; revise = existing pending proposal; list/inspect discover proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine/archive are explicit lifecycle actions; archive retains quarantined evidence in the stale terminal state; complete = finish an internal review when available.",
         },
       ),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, action=quarantine, or action=archive.",
         }),
       ),
       artifact_path: Type.Optional(
@@ -142,13 +143,14 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
       evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
       reason: Type.Optional(
         Type.String({
-          description: "Optional reason for action=apply, action=reject, or action=quarantine.",
+          description:
+            "Optional reason for action=apply, action=reject, action=quarantine, or action=archive.",
         }),
       ),
       expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact recorded proposal revision hash for revise/evaluate/apply/reject/quarantine. The action fails if the stored proposal record changed. Revise, evaluate, and apply verify proposal artifacts. Reject and quarantine run interrupted-apply recovery first, then use only the stored record.",
+            "Optional exact recorded proposal revision hash for revise/evaluate/apply/reject/quarantine/archive. The action fails if the stored proposal record changed. Revise, evaluate, and apply verify proposal artifacts. Reject and quarantine run interrupted-apply recovery first, then use only the stored record. Archive uses only the stored quarantined record after lifecycle reconciliation.",
         }),
       ),
       correlation_id: Type.Optional(

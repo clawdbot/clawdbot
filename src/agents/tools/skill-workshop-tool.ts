@@ -54,6 +54,7 @@ import {
   assertAutonomousSkillSize,
   beginProposalReviewMutation,
   completeProposalReview,
+  executeSkillWorkshopArchive,
   proposalMutationText,
   proposalResult,
   proposalReviewPhase,
@@ -444,6 +445,15 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
         return actionResult(quarantined, {
           contentText: `Quarantined skill proposal ${quarantined.id}.`,
+        });
+      }
+
+      if (action === "archive") {
+        return await executeSkillWorkshopArchive({
+          workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          env: options.env,
+          toolParams: params,
         });
       }
 

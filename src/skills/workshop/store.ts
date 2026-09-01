@@ -267,10 +267,18 @@ export async function writeSkillProposal(params: {
             .selectFrom("skill_workshop_proposals")
             .select((eb) => eb.fn.countAll<number>().as("count"))
             .where("workspace_dir", "=", path.resolve(params.workspaceDir))
-            .where("status", "in", ["pending", "quarantined"]),
+            .where("status", "=", "pending"),
         );
-        if ((count?.count ?? 0) >= params.maxPending) {
-          throw new Error(`Skill Workshop pending proposal limit reached (${params.maxPending}).`);
+        const pending = count?.count ?? 0;
+        if (pending >= params.maxPending) {
+          throw new Error(
+            `Skill Workshop pending proposal limit reached (${pending}/${params.maxPending} pending). ` +
+              `Run \`openclaw skills workshop list\`, then resolve one with ` +
+              `\`openclaw skills workshop apply <proposal-id>\`, ` +
+              `\`openclaw skills workshop reject <proposal-id>\`, or ` +
+              `\`openclaw skills workshop quarantine <proposal-id>\`. ` +
+              `Quarantined proposals do not count toward this limit.`,
+          );
         }
         insertProposal(db, {
           record: params.record,

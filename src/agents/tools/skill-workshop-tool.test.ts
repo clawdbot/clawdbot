@@ -398,6 +398,7 @@ describe("skill_workshop tool", () => {
       "apply",
       "reject",
       "quarantine",
+      "archive",
       "history",
       "restore_collection",
       "complete",
@@ -887,6 +888,23 @@ describe("skill_workshop tool", () => {
       skillKey: "quarantined-skill",
       scanState: "quarantined",
     });
+    const archiveResult = await tool.execute("call-7", {
+      action: "archive",
+      proposal_id: quarantinedId,
+      reason: "superseded; evidence retained",
+    });
+    expect((archiveResult.content[0] as { text: string }).text).toContain(
+      `Archived skill proposal ${quarantinedId}; evidence retained.`,
+    );
+    expect(archiveResult.details).toMatchObject({
+      id: quarantinedId,
+      status: "stale",
+      kind: "create",
+      skillKey: "quarantined-skill",
+    });
+    await expect(
+      tool.execute("call-8", { action: "inspect", proposal_id: quarantinedId }),
+    ).resolves.toMatchObject({ details: { id: quarantinedId, status: "stale" } });
     await expect(
       fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
     ).rejects.toThrow();
