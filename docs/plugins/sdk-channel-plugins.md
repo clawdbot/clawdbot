@@ -60,6 +60,12 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+Channel actions and adapter capabilities come from the selected plugin
+registration. An omitted `actions`, `message`, or `outbound` surface is not
+filled from another plugin with the same channel ID. Prepared delivery handlers
+created inside a registry scope retain that handle when invoked after the caller
+leaves the scope.
+
 Declare live and finalizer capabilities precisely - core uses these to decide
 what a channel can do, and drift between the declared and actual behavior is a
 contract test failure:
