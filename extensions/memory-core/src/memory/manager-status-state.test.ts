@@ -13,7 +13,16 @@ describe("memory manager status state", () => {
       name: "indexed status-only memory stays clean",
       params: {
         hasMemorySource: true,
-        statusOnly: true,
+        transient: true,
+        hasIndexedMeta: true,
+      },
+      expected: false,
+    },
+    {
+      name: "indexed one-shot CLI memory stays clean",
+      params: {
+        hasMemorySource: true,
+        transient: true,
         hasIndexedMeta: true,
       },
       expected: false,
@@ -22,8 +31,17 @@ describe("memory manager status state", () => {
       name: "missing metadata is dirty",
       params: {
         hasMemorySource: true,
-        statusOnly: true,
+        transient: true,
         hasIndexedMeta: false,
+      },
+      expected: true,
+    },
+    {
+      name: "indexed default manager stays dirty for initial sync",
+      params: {
+        hasMemorySource: true,
+        transient: false,
+        hasIndexedMeta: true,
       },
       expected: true,
     },
@@ -31,7 +49,7 @@ describe("memory manager status state", () => {
       name: "identity mismatch is dirty",
       params: {
         hasMemorySource: false,
-        statusOnly: true,
+        transient: true,
         hasIndexedMeta: true,
         indexIdentityMismatched: true,
       },

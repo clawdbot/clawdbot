@@ -16,13 +16,13 @@ type StatusAggregateRow = {
 
 export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;
-  statusOnly: boolean;
+  transient: boolean;
   hasIndexedMeta: boolean;
   indexIdentityMismatched?: boolean;
 }): boolean {
   return (
     Boolean(params.indexIdentityMismatched) ||
-    (params.hasMemorySource && (params.statusOnly ? !params.hasIndexedMeta : true))
+    (params.hasMemorySource && (params.transient ? !params.hasIndexedMeta : true))
   );
 }
 
