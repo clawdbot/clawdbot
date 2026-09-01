@@ -133,6 +133,17 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("explains that agent cron list metadata is caller-scoped", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain(
+      "In an agent session, list results are restricted to automations visible to the calling agent",
+    );
+    expect(tool.description).toContain(
+      "total, pagination, and snapshotRevision describe this restricted view, not the complete Gateway inventory",
+    );
+  });
+
   it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
     // Promotion flow contract (the guidance itself lives in the system prompt,
     // since the repeat is noticed during ordinary work rather than while

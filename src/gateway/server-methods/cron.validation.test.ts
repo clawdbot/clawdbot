@@ -848,7 +848,7 @@ describe("cron method validation", () => {
     expect(String(error?.message)).not.toContain("automation not found");
   });
 
-  it("scopes cron.list to the caller agent", async () => {
+  it("scopes cron.list to the caller agent and marks the view as restricted", async () => {
     const context = createCronContext(createCronJob({ agentId: "ops" }));
 
     const { respond } = await invokeCron(
@@ -862,7 +862,17 @@ describe("cron method validation", () => {
     );
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
+      expect.objectContaining({
+        total: 1,
+        jobs: expect.any(Array),
+        visibility: {
+          mode: "caller",
+          restricted: true,
+          warning: expect.stringContaining(
+            "total, pagination, and snapshotRevision describe this restricted view",
+          ),
+        },
+      }),
       undefined,
     );
   });
@@ -961,6 +971,7 @@ describe("cron method validation", () => {
       expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
       undefined,
     );
+    expect(respond.mock.calls.at(-1)?.[1]).not.toHaveProperty("visibility");
   });
 
   it("filters caller-scoped cron.list jobs with foreign session targets before pagination", async () => {
