@@ -2608,9 +2608,9 @@ EOF
       // invariant rather than the absence of the line keeps this valid whether
       // the breadcrumb is dropped or the log is retained.
       const output = `${result.stdout}\n${result.stderr}`;
-      const advertised = [...output.matchAll(/^\s*Installer log:\s*(\S+)\s*$/gm)].map(
-        (match) => match[1],
-      );
+      const advertised = [...output.matchAll(/^\s*Installer log:\s*(\S+)\s*$/gm)]
+        .map((match) => match[1])
+        .filter((path): path is string => path !== undefined);
 
       expect(advertised.filter((path) => !existsSync(path))).toEqual([]);
     } finally {
