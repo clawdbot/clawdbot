@@ -34,25 +34,15 @@ function jsonValuesEqual(left: object, right: object): boolean {
   );
 }
 
-function requestWithoutInput(
-  request: ResponsesContinuationRequest,
-  options: { excludeTools: boolean },
-): ResponsesContinuationRequest {
-  // Instructions are rebuilt and sent on every request; exclude them from history matching.
+function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
+  // Instructions and tools apply to the current response and remain on every wire request.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
     instructions: _instructions,
+    tools: _tools,
     ...rest
   } = request;
-  // `tools` gets the same treatment, HTTP-only: proven live in
-  // openai-responses-client.continuation-tools-change.live.test.ts, but not
-  // for the WebSocket transport sharing this resolver, which still expects a
-  // tool-schema change to reset (openai-responses-websocket.test.ts, "resets
-  // continuation on tool schema change") until it gets its own proof.
-  if (options.excludeTools) {
-    delete rest.tools;
-  }
   if (!isRecord(rest.metadata)) {
     return rest;
   }
@@ -97,10 +87,6 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-  // Required, not defaulted: forces every caller (HTTP, WebSocket, and any
-  // future transport) to state its own proof status for the `tools`
-  // exclusion instead of silently inheriting one. See requestWithoutInput.
-  options: { excludeTools: boolean },
 ): { request: ResponsesContinuationRequest; continuationStatus: ResponsesContinuationStatus } {
   if (!continuation) {
     return { request, continuationStatus: "no_previous_response" };
@@ -109,10 +95,7 @@ export function resolveResponsesContinuationRequest(
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
   if (
-    !jsonValuesEqual(
-      requestWithoutInput(request, options),
-      requestWithoutInput(continuation.lastRequest, options),
-    )
+    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };
   }
@@ -198,8 +181,6 @@ export function claimOpenAIResponsesHttpContinuation(
   const wireRequest = resolveResponsesContinuationRequest(
     previous?.kind === "ready" ? previous.state : undefined,
     params.request,
-    // Proven live over HTTP -- see requestWithoutInput's comment.
-    { excludeTools: true },
   ).request;
   return {
     request: wireRequest,

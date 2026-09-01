@@ -358,12 +358,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
     if (continuation && lease.entry) {
       // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
       lease.entry.continuation = undefined;
-      // Not proven live for WebSocket yet -- keep comparing `tools` so a
-      // schema change still resets continuation here (see
-      // requestWithoutInput's comment in openai-responses-continuation.ts).
-      prepared = resolveResponsesContinuationRequest(continuation, fullRequest, {
-        excludeTools: false,
-      });
+      prepared = resolveResponsesContinuationRequest(continuation, fullRequest);
     } else {
       prepared = {
         request: fullRequest,

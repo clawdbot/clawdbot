@@ -298,8 +298,6 @@ describe("Responses retained-user compaction replay", () => {
             ],
           },
           { model: model.id, store: true, input: nextInput },
-          // Transport-agnostic replay scenario; tools don't vary here.
-          { excludeTools: false },
         );
         expect(continued.continuationStatus, `${scenario} round ${round}`).toBe("continued");
         expect(continued.request.input).toEqual([
