@@ -9,8 +9,8 @@ export type PairLoopGuardSettings = {
   /** Suppression duration in milliseconds once the threshold is exceeded. */
   cooldownMs: number;
   /**
-   * Bot events allowed per conversation inside the burst window. Absent or
-   * non-positive values resolve to the default; disable via `enabled` instead.
+   * Bot events allowed per conversation inside the burst window. Absent
+   * disables the conversation-wide budget while leaving pair protection active.
    */
   maxConversationBotEvents?: number;
 };
@@ -101,12 +101,13 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const KEY_SEPARATOR = "\u0001";
 
 /** Default plugin-facing loop guard config before per-channel overrides. */
-export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<PairLoopGuardConfig> = {
+export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<
+  Omit<PairLoopGuardConfig, "maxConversationBotEvents">
+> = {
   enabled: true,
   maxEventsPerWindow: 20,
   windowSeconds: 60,
   cooldownSeconds: 60,
-  maxConversationBotEvents: 10,
 };
 
 /** Default runtime loop guard settings derived from the default config. */
@@ -115,7 +116,6 @@ export const DEFAULT_PAIR_LOOP_GUARD_SETTINGS: PairLoopGuardSettings = {
   maxEventsPerWindow: DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxEventsPerWindow,
   windowMs: DEFAULT_PAIR_LOOP_GUARD_CONFIG.windowSeconds * 1000,
   cooldownMs: DEFAULT_PAIR_LOOP_GUARD_CONFIG.cooldownSeconds * 1000,
-  maxConversationBotEvents: DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents,
 };
 
 /**
@@ -143,7 +143,8 @@ const CONVERSATION_BURST_MIN_ACTIVE_SENDERS = 2;
 const CONVERSATION_BURST_ACTIVE_SENDER_MIN_EVENTS = 2;
 
 /** Bounds retained burst events per conversation against event floods. */
-const CONVERSATION_BURST_EVENT_CAP = 500;
+const MAX_CONVERSATION_BOT_EVENTS = 500;
+const CONVERSATION_BURST_EVENT_CAP = MAX_CONVERSATION_BOT_EVENTS + 1;
 
 /** Merges pair-loop configs from broad defaults to narrow overrides, ignoring undefined values. */
 export function mergePairLoopGuardConfig(
@@ -187,6 +188,11 @@ function positiveInteger(value: unknown): number | undefined {
     : undefined;
 }
 
+function conversationBurstLimit(value: unknown): number | undefined {
+  const limit = positiveInteger(value);
+  return limit !== undefined && limit <= MAX_CONVERSATION_BOT_EVENTS ? limit : undefined;
+}
+
 /** Resolves runtime loop guard settings from config/defaults and the channel default-enabled gate. */
 export function resolvePairLoopGuardSettings(params: {
   config?: PairLoopGuardConfig;
@@ -212,9 +218,8 @@ export function resolvePairLoopGuardSettings(params: {
     positiveInteger(params.defaultsConfig?.cooldownSeconds) ??
     DEFAULT_PAIR_LOOP_GUARD_CONFIG.cooldownSeconds;
   const maxConversationBotEvents =
-    positiveInteger(params.config?.maxConversationBotEvents) ??
-    positiveInteger(params.defaultsConfig?.maxConversationBotEvents) ??
-    DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents;
+    conversationBurstLimit(params.config?.maxConversationBotEvents) ??
+    conversationBurstLimit(params.defaultsConfig?.maxConversationBotEvents);
 
   return {
     // Channel-level capability gates can disable protection even when config/defaults enable it.
@@ -222,7 +227,7 @@ export function resolvePairLoopGuardSettings(params: {
     maxEventsPerWindow,
     windowMs: windowSeconds * 1000,
     cooldownMs: cooldownSeconds * 1000,
-    maxConversationBotEvents,
+    ...(maxConversationBotEvents !== undefined ? { maxConversationBotEvents } : {}),
   };
 }
 
@@ -283,9 +288,10 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     settings: PairLoopGuardSettings;
     nowMs: number;
   }): PairLoopGuardResult {
-    const limit =
-      positiveInteger(paramsLocal.settings.maxConversationBotEvents) ??
-      DEFAULT_PAIR_LOOP_GUARD_CONFIG.maxConversationBotEvents;
+    const limit = conversationBurstLimit(paramsLocal.settings.maxConversationBotEvents);
+    if (limit === undefined) {
+      return { suppressed: false };
+    }
     // recordAndCheck already rejected non-positive cooldowns before this call.
     const cooldownMs = Math.floor(paramsLocal.settings.cooldownMs);
     // Keyed per receiving bot so one conversation event fanned out to several
@@ -303,12 +309,8 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
       (event) => event.tsMs > nowMs - CONVERSATION_BURST_WINDOW_MS,
     );
     entry.events.push({ tsMs: nowMs, senderId: paramsLocal.senderId });
-    // The cap must always sit above the configured limit: trimming below it
-    // would keep inWindow.length under the trip threshold forever and turn a
-    // "lenient" operator limit into a silently disabled budget.
-    const eventCap = Math.max(limit + 1, CONVERSATION_BURST_EVENT_CAP);
-    if (entry.events.length > eventCap) {
-      entry.events.splice(0, entry.events.length - eventCap);
+    if (entry.events.length > CONVERSATION_BURST_EVENT_CAP) {
+      entry.events.splice(0, entry.events.length - CONVERSATION_BURST_EVENT_CAP);
     }
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
@@ -374,11 +376,6 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     const nowMs = paramsLocal.nowMs ?? Date.now();
     pruneInactiveTrackedPairs(nowMs);
 
-    // The burst bucket records every event even when the pair budget also
-    // suppresses it, so a live storm keeps its burst armed instead of
-    // resetting through pair cooldown gaps.
-    const burstResult = recordConversationBurstAndCheck({ ...paramsLocal, nowMs });
-
     const key = buildPairKey(paramsLocal);
     let entry = tracked.get(key);
     if (!entry) {
@@ -396,6 +393,9 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     if (eventId && entry.recentEvents.some((event) => event.eventId === eventId)) {
       return { suppressed: false };
     }
+    // The burst bucket records each unique event even when the pair budget
+    // suppresses it, so a live storm remains armed through pair cooldown gaps.
+    const burstResult = recordConversationBurstAndCheck({ ...paramsLocal, nowMs });
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
       return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
     }

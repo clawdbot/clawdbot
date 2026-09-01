@@ -15,7 +15,7 @@ export const ChannelBotLoopProtectionSchema = z
     maxEventsPerWindow: z.number().int().positive().optional(),
     windowSeconds: z.number().int().positive().optional(),
     cooldownSeconds: z.number().int().positive().optional(),
-    maxConversationBotEvents: z.number().int().positive().optional(),
+    maxConversationBotEvents: z.number().int().positive().max(500).optional(),
   })
   .strict();
 

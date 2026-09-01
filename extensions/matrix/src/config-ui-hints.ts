@@ -42,7 +42,7 @@ export const matrixChannelConfigUiHints = {
   },
   "botLoopProtection.maxConversationBotEvents": {
     label: "Matrix Bot Conversation Burst Limit",
-    help: "Bot-authored messages allowed in one room within a rolling 10-minute window before suppression. Trips only when 2+ peer bots are each actively posting. Default: 10.",
+    help: "Opt-in bot-authored message limit (1-500) for one room over 10 minutes. Trips only when 2+ peer bots are each actively posting.",
   },
   dangerouslyAllowNameMatching: {
     label: "Matrix Display Name Matching",

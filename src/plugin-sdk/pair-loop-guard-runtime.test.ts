@@ -261,6 +261,23 @@ describe("conversation burst budget", () => {
     settings: burstSettings,
   };
 
+  it("stays disabled unless a conversation limit is explicitly configured", () => {
+    const guard = createPairLoopGuard();
+    const pairOnly = {
+      ...base,
+      settings: { ...burstSettings, maxConversationBotEvents: undefined },
+    };
+    for (let index = 0; index < 20; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...pairOnly,
+          senderId: `bot-${index % 2}`,
+          nowMs: index * 1_000,
+        }).suppressed,
+      ).toBe(false);
+    }
+  });
+
   it("suppresses a three-party storm the pair budget cannot see", () => {
     const guard = createPairLoopGuard();
     // Two peer senders alternating every 15s: each pair stays far below its
@@ -300,6 +317,36 @@ describe("conversation burst budget", () => {
     }
   });
 
+  it("does not consume conversation budget when an event is replayed", () => {
+    const guard = createPairLoopGuard();
+    for (let index = 0; index < 10; index += 1) {
+      expect(
+        guard.recordAndCheck({
+          ...base,
+          senderId: `bot-${index % 2}`,
+          eventId: `event-${index}`,
+          nowMs: index * 1_000,
+        }).suppressed,
+      ).toBe(false);
+    }
+    expect(
+      guard.recordAndCheck({
+        ...base,
+        senderId: "bot-1",
+        eventId: "event-9",
+        nowMs: 10_000,
+      }).suppressed,
+    ).toBe(false);
+    expect(
+      guard.recordAndCheck({
+        ...base,
+        senderId: "bot-0",
+        eventId: "event-10",
+        nowMs: 11_000,
+      }).suppressed,
+    ).toBe(true);
+  });
+
   it("lets slow multi-bot traffic drain out of the window", () => {
     const guard = createPairLoopGuard();
     // Three senders posting round-robin every 4 minutes: the 10-minute window
@@ -329,8 +376,8 @@ describe("conversation burst budget", () => {
   it("still trips when an operator raises the limit past the retention cap", () => {
     const guard = createPairLoopGuard();
     const lenient = { ...base, settings: { ...burstSettings, maxConversationBotEvents: 500 } };
-    // The retention cap must scale with the limit; a fixed cap of 500 would
-    // trim the window below the trip threshold and silently void the budget.
+    // The fixed retention cap holds the configured maximum plus the event
+    // needed to cross it.
     for (let index = 0; index < 500; index += 1) {
       expect(
         guard.recordAndCheck({ ...lenient, senderId: `bot-${index % 3}`, nowMs: index * 1_000 })
@@ -418,8 +465,22 @@ describe("resolvePairLoopGuardSettings", () => {
       maxEventsPerWindow: 4,
       windowMs: 10_000,
       cooldownMs: 30_000,
-      maxConversationBotEvents: 10,
     });
+  });
+
+  it("enables the conversation budget only for an explicit bounded limit", () => {
+    expect(
+      resolvePairLoopGuardSettings({
+        config: { maxConversationBotEvents: 10 },
+        defaultEnabled: true,
+      }).maxConversationBotEvents,
+    ).toBe(10);
+    expect(
+      resolvePairLoopGuardSettings({
+        config: { maxConversationBotEvents: 501 },
+        defaultEnabled: true,
+      }).maxConversationBotEvents,
+    ).toBeUndefined();
   });
 
   it("honors enabled=false from either channel or shared defaults", () => {

@@ -71,7 +71,7 @@ export const slackChannelConfigUiHints = {
   },
   "botLoopProtection.maxConversationBotEvents": {
     label: "Slack Bot Conversation Burst Limit",
-    help: "Bot-authored messages allowed in one Slack conversation within a rolling 10-minute window before suppression. Trips only when 2+ peer bots are each actively posting. Default: 10.",
+    help: "Opt-in bot-authored message limit (1-500) for one Slack conversation over 10 minutes. Trips only when 2+ peer bots are each actively posting.",
   },
   relay: {
     label: "Slack Relay Mode",
