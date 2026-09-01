@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveOptionMock = vi.hoisted(() => vi.fn());
-const createInteractionHandlerMock = vi.hoisted(() => vi.fn(() => async () => {}));
+type CapturedDispatch = (opts: never) => Promise<unknown>;
+const createInteractionHandlerMock = vi.hoisted(() =>
+  vi.fn((_options: { handleInteraction?: CapturedDispatch }) => async () => {}),
+);
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
@@ -50,9 +53,7 @@ function registerAndCaptureDispatcher(handleModelPickerInteraction: ReturnType<t
     allowedSourceIps: ["127.0.0.1"],
     handleModelPickerInteraction,
   } as never);
-  const options = createInteractionHandlerMock.mock.calls[0]?.[0] as
-    | { handleInteraction?: (opts: never) => Promise<unknown> }
-    | undefined;
+  const options = createInteractionHandlerMock.mock.calls[0]?.[0];
   if (!options?.handleInteraction) {
     throw new Error("registration did not supply a handleInteraction");
   }
