@@ -90,16 +90,29 @@ labels (`extensions/qa-lab/src/mantis/run.runtime.ts`):
 (default `convex`), `--credential-role` (default `ci`), `--provider-mode`
 (default `live-frontier`), `--fast` (default on), `--skip-install`, `--skip-build`.
 
-The runner creates detached `git worktree` checkouts for baseline and
-candidate under `<output-dir>/worktrees/`, runs `pnpm install`/`pnpm build` in
-each (unless skipped), then runs
+The runner treats `--output-dir` as a stable container. It must name a relative
+child directory inside the repository; the repository root (`.`), absolute
+paths, and paths that escape the repository are rejected. Detached `git
+worktree` checkouts live under `<output-dir>.worktrees/`. Each checkout has a
+unique `<lane>-<run-id>` name, so an interrupted run cannot collide with a
+later baseline or candidate. The runner runs `pnpm install`/`pnpm build` in
+each checkout (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
-plus a `<scenario-id>-timeline.html`/`.png` pair; the runner copies this
-evidence back under `baseline/`/`candidate/`, writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` in the output directory, and
-exits nonzero if the comparison did not pass (baseline `fail` and candidate
-`pass`).
+plus a `<scenario-id>-timeline.html`/`.png` pair. Before asking Git to remove
+the checkout, the runner copies the lane evidence into a private staging
+directory under `<output-dir>`.
+
+After both lanes and their cleanup finish, the runner adds `comparison.json`,
+`mantis-report.md`, and `mantis-evidence.json` to the staged set, then replaces
+the five stable entries together with rollback on publication failure. A failed
+attempt preserves the preceding complete evidence set and writes `error.txt`;
+a successful attempt removes an older `error.txt`. Existing automation
+continues reading the stable paths directly. Use a distinct output directory
+for each concurrently running command; publication to one shared output
+directory is not serialized. Existing unrelated top-level files are preserved.
+The command exits nonzero if the comparison did not pass (baseline `fail` and
+candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's
@@ -239,16 +252,39 @@ Artifact kinds: `timeline` (deterministic before/after screenshot),
 GIF from the recording), `motionClip` (motion-trimmed MP4), `fullVideo` (full
 recording), `metadata` (JSON/log sidecar), `report` (Markdown report).
 
-A run's on-disk artifact layout:
+For `qa mantis run`, the stable output container has this layout:
 
 ```text
 .artifacts/qa-e2e/mantis/<run-id>/
+  error.txt # failures only
   mantis-report.md
   mantis-evidence.json
   baseline/
   candidate/
   comparison.json
+.artifacts/qa-e2e/mantis/<run-id>.worktrees/
+  baseline-<pid>-<uuid>/
+  candidate-<pid>-<uuid>/
 ```
+
+The worktree root is normally empty after a completed run. Lane directories
+appear while active or when cleanup deliberately preserves one for diagnosis.
+If `git worktree add` fails before registration, Mantis can leave its empty,
+uniquely named prepared directory instead of deleting through a pathname that
+could have been replaced.
+
+Each failed attempt writes `<output-dir>/error.txt`. The thrown error, or the
+concise stderr diagnostic for an expected CLI interrupt, reports that exact
+path. Mantis does not recursively delete a worktree after Git no longer owns
+its registration: if cleanup fails, inspect the retained unique directory
+under `<output-dir>.worktrees/` together with the reported `error.txt`, then
+remove it through Git after resolving the failure. If an owned path disappears
+while its Git registration remains, cleanup fails closed instead of recreating
+the path. At startup, Mantis also checks the exact historical
+`<output-dir>/worktrees/baseline` and `<output-dir>/worktrees/candidate` paths
+and removes them through Git when they are still registered and present. Other
+registered or unregistered entries in that legacy directory are left
+untouched.
 
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set

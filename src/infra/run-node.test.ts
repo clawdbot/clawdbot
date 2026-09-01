@@ -1367,6 +1367,128 @@ describe("run-node script", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "keeps the five-second force-kill bound when a generic child requests extended grace",
+    async ({ tmp }) => {
+      vi.useFakeTimers();
+      try {
+        await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+        const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
+        const child = Object.assign(new EventEmitter(), { pid: 42_421, kill: vi.fn() });
+        const groupSignals: Array<[number, string | number]> = [];
+        const spawn = vi.fn(() => ({
+          kill: (signal?: string) => child.kill(signal ?? "SIGTERM"),
+          off: (event: string, callback: (...args: unknown[]) => void) =>
+            child.off(event, callback),
+          on: (event: string, callback: (...args: unknown[]) => void) => child.on(event, callback),
+          pid: child.pid,
+        }));
+        const exitCodePromise = runNodeCommand(tmp, {
+          platform: "darwin",
+          process: fakeProcess,
+          signalProcess: (pid: number, signal?: string | number) => {
+            const resolvedSignal = signal ?? "SIGTERM";
+            groupSignals.push([pid, resolvedSignal]);
+            if (resolvedSignal === "SIGKILL") {
+              queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+            }
+            return true;
+          },
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        });
+
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[2].stdio).toBe("inherit");
+        expect(child.listenerCount("message")).toBe(0);
+        child.emit("message", { graceMs: 125_000, type: "openclaw:shutdown-grace" });
+        fakeProcess.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(groupSignals).toEqual([[-42_421, "SIGTERM"]]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(groupSignals).toEqual([
+          [-42_421, "SIGTERM"],
+          [-42_421, "SIGKILL"],
+        ]);
+        await expect(exitCodePromise).resolves.toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "honors a bounded child-declared shutdown grace from the first forwarded signal",
+    async ({ tmp }) => {
+      vi.useFakeTimers();
+      try {
+        await setupStampedProject(tmp, {
+          files: {
+            [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+            [QA_RUNTIME_PLUGIN_SDK_ENTRY]: "export const qaRuntime = true;\n",
+          },
+          oldPaths: [
+            ROOT_SRC,
+            ROOT_TSCONFIG,
+            ROOT_PACKAGE,
+            QA_LAB_PLUGIN_SDK_ENTRY,
+            QA_RUNTIME_PLUGIN_SDK_ENTRY,
+          ],
+        });
+        const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
+        const child = Object.assign(new EventEmitter(), { pid: 42_422, kill: vi.fn() });
+        const groupSignals: Array<[number, string | number]> = [];
+        const spawn = vi.fn(() => ({
+          kill: (signal?: string) => child.kill(signal ?? "SIGTERM"),
+          off: (event: string, callback: (...args: unknown[]) => void) =>
+            child.off(event, callback),
+          on: (event: string, callback: (...args: unknown[]) => void) => child.on(event, callback),
+          pid: child.pid,
+        }));
+        const exitCodePromise = runNodeCommand(tmp, {
+          args: ["qa", "mantis", "run"],
+          platform: "darwin",
+          process: fakeProcess,
+          signalProcess: (pid: number, signal?: string | number) => {
+            const resolvedSignal = signal ?? "SIGTERM";
+            groupSignals.push([pid, resolvedSignal]);
+            if (resolvedSignal === "SIGKILL") {
+              queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+            }
+            return true;
+          },
+          spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        });
+
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "qa", "mantis", "run"]);
+        expect(spawnCall?.[2].stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
+        child.emit("message", { graceMs: 125_000, type: "openclaw:shutdown-grace" });
+        fakeProcess.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(groupSignals).toEqual([[-42_422, "SIGTERM"]]);
+        child.emit("message", { graceMs: 300_000, type: "openclaw:shutdown-grace" });
+        await vi.advanceTimersByTimeAsync(119_999);
+        expect(groupSignals).toEqual([[-42_422, "SIGTERM"]]);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(exitCodePromise).resolves.toBe(1);
+        expect(groupSignals).toEqual([
+          [-42_422, "SIGTERM"],
+          [-42_422, "SIGKILL"],
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "force-cleans the active openclaw child process group after forwarded SIGTERM",
     async ({ tmp }) => {
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });

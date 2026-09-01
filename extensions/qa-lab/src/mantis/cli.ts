@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
 import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
+import { runWithMantisCliInterrupts } from "./cli-interrupts.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
@@ -26,8 +27,10 @@ async function runDiscordSmoke(opts: MantisDiscordSmokeOptions) {
 }
 
 async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisBeforeAfterCommand(opts);
+  await runWithMantisCliInterrupts(async (signal) => {
+    const runtime = await loadMantisCliRuntime();
+    await runtime.runMantisBeforeAfterCommand({ ...opts, signal });
+  });
 }
 
 async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {

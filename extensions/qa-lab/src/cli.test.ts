@@ -461,6 +461,7 @@ describe("qa cli registration", () => {
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
       scenario: "discord-status-reactions-tool-only",
+      signal: expect.any(AbortSignal),
       skipBuild: true,
       skipInstall: true,
       transport: "discord",
