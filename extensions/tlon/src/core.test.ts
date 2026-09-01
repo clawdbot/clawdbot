@@ -315,6 +315,18 @@ describe("tlon core", () => {
     expect(resolved.configured).toBe(true);
   });
 
+  it("resolves fractional media limits to whole bytes", () => {
+    const resolved = resolveTlonAccount({
+      channels: {
+        tlon: {
+          mediaMaxMb: 1.5 / (1024 * 1024),
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mediaMaxBytes).toBe(1);
+  });
+
   it("keeps the default account on channel-level config only", () => {
     const resolved = resolveTlonAccount(
       {
