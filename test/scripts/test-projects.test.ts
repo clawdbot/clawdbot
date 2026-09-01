@@ -61,6 +61,7 @@ describe("test runtime prerequisites", () => {
       ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       "runtime",
     ],
+    ["ACP CLI process", ["src/cli/acp-cli-exit.process.test.ts"], "runtime"],
     ["update CLI process", ["src/cli/update-dry-run-state.process.test.ts"], "runtime"],
     ["CLI directory", ["src/cli"], "runtime"],
     ["CLI config", ["test/vitest/vitest.cli.config.ts"], undefined],
