@@ -281,30 +281,3 @@ export async function runPostCorePluginConvergence(params: {
     installRecords: records,
   };
 }
-
-/**
- * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
- * result into the existing `PluginUpdateOutcome[]` / warning shape that the
- * post-core update result carries.
- *
- * Returns:
- *  - `outcomes` to append to `pluginUpdateOutcomes`: typed repair outcomes plus
- *    per-plugin smoke errors. Other repair failures remain warnings.
- *  - `errored` boolean that callers translate into `status: "error"`.
- *    Pending activation consent and smoke failures remain errors on the
- *    explicit update path; ordinary repair warnings are nonblocking.
- */
-export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
-  warnings: PostCoreConvergenceWarning[];
-  outcomes: PluginUpdateOutcome[];
-  errored: boolean;
-} {
-  const outcomes = convergence.warnings
-    .filter((w): w is PostCoreConvergenceWarning & { pluginId: string } => Boolean(w.pluginId))
-    .map((w) => ({ pluginId: w.pluginId, status: "error" as const, message: w.message }));
-  return {
-    warnings: [...convergence.warnings, ...(convergence.notices ?? [])],
-    outcomes: [...(convergence.outcomes ?? []), ...outcomes],
-    errored: convergence.errored,
-  };
-}

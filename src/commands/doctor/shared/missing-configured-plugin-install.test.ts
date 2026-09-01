@@ -670,8 +670,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const repairModule = await import("./missing-configured-plugin-install.js");
     const repairSpy = vi.spyOn(repairModule, "repairMissingConfiguredPluginInstalls");
     try {
-      const { runPostCorePluginConvergence, convergenceWarningsToOutcomes } =
-        await import("./post-core-plugin-convergence.js");
+      const { runPostCorePluginConvergence } = await import("./post-core-plugin-convergence.js");
       const convergence = await runPostCorePluginConvergence({
         cfg: { plugins: { entries: { demo: { enabled: true }, other: { enabled: true } } } },
         env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -707,7 +706,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           code: PLUGIN_CAPABILITY_CONSENT_REQUIRED,
         }),
       ]);
-      const outcomes = convergenceWarningsToOutcomes(convergence).outcomes;
+      const outcomes = convergence.outcomes ?? [];
       expect(outcomes.some((outcome) => outcome.pluginId === "demo")).toBe(false);
       expect(
         outcomes.filter((outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED),
@@ -842,8 +841,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
       }
 
-      const { runPostCorePluginConvergence, convergenceWarningsToOutcomes } =
-        await import("./post-core-plugin-convergence.js");
+      const { runPostCorePluginConvergence } = await import("./post-core-plugin-convergence.js");
       const convergence = await runPostCorePluginConvergence({
         cfg,
         env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -854,7 +852,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       if (!accepted) {
         expect(convergence.installRecords).toEqual({});
       }
-      expect(convergenceWarningsToOutcomes(convergence).outcomes).toEqual(
+      expect(convergence.outcomes ?? []).toEqual(
         accepted
           ? []
           : [
