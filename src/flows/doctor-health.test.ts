@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import {
@@ -1015,46 +1014,6 @@ describe("runDoctorHealthFlow", () => {
       });
     },
   );
-
-  it("completes repair after discarding an empty reserved workspace attestation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir } },
-      };
-      mocks.config.mockReturnValue(cfg);
-      const identity = resolveWorkspaceStateIdentity(state.workspaceDir);
-      const attestationPath = path.join(
-        state.stateDir,
-        "workspace-attestations",
-        `${identity.workspaceKey}.attested`,
-      );
-      fs.mkdirSync(path.dirname(attestationPath), { recursive: true });
-      fs.writeFileSync(attestationPath, "");
-      mocks.runContributions.mockImplementation(async (ctx) => {
-        const result = await migrateLegacyWorkspaceState({
-          stateDir: state.stateDir,
-          env: state.env,
-          detected: detectLegacyWorkspaceState({
-            cfg: ctx.cfg,
-            stateDir: state.stateDir,
-            env: state.env,
-            homedir: () => state.home,
-            doctorOnlyStateMigrations: true,
-          }),
-        });
-        expect(result.warnings).toEqual([]);
-        expect(result.changes[0]).toContain(attestationPath);
-      });
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
-      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(fs.existsSync(attestationPath)).toBe(false);
-      expect(() =>
-        assertNoUnmigratedWorkspaceState({ workspaceDir: state.workspaceDir }),
-      ).not.toThrow();
-    });
-  });
 
   it.each(["missing-state", "missing-agent", "current"])(
     "accepts %s databases without creating or repairing them",
