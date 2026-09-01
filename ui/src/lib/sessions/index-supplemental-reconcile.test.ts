@@ -35,6 +35,41 @@ function capabilityWithList(result: ReturnType<typeof sessionsResult>) {
 }
 
 describe("supplemental session reconciliation", () => {
+  it("does not notify subscribers when lineage republishes the current row and defaults", async () => {
+    const canonical = {
+      key,
+      kind: "direct" as const,
+      sessionId: "session-device",
+      updatedAt: 10,
+    };
+    const sessions = capabilityWithList(sessionsResult([canonical], 10));
+    try {
+      await sessions.refresh({ force: true });
+      const published = vi.fn();
+      sessions.subscribe(published);
+      const owner = {
+        activeSessionLineageRoot: null,
+        activeSessionLineageSelectedRow: null,
+        childSessionRowsByParent: {},
+        context: { sessions },
+        sessionsResult: sessions.state.result,
+      };
+
+      publishActiveSessionLineage(
+        owner,
+        key,
+        { rowsByParent: {}, topmostRow: canonical, lookupFailed: false },
+        sessions.canonicalListRevision,
+      );
+
+      expect(owner.activeSessionLineageSelectedRow).toEqual(canonical);
+      expect(sessions.state.result?.sessions).toEqual([canonical]);
+      expect(published).not.toHaveBeenCalled();
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("preserves a matching canonical row when history started before its list", async () => {
     const sessions = capabilityWithList(
       sessionsResult(
@@ -53,6 +88,8 @@ describe("supplemental session reconciliation", () => {
     const sourceCanonicalListRevision = sessions.canonicalListRevision;
 
     await sessions.refresh({ force: true });
+    const published = vi.fn();
+    sessions.subscribe(published);
     sessions.reconcile(
       {
         key,
@@ -73,6 +110,7 @@ describe("supplemental session reconciliation", () => {
       model: "gpt-5.6-luna",
       contextTokens: 128_000,
     });
+    expect(published).toHaveBeenCalledOnce();
     sessions.dispose();
   });
 

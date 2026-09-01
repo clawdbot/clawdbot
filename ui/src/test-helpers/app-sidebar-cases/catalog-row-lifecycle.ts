@@ -23,6 +23,7 @@ describe("AppSidebar catalog row lifecycle", () => {
       )!;
       adoptedRow.label = label;
       adoptedRow.displayName = "Captured native title";
+      adoptedRow.boardFace = "dashboard";
       const { sidebar } = await mountSidebar(
         createGateway({} as GatewayBrowserClient),
         sessions.sessions,
@@ -37,6 +38,9 @@ describe("AppSidebar catalog row lifecycle", () => {
       expect(row?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(expected);
       expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toContain(
         expected,
+      );
+      expect(row?.querySelector("a")?.getAttribute("href")).toBe(
+        "/dashboard/main/adopted-title?nav=collapsed",
       );
     },
   );
