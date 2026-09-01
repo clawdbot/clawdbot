@@ -482,3 +482,116 @@ describe("cron failure alert persistence", () => {
     });
   });
 });
+
+describe("cron failure alert outcome write-back", () => {
+  const dueAt = Date.parse("2026-08-01T15:00:00.000Z");
+  const endedAt = dueAt + 10;
+
+  async function runFailure(params: { id: string; sendCronFailureAlert: SendCronFailureAlert }) {
+    const store = fixtures.makeStorePath();
+    const job = createAlertJob({ id: params.id, dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => endedAt,
+      sendCronFailureAlert: params.sendCronFailureAlert,
+    });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt,
+    });
+    return { store, state };
+  }
+
+  it("persists a delivered outcome once the send settles", async () => {
+    const { store } = await runFailure({
+      id: "alert-outcome-delivered",
+      sendCronFailureAlert: vi.fn(async (params) => {
+        params.onDeliveryAttempt?.(true);
+      }),
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastFailureAlertAtMs: endedAt,
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      });
+    });
+    expect(
+      (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryError,
+    ).toBeUndefined();
+  });
+
+  it("persists a not-delivered outcome with the error when the send rejects", async () => {
+    const { store } = await runFailure({
+      id: "alert-outcome-rejected",
+      sendCronFailureAlert: vi.fn(async () => {
+        throw new Error("alert channel exploded");
+      }),
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+        lastFailureNotificationDeliveryError: expect.stringContaining("alert channel exploded"),
+      });
+    });
+  });
+
+  it("persists a not-delivered outcome when no delivery attempt reaches the recipient", async () => {
+    const { store } = await runFailure({
+      id: "alert-outcome-unreached",
+      sendCronFailureAlert: vi.fn(async (params) => {
+        params.onDeliveryAttempt?.(false);
+      }),
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+        lastFailureNotificationDelivered: false,
+        lastFailureNotificationDeliveryStatus: "not-delivered",
+        lastFailureNotificationDeliveryError: expect.stringContaining("recipient not reached"),
+      });
+    });
+  });
+
+  it("does not clobber a newer alert cycle that owns the fields", async () => {
+    let resolveSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    });
+    const sendCronFailureAlert = vi.fn(async (params) => {
+      await sendGate;
+      params.onDeliveryAttempt?.(true);
+    });
+    const { state } = await runFailure({
+      id: "alert-outcome-stale-cycle",
+      sendCronFailureAlert,
+    });
+
+    // A newer alert cycle re-requests the notification before the first send
+    // settles; the stale settle must not overwrite its fields.
+    const live = state.store?.jobs[0];
+    expect(live).toBeDefined();
+    live!.state.lastFailureAlertAtMs = endedAt + 60_000;
+    live!.state.lastFailureNotificationDelivered = undefined;
+    live!.state.lastFailureNotificationDeliveryStatus = "unknown";
+    live!.state.lastFailureNotificationDeliveryError = undefined;
+
+    resolveSend?.();
+    await sendCronFailureAlert.mock.results[0]?.value;
+    await state.op;
+
+    expect(live!.state).toMatchObject({
+      lastFailureAlertAtMs: endedAt + 60_000,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
+    expect(live!.state.lastFailureNotificationDelivered).toBeUndefined();
+  });
+});
