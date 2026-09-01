@@ -841,45 +841,122 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("force-kills Windows gateway descendants before retry cleanup settles", async () => {
+  it.each([true, false])(
+    "joins Windows gateway closure before retry cleanup (inherited pipes=%s)",
+    async (inheritedPipes) => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const kill = vi.fn(() => true);
+      // SAFETY: The stub supplies every process and pipe member consumed by the stopper.
+      const child = {
+        exitCode: 1,
+        kill,
+        pid: 12345,
+        signalCode: null,
+        stderr,
+        stdout,
+      } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+      const closePipes = () => {
+        stdout.destroy();
+        stderr.destroy();
+      };
+      const runTaskkill = vi.fn(() => {
+        closePipes();
+        return { status: 0 };
+      });
+      if (!inheritedPipes) {
+        setImmediate(closePipes);
+      }
+
+      await expect(
+        testing.stopGatewayProcess(child, Date.now() + 500, 250, {
+          forceWindowsTree: true,
+          platform: "win32",
+          runTaskkill,
+        }),
+      ).resolves.toBe(true);
+
+      if (inheritedPipes) {
+        expect(runTaskkill).toHaveBeenCalledOnce();
+        expect(runTaskkill).toHaveBeenCalledWith(
+          path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+          ["/PID", "12345", "/T", "/F"],
+          {
+            killSignal: "SIGKILL",
+            stdio: "ignore",
+            timeout: 10_000,
+          },
+        );
+      } else {
+        expect(runTaskkill).not.toHaveBeenCalled();
+      }
+      expect(kill).not.toHaveBeenCalled();
+      expect(stdout.closed).toBe(true);
+      expect(stderr.closed).toBe(true);
+    },
+  );
+
+  it.each([
+    { label: "joined closure", taskkillStatus: 0, closePipes: true, stopped: true },
+    { label: "held pipe", taskkillStatus: 0, closePipes: false, stopped: false },
+    { label: "unverified tree", taskkillStatus: 1, closePipes: true, stopped: false },
+  ])("observes Windows $label after blocking termination", async (scenario) => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const kill = vi.fn(() => true);
-    const child = {
-      exitCode: 1,
-      kill,
+    const processState = createGatewayProcessState();
+    // SAFETY: The stub supplies every process and pipe member consumed by the stopper.
+    const child = Object.assign(processState, {
       pid: 12345,
-      signalCode: null,
-      stderr,
+      kill: vi.fn(() => true),
       stdout,
-    } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+      stderr,
+    }) as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+    const observed = createDeferred();
+    const now = Date.now.bind(Date);
+    let offset = 0;
+    let scheduled = false;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
     const runTaskkill = vi.fn(() => {
-      stdout.destroy();
-      stderr.destroy();
-      return { status: 0 };
+      // A synchronous taskkill consumes wall time before Node can deliver exit/close.
+      offset += 1_000;
+      if (!scheduled) {
+        scheduled = true;
+        setImmediate(() => {
+          processState.exitCode = 0;
+          stdout.destroy();
+          if (scenario.closePipes) {
+            stderr.destroy();
+          }
+          observed.resolve();
+        });
+      }
+      return { status: scenario.taskkillStatus };
     });
-
-    await expect(
-      testing.stopGatewayProcess(child, Date.now() + 500, 250, {
-        forceWindowsTree: true,
+    try {
+      const stopped = await testing.stopGatewayProcess(child, Date.now() + 500, 250, {
         platform: "win32",
         runTaskkill,
-      }),
-    ).resolves.toBe(true);
-
-    expect(runTaskkill).toHaveBeenCalledOnce();
-    expect(runTaskkill).toHaveBeenCalledWith(
-      path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        killSignal: "SIGKILL",
-        stdio: "ignore",
-        timeout: 10_000,
-      },
-    );
-    expect(kill).not.toHaveBeenCalled();
-    expect(stdout.closed).toBe(true);
-    expect(stderr.closed).toBe(true);
+      });
+      expect(stopped).toBe(scenario.stopped);
+      expect(runTaskkill).toHaveBeenCalledTimes(scenario.taskkillStatus === 0 ? 1 : 2);
+      if (!scenario.closePipes) {
+        expect(stderr.closed).toBe(false);
+      }
+      if (stopped) {
+        expect(child.exitCode).toBe(0);
+        expect(stdout.closed && stderr.closed).toBe(true);
+      }
+    } finally {
+      if (scheduled) {
+        await observed.promise;
+      }
+      const closed = Promise.all(
+        [stdout, stderr].map((pipe) => (pipe.closed ? Promise.resolve() : once(pipe, "close"))),
+      );
+      stdout.destroy();
+      stderr.destroy();
+      await closed.finally(() => clock.mockRestore());
+    }
   });
 
   it("keeps only bounded child output tails in helper logs", () => {
