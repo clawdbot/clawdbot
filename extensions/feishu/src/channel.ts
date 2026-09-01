@@ -327,6 +327,16 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      // Declare the durable-final capabilities Feishu already supports at
+      // runtime so the core delivery layer does not reject durable sends that
+      // carry these requirements (reply context, thread, structured payload,
+      // sending hooks). Capabilities Feishu lacks (silent, batch, poll,
+      // nativeQuote) stay absent so core never assumes them. Parity with the
+      // Telegram outbound adapter's deliveryCapabilities.durableFinal.
+      payload: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
     },
   },
   send: {
@@ -462,6 +472,7 @@ function describeFeishuMessageTool({
     "member-info",
     "channel-info",
     "channel-list",
+    "poll",
   ]);
   if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "reactions"))) {
     actions.add("react");
@@ -1072,7 +1083,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
       capabilities: {
         chatTypes: ["direct", "channel"],
-        polls: false,
+        polls: true,
         threads: true,
         media: true,
         tts: {
@@ -2080,6 +2091,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         },
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
+        sendPoll: { resolve: (runtime) => runtime.feishuOutbound.sendPoll },
       }),
     },
   });

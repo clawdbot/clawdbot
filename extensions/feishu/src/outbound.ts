@@ -1,4 +1,5 @@
 // Feishu plugin module implements outbound behavior.
+import crypto from "node:crypto";
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -48,6 +49,11 @@ import {
   resolveFeishuCardTemplate,
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
+import {
+  buildFeishuPollCard,
+  createFeishuPollStoreState,
+  FEISHU_POLL_MAX_OPTIONS,
+} from "./polls.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationFallback,
@@ -702,6 +708,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       },
     },
   },
+  pollMaxOptions: FEISHU_POLL_MAX_OPTIONS,
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
@@ -1171,6 +1178,38 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         throw partialFeishuSendError(error, results);
       }
       return toFeishuOutboundResult(aggregateFeishuSendResult(mediaResult, results));
+    },
+    sendPoll: async ({ cfg, to, poll, accountId }) => {
+      const pollId = crypto.randomUUID();
+      const maxSelections = poll.maxSelections ?? 1;
+      const card = buildFeishuPollCard({
+        pollId,
+        question: poll.question,
+        options: poll.options,
+        maxSelections,
+      });
+      const result = await sendCardFeishu({
+        cfg,
+        to,
+        card,
+        accountId: accountId ?? undefined,
+      });
+      const pollStore = createFeishuPollStoreState();
+      await pollStore.createPoll({
+        id: pollId,
+        question: poll.question,
+        options: poll.options,
+        maxSelections,
+        createdAt: new Date().toISOString(),
+        conversationId: result.chatId,
+        messageId: result.messageId,
+        votes: {},
+      });
+      return {
+        pollId,
+        messageId: result.messageId,
+        chatId: result.chatId,
+      };
     },
   }),
 };

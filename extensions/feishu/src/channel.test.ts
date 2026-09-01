@@ -324,6 +324,7 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "poll",
       "react",
       "reactions",
     ]);
@@ -421,6 +422,7 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "poll",
     ]);
   });
 
@@ -459,6 +461,7 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "poll",
     ]);
     expect(getDescribedActions(cfgLocal, "work")).toEqual([
       "send",
@@ -471,6 +474,7 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+      "poll",
       "react",
       "reactions",
     ]);
