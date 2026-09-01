@@ -62,6 +62,7 @@ suite.define(() => {
         return {
           inset: sectionRect.right - rowRect.right,
           maskImage: scrollerStyle.maskImage,
+          maskPosition: scrollerStyle.maskPosition,
           maskSize: scrollerStyle.maskSize,
           overflows: scroller.scrollHeight > scroller.clientHeight,
           sectionPaddingEnd: Number.parseFloat(getComputedStyle(section).paddingRight),
@@ -73,7 +74,14 @@ suite.define(() => {
         geometry.sectionPaddingEnd,
       );
       expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
+      expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
       expect(geometry.maskSize.split(", ")).toContain("12px 100%");
+
+      const rtlMaskPosition = await active.evaluate((row) => {
+        document.documentElement.dir = "rtl";
+        return getComputedStyle(row.closest<HTMLElement>(".sidebar-shell__body")!).maskPosition;
+      });
+      expect(rtlMaskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
 
       if (captureProof) {
         await page.screenshot({

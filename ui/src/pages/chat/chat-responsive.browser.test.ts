@@ -1938,6 +1938,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [1200, 800, "desktop"],
+    [900, 500, "landscape-900"],
+    [640, 900, "responsive-640"],
     [320, 568, "mobile-320"],
     [375, 812, "mobile-375"],
     [430, 932, "mobile-430"],
@@ -1987,15 +1989,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 width: bounds.width,
               };
             };
+            const composer = document
+              .querySelector<HTMLElement>(".agent-chat__composer-shell")!
+              .getBoundingClientRect();
+            const thread = document
+              .querySelector<HTMLElement>(".chat-thread")!
+              .getBoundingClientRect();
+            const fade = getComputedStyle(
+              document.querySelector<HTMLElement>(".agent-chat__composer-shell")!,
+              "::before",
+            );
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
+              fadeInsetLeft: composer.left + Number.parseFloat(fade.left) - thread.left,
+              fadeInsetRight: thread.right - (composer.right - Number.parseFloat(fade.right)),
+              scrollbarSize: Number.parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+              ),
               thread: rect(".chat-thread"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
+        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         await page.locator(".chat-topbar-notices").evaluate((node) => {
           node.innerHTML =
             '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
@@ -3112,47 +3131,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(thread.width).toBeCloseTo(768, 0);
         expect(Math.abs(assistantLane.left - thread.left)).toBeLessThanOrEqual(1);
         expect(Math.abs(userLane.right - thread.right)).toBeLessThanOrEqual(1);
-      } finally {
-        await closeBrowserPage(page);
-      }
-    },
-  );
-
-  it.each([
-    [393, 852],
-    [640, 900],
-    [900, 500],
-    [1366, 900],
-  ] as const)(
-    "keeps the transcript fade inside its scrollbar gutters at %sx%s",
-    async (width, height) => {
-      const page = await openFixture(width, height, { direct: true });
-      try {
-        const geometry = await page.evaluate(() => {
-          const composer = document.querySelector<HTMLElement>(".agent-chat__composer-shell");
-          const transcript = document.querySelector<HTMLElement>(".chat-thread");
-          if (!composer || !transcript) {
-            throw new Error("Missing transcript fade fixture");
-          }
-          const composerRect = composer.getBoundingClientRect();
-          const transcriptRect = transcript.getBoundingClientRect();
-          const fadeStyle = getComputedStyle(composer, "::before");
-          const rootStyle = getComputedStyle(document.documentElement);
-          return {
-            fadeLeft: composerRect.left + Number.parseFloat(fadeStyle.left),
-            fadeRight: composerRect.right - Number.parseFloat(fadeStyle.right),
-            scrollbarSize: Number.parseFloat(rootStyle.getPropertyValue("--scrollbar-size")),
-            transcriptLeft: transcriptRect.left,
-            transcriptRight: transcriptRect.right,
-          };
-        });
-
-        expect(geometry.fadeLeft - geometry.transcriptLeft).toBeGreaterThanOrEqual(
-          geometry.scrollbarSize,
-        );
-        expect(geometry.transcriptRight - geometry.fadeRight).toBeGreaterThanOrEqual(
-          geometry.scrollbarSize,
-        );
       } finally {
         await closeBrowserPage(page);
       }
