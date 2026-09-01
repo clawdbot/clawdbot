@@ -382,6 +382,7 @@ describe("createGatewayKernel", () => {
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         VITEST: "1",
       },
     });
