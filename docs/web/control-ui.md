@@ -684,6 +684,29 @@ Chat error banners, including cloud runner failures, show short messages in full
   </Accordion>
 </AccordionGroup>
 
+### Mermaid diagrams
+
+Use a `mermaid` fenced code block in chat. The Control UI renders it as a diagram
+automatically:
+
+````markdown
+```mermaid
+flowchart LR
+  Gateway --> Worker
+  Worker --> State
+```
+````
+
+Choose **Diagram** or **Source** to switch views, **Copy source** to copy the
+Mermaid text, or **Expand diagram** to open the image viewer with zoom controls.
+Diagram colors and fonts follow the current UI theme.
+
+An unfinished streaming fence stays readable as code. Rendering starts when the
+closing fence arrives or the response finishes. Invalid or overly complex
+diagrams keep their source visible with an error; correct the syntax or simplify
+the diagram. Diagram source cannot run scripts or click handlers, load external
+images, or add custom CSS to the Control UI.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard

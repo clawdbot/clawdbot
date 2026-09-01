@@ -5727,6 +5727,15 @@ export const en: TranslationMap = {
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
     },
+    mermaid: {
+      title: "Mermaid diagram",
+      diagram: "Diagram",
+      source: "Source",
+      copySource: "Copy source",
+      expand: "Expand diagram",
+      rendering: "Rendering diagram…",
+      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+    },
     codeBlock: {
       languageFallback: "Code",
       hiddenLine: "1 hidden line",
