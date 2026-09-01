@@ -193,9 +193,6 @@ describe("outbound channel resolution", () => {
     getLoadedChannelPluginMock.mockReturnValue(undefined);
     getChannelPluginMock.mockReturnValue(undefined);
     const channelResolution = await importChannelResolution("scoped-message-adapter");
-    const { withPluginRuntimeRegistryScope } =
-      await import("../../plugins/runtime/gateway-request-scope.js");
-
     expect(
       withPluginRuntimeRegistryScope(registry, () =>
         channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
