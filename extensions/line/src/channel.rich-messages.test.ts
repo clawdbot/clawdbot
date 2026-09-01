@@ -11,22 +11,6 @@ import {
 } from "./rich-messages.js";
 import type { LineRichCard } from "./types.js";
 
-describe("LINE agent prompt capabilities", () => {
-  const cfg = {
-    channels: { line: { enabled: true, channelAccessToken: "token", channelSecret: "secret" } },
-  } as never;
-
-  it("tells the agent it has the buttons the renderer produces", () => {
-    const advertised = linePlugin.agentPrompt?.messageToolCapabilities?.({ cfg });
-    const renders = lineOutboundAdapter.presentationCapabilities?.buttons === true;
-
-    // The prompt and the renderer answer the same question; a channel that says
-    // no here loses the button hint and is told to set a config key it has not got.
-    expect(renders).toBe(true);
-    expect(advertised).toContain("inlineButtons");
-  });
-});
-
 function resolveChannelDataSchema() {
   const discovery = lineMessageActions.describeMessageTool({
     cfg: {

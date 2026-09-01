@@ -120,10 +120,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       defaultTopLevelPlacement: "current",
     },
     agentPrompt: {
-      // LINE renders presentation buttons on every account and has no switch to
-      // turn them off, so the prompt must offer them. Without this the agent is
-      // told inline buttons are off and to ask for a channels.line.capabilities
-      // key the strict account schema rejects.
+      // LINE always renders native buttons; it has no capability opt-in setting.
       messageToolCapabilities: () => ["inlineButtons"],
       messageToolHints: () => [
         "",
