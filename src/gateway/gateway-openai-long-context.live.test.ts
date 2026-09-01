@@ -370,7 +370,21 @@ function markerStatus(text: string, markers: LongOutputMarkers): Record<string, 
 }
 
 function expectAllMarkers(text: string, markers: LongOutputMarkers): void {
-  expect(markerStatus(text, markers)).toEqual({ begin: true, middle: true, end: true });
+  // Diagnose recall failures without retaining provider text or marker values.
+  const diagnostic = {
+    responseChars: text.length,
+    responseHash: createHash("sha256").update(text).digest("hex"),
+    caseInsensitive: markerStatus(text.toLowerCase(), {
+      begin: markers.begin.toLowerCase(),
+      middle: markers.middle.toLowerCase(),
+      end: markers.end.toLowerCase(),
+    }),
+  };
+  expect(markerStatus(text, markers), JSON.stringify(diagnostic)).toEqual({
+    begin: true,
+    middle: true,
+    end: true,
+  });
 }
 
 function promptTokens(result: TurnResult): number | undefined {
