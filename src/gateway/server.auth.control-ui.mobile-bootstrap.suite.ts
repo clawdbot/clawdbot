@@ -36,10 +36,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
       mode: "node";
       deviceFamily: string;
     };
-    limited?: boolean;
-    nodeOnly?: boolean;
-    voice?: boolean;
-    confidentialTransport?: boolean;
+    profile?: "full" | "limited" | "node" | "voice";
+    transport?: "confidential" | "observable";
     identityFixture?: Awaited<ReturnType<typeof createOperatorIdentityFixture>>;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
@@ -56,19 +54,19 @@ export function registerControlUiMobileBootstrapSuite(): void {
     try {
       const wsBootstrap = await openWs(
         port,
-        params.confidentialTransport === false
+        params.transport === "observable"
           ? REMOTE_BOOTSTRAP_HEADERS
           : CONFIDENTIAL_REMOTE_BOOTSTRAP_HEADERS,
       );
       try {
+        const profiles = {
+          full: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          limited: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          node: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          voice: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        } as const;
         const issued = await issueDeviceBootstrapToken({
-          profile: params.voice
-            ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-            : params.nodeOnly
-              ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-              : params.limited
-                ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-                : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          profile: profiles[params.profile ?? "full"],
         });
         const initial = await connectReq(wsBootstrap, {
           skipDefaultAuth: true,
@@ -548,8 +546,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         mode: "node" as const,
         deviceFamily: "Android",
       },
-      voice: false,
-      nodeOnly: false,
+      profile: "full" as const,
       expectedRoles: ["node", "operator"],
       expectedScopes: FULL_OPERATOR_SCOPES,
     },
@@ -563,8 +560,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         mode: "node" as const,
         deviceFamily: "ESP32",
       },
-      voice: true,
-      nodeOnly: false,
+      profile: "voice" as const,
       expectedRoles: ["node", "operator"],
       expectedScopes: ["operator.read", "operator.talk"],
     },
@@ -578,20 +574,18 @@ export function registerControlUiMobileBootstrapSuite(): void {
         mode: "node" as const,
         deviceFamily: "server",
       },
-      voice: false,
-      nodeOnly: true,
+      profile: "node" as const,
       expectedRoles: ["node"],
       expectedScopes: [],
     },
   ])(
     "cleartext $name setup requires owner approval",
-    async ({ client, identityPrefix, voice, nodeOnly, expectedRoles, expectedScopes }) => {
+    async ({ client, identityPrefix, profile, expectedRoles, expectedScopes }) => {
       const { identity, initial } = await connectSetupCodeBootstrapNode({
         identityPrefix,
         client,
-        voice,
-        nodeOnly,
-        confidentialTransport: false,
+        profile,
+        transport: "observable",
       });
       expect(initial.ok).toBe(false);
       expect(initial.error?.details).toMatchObject({
@@ -627,7 +621,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const limited = await connectSetupCodeBootstrapNode({
       identityPrefix,
       client,
-      limited: true,
+      profile: "limited",
       identityFixture,
     });
     const upgraded = await connectSetupCodeBootstrapNode({

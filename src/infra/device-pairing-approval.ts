@@ -9,7 +9,7 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
-import { bindDeviceBootstrapAfterOwnerApproval } from "./device-bootstrap.js";
+import { bindDeviceBootstrapAfterOwnerApprovalInState } from "./device-bootstrap.js";
 import {
   loadDevicePairingState,
   mergeDevicePairingRoles,
@@ -156,8 +156,13 @@ function commitApprovedDevicePairing(params: {
   requestId: string;
   device: PairedDevice;
   baseDir?: string;
-}): Extract<ApproveDevicePairingResult, { status: "approved" }> {
+  bindOwnerBootstrapApproval?: boolean;
+}): ApproveDevicePairingResult {
   const { state, requestId, device, baseDir } = params;
+  const pending = state.pendingById[requestId];
+  if (!pending) {
+    return null;
+  }
   const existing = state.pairedByDeviceId[device.deviceId];
   // The approved device preserves nodeSurface by reference, so capture its
   // generation before cleanup mutates generation-owned fields.
@@ -170,12 +175,24 @@ function commitApprovedDevicePairing(params: {
   const installationIdentityChanged = Boolean(existing && existing.publicKey !== device.publicKey);
   delete state.pendingById[requestId];
   state.pairedByDeviceId[device.deviceId] = device;
-  persistState(
-    state,
-    baseDir,
-    "both",
-    installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
-  );
+  const persisted = persistState(state, baseDir, "both", {
+    ...(installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : {}),
+    expectedPendingRequest: pending,
+    ...(params.bindOwnerBootstrapApproval
+      ? {
+          mutateBootstrapState: (bootstrapState) =>
+            bindDeviceBootstrapAfterOwnerApprovalInState({
+              state: bootstrapState,
+              requestId,
+              deviceId: device.deviceId,
+              publicKey: device.publicKey,
+            }) !== "invalid",
+        }
+      : {}),
+  });
+  if (!persisted) {
+    return null;
+  }
   invalidatePairedCardRendererCache();
   return {
     status: "approved",
@@ -393,19 +410,13 @@ async function approveDevicePairingWithOptions(
       approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
-    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
-  });
-  if (result?.status !== "approved") {
-    return result;
-  }
-  if ((options?.approvedVia ?? "owner") !== "owner") {
-    return result;
-  }
-  await bindDeviceBootstrapAfterOwnerApproval({
-    requestId,
-    deviceId: result.device.deviceId,
-    publicKey: result.device.publicKey,
-    baseDir,
+    return commitApprovedDevicePairing({
+      state,
+      requestId,
+      device,
+      baseDir,
+      bindOwnerBootstrapApproval: (options?.approvedVia ?? "owner") === "owner",
+    });
   });
   return result;
 }

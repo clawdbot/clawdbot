@@ -93,7 +93,6 @@ export type GatewayConnectPhaseContext = {
   peerLabel: string;
   hasProxyHeaders: boolean;
   isLocalClient: boolean;
-  confidentialTransport: boolean;
   reportedClientIp?: string;
   reportedClientIpSource: NodePairingAutoApproveClientIpSource;
   hasBrowserOriginHeader: boolean;
@@ -149,6 +148,7 @@ export type AuthenticatedGatewayConnect = {
   sessionSharedGatewaySessionGeneration?: string;
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   bootstrapIdentityBound: boolean;
+  requiresOwnerBootstrapApproval: boolean;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
   controlUiPairingKind: ControlUiPairingKind;

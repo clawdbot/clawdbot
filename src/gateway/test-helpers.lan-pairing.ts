@@ -86,9 +86,7 @@ type LanNodePairingContext = {
   lanIp: string;
   loaded: ReturnType<typeof loadDeviceIdentity>;
   /** Open a fresh LAN WebSocket, run the node connect handshake, close it. */
-  connectNode: (auth?: {
-    bootstrapToken: string;
-  }) => Promise<Awaited<ReturnType<typeof connectReq>>>;
+  connectNode: (bootstrapToken?: string) => Promise<Awaited<ReturnType<typeof connectReq>>>;
 };
 
 type LanNodePairingAttempt = (params: {
@@ -142,13 +140,13 @@ export function describeWithLanNodePairingServer(
       if (await getPairedDevice(loaded.identity.deviceId)) {
         await removePairedDevice(loaded.identity.deviceId);
       }
-      const connectNode = async (auth?: { bootstrapToken: string }) => {
+      const connectNode = async (bootstrapToken?: string) => {
         const ws = await openLanGatewayWs({ host, port: activeServer.port });
         openSockets.add(ws);
         try {
           return await connectReq(ws, {
-            ...(auth
-              ? { skipDefaultAuth: true, bootstrapToken: auth.bootstrapToken }
+            ...(bootstrapToken
+              ? { skipDefaultAuth: true, bootstrapToken }
               : { token: LAN_NODE_PAIRING_TOKEN }),
             role: "node",
             scopes: [],

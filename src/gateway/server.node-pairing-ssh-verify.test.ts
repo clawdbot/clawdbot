@@ -146,7 +146,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           stdout: `{"deviceId":"${loaded.identity.deviceId}","publicKey":"${loaded.publicKey}"}\n`,
         }));
 
-        const res = await connectNode({ bootstrapToken: issued.token });
+        const res = await connectNode(issued.token);
         expect(res.ok).toBe(false);
         await new Promise((resolve) => {
           setTimeout(resolve, 250);

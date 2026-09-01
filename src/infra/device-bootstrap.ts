@@ -18,8 +18,10 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+  findDeviceBootstrapTokenRecord as findBootstrapTokenRecord,
   loadDeviceBootstrapState as loadState,
   type DeviceBootstrapState as DeviceBootstrapStateFile,
+  withoutDeviceBootstrapApprovalRequest,
   withDeviceBootstrapLock as withLock,
 } from "./device-bootstrap-state.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
@@ -35,7 +37,7 @@ import type {
   DevicePairSetupCompletionRecord,
   PairedDevice,
 } from "./device-pairing.types.js";
-import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
+import { generatePairingToken } from "./pairing-token.js";
 
 // Outlive the credential itself: a client that waits for the full TTL still has
 // to find its completion after the code it was showing has expired.
@@ -183,13 +185,6 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
     return normalizeDevicePublicKeyBase64Url(trimmed) ?? trimmed;
   }
   return trimmed;
-}
-
-function findBootstrapTokenRecord(
-  state: DeviceBootstrapStateFile,
-  token: string,
-): [string, DeviceBootstrapTokenRecord] | undefined {
-  return Object.entries(state).find(([, candidate]) => verifyPairingToken(token, candidate.token));
 }
 
 type DeviceBootstrapTokenIssueParams = {
@@ -539,7 +534,7 @@ function verifyDeviceBootstrapTokenContextInState(
     scopes: readonly string[];
     bindIdentity: boolean;
   },
-): { result: VerifyDeviceBootstrapTokenContextResult; changed: boolean; tokenKey?: string } {
+): { result: VerifyDeviceBootstrapTokenContextResult; changed: boolean } {
   const invalid = {
     result: { ok: false, reason: "bootstrap_token_invalid" } as const,
     changed: false,
@@ -589,36 +584,28 @@ function verifyDeviceBootstrapTokenContextInState(
     typeof record.publicKey === "string"
       ? normalizeBootstrapPublicKey(record.publicKey)
       : undefined;
-  if (boundDeviceId || boundPublicKey) {
+  const identityBound = Boolean(boundDeviceId || boundPublicKey);
+  const pendingProfile = identityBound ? resolvePersistedPendingProfile(record) : null;
+  if (identityBound) {
     if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
       return invalid;
     }
-    const pendingProfile = resolvePersistedPendingProfile(record);
     if (pendingProfile && !deviceBootstrapProfilesEqual(pendingProfile, requestedProfile)) {
       return invalid;
     }
-    state[tokenKey] = {
-      ...record,
-      profile: allowedProfile,
-      pendingProfile: pendingProfile ?? requestedProfile,
-      deviceId,
-      publicKey,
-      lastUsedAtMs: Date.now(),
-    };
-    return { result: { ok: true, context: buildContext(true) }, changed: true, tokenKey };
   }
-  if (!params.bindIdentity) {
-    return { result: { ok: true, context: buildContext(false) }, changed: false, tokenKey };
+  if (!identityBound && !params.bindIdentity) {
+    return { result: { ok: true, context: buildContext(false) }, changed: false };
   }
   state[tokenKey] = {
     ...record,
     profile: allowedProfile,
-    pendingProfile: requestedProfile,
+    pendingProfile: pendingProfile ?? requestedProfile,
     deviceId,
     publicKey,
     lastUsedAtMs: Date.now(),
   };
-  return { result: { ok: true, context: buildContext(true) }, changed: true, tokenKey };
+  return { result: { ok: true, context: buildContext(true) }, changed: true };
 }
 
 /** Verify a bootstrap token and bind only when the transport can protect first presentation. */
@@ -641,54 +628,46 @@ export async function verifyDeviceBootstrapTokenContext(params: {
   });
 }
 
-/** Bind the setup credential only to the exact request an owner approved. */
-export async function bindDeviceBootstrapAfterOwnerApproval(params: {
+/** Bind the setup credential only to the exact request an owner is approving. */
+export function bindDeviceBootstrapAfterOwnerApprovalInState(params: {
+  state: DeviceBootstrapStateFile;
   requestId: string;
   deviceId: string;
   publicKey: string;
-  baseDir?: string;
-}): Promise<boolean> {
+}): "absent" | "bound" | "invalid" {
   const requestId = params.requestId.trim();
   if (!requestId) {
-    return false;
+    return "invalid";
   }
-  return await withLock(async () => {
-    const state = await loadState(params.baseDir);
-    const found = Object.entries(state).find(([, record]) =>
-      record.pendingApprovalRequests?.some((request) => request.requestId === requestId),
-    );
-    if (!found) {
-      return false;
-    }
-    const [tokenKey, record] = found;
-    const approval = record.pendingApprovalRequests?.find(
-      (request) => request.requestId === requestId,
-    );
-    if (!approval) {
-      return false;
-    }
-    const verified = verifyDeviceBootstrapTokenContextInState(state, {
-      token: record.token,
-      deviceId: params.deviceId,
-      publicKey: params.publicKey,
-      role: approval.role,
-      scopes: approval.scopes,
-      bindIdentity: true,
-    });
-    if (!verified.result.ok) {
-      const nextRequests = record.pendingApprovalRequests?.filter(
-        (candidate) => candidate.requestId !== requestId,
-      );
-      state[tokenKey] = { ...record, pendingApprovalRequests: nextRequests };
-      persistState(state, params.baseDir);
-      return false;
-    }
-    const nextRecord = { ...record, ...state[tokenKey] };
-    delete nextRecord.pendingApprovalRequests;
-    state[tokenKey] = nextRecord;
-    persistState(state, params.baseDir);
-    return true;
+  const found = Object.entries(params.state).find(([, record]) =>
+    record.pendingApprovalRequests?.some((request) => request.requestId === requestId),
+  );
+  if (!found) {
+    return "absent";
+  }
+  const [tokenKey, record] = found;
+  const approval = record.pendingApprovalRequests?.find(
+    (request) => request.requestId === requestId,
+  );
+  if (!approval) {
+    return "invalid";
+  }
+  const verified = verifyDeviceBootstrapTokenContextInState(params.state, {
+    token: record.token,
+    deviceId: params.deviceId,
+    publicKey: params.publicKey,
+    role: approval.role,
+    scopes: approval.scopes,
+    bindIdentity: true,
   });
+  if (!verified.result.ok) {
+    params.state[tokenKey] = withoutDeviceBootstrapApprovalRequest(record, requestId);
+    return "invalid";
+  }
+  const nextRecord = { ...record, ...params.state[tokenKey] };
+  delete nextRecord.pendingApprovalRequests;
+  params.state[tokenKey] = nextRecord;
+  return "bound";
 }
 
 /** Verify and bind a bootstrap token for callers whose transport policy predates ingress gating. */

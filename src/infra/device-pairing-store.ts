@@ -1,3 +1,4 @@
+// Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
 import type { DatabaseSync } from "node:sqlite";
 import {
   resolvePairingSetupAccess,
@@ -7,12 +8,11 @@ import {
   ensureDevicePairSetupBootstrapSchema,
   ensureDevicePairSetupCompletionSchema,
 } from "../state/openclaw-state-db-schema-additive.js";
-import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   DevicePairingPaired,
   DevicePairingPending,
-  DeviceBootstrapTokens,
 } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -21,9 +21,9 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
-  decodePendingBootstrapState,
-  DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP,
-  encodePendingBootstrapState,
+  fromBootstrapRow,
+  loadDeviceBootstrapTokenRecordsFromDatabase,
+  replaceDeviceBootstrapTokenRecordsInDatabase,
 } from "./device-bootstrap-store-codec.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type {
@@ -47,6 +47,10 @@ export type DevicePairingStoreState = {
   pendingById: Record<string, DevicePairingPendingRecord>;
   pairedByDeviceId: Record<string, PairedDevice>;
 };
+
+export type DeviceBootstrapStateMutation = (
+  state: Record<string, DeviceBootstrapTokenRecord>,
+) => boolean;
 
 type DevicePairingStoreTarget = "pending" | "paired" | "both";
 
@@ -306,50 +310,6 @@ function fromPairedRow(row: DevicePairingPaired): PairedDevice {
   };
 }
 
-function toBootstrapRow(
-  tokenKey: string,
-  record: DeviceBootstrapTokenRecord,
-): DeviceBootstrapTokens {
-  return {
-    token_key: tokenKey,
-    token: record.token,
-    setup_id: record.setupId ?? null,
-    ts: record.ts,
-    device_id: record.deviceId ?? null,
-    public_key: record.publicKey ?? null,
-    profile_json: toJsonColumn(record.profile),
-    redeemed_profile_json: toJsonColumn(record.redeemedProfile),
-    pending_profile_json: toJsonColumn(encodePendingBootstrapState(record)),
-    issued_at_ms: record.issuedAtMs,
-    last_used_at_ms: record.lastUsedAtMs ?? null,
-  };
-}
-
-function fromBootstrapRow(row: DeviceBootstrapTokens): DeviceBootstrapTokenRecord {
-  const pendingState = decodePendingBootstrapState(
-    fromJsonColumn<unknown>(row.pending_profile_json),
-  );
-  return {
-    token: row.token,
-    ...optional("setupId", row.setup_id),
-    ts: row.ts,
-    ...optional("deviceId", row.device_id),
-    ...optional("publicKey", row.public_key),
-    ...optional(
-      "profile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["profile"]>(row.profile_json) ?? null,
-    ),
-    ...optional(
-      "redeemedProfile",
-      fromJsonColumn<DeviceBootstrapTokenRecord["redeemedProfile"]>(row.redeemed_profile_json) ??
-        null,
-    ),
-    ...pendingState,
-    issuedAtMs: row.issued_at_ms,
-    ...optional("lastUsedAtMs", row.last_used_at_ms),
-  };
-}
-
 export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): DevicePairingStoreState {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const pendingById: Record<string, DevicePairingPendingRecord> = {};
@@ -488,10 +448,40 @@ export function persistDevicePairingStoreState(
   state: DevicePairingStoreState,
   baseDir: string | undefined,
   target: DevicePairingStoreTarget,
-  options?: { clearApnsNodeIds?: readonly string[] },
-): void {
-  runDevicePairingStoreMutation(baseDir, ({ db }) => {
+  options?: {
+    clearApnsNodeIds?: readonly string[];
+    expectedPendingRequest?: Pick<
+      DevicePairingPendingRecord,
+      "requestId" | "deviceId" | "publicKey"
+    >;
+    mutateBootstrapState?: DeviceBootstrapStateMutation;
+  },
+): boolean {
+  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    if (options?.expectedPendingRequest) {
+      const expected = options.expectedPendingRequest;
+      const current = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("device_pairing_pending")
+          .select(["request_id", "device_id", "public_key"])
+          .where("request_id", "=", expected.requestId),
+      );
+      if (
+        !current ||
+        current.device_id !== expected.deviceId ||
+        current.public_key !== expected.publicKey
+      ) {
+        return { mutated: false, value: false };
+      }
+    }
+    const bootstrapState = options?.mutateBootstrapState
+      ? loadDeviceBootstrapTokenRecordsFromDatabase(db)
+      : undefined;
+    if (bootstrapState && !options?.mutateBootstrapState?.(bootstrapState)) {
+      return { mutated: false, value: false };
+    }
     if (target !== "paired") {
       executeSqliteQuerySync(db, kysely.deleteFrom("device_pairing_pending"));
       const rows = Object.values(state.pendingById).map(toPendingRow);
@@ -509,29 +499,16 @@ export function persistDevicePairingStoreState(
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
     }
-    return { mutated: true, value: undefined };
+    if (bootstrapState) {
+      replaceDeviceBootstrapTokenRecordsInDatabase(db, bootstrapState);
+    }
+    return { mutated: true, value: true };
   });
 }
 
-export function loadDeviceBootstrapTokenRecords(
-  baseDir?: string,
-): Record<string, DeviceBootstrapTokenRecord> {
+export function loadDeviceBootstrapTokenRecords(baseDir?: string) {
   const { db } = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
-  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-  const state: Record<string, DeviceBootstrapTokenRecord> = {};
-  const hasSetupId = tableHasColumn(db, "device_bootstrap_tokens", "setup_id");
-  const rows: DeviceBootstrapTokens[] = hasSetupId
-    ? executeSqliteQuerySync(db, kysely.selectFrom("device_bootstrap_tokens").selectAll()).rows
-    : executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("device_bootstrap_tokens")
-          .select(DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP),
-      ).rows.map((row) => Object.assign(row, { setup_id: null }));
-  for (const row of rows) {
-    state[row.token_key] = fromBootstrapRow(row);
-  }
-  return state;
+  return loadDeviceBootstrapTokenRecordsFromDatabase(db);
 }
 
 /** Replace the bootstrap token table contents with the given snapshot. */
@@ -540,25 +517,7 @@ export function persistDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    const rows = Object.entries(state).map(([tokenKey, record]) =>
-      toBootstrapRow(tokenKey, record),
-    );
-    if (rows.some((row) => row.setup_id !== null)) {
-      ensureDevicePairSetupBootstrapSchema(db);
-    }
-    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
-    executeSqliteQuerySync(db, kysely.deleteFrom("device_bootstrap_tokens"));
-    if (rows.length > 0) {
-      if (tableHasColumn(db, "device_bootstrap_tokens", "setup_id")) {
-        executeSqliteQuerySync(db, kysely.insertInto("device_bootstrap_tokens").values(rows));
-      } else {
-        const rowsWithoutSetup = rows.map(({ setup_id: _setupId, ...row }) => row);
-        executeSqliteQuerySync(
-          db,
-          kysely.insertInto("device_bootstrap_tokens").values(rowsWithoutSetup),
-        );
-      }
-    }
+    replaceDeviceBootstrapTokenRecordsInDatabase(db, state);
   }, resolveDevicePairingStateDbOptions(baseDir));
 }
 

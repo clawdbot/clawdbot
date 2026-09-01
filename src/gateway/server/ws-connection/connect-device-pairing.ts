@@ -11,10 +11,6 @@ import {
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
 import {
-  clearDeviceBootstrapApprovalRequest,
-  registerDeviceBootstrapApprovalRequest,
-} from "../../../infra/device-bootstrap-pairing-approval.js";
-import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../../../infra/device-pairing-approval.js";
@@ -169,7 +165,6 @@ export async function authorizeGatewayConnectDevice(
         state,
         connectParams,
         configSnapshot,
-        confidentialTransport: context.confidentialTransport,
         hasBrowserOriginHeader,
         reportedClientIp,
         reportedClientIpSource,
@@ -211,31 +206,25 @@ export async function authorizeGatewayConnectDevice(
           existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : undefined,
         );
       }
-      const pairing = await requestDevicePairing({
-        deviceId: device.id,
-        publicKey: devicePublicKey,
-        ...clientPairingMetadata,
-        scopes,
-        ...(plan.bootstrapPairingRoles
-          ? {
-              roles: plan.bootstrapPairingRoles,
-              scopes: plan.bootstrapPairingScopes ?? [],
-            }
-          : {}),
-        silent: plan.silent,
-      });
-      if (
-        authMethod === "bootstrap-token" &&
-        state.bootstrapTokenCandidate &&
-        !context.confidentialTransport
-      ) {
-        await registerDeviceBootstrapApprovalRequest({
-          token: state.bootstrapTokenCandidate,
-          requestId: pairing.request.requestId,
-          role,
+      const pairing = await requestDevicePairing(
+        {
+          deviceId: device.id,
+          publicKey: devicePublicKey,
+          ...clientPairingMetadata,
           scopes,
-        });
-      }
+          ...(plan.bootstrapPairingRoles
+            ? {
+                roles: plan.bootstrapPairingRoles,
+                scopes: plan.bootstrapPairingScopes ?? [],
+              }
+            : {}),
+          silent: plan.silent,
+        },
+        undefined,
+        state.requiresOwnerBootstrapApproval && state.bootstrapTokenCandidate
+          ? { bootstrapApproval: { token: state.bootstrapTokenCandidate, role, scopes } }
+          : undefined,
+      );
       const trustedProxyApprovalScopes =
         pairing.request.isRepair !== true || plan.isTrustedProxySameKeyUpgrade
           ? plan.trustedProxyAutoApproveScopes
@@ -245,7 +234,6 @@ export async function authorizeGatewayConnectDevice(
       // UIs so they drop the stale prompts instead of stacking alerts forever.
       const supersededResolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
-        await clearDeviceBootstrapApprovalRequest(superseded.requestId);
         requestContext.broadcast(
           "device.pair.resolved",
           {
@@ -378,15 +366,17 @@ export async function authorizeGatewayConnectDevice(
       }
       // SSH verification runs detached: this connection still closes with
       // pairing-required, and the node retry loop picks up the approval.
-      const sshVerifyStarted = startGatewayNodePairingSshApproval({
-        context,
-        state: { ...state, scopes, handoffBootstrapProfile },
-        pairing,
-        existingPairedDevice,
-        devicePublicKey,
-        clientAccessMetadata,
-        reason,
-      });
+      const sshVerifyStarted =
+        !state.requiresOwnerBootstrapApproval &&
+        startGatewayNodePairingSshApproval({
+          context,
+          state: { ...state, scopes, handoffBootstrapProfile },
+          pairing,
+          existingPairedDevice,
+          devicePublicKey,
+          clientAccessMetadata,
+          reason,
+        });
       // Re-resolve: another connection may have superseded/approved the request since we created it
       recoveryRequestId = await resolveLivePendingRequestId();
       const pairingResolved =

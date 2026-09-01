@@ -37,7 +37,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
-import { isGatewayIngressConfidential } from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
@@ -353,10 +352,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           peerLabel,
           hasProxyHeaders,
           isLocalClient,
-          confidentialTransport: isGatewayIngressConfidential({
-            req: params.upgradeReq,
-            attribution: ingressAttribution,
-          }),
           reportedClientIp,
           reportedClientIpSource,
           hasBrowserOriginHeader,

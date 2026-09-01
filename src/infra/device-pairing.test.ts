@@ -7,8 +7,9 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { registerDeviceBootstrapApprovalRequest } from "./device-bootstrap-pairing-approval.js";
+import { removeDeviceBootstrapApprovalRequestInState } from "./device-bootstrap-state.js";
 import {
+  bindDeviceBootstrapAfterOwnerApprovalInState,
   issueDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
   verifyDeviceBootstrapTokenContext,
@@ -908,17 +909,9 @@ describe("device pairing tokens", () => {
           scopes: [],
         },
         baseDir,
+        { bootstrapApproval: { token: issued.token, role: "node", scopes: [] } },
       );
       requestIds[identity] = pairing.request.requestId;
-      await expect(
-        registerDeviceBootstrapApprovalRequest({
-          token: issued.token,
-          requestId: pairing.request.requestId,
-          role: "node",
-          scopes: [],
-          baseDir,
-        }),
-      ).resolves.toBe(true);
     }
 
     closeOpenClawStateDatabaseForTest();
@@ -937,6 +930,100 @@ describe("device pairing tokens", () => {
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toMatchObject({
       deviceId: "victim-device",
       publicKey: "victim-key",
+    });
+  });
+
+  test("moves a reused approval request to the latest bootstrap token", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const first = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: { roles: ["node"], scopes: [] },
+    });
+    const second = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: { roles: ["node"], scopes: [] },
+    });
+    const firstPairing = await requestDevicePairing(
+      { deviceId: "device-1", publicKey: "key-1", role: "node", scopes: [] },
+      baseDir,
+      { bootstrapApproval: { token: first.token, role: "node", scopes: [] } },
+    );
+    const pairing = await requestDevicePairing(
+      { deviceId: "device-1", publicKey: "key-1", role: "node", scopes: [] },
+      baseDir,
+      { bootstrapApproval: { token: second.token, role: "node", scopes: [] } },
+    );
+
+    expect(pairing.request.requestId).toBe(firstPairing.request.requestId);
+    await approveDevicePairing(pairing.request.requestId, baseDir);
+    const records = loadDeviceBootstrapTokenRecords(baseDir);
+    expect(records[first.token]?.deviceId).toBeUndefined();
+    expect(records[second.token]).toMatchObject({ deviceId: "device-1", publicKey: "key-1" });
+  });
+
+  test("serializes owner approval and rejection against the same bootstrap request", async () => {
+    const makeLinkedRequest = async () => {
+      const baseDir = await makeDevicePairingDir();
+      const issued = await issueDeviceBootstrapToken({
+        baseDir,
+        profile: { roles: ["node"], scopes: [] },
+      });
+      const request = await requestDevicePairing(
+        { deviceId: "device-1", publicKey: "key-1", role: "node", scopes: [] },
+        baseDir,
+        { bootstrapApproval: { token: issued.token, role: "node", scopes: [] } },
+      );
+      return { baseDir, issued, request };
+    };
+
+    const rejected = await makeLinkedRequest();
+    const staleApprovalState = loadDevicePairingStoreState(rejected.baseDir);
+    const stalePending = staleApprovalState.pendingById[rejected.request.request.requestId];
+    if (!stalePending) {
+      throw new Error("expected the linked request to remain pending");
+    }
+    await rejectDevicePairing(rejected.request.request.requestId, rejected.baseDir);
+    expect(
+      persistDevicePairingStoreState(staleApprovalState, rejected.baseDir, "pending", {
+        expectedPendingRequest: stalePending,
+        mutateBootstrapState: (bootstrapState) =>
+          bindDeviceBootstrapAfterOwnerApprovalInState({
+            state: bootstrapState,
+            requestId: rejected.request.request.requestId,
+            deviceId: "device-1",
+            publicKey: "key-1",
+          }) !== "invalid",
+      }),
+    ).toBe(false);
+    const rejectedRecord = loadDeviceBootstrapTokenRecords(rejected.baseDir)[rejected.issued.token];
+    expect(rejectedRecord).toBeDefined();
+    expect(rejectedRecord?.pendingApprovalRequests).toBeUndefined();
+    expect(rejectedRecord?.deviceId).toBeUndefined();
+
+    const approved = await makeLinkedRequest();
+    const staleRejectionState = loadDevicePairingStoreState(approved.baseDir);
+    const approvedPending = staleRejectionState.pendingById[approved.request.request.requestId];
+    if (!approvedPending) {
+      throw new Error("expected the linked request to remain pending");
+    }
+    await approveDevicePairing(approved.request.request.requestId, approved.baseDir);
+    delete staleRejectionState.pendingById[approved.request.request.requestId];
+    expect(
+      persistDevicePairingStoreState(staleRejectionState, approved.baseDir, "pending", {
+        expectedPendingRequest: approvedPending,
+        mutateBootstrapState: (bootstrapState) => {
+          removeDeviceBootstrapApprovalRequestInState({
+            state: bootstrapState,
+            requestId: approved.request.request.requestId,
+            revokeToken: false,
+          });
+          return true;
+        },
+      }),
+    ).toBe(false);
+    expect(loadDeviceBootstrapTokenRecords(approved.baseDir)[approved.issued.token]).toMatchObject({
+      deviceId: "device-1",
+      publicKey: "key-1",
     });
   });
 

@@ -82,7 +82,7 @@ describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve
         const issued = await issueDeviceBootstrapToken({
           profile: { roles: ["node"], scopes: [] },
         });
-        const res = await connectNode({ bootstrapToken: issued.token });
+        const res = await connectNode(issued.token);
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("pairing required");
         const pending = (await listDevicePairing()).pending.filter(

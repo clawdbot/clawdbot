@@ -1,5 +1,5 @@
 // Gateway WebSocket paired-device connects enforce pinned metadata and approved access.
-import { verifyDeviceBootstrapTokenContext } from "../../../infra/device-bootstrap.js";
+import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
@@ -49,6 +49,7 @@ export async function authorizeExistingGatewayDevice(params: {
     authMethod,
     bootstrapTokenCandidate,
     bootstrapIdentityBound,
+    requiresOwnerBootstrapApproval,
     issuedBootstrapProfile,
     pairingLocality,
     isControlUi,
@@ -115,24 +116,16 @@ export async function authorizeExistingGatewayDevice(params: {
     }
   }
 
-  if (
-    authMethod === "bootstrap-token" &&
-    bootstrapTokenCandidate &&
-    !context.confidentialTransport &&
-    !bootstrapIdentityBound
-  ) {
+  if (requiresOwnerBootstrapApproval && bootstrapTokenCandidate && !bootstrapIdentityBound) {
     if (!(await requirePairing("scope-upgrade", paired))) {
       return { ok: false, handoffBootstrapProfile };
     }
-    const rebound = await verifyDeviceBootstrapTokenContext({
+    const reboundProfile = await getBoundDeviceBootstrapProfile({
       token: bootstrapTokenCandidate,
       deviceId: paired.deviceId,
       publicKey: devicePublicKey,
-      role,
-      scopes,
-      bindIdentity: false,
     });
-    if (!rebound.ok || !rebound.context.identityBound) {
+    if (!reboundProfile) {
       return { ok: false, handoffBootstrapProfile };
     }
   }

@@ -1,10 +1,11 @@
 // Manages device pairing requests, records, metadata, and node pairing state.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { resolveStateDir } from "../config/paths.js";
-import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { isProgressCardRendererClient } from "../utils/message-channel.js";
-import { clearDeviceBootstrapApprovalRequest } from "./device-bootstrap-pairing-approval.js";
+import {
+  linkDeviceBootstrapApprovalRequestInState,
+  removeDeviceBootstrapApprovalRequestInState,
+} from "./device-bootstrap-state.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   cloneDevicePairingTokens,
@@ -15,11 +16,10 @@ import {
   mergeDevicePairingScopes,
   normalizeDevicePairingId,
   normalizeDevicePairingRole,
+  prepareDevicePairingRequest,
   preserveDeviceRoleScopes,
-  reconcilePendingPairingRequests,
   resolvePairingRequestExpiry,
   resolveRequestedDeviceRoles,
-  sameDevicePairingStringSet,
   withDevicePairingLock as withLock,
 } from "./device-pairing-state.js";
 import {
@@ -107,9 +107,12 @@ export function hasPairedCardRenderer(baseDir?: string): Promise<boolean> {
   return pairedCardRendererCache.value;
 }
 
-function persistState(...args: Parameters<typeof persistDevicePairingStoreState>): void {
-  persistDevicePairingStoreState(...args);
-  invalidatePairedCardRendererCache();
+function persistState(...args: Parameters<typeof persistDevicePairingStoreState>): boolean {
+  const persisted = persistDevicePairingStoreState(...args);
+  if (persisted) {
+    invalidatePairedCardRendererCache();
+  }
+  return persisted;
 }
 
 /**
@@ -257,149 +260,11 @@ export function resolveNodePairingState(device: PairedDevice | null): NodePairin
   return { identity, generation: resolveNodePairingGeneration(device) };
 }
 
-function resolveRequestedScopes(input: { scopes?: string[] }): string[] {
-  return normalizeDeviceAuthScopes(input.scopes);
-}
-
-function samePendingApprovalSnapshot(
-  existing: DevicePairingPendingRequest,
-  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
-): boolean {
-  if (existing.publicKey !== incoming.publicKey) {
-    return false;
-  }
-  if (existing.browserOrigin !== incoming.browserOrigin) {
-    return false;
-  }
-  if (normalizeDevicePairingRole(existing.role) !== normalizeDevicePairingRole(incoming.role)) {
-    return false;
-  }
-  if (
-    !sameDevicePairingStringSet(
-      resolveRequestedDeviceRoles(existing),
-      resolveRequestedDeviceRoles(incoming),
-    ) ||
-    !sameDevicePairingStringSet(resolveRequestedScopes(existing), resolveRequestedScopes(incoming))
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function isStringSubset(subset: readonly string[], superset: readonly string[]): boolean {
-  const supersetSet = new Set(superset);
-  for (const value of subset) {
-    if (!supersetSet.has(value)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// True when the incoming request only asks for roles/scopes a single existing pending
-// request (same key + role) already covers. Such subset re-requests refresh in place so
-// the owner's listed requestId stays valid; escalations still supersede with a fresh id.
-function incomingApprovalCoveredByExisting(
-  existing: DevicePairingPendingRequest,
-  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
-): boolean {
-  if (existing.publicKey !== incoming.publicKey) {
-    return false;
-  }
-  if (existing.browserOrigin !== incoming.browserOrigin) {
-    return false;
-  }
-  if (normalizeDevicePairingRole(existing.role) !== normalizeDevicePairingRole(incoming.role)) {
-    return false;
-  }
-  const incomingRoles = resolveRequestedDeviceRoles(incoming);
-  if (!isStringSubset(incomingRoles, resolveRequestedDeviceRoles(existing))) {
-    return false;
-  }
-  const existingScopes = resolveRequestedScopes(existing);
-  for (const scope of resolveRequestedScopes(incoming)) {
-    const covered = incomingRoles.some((role) =>
-      roleScopesAllow({
-        role,
-        requestedScopes: [scope],
-        allowedScopes: existingScopes,
-      }),
-    );
-    if (!covered) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function refreshPendingDevicePairingRequest(
-  existing: DevicePairingPendingRecord,
-  incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
-  isRepair: boolean,
-): DevicePairingPendingRecord {
-  return {
-    ...existing,
-    publicKey: incoming.publicKey,
-    displayName: incoming.displayName ?? existing.displayName,
-    platform: incoming.platform ?? existing.platform,
-    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
-    clientId: incoming.clientId ?? existing.clientId,
-    clientMode: incoming.clientMode ?? existing.clientMode,
-    browserOrigin: existing.browserOrigin,
-    remoteIp: incoming.remoteIp ?? existing.remoteIp,
-    // If either request is interactive, keep the pending request visible for approval.
-    silent: Boolean(existing.silent && incoming.silent),
-    isRepair: existing.isRepair || isRepair,
-    // Preserve the original creation timestamp so that reconnects cannot bump this
-    // request's queue position. Using Date.now() here would let an attacker silently
-    // refresh recency and win the implicit --latest approval race.
-    ts: existing.ts,
-    // Keepalive for the pending TTL only (see pruneExpiredPending); never affects ordering.
-    refreshedAtMs: Date.now(),
-  };
-}
-
-function resolveSupersededPendingSilent(params: {
-  existing: readonly DevicePairingPendingRequest[];
-  incomingSilent: boolean | undefined;
-}): boolean {
-  return Boolean(
-    params.incomingSilent && params.existing.every((pending) => pending.silent === true),
-  );
-}
-
 function toPublicPendingDevicePairingRequest(
   pending: DevicePairingPendingRecord,
 ): DevicePairingPendingRequest {
   const { refreshedAtMs: _refreshedAtMs, ...request } = pending;
   return request;
-}
-
-function buildPendingDevicePairingRequest(params: {
-  requestId?: string;
-  deviceId: string;
-  isRepair: boolean;
-  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
-}): DevicePairingPendingRequest {
-  const role = normalizeDevicePairingRole(params.req.role) ?? undefined;
-  return {
-    requestId: params.requestId ?? randomUUID(),
-    deviceId: params.deviceId,
-    publicKey: params.req.publicKey,
-    displayName: params.req.displayName,
-    platform: params.req.platform,
-    deviceFamily: params.req.deviceFamily,
-    clientId: params.req.clientId,
-    clientMode: params.req.clientMode,
-    browserOrigin: params.req.browserOrigin,
-    role,
-    roles: mergeDevicePairingRoles(params.req.roles, role),
-    scopes: mergeDevicePairingScopes(params.req.scopes),
-    remoteIp: params.req.remoteIp,
-    silent: params.req.silent,
-    isRepair: params.isRepair,
-    ts: Date.now(),
-  };
 }
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
@@ -451,63 +316,39 @@ export async function getPendingDevicePairing(
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
+  options?: {
+    bootstrapApproval?: { token: string; role: string; scopes: readonly string[] };
+  },
 ): Promise<RequestDevicePairingResult> {
   return await withLock(async () => {
     const state = await loadDevicePairingState(baseDir);
-    const deviceId = normalizeDevicePairingId(req.deviceId);
-    if (!deviceId) {
-      throw new Error("deviceId required");
-    }
-    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
-    const pendingForDevice = Object.values(state.pendingById)
-      .filter((pending) => pending.deviceId === deviceId)
-      .toSorted((left, right) => right.ts - left.ts);
-    const result = reconcilePendingPairingRequests({
-      pendingById: state.pendingById,
-      existing: pendingForDevice,
-      incoming: req,
-      canRefreshSingle: (existing, incoming) =>
-        samePendingApprovalSnapshot(existing, incoming) ||
-        incomingApprovalCoveredByExisting(existing, incoming),
-      refreshSingle: (existing, incoming) =>
-        refreshPendingDevicePairingRequest(existing, incoming, isRepair),
-      buildReplacement: ({ existing, incoming }) => {
-        const latestPending = existing[0];
-        const mergedRoles = mergeDevicePairingRoles(
-          ...existing.flatMap((pending) => [pending.roles, pending.role]),
-          incoming.roles,
-          incoming.role,
-        );
-        const mergedScopes = mergeDevicePairingScopes(
-          ...existing.map((pending) => pending.scopes),
-          incoming.scopes,
-        );
-        return buildPendingDevicePairingRequest({
-          deviceId,
-          isRepair,
-          req: {
-            ...incoming,
-            role: normalizeDevicePairingRole(incoming.role) ?? latestPending?.role,
-            roles: mergedRoles,
-            scopes: mergedScopes,
-            // Preserve interactive visibility when superseding pending requests:
-            // if any previous pending request was interactive, keep this one interactive.
-            silent: resolveSupersededPendingSilent({
-              existing,
-              incomingSilent: incoming.silent,
-            }),
-          },
-        });
-      },
-      persist: () => persistState(state, baseDir, "pending"),
-    });
+    const { result, superseded: supersededRecords } = prepareDevicePairingRequest({ state, req });
     // Surface superseded requestIds so callers can broadcast their resolution;
     // clients otherwise keep prompting for requests that can no longer be approved.
-    const superseded = result.created
-      ? pendingForDevice
-          .filter((pending) => pending.requestId !== result.request.requestId)
-          .map((pending) => ({ requestId: pending.requestId, deviceId: pending.deviceId }))
-      : [];
+    const superseded = supersededRecords.map((pending) => ({
+      requestId: pending.requestId,
+      deviceId: pending.deviceId,
+    }));
+    const bootstrapApproval = options?.bootstrapApproval;
+    const persisted = persistState(state, baseDir, "pending", {
+      ...(!result.created ? { expectedPendingRequest: result.request } : {}),
+      ...(bootstrapApproval
+        ? {
+            mutateBootstrapState: (bootstrapState) =>
+              linkDeviceBootstrapApprovalRequestInState({
+                state: bootstrapState,
+                token: bootstrapApproval.token,
+                requestId: result.request.requestId,
+                role: bootstrapApproval.role,
+                scopes: bootstrapApproval.scopes,
+                supersededRequestIds: superseded.map((pending) => pending.requestId),
+              }),
+          }
+        : {}),
+    });
+    if (!persisted) {
+      throw new Error("Pairing request changed before bootstrap approval could be linked.");
+    }
     const publicResult = {
       ...result,
       request: toPublicPendingDevicePairingRequest(result.request),
@@ -522,7 +363,6 @@ export async function rejectDevicePairing(
   requestId: string,
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
-  await clearDeviceBootstrapApprovalRequest(requestId, baseDir);
   return await withLock(async () => {
     const state = await loadDevicePairingState(baseDir);
     const pending = state.pendingById[requestId];
@@ -530,7 +370,20 @@ export async function rejectDevicePairing(
       return null;
     }
     delete state.pendingById[requestId];
-    persistState(state, baseDir, "pending");
+    const persisted = persistState(state, baseDir, "pending", {
+      expectedPendingRequest: pending,
+      mutateBootstrapState: (bootstrapState) => {
+        removeDeviceBootstrapApprovalRequestInState({
+          state: bootstrapState,
+          requestId,
+          revokeToken: false,
+        });
+        return true;
+      },
+    });
+    if (!persisted) {
+      return null;
+    }
     await revokeDeviceBootstrapTokensForDevice({
       deviceId: pending.deviceId,
       publicKey: pending.publicKey,

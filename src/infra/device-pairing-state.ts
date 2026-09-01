@@ -1,12 +1,20 @@
 // Shared snapshot, lock, and normalization owner for device pairing domain modules.
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { loadDevicePairingStoreStateReadOnly } from "./device-pairing-store-readonly.js";
 import {
   loadDevicePairingStoreState,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
-import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+import type {
+  DeviceAuthToken,
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+} from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 
 const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
@@ -135,6 +143,163 @@ export function resolveRequestedDeviceRoles(input: { role?: string; roles?: stri
 /** Clone a paired device's role-token map before mutation. */
 export function cloneDevicePairingTokens(device: PairedDevice): Record<string, DeviceAuthToken> {
   return device.tokens ? { ...device.tokens } : {};
+}
+
+type IncomingDevicePairingRequest = Omit<
+  DevicePairingPendingRequest,
+  "requestId" | "ts" | "isRepair"
+>;
+
+function samePendingApprovalSnapshot(
+  existing: DevicePairingPendingRequest,
+  incoming: IncomingDevicePairingRequest,
+): boolean {
+  return (
+    existing.publicKey === incoming.publicKey &&
+    existing.browserOrigin === incoming.browserOrigin &&
+    normalizeDevicePairingRole(existing.role) === normalizeDevicePairingRole(incoming.role) &&
+    sameDevicePairingStringSet(
+      resolveRequestedDeviceRoles(existing),
+      resolveRequestedDeviceRoles(incoming),
+    ) &&
+    sameDevicePairingStringSet(
+      normalizeDeviceAuthScopes(existing.scopes),
+      normalizeDeviceAuthScopes(incoming.scopes),
+    )
+  );
+}
+
+function isStringSubset(subset: readonly string[], superset: readonly string[]): boolean {
+  const supersetSet = new Set(superset);
+  return subset.every((value) => supersetSet.has(value));
+}
+
+function incomingApprovalCoveredByExisting(
+  existing: DevicePairingPendingRequest,
+  incoming: IncomingDevicePairingRequest,
+): boolean {
+  if (
+    existing.publicKey !== incoming.publicKey ||
+    existing.browserOrigin !== incoming.browserOrigin ||
+    normalizeDevicePairingRole(existing.role) !== normalizeDevicePairingRole(incoming.role)
+  ) {
+    return false;
+  }
+  const incomingRoles = resolveRequestedDeviceRoles(incoming);
+  if (!isStringSubset(incomingRoles, resolveRequestedDeviceRoles(existing))) {
+    return false;
+  }
+  const existingScopes = normalizeDeviceAuthScopes(existing.scopes);
+  return normalizeDeviceAuthScopes(incoming.scopes).every((scope) =>
+    incomingRoles.some((role) =>
+      roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: existingScopes }),
+    ),
+  );
+}
+
+function refreshPendingDevicePairingRequest(
+  existing: DevicePairingPendingRecord,
+  incoming: IncomingDevicePairingRequest,
+  isRepair: boolean,
+): DevicePairingPendingRecord {
+  return {
+    ...existing,
+    publicKey: incoming.publicKey,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
+    browserOrigin: existing.browserOrigin,
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    silent: Boolean(existing.silent && incoming.silent),
+    isRepair: existing.isRepair || isRepair,
+    // Preserve creation time so reconnects cannot jump the owner's approval queue.
+    ts: existing.ts,
+    refreshedAtMs: Date.now(),
+  };
+}
+
+function buildPendingDevicePairingRequest(params: {
+  deviceId: string;
+  isRepair: boolean;
+  req: IncomingDevicePairingRequest;
+}): DevicePairingPendingRecord {
+  const role = normalizeDevicePairingRole(params.req.role) ?? undefined;
+  return {
+    requestId: randomUUID(),
+    deviceId: params.deviceId,
+    publicKey: params.req.publicKey,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    deviceFamily: params.req.deviceFamily,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
+    browserOrigin: params.req.browserOrigin,
+    role,
+    roles: mergeDevicePairingRoles(params.req.roles, role),
+    scopes: mergeDevicePairingScopes(params.req.scopes),
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    isRepair: params.isRepair,
+    ts: Date.now(),
+  };
+}
+
+/** Reconcile one incoming request against the mutable pairing snapshot. */
+export function prepareDevicePairingRequest(params: {
+  state: DevicePairingStoreState;
+  req: IncomingDevicePairingRequest;
+}) {
+  const deviceId = normalizeDevicePairingId(params.req.deviceId);
+  if (!deviceId) {
+    throw new Error("deviceId required");
+  }
+  const isRepair = Boolean(params.state.pairedByDeviceId[deviceId]);
+  const existing = Object.values(params.state.pendingById)
+    .filter((pending) => pending.deviceId === deviceId)
+    .toSorted((left, right) => right.ts - left.ts);
+  const result = reconcilePendingPairingRequests({
+    pendingById: params.state.pendingById,
+    existing,
+    incoming: params.req,
+    canRefreshSingle: (pending, incoming) =>
+      samePendingApprovalSnapshot(pending, incoming) ||
+      incomingApprovalCoveredByExisting(pending, incoming),
+    refreshSingle: (pending, incoming) =>
+      refreshPendingDevicePairingRequest(pending, incoming, isRepair),
+    buildReplacement: ({ existing: priorRequests, incoming }) => {
+      const latestPending = priorRequests[0];
+      const roles = mergeDevicePairingRoles(
+        ...priorRequests.flatMap((pending) => [pending.roles, pending.role]),
+        incoming.roles,
+        incoming.role,
+      );
+      const scopes = mergeDevicePairingScopes(
+        ...priorRequests.map((pending) => pending.scopes),
+        incoming.scopes,
+      );
+      return buildPendingDevicePairingRequest({
+        deviceId,
+        isRepair,
+        req: {
+          ...incoming,
+          role: normalizeDevicePairingRole(incoming.role) ?? latestPending?.role,
+          roles,
+          scopes,
+          // Once an owner-visible request exists, replacements stay visible.
+          silent: Boolean(
+            incoming.silent && priorRequests.every((pending) => pending.silent === true),
+          ),
+        },
+      });
+    },
+    persist: () => {},
+  });
+  const superseded = result.created
+    ? existing.filter((pending) => pending.requestId !== result.request.requestId)
+    : [];
+  return { result, superseded };
 }
 
 /** Refresh one compatible pending request or replace a superseded request set atomically. */

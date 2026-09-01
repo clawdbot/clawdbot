@@ -13,6 +13,7 @@ import {
 } from "../../../shared/device-bootstrap-profile.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
+import { isGatewayIngressConfidential } from "../../ingress-attribution.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -74,6 +75,7 @@ async function authenticateGatewayConnectCore(
 ): Promise<AuthenticatedGatewayConnect | undefined> {
   const {
     upgradeReq,
+    ingressAttribution,
     connId,
     remoteAddr,
     remotePort,
@@ -103,6 +105,10 @@ async function authenticateGatewayConnectCore(
     markHandshakeFailure,
     sendHandshakeErrorResponse,
   } = context;
+  const confidentialTransport = isGatewayIngressConfidential({
+    req: upgradeReq,
+    attribution: ingressAttribution,
+  });
   const resolvedAuth = getResolvedAuth();
   const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
@@ -393,7 +399,7 @@ async function authenticateGatewayConnectCore(
         token,
         role: roleLocal,
         scopes: scopesLocal,
-        bindIdentity: context.confidentialTransport,
+        bindIdentity: confidentialTransport,
       });
       if (result.ok) {
         verifiedBootstrap.context = result.context;
@@ -476,6 +482,8 @@ async function authenticateGatewayConnectCore(
   advanceHandshakePhase("auth_validated");
   const issuedBootstrapProfile = boundBootstrapContext?.profile ?? null;
   const bootstrapIdentityBound = boundBootstrapContext?.identityBound ?? false;
+  const requiresOwnerBootstrapApproval =
+    authMethod === "bootstrap-token" && Boolean(bootstrapTokenCandidate) && !confidentialTransport;
   const usesSharedGatewayAuth =
     authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
   const sharedGatewaySessionGeneration = usesSharedGatewayAuth
@@ -563,6 +571,7 @@ async function authenticateGatewayConnectCore(
     sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     bootstrapIdentityBound,
+    requiresOwnerBootstrapApproval,
     handoffBootstrapProfile,
     trustedProxyAuthOk,
     controlUiPairingKind,

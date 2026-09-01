@@ -63,7 +63,6 @@ export type PairingApprovalPlan = {
   trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
-  allowControlUiOwnerBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
   bootstrapPairingScopes: string[] | undefined;
@@ -81,7 +80,6 @@ export function resolvePairingApprovalPlan(params: {
   state: AuthenticatedGatewayConnect;
   connectParams: GatewayConnectPhaseContext["connectParams"];
   configSnapshot: GatewayConnectPhaseContext["configSnapshot"];
-  confidentialTransport: boolean;
   hasBrowserOriginHeader: boolean;
   reportedClientIp: string | undefined;
   reportedClientIpSource: GatewayConnectPhaseContext["reportedClientIpSource"];
@@ -101,12 +99,9 @@ export function resolvePairingApprovalPlan(params: {
     authResult,
     bootstrapTokenCandidate,
     issuedBootstrapProfile,
+    requiresOwnerBootstrapApproval,
     pairingLocality,
   } = state;
-  const requiresOwnerBootstrapApproval =
-    authMethod === "bootstrap-token" &&
-    Boolean(bootstrapTokenCandidate) &&
-    !params.confidentialTransport;
   const allowSilentLocalPairing =
     !requiresOwnerBootstrapApproval &&
     !(existingPairedDevice && role !== "operator") &&
@@ -187,7 +182,7 @@ export function resolvePairingApprovalPlan(params: {
       ? setupBootstrapProfile
       : null;
   const allowSetupCodeHandoffBootstrapPairing =
-    params.confidentialTransport && setupCodeHandoffBootstrapProfile !== null;
+    !requiresOwnerBootstrapApproval && setupCodeHandoffBootstrapProfile !== null;
   const allowControlUiOwnerBootstrapPairing =
     reason === "scope-upgrade" &&
     isControlUiOwnerBootstrapProfile({
@@ -195,7 +190,7 @@ export function resolvePairingApprovalPlan(params: {
       requestedScopes: scopes,
     });
   const allowControlUiOperatorBootstrapPairing =
-    params.confidentialTransport &&
+    !requiresOwnerBootstrapApproval &&
     ((reason === "not-paired" &&
       isControlUiOperatorBootstrapProfile({
         profile: setupBootstrapProfile,
@@ -244,7 +239,6 @@ export function resolvePairingApprovalPlan(params: {
     trustedProxyUser,
     isTrustedProxySameKeyUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
-    allowControlUiOwnerBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,
     bootstrapPairingScopes,
