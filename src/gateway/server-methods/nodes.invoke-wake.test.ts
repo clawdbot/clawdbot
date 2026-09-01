@@ -1384,33 +1384,6 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
   });
 
-  it("retries a direct wake after the system clock moves backward", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
-    const nodeId = "ios-node-clock-rollback";
-    mockDirectWakeConfig(nodeId);
-    mocks.sendApnsBackgroundWake.mockResolvedValue({
-      ok: true,
-      status: 200,
-      tokenSuffix: "1234abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      transport: "direct",
-    });
-
-    await expect(maybeWakeNodeWithApns(nodeId)).resolves.toMatchObject({
-      path: "sent",
-      throttled: false,
-    });
-    vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
-
-    await expect(maybeWakeNodeWithApns(nodeId)).resolves.toMatchObject({
-      path: "sent",
-      throttled: false,
-    });
-    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
-  });
-
   it("does not share an in-flight wake with a replacement pairing generation", async () => {
     const nodeId = "ios-node-replacement-in-flight";
     const generationOne = { nodeId, key: "generation-1" };
@@ -2056,6 +2029,35 @@ describe("node.invoke APNs wake path", () => {
     await expect(reconnectPromise).resolves.toBe(false);
     expect(nodeRegistry.get).toHaveBeenCalledWith("ios-node-never-reconnects");
   });
+
+  it.each([-3_600_000, 3_600_000])(
+    "keeps the reconnect wait interval across a %i ms wall-clock change",
+    async (clockChange) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const nodeRegistry = {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => undefined),
+      };
+      let settled = false;
+      const reconnect = waitForNodeReconnect({
+        nodeId: "clock-node",
+        context: { nodeRegistry },
+        timeoutMs: 300,
+        pollMs: 50,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      vi.setSystemTime(10_000_000 + clockChange);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(reconnect).resolves.toBe(false);
+    },
+  );
 
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
     const respond = vi.fn();
