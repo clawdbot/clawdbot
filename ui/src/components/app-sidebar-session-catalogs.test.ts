@@ -127,6 +127,12 @@ describe("findCatalogSessionHovercardRow", () => {
         sessionKey: "catalog:codex:gateway%3Acodex:pull-request",
       })?.workContext,
     ).toEqual({ kind: "project", name: "pull-request", path: "/work/pull-request" });
+    expect(
+      findCatalogSessionHovercardRow({
+        catalogs: [catalog],
+        sessionKey: "agent:main:catalog:codex:gateway%3Acodex:colored",
+      })?.color,
+    ).toBe("cyan");
   });
 });
 

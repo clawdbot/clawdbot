@@ -12,7 +12,7 @@ import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -43,14 +43,21 @@ export function findCatalogSessionHovercardRow(params: {
   for (const catalog of params.catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
-        const key =
-          session.sessionKey ??
-          buildCatalogSessionKey({
-            catalogId: catalog.id,
-            hostId: host.hostId,
-            threadId: session.threadId,
-          });
-        if (key !== params.sessionKey) {
+        const catalogKey = {
+          catalogId: catalog.id,
+          hostId: host.hostId,
+          threadId: session.threadId,
+        };
+        const identityKey = buildCatalogSessionKey(catalogKey);
+        const key = session.sessionKey ?? identityKey;
+        const requestedCatalog = parseCatalogSessionKey(params.sessionKey);
+        const matches =
+          key === params.sessionKey ||
+          (requestedCatalog !== null &&
+            requestedCatalog.catalogId === catalogKey.catalogId &&
+            requestedCatalog.hostId === catalogKey.hostId &&
+            requestedCatalog.threadId === catalogKey.threadId);
+        if (!matches) {
           continue;
         }
         const cwd = normalizeOptionalString(session.cwd);
