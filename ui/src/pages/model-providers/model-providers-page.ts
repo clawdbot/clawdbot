@@ -698,7 +698,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           fallbacks: current.fallbacks.filter((fallback) => fallback !== model),
         });
       },
-      onFallbackChange: (model) => stageDefaults({ fallbacks: model ? [model] : [] }),
+      onFallbackChange: (model) => {
+        const current = this.defaultsDraft ?? configuredDefaults;
+        stageDefaults({
+          fallbacks: model
+            ? [model, ...current.fallbacks.slice(1).filter((fallback) => fallback !== model)]
+            : [],
+        });
+      },
       onUtilityChange: (model) => stageDefaults({ utilityModel: model }),
       onThinkingChange: (level) =>
         stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),

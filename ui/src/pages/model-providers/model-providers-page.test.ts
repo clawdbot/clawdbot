@@ -278,6 +278,64 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
+  it("preserves trailing fallbacks when replacing the visible fallback", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    const model = {
+      primary: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
+    };
+    Object.assign(runtimeConfig.state.configForm.agents.defaults, { model });
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: runtimeConfig.state.configForm,
+      models: [
+        { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+        {
+          id: "claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+          available: true,
+        },
+        { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
+        { id: "grok", name: "Grok", provider: "xai", available: true },
+      ],
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    runtimeConfig.patch.mockClear();
+
+    const fallback = [
+      ...page.querySelectorAll<HTMLElement & { value: string; updateComplete: Promise<unknown> }>(
+        "wa-select",
+      ),
+    ].find((select) => select.querySelector('[slot="label"]')?.textContent === "Fallback Model");
+    expect(fallback).toBeDefined();
+    fallback!.value = "xai/grok";
+    await fallback!.updateComplete;
+    fallback!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5",
+              fallbacks: ["xai/grok", "google/gemini-pro"],
+            },
+            utilityModel: null,
+            thinkingDefault: "low",
+            fastModeDefault: "auto",
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
+  });
+
   it("autosaves removal of inherited behavior overrides", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
