@@ -172,10 +172,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   // claim off, so counting them against startLimit would let a few waiting
   // deliveries stall every other lane until they finish.
   //
+  // Only for a drain that actually releases the lane on deferral - that release
+  // is the whole reason the slot is safe to lend, and a "hold" drain still
+  // serializes its lane, so widening its ceiling would buy nothing and raise
+  // concurrency for a channel that never asked.
+  //
   // The discount is bounded: past this many, a deferral keeps its slot, so the
   // drain stops starting work instead of parking callbacks without a ceiling.
   // Live deliveries therefore stay within startLimit + this budget.
-  const deferredStartCapacityLimit = options.drain?.startLimit ?? 0;
+  const deferredStartCapacityLimit =
+    options.drain?.deferredLaneOccupancy === "release" ? (options.drain.startLimit ?? 0) : 0;
   let deferredStartCapacity = 0;
   const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;

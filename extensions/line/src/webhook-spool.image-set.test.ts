@@ -5,9 +5,6 @@ import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from ".
 import { callback, createEvent, runtime, withQueue } from "./webhook-spool.test-support.js";
 
 describe("LINE webhook spool image sets", () => {
-  // LINE lanes are keyed per sender, so every part of one multi-image send shares
-  // one. A part that defers while its set is incomplete must stop owning that lane
-  // or the later parts can never arrive to complete it.
   // LINE splits one multi-image send across several webhook events on one lane.
   // The spool groups their claims so the set reaches the handler as a single turn.
   it("delivers a same-lane image set as one turn owning every part's claim", async () => {
@@ -90,9 +87,8 @@ describe("LINE webhook spool image sets", () => {
     });
   });
 
-  // A text landing between image parts must not become the lane owner: the parts
-  // that follow could then never be claimed, and the set would split into a
-  // partial image turn, the text, and a second image turn.
+  // Shutdown mid-delivery must return every claim the combined turn consumed, not
+  // only the holder's, or the deferred parts stay held until recovery.
   it("hands back every claim in a set when shutdown interrupts its delivery", async () => {
     await withQueue(async (queue) => {
       let releaseDelivery = () => {};
@@ -138,6 +134,9 @@ describe("LINE webhook spool image sets", () => {
     });
   });
 
+  // A text landing between image parts must not become the lane owner: the parts
+  // that follow could then never be claimed, and the set would split into a
+  // partial image turn, the text, and a second image turn.
   it("still aggregates a set when a text lands between its parts", async () => {
     await withQueue(async (queue) => {
       const turns: string[] = [];

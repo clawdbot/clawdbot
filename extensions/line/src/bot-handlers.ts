@@ -625,11 +625,6 @@ async function handlePostbackEvent(
   });
 }
 
-/**
- * Splits one delivery into its turns. A LINE callback can carry several events,
- * and the durable spool hands the parts of one multi-image send over together;
- * those parts share a turn while everything else keeps its own.
- */
 /** Media reads in the order the sender picked, whatever order LINE delivered. */
 function orderedLineSetMessages(
   message: MessageEvent["message"],
@@ -641,6 +636,11 @@ function orderedLineSetMessages(
   return messages.toSorted((left, right) => indexOf(left) - indexOf(right));
 }
 
+/**
+ * Splits one delivery into its turns. A LINE callback can carry several events,
+ * and the durable spool hands the parts of one multi-image send over together;
+ * those parts share a turn while everything else keeps its own.
+ */
 function groupLineDeliveryTurns(events: readonly WebhookEvent[]): WebhookEvent[][] {
   const turns: WebhookEvent[][] = [];
   const bySetId = new Map<string, WebhookEvent[]>();
