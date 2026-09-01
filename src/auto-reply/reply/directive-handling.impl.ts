@@ -1,6 +1,5 @@
 /** Applies directive-only command state changes without running the agent. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import {
@@ -58,6 +57,8 @@ import {
   prepareModelSelectionRuntime,
 } from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+
+type ModelRuntimeResolution = Parameters<typeof applyModelRuntimeDirective>[1];
 
 /** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
@@ -161,17 +162,14 @@ export async function handleDirectiveOnly(
   if (modelResolution.errorText) {
     return rejectModelTransaction(modelResolution.errorText);
   }
-  const modelSelection = modelResolution.modelSelection;
-  const profileOverride = modelResolution.profileOverride;
+  const { modelSelection, profileOverride } = modelResolution;
   if (modelSelection && isModelSelectionLocked(sessionEntry)) {
     return rejectModelTransaction(MODEL_SELECTION_LOCKED_MESSAGE);
   }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  let modelRuntimeResolution: Parameters<typeof applyModelRuntimeDirective>[1] = {
-    kind: "unchanged",
-  };
+  let modelRuntimeResolution: ModelRuntimeResolution = { kind: "unchanged" };
   if (modelSelection) {
     const prepared = await prepareModelSelectionRuntime({
       cfg: params.cfg,
@@ -180,7 +178,7 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       catalog: thinkingCatalog ?? [],
       rawRuntime: directives.rawModelRuntime,
-      workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, activeAgentId),
+      workspaceDir: params.workspaceDir,
       sessionKey: params.sessionKey,
       sessionEntry,
     });

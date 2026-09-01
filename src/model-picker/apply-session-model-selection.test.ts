@@ -88,6 +88,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
   return {
     cfg: {},
     agentId: "main",
+    workspaceDir: "/tmp/workspace",
     sessionKey,
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },

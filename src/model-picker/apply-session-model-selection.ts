@@ -1,8 +1,4 @@
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  type AgentModelPrimaryWriteTarget,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey } from "../agents/model-selection.js";
 import {
@@ -54,6 +50,7 @@ export type SessionModelSelectionRequest = {
 export type ApplySessionModelSelectionParams = {
   cfg: OpenClawConfig;
   agentId: string;
+  workspaceDir: string;
   sessionKey: string;
   storePath?: string;
   sessionEntry: SessionEntry;
@@ -188,7 +185,7 @@ export async function applySessionModelSelection(
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
     rawRuntime:
       request.runtime.kind === "set"

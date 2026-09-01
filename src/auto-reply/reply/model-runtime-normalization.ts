@@ -90,7 +90,7 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
-  workspaceDir: string;
+  workspaceDir?: string;
   sessionKey: string;
   sessionEntry?: SessionEntry;
 }): Promise<ModelSelectionPreparation> {
@@ -106,21 +106,23 @@ export async function prepareModelSelectionRuntime(params: {
       message: `Unknown provider "${params.provider}". Use /models to list providers.`,
     };
   }
-  const missingHarnessRuntime = resolveMissingAgentHarnessRuntime({
-    selection: {
-      provider: params.provider,
-      modelId: params.model,
-      runtime:
-        runtime.kind === "set"
-          ? runtime.runtime
-          : runtime.kind === "unchanged"
-            ? params.sessionEntry?.agentRuntimeOverride
-            : undefined,
-      agentId: params.agentId,
-    },
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
+  const missingHarnessRuntime = params.workspaceDir
+    ? resolveMissingAgentHarnessRuntime({
+        selection: {
+          provider: params.provider,
+          modelId: params.model,
+          runtime:
+            runtime.kind === "set"
+              ? runtime.runtime
+              : runtime.kind === "unchanged"
+                ? params.sessionEntry?.agentRuntimeOverride
+                : undefined,
+          agentId: params.agentId,
+        },
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+      })
+    : undefined;
   // Existing ACP metadata owns this session's concrete backend. Model selection may update
   // policy, but it must not require a separate plugin harness while that binding is active.
   if (

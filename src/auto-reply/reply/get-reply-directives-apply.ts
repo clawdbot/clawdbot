@@ -435,6 +435,7 @@ export async function applyInlineDirectiveOverrides(params: {
         ).applySessionModelSelection({
           cfg,
           agentId,
+          workspaceDir,
           sessionKey,
           storePath,
           sessionEntry,

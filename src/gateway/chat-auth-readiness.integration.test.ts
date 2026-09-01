@@ -87,6 +87,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
         applySessionModelSelection({
           cfg: getRuntimeConfig(),
           agentId: "main",
+          workspaceDir: process.cwd(),
           sessionKey,
           storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
           sessionEntry: entry,
