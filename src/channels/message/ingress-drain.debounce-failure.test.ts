@@ -8,7 +8,8 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
-import { SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
+
+const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
 
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]

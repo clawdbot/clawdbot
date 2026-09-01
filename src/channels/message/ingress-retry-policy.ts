@@ -14,7 +14,7 @@ export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
  * If it remains identical through the normal attempt budget, keeping the lane blocked for
  * the generic 24-hour age gate cannot make the stale event healthier.
  */
-export const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
+const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
 const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 
 export type IngressRetryPolicyConfig = {

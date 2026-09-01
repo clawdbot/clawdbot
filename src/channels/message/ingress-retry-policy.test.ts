@@ -6,9 +6,10 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
-  SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
+
+const SESSION_START_CONFLICT_RETRY_MAX_ATTEMPTS = 8;
 
 describe("ingress retry policy", () => {
   it.each([
