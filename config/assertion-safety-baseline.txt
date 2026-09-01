@@ -1753,7 +1753,7 @@ src/agents/embedded-agent-runner/delivery-evidence.ts	12
 src/agents/embedded-agent-runner/direct-compaction-preparation.ts	1
 src/agents/embedded-agent-runner/empty-assistant-turn.ts	1
 src/agents/embedded-agent-runner/extensions.ts	1
-src/agents/embedded-agent-runner/extra-params.ts	12
+src/agents/embedded-agent-runner/extra-params.ts	10
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	13
