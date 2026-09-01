@@ -151,6 +151,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
     get transientRetryCount() {
       return transientRetryCount;
     },
+    // Saved retry.provider.maxRetries keeps its meaning as the transient-retry
+    // attempt budget, now owned here instead of per-SDK-request. The 90s window in
+    // resolveTransientRetryDelayMs still bounds it, so values larger than the window
+    // fits degrade to fewer attempts rather than an unbounded wait.
     setTransientRetryBudget: (maxRetries?: number) => {
       transientRetryBudget = maxRetries ?? MAX_TRANSIENT_RETRIES;
     },
