@@ -1009,7 +1009,7 @@ describe("runDoctorSessionSqlite", () => {
         agentId: "main",
         env: store.env,
         sessionId: "session-1",
-      }).map((event) => event.id),
+      }).map((event) => (event as { id?: string }).id),
     ).toEqual(["session-1", "root", "reply", "selection"]);
 
     const scope = { agentId: "main", env: store.env, sessionId: "session-1" };
