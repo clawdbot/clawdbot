@@ -203,7 +203,7 @@ function routeModelMemoKey(
   },
 ): string {
   const route = plan.modelRoute;
-  return [
+  return JSON.stringify([
     params.provider,
     params.modelId,
     plan.forwardedAuthProfileId ?? "",
@@ -213,7 +213,7 @@ function routeModelMemoKey(
     route?.authRequirement ?? "",
     params.requestedProfileId?.trim() ?? "",
     params.providerUsesProfileScopedModelMetadata ? "1" : "0",
-  ].join("\u0001");
+  ]);
 }
 
 export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRouteModel>(params: {
@@ -224,6 +224,8 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
   nativeModelOwned: boolean;
   requestedProfileId?: string;
   providerUsesProfileScopedModelMetadata: boolean;
+  /** Dynamic preparation owns its refresh cadence and must run on every turn. */
+  providerOwnsDynamicModelRefresh?: boolean;
   /** Optional generation-owned memo; omit to keep run-local caching only. */
   generationRouteModelMemo?: PreparedRuntimeRouteModelMemo;
   resolveModel(request: {
@@ -275,7 +277,9 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
       params.providerUsesProfileScopedModelMetadata,
     );
     const memo =
-      params.nativeModelOwned || !willResolve ? undefined : params.generationRouteModelMemo;
+      params.nativeModelOwned || !willResolve || params.providerOwnsDynamicModelRefresh
+        ? undefined
+        : params.generationRouteModelMemo;
     if (!plan.modelRoute && !memo) {
       return materializeUncached(plan);
     }
@@ -293,6 +297,7 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         // output. The Model-type cast is sound only because auth-plan is the
         // sole memo-passing call site; a second caller with a narrower Model
         // must not share this memo instance.
+        // SAFETY: this memo is owned by the sole materializer call site and stores this Model.
         const hit = generationHit as Promise<Model>;
         if (plan.modelRoute) {
           materializedRouteModels.set(plan, hit);
@@ -307,10 +312,12 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
       materializedRouteModels.set(plan, materialized);
     }
     if (memo && memoKey) {
+      // SAFETY: Model is constrained to RuntimeRouteModel and promises are covariant here.
       memo.set(memoKey, materialized as Promise<RuntimeRouteModel>);
       // Resolution failures throw (materialize-model.ts); never pin a
       // rejection for the generation — but never evict a newer healthy entry.
       materialized.catch(() => {
+        // SAFETY: same constrained promise identity stored immediately above.
         if (memo.get(memoKey) === (materialized as Promise<RuntimeRouteModel>)) {
           memo.delete(memoKey);
         }

@@ -33,6 +33,7 @@ const routedModel = {
 
 function buildMaterializer(params: {
   memo?: ReturnType<typeof createPreparedRuntimeRouteModelMemo>;
+  providerOwnsDynamicModelRefresh?: boolean;
   resolveModel: () => Promise<{ model?: typeof routedModel | null; error?: string }>;
 }) {
   return createPreparedRuntimeModelMaterializer({
@@ -42,6 +43,7 @@ function buildMaterializer(params: {
     getModel: () => ({ ...routedModel, baseUrl: "https://api.openai.com/v1" }),
     nativeModelOwned: false,
     providerUsesProfileScopedModelMetadata: true,
+    providerOwnsDynamicModelRefresh: params.providerOwnsDynamicModelRefresh,
     ...(params.memo ? { generationRouteModelMemo: params.memo } : {}),
     resolveModel: params.resolveModel,
   });
@@ -68,6 +70,37 @@ describe("generation route-model memo", () => {
 
     await run.materialize(buildPlan());
     await run.materialize(buildPlan({ forwardedAuthProfileId: "openai:backup" }));
+    expect(resolveModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps delimiter-containing route identities as distinct memo entries", async () => {
+    const memo = createPreparedRuntimeRouteModelMemo();
+    const resolveModel = vi.fn(async () => ({ model: routedModel }));
+    const run = buildMaterializer({ memo, resolveModel });
+
+    await run.materialize(
+      buildPlan({
+        forwardedAuthProfileId: "openai:subscription\u0001token",
+        selectedAuthMode: undefined,
+      }),
+    );
+    await run.materialize(
+      buildPlan({
+        forwardedAuthProfileId: "openai:subscription",
+        selectedAuthMode: "token",
+      }),
+    );
+    expect(resolveModel).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves provider-owned dynamic-model refreshes across turns", async () => {
+    const memo = createPreparedRuntimeRouteModelMemo();
+    const resolveModel = vi.fn(async () => ({ model: routedModel }));
+    const runA = buildMaterializer({ memo, resolveModel, providerOwnsDynamicModelRefresh: true });
+    const runB = buildMaterializer({ memo, resolveModel, providerOwnsDynamicModelRefresh: true });
+
+    await runA.materialize(buildPlan());
+    await runB.materialize(buildPlan());
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 

@@ -285,6 +285,15 @@ export async function prepareProviderDynamicModel(params: {
   return resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
 }
 
+export function providerOwnsDynamicModelPreparation(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  return resolveProviderRuntimePlugin(params)?.prepareDynamicModel !== undefined;
+}
+
 export function shouldPreferProviderRuntimeResolvedModel(params: {
   provider: string;
   config?: OpenClawConfig;
