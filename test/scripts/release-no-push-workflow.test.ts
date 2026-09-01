@@ -206,6 +206,7 @@ function executeReleaseGroupCapture(
   crossOsSuiteFilter = "",
   phase = "all",
   candidateArtifactJson = "",
+  releaseProfile = "beta",
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-groups-"));
   const output = join(root, "github-output");
@@ -231,7 +232,7 @@ function executeReleaseGroupCapture(
         RELEASE_PHASE_INPUT: phase,
         RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: "",
         RELEASE_PACKAGE_SPEC_INPUT: "",
-        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_PROFILE_INPUT: releaseProfile,
         RELEASE_PROVIDER_INPUT: "openai",
         RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
         RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
@@ -266,6 +267,7 @@ function runReleaseGroupCapture(
   crossOsSuiteFilter = "",
   phase = "all",
   candidateArtifactJson = "",
+  releaseProfile = "beta",
 ): Record<string, string> {
   const execution = executeReleaseGroupCapture(
     group,
@@ -274,6 +276,7 @@ function runReleaseGroupCapture(
     crossOsSuiteFilter,
     phase,
     candidateArtifactJson,
+    releaseProfile,
   );
   expect(execution.result.status, `${group}: ${execution.result.stderr}`).toBe(0);
   return execution.outputs;
@@ -621,30 +624,34 @@ describe("release validation no-push transport", () => {
       expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
       expect(outputs.package_required).toBe(packageRequired);
       expect(outputs.docker_required).toBe(dockerRequired);
+      expect(outputs.skip_package_telegram_e2e).toBe("false");
     },
   );
 
-  it("expands all only to the profile-selected concrete groups", () => {
-    const beta = runReleaseGroupCapture("all");
-    const soak = runReleaseGroupCapture("all", true);
+  it.each([
+    { profile: "beta", soak: false, effectiveSoak: false },
+    { profile: "minimum", soak: false, effectiveSoak: false },
+    { profile: "beta", soak: true, effectiveSoak: true },
+    { profile: "stable", soak: false, effectiveSoak: true },
+    { profile: "full", soak: false, effectiveSoak: true },
+  ])(
+    "keeps required all-group coverage and selects Telegram confidence for $profile (soak=$soak)",
+    ({ profile, soak, effectiveSoak }) => {
+      const outputs = runReleaseGroupCapture("all", soak, "", "", "all", "", profile);
 
-    expect(JSON.parse(beta.release_check_groups_json ?? "null")).toEqual([
-      "install-smoke",
-      "cross-os",
-      "package",
-      "qa-parity",
-    ]);
-    expect(beta.docker_required).toBe("false");
-    expect(JSON.parse(soak.release_check_groups_json ?? "null")).toEqual([
-      "install-smoke",
-      "cross-os",
-      "package",
-      "qa-parity",
-      "live-e2e",
-      "qa-live",
-    ]);
-    expect(soak.docker_required).toBe("true");
-  });
+      expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual([
+        "install-smoke",
+        "cross-os",
+        "package",
+        "qa-parity",
+        ...(effectiveSoak ? ["live-e2e", "qa-live"] : []),
+      ]);
+      expect(outputs.run_release_soak).toBe(String(effectiveSoak));
+      expect(outputs.docker_required).toBe(String(effectiveSoak));
+      expect(outputs.skip_package_telegram_e2e).toBe(String(!effectiveSoak));
+      expect(outputs.telegram_waiver).toBe("");
+    },
+  );
 
   it.each([
     {
@@ -684,6 +691,7 @@ describe("release validation no-push transport", () => {
       expect(outputs.package_acceptance_scheduled).toBe(packageAcceptanceScheduled);
       expect(outputs.qa_parity_scheduled).toBe(qaParityScheduled);
       expect(outputs.package_required).toBe(packageRequired);
+      expect(outputs.skip_package_telegram_e2e).toBe("true");
     },
   );
 
@@ -949,6 +957,12 @@ describe("release validation no-push transport", () => {
       '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$DOCKER_CALLS"\nprintf "invalid-config-digest\\n"\n',
     );
     chmodSync(join(bin, "docker"), 0o755);
+    // Satisfy the tool preflight without requiring compression on this rejection path.
+    writeFileSync(
+      join(bin, "zstd"),
+      '#!/usr/bin/env bash\nprintf "unexpected image compression\\n" >&2\nexit 99\n',
+    );
+    chmodSync(join(bin, "zstd"), 0o755);
 
     // Run the checked-in pack step and artifact owner; only an invalid external Docker image ID is injected.
     const result = spawnSync("bash", ["-c", pack.run ?? ""], {

@@ -155,6 +155,16 @@ until their dependent enforcement changes land.
   - `postpublish-confidence`: published package inputs with
     `run_release_soak=true` or explicit focused groups
   - `stable-publish`: `release_profile=stable`
+- An `all` run without soak for an actual beta package on its matching canonical
+  release branch or beta tag records `coveragePolicy=npm-beta-v1`. It keeps
+  Linux/macOS/Windows Node, Control UI, plugin, package, install/update,
+  cross-OS, QA parity, runtime-pair/restart, and tool-coverage gates. Native app
+  CI, performance, and published-package Telegram are deferred to confidence.
+  Beta `all` without soak also defers Package Acceptance Telegram, including
+  beta-profile checks of `main` or alpha. Record deferred checks as not run,
+  never passed. Stable/full, soak, and focused groups retain their coverage;
+  selected children still require terminal evidence. An absent coverage policy
+  retains historical full behavior.
 - Keep at most one active parent for the same Validation SHA + Tooling SHA + rerun
   group + release profile + effective soak coverage. Stable/full always include
   soak. Distinct coverage profiles can run independently; concurrency does not
@@ -231,12 +241,12 @@ non-billable credentials fail before the expensive release matrix.
 
 ## Dispatch
 
-Start product performance evidence as early as the Code SHA exists, in
-parallel with other release work:
+An early standalone product-performance run is optional beta confidence. If
+useful, start it against the frozen Code SHA in parallel with release work:
 
 ```bash
-# Full Release Validation profile gate: true for stable, false for beta.
-fail_on_regression=true
+# Optional early beta confidence; stable/full use the required parent child.
+fail_on_regression=false
 gh workflow run openclaw-performance.yml \
   --repo openclaw/openclaw \
   --ref main \
@@ -248,15 +258,16 @@ gh workflow run openclaw-performance.yml \
   -f fail_on_regression="$fail_on_regression"
 ```
 
-- Do not wait for full release validation to start this early perf signal.
+- Do not add a separate mandatory prepublish wait for this optional beta signal.
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
 - Call out any regression in the release proof. Treat a major regression as a
   release blocker until it is fixed, waived by the operator, or proven to be
   infrastructure noise.
-- Full Release Validation records blocking product-performance evidence. The
-  early standalone run is for overlap and faster regression discovery, but a
-  regression or missing child run blocks the parent validation.
+- Full Release Validation requires blocking performance evidence for stable
+  and full profiles. `npm-beta-v1` defers the child; explicit `performance`
+  and soak-enabled beta runs retain advisory performance coverage. Every
+  selected performance child must finish and prove artifact-only publication.
 
 Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
 
@@ -311,11 +322,14 @@ against the exact Release SHA and its new tarball bytes.
 
 The SHA-pinned helper infers `beta` for matching beta release candidates and
 exact alpha tags, and `stable` for stable/correction versions, then passes the
-Validation SHA + Tooling SHA run identity. `beta` without soak is the bounded
-beta-publish gate. Run broad live QA and E2E as postpublish confidence with
+Validation SHA + Tooling SHA run identity. Canonical beta `all` without soak
+uses `npm-beta-v1`; `main`, alpha, and non-beta targets do not qualify for that
+policy. Run deferred native, performance, Telegram, broad live QA, and E2E as
+postpublish confidence with the exact published package and
 `run_release_soak=true` or explicit groups. Stable and full profiles force the
-release soak. Use a narrow `rerun_group` after focused fixes; never widen
-automatically.
+release soak. Native artifact publication still requires its own build,
+signing, notarization, and promotion gates. Use a narrow `rerun_group` after
+focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
@@ -449,10 +463,10 @@ Record:
 
 - release lifecycle ledger: Code SHA, Release SHA, and Tooling SHA for regular
   releases; canonical branch, exact SHA, and immutable tag for extended-stable
-- evidence-reuse policy and complete changed-path set
+- evidence-reuse policy, coverage policy, and complete changed-path set
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
-- child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance
+- selected child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance; record deferred confidence as not run
 - performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result

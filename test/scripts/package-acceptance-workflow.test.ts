@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -352,6 +353,7 @@ function runFullReleaseInputValidation(
     encoding: "utf8",
     env: {
       PATH: process.env.PATH,
+      GITHUB_OUTPUT: resolve(workdir, "output"),
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
@@ -369,6 +371,9 @@ function runFullReleaseTargetIdentityValidation(params: {
   targetContextRef?: string;
   targetRef: string;
   version: string;
+  releaseProfile?: string;
+  runReleaseSoak?: string;
+  rerunGroup?: string;
 }) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
@@ -414,7 +419,8 @@ exit 64
   const remoteRef = normalizedContextRef.startsWith("v")
     ? `refs/tags/${normalizedContextRef}`
     : `refs/heads/${normalizedContextRef}`;
-  return spawnSync("bash", ["-c", step.run ?? ""], {
+  const outputPath = resolve(workdir, "output");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
     cwd: workdir,
     encoding: "utf8",
     env: {
@@ -423,14 +429,18 @@ exit 64
       FAKE_REMOTE_SHA: params.remoteSha ?? targetSha,
       GH_TOKEN: "test-token",
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
-      RELEASE_PROFILE: "beta",
+      RELEASE_PROFILE: params.releaseProfile ?? "beta",
+      RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
+      RERUN_GROUP: params.rerunGroup ?? "all",
       SKIP_PACKAGE_TELEGRAM_E2E: "false",
       TARGET_CONTEXT_REF: params.targetContextRef ?? "",
       TARGET_REF: params.targetRef,
       TARGET_SHA: targetSha,
     },
   });
+  return { ...result, output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "" };
 }
 
 function runReleaseChecksInputValidation(
@@ -5506,6 +5516,32 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
+    { label: "canonical beta", scope: "npm-beta" },
+    { label: "beta soak", runReleaseSoak: "true", scope: "full" },
+    { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
+    { label: "stable profile", releaseProfile: "stable", scope: "full" },
+    { label: "stable version", version: "2026.8.1", scope: "full" },
+    { label: "main beta profile", targetRef: "main", scope: "full" },
+  ])(
+    "resolves $label qualification scope before dispatch",
+    ({ label: _label, scope, ...overrides }) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        targetRef: "release/2026.8.1",
+        version: "2026.8.1-beta.3",
+        ...overrides,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.output).toContain(`ci_release_scope=${scope}\n`);
+      expect(result.output).toContain(
+        `coverage_policy=${scope === "npm-beta" ? "npm-beta-v1" : ""}\n`,
+      );
+      expect(result.output).toContain(
+        `skip_package_telegram_e2e=${overrides.runReleaseSoak === "true" || overrides.rerunGroup === "ci" || overrides.releaseProfile === "stable" ? "false" : "true"}\n`,
+      );
+    },
+  );
+
+  it.each([
     ["release/2026.8.1", "2026.8.1"],
     ["release/2026.8.1", "2026.8.1-beta.3"],
     ["extended-stable/2026.7.33", "2026.7.33"],
@@ -7024,7 +7060,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
-      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}",
       TRUSTED_WORKFLOW_JSON: "${{ needs.resolve_target.outputs.trusted_workflow_json }}",
     });
     expectTextToIncludeAll(evidenceReuseStep.run, [
