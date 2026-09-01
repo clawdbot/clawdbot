@@ -188,7 +188,10 @@ export function formatMs(ms?: number | null): string {
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString(i18n.getLocale());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale(), {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
 }
 
 export function formatDateMs(
@@ -210,7 +213,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options);
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options ?? { timeStyle: "short" });
 }
 
 export function formatDateTimeMs(
