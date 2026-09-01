@@ -3120,6 +3120,47 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [393, 852],
+    [640, 900],
+    [900, 500],
+    [1366, 900],
+  ] as const)(
+    "keeps the transcript fade inside its scrollbar gutters at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, { direct: true });
+      try {
+        const geometry = await page.evaluate(() => {
+          const composer = document.querySelector<HTMLElement>(".agent-chat__composer-shell");
+          const transcript = document.querySelector<HTMLElement>(".chat-thread");
+          if (!composer || !transcript) {
+            throw new Error("Missing transcript fade fixture");
+          }
+          const composerRect = composer.getBoundingClientRect();
+          const transcriptRect = transcript.getBoundingClientRect();
+          const fadeStyle = getComputedStyle(composer, "::before");
+          const rootStyle = getComputedStyle(document.documentElement);
+          return {
+            fadeLeft: composerRect.left + Number.parseFloat(fadeStyle.left),
+            fadeRight: composerRect.right - Number.parseFloat(fadeStyle.right),
+            scrollbarSize: Number.parseFloat(rootStyle.getPropertyValue("--scrollbar-size")),
+            transcriptLeft: transcriptRect.left,
+            transcriptRight: transcriptRect.right,
+          };
+        });
+
+        expect(geometry.fadeLeft - geometry.transcriptLeft).toBeGreaterThanOrEqual(
+          geometry.scrollbarSize,
+        );
+        expect(geometry.transcriptRight - geometry.fadeRight).toBeGreaterThanOrEqual(
+          geometry.scrollbarSize,
+        );
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each([
+    [393, 852],
     [900, 500],
     [1366, 900],
     [1920, 1080],

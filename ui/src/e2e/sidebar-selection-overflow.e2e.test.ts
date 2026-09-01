@@ -13,7 +13,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps the active session pill clear of a classic scrollbar", async () => {
+  it("keeps the active session pill and fade clear of a classic scrollbar", async () => {
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
     if (captureProof) {
       await fs.mkdir(path.join(suite.artifactDir, "sidebar-selection-overflow"), {
@@ -58,8 +58,11 @@ suite.define(() => {
         }
         const rowRect = row.getBoundingClientRect();
         const sectionRect = section.getBoundingClientRect();
+        const scrollerStyle = getComputedStyle(scroller);
         return {
           inset: sectionRect.right - rowRect.right,
+          maskImage: scrollerStyle.maskImage,
+          maskSize: scrollerStyle.maskSize,
           overflows: scroller.scrollHeight > scroller.clientHeight,
           sectionPaddingEnd: Number.parseFloat(getComputedStyle(section).paddingRight),
         };
@@ -69,6 +72,8 @@ suite.define(() => {
       expect(geometry.inset, JSON.stringify(geometry)).toBeGreaterThanOrEqual(
         geometry.sectionPaddingEnd,
       );
+      expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
+      expect(geometry.maskSize.split(", ")).toContain("12px 100%");
 
       if (captureProof) {
         await page.screenshot({
