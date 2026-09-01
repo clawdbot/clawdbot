@@ -49,6 +49,7 @@ export async function runCliProcessChild(params: {
   nodeArgs: string[];
   env: NodeJS.ProcessEnv;
   cwd?: string;
+  input?: string;
   onStdout?: (stdout: string) => void;
   timeoutMs?: number;
 }): Promise<CliProcessChildResult> {
@@ -56,8 +57,9 @@ export async function runCliProcessChild(params: {
   const child = spawn(process.execPath, params.nodeArgs, {
     cwd: params.cwd ?? path.resolve("."),
     env: params.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
+  child.stdin.end(params.input);
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   let stdout = "";
