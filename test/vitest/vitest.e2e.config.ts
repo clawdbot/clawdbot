@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import baseConfig from "./vitest.config.ts";
 import { RepoE2eSequencer } from "./vitest.e2e.sequencer.ts";
-import { resolveRepoRootPath } from "./vitest.shared.config.ts";
+import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { tuiPtyTestFiles } from "./vitest.test-shards.mjs";
 
 function resolveE2EWorkerCount(env: Record<string, string | undefined>): number {
@@ -37,7 +37,7 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
     test: {
       ...baseTest,
       maxWorkers: e2eWorkers,
-      reporters: [...new Set([...baseConfig.test!.reporters, "default"])],
+      reporters: [...sharedVitestConfig.test.reporters, "default"],
       sequence: { sequencer: RepoE2eSequencer },
       silent: !verboseE2E,
       globalSetup: [resolveRepoRootPath("test/vitest/vitest.e2e.global-setup.ts")],

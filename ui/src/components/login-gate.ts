@@ -45,7 +45,7 @@ type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
-  refreshAction?: { label: string };
+  refreshAction?: boolean;
   steps: LoginFailureStep[];
   docsHref: string;
   rawError: string;
@@ -102,7 +102,7 @@ function buildFeedback(params: {
   summaryKey?: string;
   stepKeys: LoginFailureStepDefinition[];
   stepParams?: Record<string, string>;
-  refreshAction?: { label: string };
+  refreshAction?: boolean;
 }): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
   const rawError = redactLoginFailureError(params.rawError);
@@ -151,7 +151,7 @@ function resolveLoginFailureFeedback(
       rawError,
       titleKey: "chat.sidebar.serverUpdatedTitle",
       summaryKey: "chat.sidebar.serverUpdatedRefresh",
-      refreshAction: { label: t("login.failure.protocol.refresh") },
+      refreshAction: true,
       stepKeys: [],
       docsHref: "https://docs.openclaw.ai/web/control-ui",
     });
@@ -252,7 +252,7 @@ function resolveLoginFailureFeedback(
         "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
-      refreshAction: { label: t("login.failure.protocol.refresh") },
+      refreshAction: true,
       stepKeys: [
         {
           key: "login.failure.protocol.stepDashboard",
@@ -388,7 +388,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
               class="btn primary login-gate__failure-refresh"
               @click=${refreshLoginGatePage}
             >
-              ${feedback.refreshAction.label}
+              ${t("login.failure.protocol.refresh")}
             </button>
           `
         : nothing}
