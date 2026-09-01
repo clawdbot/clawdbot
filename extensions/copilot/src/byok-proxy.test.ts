@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 // Copilot BYOK proxy tests verify SDK-local transport is guarded outbound fetch.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -319,19 +320,29 @@ describe("createCopilotByokProxy", () => {
         api: "azure-openai-responses",
         id: "deployment-gpt",
         baseUrl: "https://example.openai.azure.com/openai/v1",
+        headers: {
+          "X-OpenClaw-Copilot-Byok-Proxy-Token": "configured-value",
+          "X-Trace": "test",
+        },
       },
       resolvedApiKey: "azure-key",
     });
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
     expect(proxy?.provider.provider?.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");
+    expect(sdkHeaders).toMatchObject({
+      "X-Trace": "test",
+      "x-openclaw-copilot-byok-proxy-token": expect.stringMatching(/^[a-f0-9]{24}$/),
+    });
+    expect(sdkHeaders).not.toHaveProperty("X-OpenClaw-Copilot-Byok-Proxy-Token");
 
     try {
       const response = await fetch(
         `${proxy?.provider.provider?.baseUrl}/openai/v1/responses?trace=request`,
         {
           method: "POST",
-          headers: { "api-key": "azure-key" },
+          headers: { ...sdkHeaders, "api-key": "azure-key" },
           body: JSON.stringify({ model: "deployment-gpt" }),
         },
       );
@@ -346,10 +357,69 @@ describe("createCopilotByokProxy", () => {
             headers: expect.objectContaining({
               "accept-encoding": "identity",
               "api-key": "azure-key",
+              "x-trace": "test",
             }),
           }),
         }),
       );
+      const call = ssrfRuntimeMock.fetchWithSsrFGuard.mock.calls[0]?.[0] as
+        | { init?: { headers?: Record<string, string> } }
+        | undefined;
+      expect(call?.init?.headers).not.toHaveProperty("x-openclaw-copilot-byok-proxy-token");
+    } finally {
+      await proxy?.close();
+    }
+  });
+
+  it("rejects nonce-less Azure SDK paths before reading the request body", async () => {
+    ssrfRuntimeMock.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("unexpected", { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+    const proxy = await createCopilotByokProxy(
+      resolveCopilotProvider({
+        model: {
+          provider: "custom-azure",
+          api: "azure-openai-responses",
+          id: "deployment-gpt",
+          baseUrl: "https://example.openai.azure.com/openai/v1",
+        },
+      }),
+    );
+
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const client = httpRequest(
+          `${proxy?.provider.provider?.baseUrl}/openai/v1/responses`,
+          { method: "POST", headers: { "content-length": "1048576" } },
+          (response) => {
+            clearTimeout(timeout);
+            response.resume();
+            resolve(response.statusCode ?? 0);
+          },
+        );
+        const timeout = setTimeout(() => {
+          client.destroy();
+          reject(new Error("proxy waited for the unauthenticated request body"));
+        }, 1_000);
+        client.on("error", (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+        client.flushHeaders();
+      });
+
+      expect(status).toBe(404);
+      const wrongCredential = await fetch(
+        `${proxy?.provider.provider?.baseUrl}/openai/v1/responses`,
+        {
+          method: "POST",
+          headers: { "x-openclaw-copilot-byok-proxy-token": "wrong" },
+          body: JSON.stringify({ model: "deployment-gpt" }),
+        },
+      );
+      expect(wrongCredential.status).toBe(404);
+      expect(ssrfRuntimeMock.fetchWithSsrFGuard).not.toHaveBeenCalled();
     } finally {
       await proxy?.close();
     }
@@ -372,10 +442,12 @@ describe("createCopilotByokProxy", () => {
     });
 
     const proxy = await createCopilotByokProxy(resolvedProvider);
+    const sdkHeaders = expectDefined(proxy?.provider.provider?.headers, "Azure SDK headers");
 
     try {
       const response = await fetch(`${proxy?.provider.provider?.baseUrl}/openai/v1/responses`, {
         method: "POST",
+        headers: sdkHeaders,
         body: JSON.stringify({ model: "deployment-gpt" }),
       });
 

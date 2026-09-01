@@ -1,5 +1,5 @@
 // Copilot BYOK transport proxy keeps OpenClaw in charge of outbound network policy.
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,6 +8,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
+const PROXY_CREDENTIAL_HEADER = "x-openclaw-copilot-byok-proxy-token";
 
 type CopilotByokProxyHandle = {
   close: () => Promise<void>;
@@ -32,6 +33,8 @@ export async function createCopilotByokProxy(
   const nonce = randomBytes(12).toString("hex");
   const targetPathPrefix = trimTrailingSlash(targetBaseUrl.pathname);
   const proxyPathPrefix = `/${nonce}${targetPathPrefix}`;
+  // Azure rebuilds nonce-less /openai paths, so carry the same per-proxy secret
+  // in an SDK provider header and validate it before accepting request bytes.
   const acceptsAzureSdkPaths = providerConfig.type === "azure";
   const upstreamBearerAuthorization = resolveUpstreamBearerAuthorization(providerConfig);
   const activeFetches = new Set<AbortController>();
@@ -40,6 +43,7 @@ export async function createCopilotByokProxy(
       acceptsAzureSdkPaths,
       activeFetches,
       proxyPathPrefix,
+      proxyCredential: nonce,
       targetBaseUrl,
       targetPathPrefix,
       upstreamBearerAuthorization,
@@ -69,6 +73,9 @@ export async function createCopilotByokProxy(
       provider: {
         ...providerConfig,
         baseUrl: sdkBaseUrl,
+        ...(acceptsAzureSdkPaths
+          ? { headers: buildSdkProviderHeaders(providerConfig.headers, nonce) }
+          : {}),
       },
     },
     close: async () => {
@@ -92,6 +99,7 @@ async function handleProxyRequest(
     acceptsAzureSdkPaths: boolean;
     activeFetches: Set<AbortController>;
     proxyPathPrefix: string;
+    proxyCredential: string;
     targetBaseUrl: URL;
     targetPathPrefix: string;
     upstreamBearerAuthorization: string | undefined;
@@ -108,9 +116,9 @@ async function handleProxyRequest(
     }
   });
   try {
-    const canInjectBearerAuthorization = isNonceProtectedProxyRequest(req, params.proxyPathPrefix);
+    const isNonceProtected = isNonceProtectedProxyRequest(req, params.proxyPathPrefix);
     const url = resolveTargetUrl(req, params);
-    if (!url) {
+    if (!url || (!isNonceProtected && !hasValidProxyCredential(req, params.proxyCredential))) {
       res.writeHead(404);
       res.end("Not found");
       return;
@@ -121,7 +129,7 @@ async function handleProxyRequest(
       init: {
         method: req.method,
         headers: buildProxyRequestHeaders(req.headers, {
-          upstreamBearerAuthorization: canInjectBearerAuthorization
+          upstreamBearerAuthorization: isNonceProtected
             ? params.upstreamBearerAuthorization
             : undefined,
         }),
@@ -210,6 +218,18 @@ function isNonceProtectedProxyRequest(req: IncomingMessage, proxyPathPrefix: str
   );
 }
 
+function hasValidProxyCredential(req: IncomingMessage, expected: string): boolean {
+  const received = req.headers[PROXY_CREDENTIAL_HEADER];
+  if (typeof received !== "string") {
+    return false;
+  }
+  const receivedBytes = Buffer.from(received);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes)
+  );
+}
+
 async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | undefined> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -221,7 +241,11 @@ async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | und
 function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (isHopByHopHeader(key) || key.toLowerCase() === "accept-encoding") {
+    if (
+      isHopByHopHeader(key) ||
+      key.toLowerCase() === "accept-encoding" ||
+      key.toLowerCase() === PROXY_CREDENTIAL_HEADER
+    ) {
       continue;
     }
     const normalized = normalizeHeaderValue(value);
@@ -230,6 +254,17 @@ function normalizeProxyRequestHeaders(headers: IncomingMessage["headers"]): Reco
     }
   }
   out["accept-encoding"] = "identity";
+  return out;
+}
+
+function buildSdkProviderHeaders(
+  headers: ProviderConfig["headers"],
+  proxyCredential: string,
+): Record<string, string> {
+  const out = Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() !== PROXY_CREDENTIAL_HEADER),
+  );
+  out[PROXY_CREDENTIAL_HEADER] = proxyCredential;
   return out;
 }
 
