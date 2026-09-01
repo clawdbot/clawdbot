@@ -267,13 +267,7 @@ function resolveLoginFailureFeedback(
     });
   }
 
-  const authHintKind = resolveAuthHintKind({
-    connected: false,
-    lastError: rawError,
-    lastErrorCode,
-    hasToken: params.hasToken,
-    hasPassword: params.hasPassword,
-  });
+  const authHintKind = resolveAuthHintKind(params);
   if (authHintKind === "required") {
     return buildFeedback({
       kind: "auth-required",
@@ -419,13 +413,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 function renderLoginGate(props: LoginGateProps) {
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
-  const failure = resolveLoginFailureFeedback({
-    connected: props.connected,
-    lastError: props.lastError,
-    lastErrorCode: props.lastErrorCode,
-    hasToken: props.hasToken,
-    hasPassword: props.hasPassword,
-  });
+  const failure = resolveLoginFailureFeedback(props);
 
   return html`
     <div class="login-gate">
