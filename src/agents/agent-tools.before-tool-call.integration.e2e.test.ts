@@ -1766,47 +1766,99 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
 
-  it("emits a tool-authored terminal presentation with the recorded outcome", async () => {
+  it("isolates terminal presentation arguments while using the final middleware result", async () => {
     const onToolOutcome = vi.fn();
+    let executedParams: { request: { url: string } } | undefined;
     const sourceTool = setToolTerminalPresentation(
       asAgentTool({
         name: "web_fetch",
         description: "fetch",
         parameters: {},
         resultContentSource: "network",
-        execute: vi.fn().mockResolvedValue({
-          content: [],
-          details: { status: 200 },
+        execute: vi.fn(async (_id, params: { request: { url: string } }) => {
+          executedParams = params;
+          return { content: [], details: { status: 200 } };
         }),
       }),
-      (_params, result) => ({
-        text: `Fetched with status ${(result.details as { status: number }).status}`,
-      }),
+      (params, result) => {
+        const url = (params as { request: { url: string } }).request.url;
+        return {
+          text: `Fetched ${url} with status ${(result.details as { status: number }).status}`,
+        };
+      },
     );
     const tool = expectDefined(
       wrapToolWithBeforeToolCallHook(
         normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
         {
           sessionId: "session-terminal-presentation",
+          runId: "run-terminal-presentation",
           onToolOutcome,
         },
       ),
       "wrapToolWithBeforeToolCallHook( normalizeToolParameters(sourceTool, {... test invariant",
     );
     await tool.execute("call-terminal-presentation", {
-      url: "https://example.com",
+      request: { url: "https://example.com" },
     });
 
     expect(onToolOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "web_fetch",
         resultContentSource: "network",
-        terminalPresentation: "Fetched with status 200",
+        terminalPresentation: "Fetched https://example.com with status 200",
+      }),
+    );
+
+    expectDefined(executedParams, "executed formatter arguments").request.url =
+      "https://changed.example";
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-terminal-presentation",
+      runId: "run-terminal-presentation",
+      result: { content: [], details: { status: 201 } },
+      isError: false,
+    });
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        presentationOnly: true,
+        terminalPresentation: "Fetched https://example.com with status 201",
       }),
     );
   });
 
-  it("keeps the later model-ordered result when parallel tools finish out of order", async () => {
+  it("does not publish terminal presentation state when raw outcome observation fails", async () => {
+    const observerError = new Error("observer failed");
+    const onToolOutcome = vi.fn(() => {
+      throw observerError;
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "read_file",
+        description: "read",
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({ content: [], details: { ok: true } }),
+      }),
+      {
+        sessionId: "session-terminal-observer-error",
+        runId: "run-terminal-observer-error",
+        onToolOutcome,
+      },
+    );
+
+    await expect(tool.execute("call-terminal-observer-error", {})).rejects.toBe(observerError);
+    const callsBeforeFinalization = onToolOutcome.mock.calls.length;
+    expect(() =>
+      finalizeToolTerminalPresentation({
+        toolCallId: "call-terminal-observer-error",
+        runId: "run-terminal-observer-error",
+        result: { content: [], details: { ok: true } },
+        isError: false,
+      }),
+    ).not.toThrow();
+    expect(onToolOutcome).toHaveBeenCalledTimes(callsBeforeFinalization);
+  });
+
+  it("clears a prior summary for large uncloneable plain-tool input and fences stale finalizers", async () => {
     type ToolResult = { content: []; details: { ok?: boolean; status?: number } };
     let resolvePresentation!: (result: ToolResult) => void;
     let resolvePlain!: (result: ToolResult) => void;
@@ -1816,7 +1868,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const plainExecution = new Promise<ToolResult>((resolve) => {
       resolvePlain = resolve;
     });
-    let terminalPresentation: string | undefined;
+    let terminalPresentation: string | undefined = "Previous tool summary";
     let latestOrdinal = -1;
     const onToolOutcome = vi.fn(
       (outcome: { toolCallOrdinal?: number; terminalPresentation?: string }) => {
@@ -1847,12 +1899,19 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       hookContext,
     );
     const plainTool = wrapToolWithBeforeToolCallHook(
-      asAgentTool({
-        name: "read_file",
-        description: "read",
-        parameters: {},
-        execute: vi.fn(() => plainExecution),
-      }),
+      {
+        ...asAgentTool({
+          name: "read_file",
+          description: "read",
+          parameters: {},
+          execute: vi.fn(() => plainExecution),
+        }),
+        // Tool-owned preparation can carry private, non-JSON execution state.
+        finalizeBeforeToolCallParams: () => ({
+          content: Array.from({ length: 16_384 }, (_, index) => index),
+          privateCallback: () => undefined,
+        }),
+      },
       hookContext,
     );
 
