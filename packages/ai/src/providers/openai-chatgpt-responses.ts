@@ -6,7 +6,6 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
@@ -36,6 +35,8 @@ import { processResponsesStream } from "../transports/openai-responses-stream-in
 import {
   createOpenAIProviderAcceptanceHook,
   createOpenAIResponseHook,
+  readOpenAIResponseModelHeader,
+  readOpenAIResponseModelEvent,
 } from "../transports/openai-transport-shared.js";
 import {
   assignTransportErrorDetails,
@@ -118,7 +119,6 @@ const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
-const OPENAI_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
@@ -542,7 +542,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const hookedResponseStream = withProviderResponseHook({
         stream: mapCodexEvents(
           parseOpenAIChatGptResponsesSse(response),
-          readCodexHttpResponseModel(response.headers),
+          readOpenAIResponseModelHeader(response.headers),
         ),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
@@ -814,7 +814,7 @@ async function* mapCodexEvents(
       continue;
     }
 
-    responseModel = readCodexEventResponseModel(event) ?? responseModel;
+    responseModel = readOpenAIResponseModelEvent(event) ?? responseModel;
 
     if (type === "error") {
       const { code, message } = extractCodexEventError(event);
@@ -834,7 +834,7 @@ async function* mapCodexEvents(
         ? {
             ...response,
             status: normalizeCodexStatus(response.status),
-            ...(responseModel ? { model: responseModel } : {}),
+            model: responseModel,
           }
         : response;
       yield {
@@ -847,39 +847,6 @@ async function* mapCodexEvents(
 
     yield event as unknown as ResponseStreamEvent;
   }
-}
-
-function readCodexEventResponseModel(event: Record<string, unknown>): string | undefined {
-  const response = isRecord(event.response) ? event.response : undefined;
-  return (
-    readCodexHeaderResponseModel(response?.headers) ?? readCodexHeaderResponseModel(event.headers)
-  );
-}
-
-function readCodexHeaderResponseModel(headers: unknown): string | undefined {
-  if (!isRecord(headers)) {
-    return undefined;
-  }
-  for (const [name, value] of Object.entries(headers)) {
-    if (!OPENAI_MODEL_HEADER_NAMES.has(name.toLowerCase()) || typeof value !== "string") {
-      continue;
-    }
-    const model = value.trim();
-    if (model) {
-      return model;
-    }
-  }
-  return undefined;
-}
-
-function readCodexHttpResponseModel(headers: Headers): string | undefined {
-  for (const name of OPENAI_MODEL_HEADER_NAMES) {
-    const model = headers.get(name)?.trim();
-    if (model) {
-      return model;
-    }
-  }
-  return undefined;
 }
 
 function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined {

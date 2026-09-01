@@ -59,12 +59,13 @@ type RequestLifecycle = {
   assertListenersRemoved(): void;
 };
 
-function completedResponse(init?: ResponseInit): Response {
+function completedResponse(init?: ResponseInit, eventHeaders?: Record<string, string>): Response {
   const response = {
     id: "resp_response_hook",
     object: "response",
     status: "completed",
     model: openAIModel.id,
+    ...(eventHeaders ? { headers: eventHeaders } : {}),
     output: [
       {
         id: "msg_response_hook",
@@ -358,6 +359,41 @@ describe.each(fixtures)("$name response hook", ({ createStream, installResponse,
       lifecycle.assertListenersRemoved();
     },
   );
+});
+
+describe("managed ChatGPT OAuth response model", () => {
+  it("preserves the concrete model reported by the managed response header", async () => {
+    const responseModel = "gpt-5.6-luna-2026-08-01";
+    const tracked = trackedFetch(() =>
+      completedResponse({ headers: { "openai-model": responseModel } }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBe(responseModel);
+  });
+
+  it("does not treat the terminal payload model as concrete identity without a header", async () => {
+    const tracked = trackedFetch(completedResponse);
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBeUndefined();
+  });
+
+  it("preserves the concrete model reported by managed SSE event headers", async () => {
+    const responseModel = "gpt-5.6-luna-2026-08-02";
+    const tracked = trackedFetch(() =>
+      completedResponse(undefined, { "x-openai-model": responseModel }),
+    );
+    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
+
+    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
+
+    expect(result.responseModel).toBe(responseModel);
+  });
 });
 
 describe("native ChatGPT SSE non-success response hooks", () => {

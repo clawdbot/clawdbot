@@ -63,12 +63,17 @@ function stubHangingFetch(timeoutMs: number): void {
   );
 }
 
-function completedSseResponse(responseId = "resp_test", headers?: HeadersInit): Response {
+function completedSseResponse(
+  responseId = "resp_test",
+  headers?: HeadersInit,
+  payloadModel?: string,
+): Response {
   const event = {
     type: "response.completed",
     response: {
       id: responseId,
       status: "completed",
+      ...(payloadModel ? { model: payloadModel } : {}),
       output: [],
       usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
     },
@@ -283,6 +288,22 @@ describe("streamOpenAICodexResponses transport", () => {
     }).result();
 
     expect(result.responseModel).toBe(responseModel);
+  });
+
+  it("does not treat the ChatGPT terminal payload model as concrete identity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => completedSseResponse("resp_payload_model", undefined, model.id)),
+    );
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+      }),
+      transport: "sse",
+    }).result();
+
+    expect(result.responseModel).toBeUndefined();
   });
 
   it("preserves the concrete model reported by ChatGPT websocket event headers", async () => {

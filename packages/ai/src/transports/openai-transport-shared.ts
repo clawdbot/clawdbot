@@ -21,6 +21,7 @@ export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
@@ -36,6 +37,63 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
+
+export function readOpenAIResponseModelHeader(headers: Headers): string | undefined {
+  for (const name of OPENAI_RESPONSE_MODEL_HEADER_NAMES) {
+    const responseModel = headers.get(name)?.trim();
+    if (responseModel) {
+      return responseModel;
+    }
+  }
+  return undefined;
+}
+
+function readOpenAIResponseModelHeaderRecord(headers: unknown): string | undefined {
+  if (!isRecord(headers)) {
+    return undefined;
+  }
+  for (const [name, value] of Object.entries(headers)) {
+    if (
+      OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()) &&
+      typeof value === "string" &&
+      value.trim()
+    ) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+export function readOpenAIResponseModelEvent(event: unknown): string | undefined {
+  if (!isRecord(event)) {
+    return undefined;
+  }
+  const response = isRecord(event.response) ? event.response : undefined;
+  return (
+    readOpenAIResponseModelHeaderRecord(response?.headers) ??
+    readOpenAIResponseModelHeaderRecord(event.headers)
+  );
+}
+
+export function createResponseModelTracker(enabled = true) {
+  let responseModel: string | undefined;
+  const resolve = () => responseModel;
+  return {
+    track(response: Response, stream: AsyncIterable<unknown>): AsyncIterable<unknown> {
+      if (!enabled) {
+        return stream;
+      }
+      responseModel = readOpenAIResponseModelHeader(response.headers);
+      return (async function* () {
+        for await (const event of stream) {
+          responseModel = readOpenAIResponseModelEvent(event) ?? responseModel;
+          yield event;
+        }
+      })();
+    },
+    terminalOptions: enabled ? { resolveResponseModel: resolve } : {},
+  };
+}
 
 export function resolveOpenAIClientBaseUrl(
   model: Pick<Model, "provider" | "baseUrl">,
