@@ -296,7 +296,6 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@anthropic-ai/claude-agent-sdk",
     "@anthropic-ai/vertex-sdk",
     "@discordjs/voice",
-    "@lancedb/lancedb",
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
@@ -306,9 +305,12 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "jimp",
     "matrix-js-sdk",
     "prism-media",
-    "sharp",
     "typescript",
     "vitest",
+    // Selected plugin distributions install platform optionals beside bundled JavaScript.
+    ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
+      Object.keys(packageJson?.optionalDependencies ?? {}),
+    ),
   ],
 });
 
