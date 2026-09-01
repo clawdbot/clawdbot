@@ -32,6 +32,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLegacyIds,
+  resolveOfficialExternalPluginLegacyNpmPackageNames,
 } from "./official-external-plugin-catalog.js";
 
 type ExtensionPackageMetadata = {
@@ -2077,14 +2078,17 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
     expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(resolveOfficialExternalPluginLegacyNpmPackageNames(qqbotByChannel)).toEqual([
+      "@openclaw/qqbot",
+    ]);
     expect(
       getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
     ).toEqual({ openDmRequiresAllowFromWildcard: false });
     expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
-      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
       defaultChoice: "npm",
       expectedIntegrity:
-        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+        "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
     });
     expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
       channelId: "qqbot",
