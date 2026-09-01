@@ -206,6 +206,13 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    For provider-key lookup and selection from an already loaded auth store,
+    import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
+    `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
+    loading the full agent runtime just to select a credential. The deprecated
+    `agent-runtime` exports remain available for compatibility; use the narrower
+    `provider-auth` route in new code.
+
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
 
