@@ -265,6 +265,24 @@ suite.define(() => {
           return Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
         })
         .toBe(4);
+      await page.evaluate(() => {
+        document.documentElement.dir = "rtl";
+      });
+      await expect
+        .poll(async () => {
+          const [brandBox, actionsBox] = await Promise.all([
+            sidebarBrand.boundingBox(),
+            sidebarBrand.locator(".sidebar-brand__actions").boundingBox(),
+          ]);
+          if (!brandBox || !actionsBox) {
+            return null;
+          }
+          return Math.round(actionsBox.x - brandBox.x);
+        })
+        .toBe(0);
+      await page.evaluate(() => {
+        document.documentElement.dir = "ltr";
+      });
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");

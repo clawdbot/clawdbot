@@ -220,6 +220,11 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
+html.openclaw-native-web-chrome .sidebar-brand__new-thread {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
@@ -1044,7 +1049,7 @@ openclaw-settings-save-indicator:empty {
   gap: 3px;
   /* Keep the action rail independent from the fit-content identity card so
      short agent names never pull navigation controls away from the edge. */
-  margin-left: auto;
+  margin-inline-start: auto;
   flex: 0 0 auto;
 }
 
@@ -3205,19 +3210,24 @@ a:is(
   gap: 9px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 4px 1px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
   cursor: var(--cursor-action);
-  transition: background var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
 }
 
 .sidebar-agent-card__main:hover,
-.sidebar-agent-card__main:focus-visible,
 .sidebar-agent-card--open .sidebar-agent-card__main {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-card__main:active {
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
 }
 
 .sidebar-agent-card__main:focus-visible {
@@ -3320,8 +3330,9 @@ a:is(
 }
 
 .sidebar-agent-card__menu-unread {
-  flex: none;
-  margin-left: auto;
+  position: absolute;
+  top: -1px;
+  left: -1px;
   width: 6px;
   height: 6px;
 }

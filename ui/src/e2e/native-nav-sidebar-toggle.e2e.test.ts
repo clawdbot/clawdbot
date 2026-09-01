@@ -437,6 +437,14 @@ suite.define(() => {
     const sidebarNewThread = sidebarBrand.locator(".sidebar-brand__new-thread");
     await expect.poll(() => sidebarNewThread.isVisible()).toBe(true);
     await expect
+      .poll(() =>
+        sidebarNewThread.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { borderColor: style.borderTopColor, boxShadow: style.boxShadow };
+        }),
+      )
+      .toEqual({ borderColor: "rgba(0, 0, 0, 0)", boxShadow: "none" });
+    await expect
       .poll(async () => {
         const [brandBox, newThreadBox] = await Promise.all([
           sidebarBrand.boundingBox(),
