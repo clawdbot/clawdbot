@@ -24,34 +24,42 @@ type RecordedRequest = {
 
 async function createBotApiRecorder() {
   const requests: RecordedRequest[] = [];
-  const server = createServer(async (request, response) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) chunks.push(Buffer.from(chunk));
-    const rawBody = Buffer.concat(chunks).toString("utf8");
-    const contentType = String(request.headers["content-type"] ?? "");
-    let body: Record<string, unknown> = {};
-    if (rawBody) {
-      body = contentType.includes("application/json")
-        ? (JSON.parse(rawBody) as Record<string, unknown>)
-        : Object.fromEntries(new URLSearchParams(rawBody).entries());
-    }
-    const method = (request.url ?? "/").split("/").at(-1) ?? "unknown";
-    requests.push({ method, body });
-    const chatId = Number(body.chat_id) || 12345;
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({
-        ok: true,
-        result: {
-          message_id: 50000 + requests.length,
-          date: Math.floor(Date.now() / 1000),
-          chat: { id: chatId, type: "private" },
-          ...(typeof body.text === "string" ? { text: body.text } : {}),
-        },
-      }),
-    );
+  const server = createServer((request, response) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      const contentType = request.headers["content-type"] ?? "";
+      let body: Record<string, unknown> = {};
+      if (rawBody) {
+        body = contentType.includes("application/json")
+          ? JSON.parse(rawBody)
+          : Object.fromEntries(new URLSearchParams(rawBody).entries());
+      }
+      const method = (request.url ?? "/").split("/").at(-1) ?? "unknown";
+      requests.push({ method, body });
+      const chatId = Number(body.chat_id) || 12345;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ok: true,
+          result: {
+            message_id: 50000 + requests.length,
+            date: Math.floor(Date.now() / 1000),
+            chat: { id: chatId, type: "private" },
+            ...(typeof body.text === "string" ? { text: body.text } : {}),
+          },
+        }),
+      );
+    })().catch((error: unknown) => {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+    });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("local Bot API recorder did not bind");
@@ -60,9 +68,15 @@ async function createBotApiRecorder() {
     requests,
     apiRoot: `http://127.0.0.1:${address.port}`,
     close: async () =>
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      }),
   };
 }
 
@@ -177,15 +191,23 @@ async function main() {
           2,
         ),
       );
-      if (!passed) process.exitCode = 1;
+      if (!passed) {
+        process.exitCode = 1;
+      }
     } finally {
       telegramActionRuntime.sendDurableMessageBatch = originalDurable;
     }
   } finally {
-    if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-    else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
-    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await recorder.close();
     rmSync(tempStateDir, { recursive: true, force: true });
   }
