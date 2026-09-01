@@ -63,12 +63,60 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        allowedDecisions: ["deny"],
+        externalResolution: {
+          label: "Verify with World",
+          decisions: ["allow-once", "allow-always"],
+        },
+      }),
+    ).toBe(true);
     expect(validateApprovalPresentation({ ...pluginPresentation, detail: "full tool input" })).toBe(
       true,
     );
     expect(validateApprovalPresentation({ ...pluginPresentation, detail: "" })).toBe(false);
     expect(
       validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(16_385) }),
+    ).toBe(false);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: { label: "", decisions: ["allow-once"] },
+      }),
+    ).toBe(false);
+    const astralLabel = String.fromCodePoint(0x1f680).repeat(80);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: { label: astralLabel, decisions: ["allow-once"] },
+      }),
+    ).toBe(true);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: {
+          label: `${astralLabel}${String.fromCodePoint(0x1f680)}`,
+          decisions: ["allow-once"],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: { label: "Verify", decisions: ["deny"] },
+      }),
+    ).toBe(false);
+    expect(
+      validateApprovalPresentation({
+        ...pluginPresentation,
+        externalResolution: {
+          label: "Verify",
+          decisions: ["allow-once"],
+          proof: "private",
+        },
+      }),
     ).toBe(false);
 
     for (const forbiddenField of ["cwd", "env", "systemRunBinding", "systemRunPlan"] as const) {
@@ -245,7 +293,7 @@ describe("unified approval protocol validators", () => {
           sourceSessionKey: "agent:worker:subagent:123",
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateApprovalGetResult({
         approval: {

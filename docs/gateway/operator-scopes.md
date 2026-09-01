@@ -149,9 +149,16 @@ configured host targets cannot bypass this restriction. The agent's managed
 GitHub identity is not injected into sandboxed execution: `GH_CONFIG_DIR` is
 absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
 
-The role's `scopes` list intersects scopes granted through connection auth,
-identity grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP
-requests. It cannot grant scopes the connection did not already receive.
+The role's `scopes` list caps scopes granted through connection auth, identity
+grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
+The ceiling uses the normal scope implications: `operator.admin` permits every
+operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
+It only filters existing grants; it cannot add scopes the connection did not
+already receive.
+This includes plugin HTTP requests and WebSocket upgrades: without a scope
+header, ordinary Gateway-authenticated plugin routes start with only
+`operator.write`, then apply the role ceiling. Read-only and empty roles
+therefore receive no runtime scopes on that default path.
 Control UI plugin grants carry the authenticated profile inside a signed
 cookie; plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
@@ -223,6 +230,10 @@ dispatch so authorization failures have one canonical structured response:
 - The top-level `fs.listDir` RPC needs `operator.write` for Gateway-host
   requests and `operator.admin` when `nodeId` targets a node. Its handler limits
   non-admin Gateway-host browsing to configured agent workspaces.
+- `plugins.sessionAction` requires every scope declared in the selected action's
+  `requiredScopes`; omitted or empty lists default to `operator.write`.
+  `operator.write` satisfies `operator.read` and `operator.talk`. Other scopes
+  require an exact match, or `operator.admin`.
 - `sessions.create` needs `operator.write` for ordinary creation, including a
   `projectId`, and `operator.admin` for incognito sessions or any `execNode`
   request. For non-admin callers, the handler limits `cwd` to configured agent
@@ -307,8 +318,14 @@ the Gateway returns the new token only to that device's live waiter; the browser
 stores it before reconnecting. Canceling the wait or disconnecting before
 approval falls back to the ordinary pairing repair flow on the next connection.
 
+A role with only `operator.admin` permits the Control UI's full operator scope
+request. Approval is still required; the role ceiling does not grant device
+scopes on its own.
+
 Requests outside the authenticated person's assigned role ceiling are denied,
-not queued for device approval. The Control UI shows the denial and administrator
+not queued for device approval. The Gateway checks the current role again after
+approval, before returning the token, so a role demotion during the wait still
+blocks an out-of-role result. The Control UI shows the denial and administrator
 guidance without **Retry**; an administrator must change the role first.
 
 The explicit exception is the administrator-capable Control UI owner profile

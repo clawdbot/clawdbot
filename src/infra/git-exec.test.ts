@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
-import { requireGitCommand, requireGitCommandBuffer, requireGitCommandRaw } from "./git-exec.js";
+import {
+  createGitCommandError,
+  executeGitCommand,
+  requireGitCommand,
+  requireGitCommandBuffer,
+  requireGitCommandRaw,
+} from "./git-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -14,6 +20,27 @@ const failure = {
   killed: false,
   termination: "exit",
 } satisfies SpawnResult;
+
+it.each([
+  { timeoutMs: undefined, seconds: 120 },
+  { timeoutMs: 300_000, seconds: 300 },
+])("reports the applied $seconds-second Git timeout", async ({ timeoutMs, seconds }) => {
+  const commandSpy = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+    ...failure,
+    termination: "timeout",
+    code: 124,
+  });
+  const args = ["worktree", "add"];
+  const result = await executeGitCommand("/repo", args, { timeoutMs });
+  const label = `timed out after ${seconds} seconds`;
+  expect(createGitCommandError("git worktree add", result).message).toContain(label);
+  await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
+  expect(
+    commandSpy.mock.calls.map(([, options]) =>
+      typeof options === "number" ? options : options.timeoutMs,
+    ),
+  ).toEqual([seconds * 1000, seconds * 1000]);
+});
 
 describe.each([
   ["text", requireGitCommand],
@@ -39,6 +66,7 @@ describe.each([
       ...result,
       stdout: Buffer.from(result.stdout),
       stderr: Buffer.from(result.stderr),
+      code: result.termination === "exit" && !result.outputLimitExceeded ? result.code : null,
       termination: result.outputLimitExceeded
         ? "output-limit"
         : result.termination === "no-output-timeout"
@@ -112,7 +140,7 @@ describe.each([
     },
   );
 
-  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`])(
+  it.each(["", " \t\r\n", `${String.fromCharCode(27)}[0m`, "progress\r \t"])(
     "uses stdout when stderr has no visible diagnostic: %j",
     async (stderr) => {
       failWith({ stderr, stdout: "error: cannot read index\n" });

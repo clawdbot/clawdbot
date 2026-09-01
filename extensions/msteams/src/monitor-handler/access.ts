@@ -157,7 +157,28 @@ export async function resolveMSTeamsSenderAccess(params: {
   const resolved = await resolveStableChannelMessageIngress({
     channelId: "msteams",
     accountId: pairing.accountId,
-    identity: msteamsIngressIdentity,
+    identity: {
+      ...msteamsIngressIdentity,
+      resolveParticipant: () => {
+        const tenantId = activity.channelData?.tenant?.id ?? activity.conversation?.tenantId;
+        const aadId = activity.from?.aadObjectId;
+        if (tenantId && aadId) {
+          return {
+            domain: `entra:${tenantId.toLowerCase()}`,
+            idKind: "object-id",
+            id: aadId.toLowerCase(),
+          };
+        }
+        // Bot Framework sender ids are scoped to the receiving application, not local accountId.
+        return msteamsCfg?.appId && activity.from?.id
+          ? {
+              domain: `bot:${msteamsCfg.appId.toLowerCase()}`,
+              idKind: "channel-account-id",
+              id: activity.from.id,
+            }
+          : undefined;
+      },
+    },
     cfg: params.cfg,
     readStoreAllowFrom: pairing.readAllowFromStore,
     subject: {

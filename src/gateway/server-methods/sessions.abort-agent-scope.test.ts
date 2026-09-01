@@ -252,6 +252,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      agentIdBySessionKey: new Map(),
       durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},

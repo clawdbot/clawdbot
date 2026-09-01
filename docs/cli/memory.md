@@ -80,11 +80,11 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--max-results <n>`: cap result count (positive integer).
 - `--min-score <n>`: filter out matches below this score.
 
-If the index remains dirty after the bounded search-time refresh, human output
-warns that matches may be incomplete. With `--json`, the response adds
-`stale: true`, plus `warning` and `action` fields describing how to rebuild the
-index. Treat an empty `results` array as authoritative only when `stale` is
-absent.
+Routine indexing can continue after search returns and does not add a warning.
+If automatic indexing failed, or the index identity is incompatible, human
+output warns that matches may be incomplete. With `--json`, the response adds
+`stale: true`, plus `warning` and `action` fields. Treat an empty `results`
+array as authoritative only when `stale` is absent.
 
 ## `memory forget`
 
@@ -125,6 +125,12 @@ types combine with **OR**: a session matching any selector is selected, subject
 to `--since`. Selectors match recorded identifiers, not names or text in
 messages. A participant selector selects the whole session, including other
 participants' contributions.
+
+`--participant` intentionally matches raw actor IDs across identity namespaces;
+it is not a profile-only selector. The report's `participantMatches` shows the
+typed identities matching each requested ID, including ambiguous matches.
+Review these identities and the selected whole sessions in `--dry-run --json`
+before deleting. Profile merges do not silently reinterpret a raw selector.
 
 Explicit IDs and keys resolve against live sessions and retained archives in
 the configured `session.store`, including custom and shared stores. Matching
@@ -227,6 +233,10 @@ reason `forgotten`. Repeating the purge does not remove the exclusion, and
 removing an admission-policy rule does not undo it. Future sessions with new
 IDs are not excluded by a previous purge.
 
+New session-backfill diary facts and reflections carry entry markers and
+source origins, including REM previews and diary blocks left by a failed apply.
+Forgetting removes each matching line, including transformed or combined claims;
+unrelated lines remain. Historical unmarked backfill text has no reconstructed lineage.
 Exact corpus quotations in dream diaries such as `DREAMS.md` and
 `memory/dreaming/**/*.md` can be removed as whole lines. Untracked paraphrases
 cannot be reliably attributed and remain.
@@ -348,7 +358,7 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--to YYYY-MM-DD`           |              | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
 | `--archive-files <path...>` |              | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
-| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                                            |
+| `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
 | `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
 | `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
 | `--json`                    |              | Print machine-readable per-day counts and top candidates.                                                     |
@@ -373,6 +383,11 @@ candidates. It writes only the session corpus under `memory/.dreams/`, short-ter
 staging state, and reversible diary entries in `DREAMS.md`. It never writes
 `MEMORY.md` or `USER.md`; durable promotion remains a separate `memory promote`
 or dreaming decision. `--rem` and `--apply` are mutually exclusive.
+
+Both writing modes record diary origins before publishing text, so a later
+apply failure does not leave untraceable diary quotations. REM keeps only the
+diary and its origin bookkeeping: it does not retain a session corpus, stage
+candidates, advance ingestion cursors, or call a model.
 
 Backfill rollback is intentionally shared with `memory rem-backfill`: both
 commands use the same grounded-only staging class and diary markers. Run

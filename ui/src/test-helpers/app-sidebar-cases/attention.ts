@@ -99,9 +99,17 @@ describe("AppSidebar session attention", () => {
       id: "question-home",
       status: "cancelled",
     });
-    setRows(sessionsHarness, [failedRow(mainKey)]);
+    setRows(sessionsHarness, [
+      failedRow(mainKey, {
+        lastRunError: "⚠️ ✉️ Message failed:  delivery unavailable",
+      }),
+    ]);
     await sidebar.updateComplete;
     expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
+    expect(home?.getAttribute("aria-label")).toBe(
+      "Home · Run failed:   Message failed:  delivery unavailable",
+    );
+    expect(home?.getAttribute("aria-label")).not.toMatch(/[⚠✉]/u);
 
     setRows(sessionsHarness, [
       { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
@@ -151,18 +159,30 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).toContain("Blocked: need the staging password");
   });
 
-  it("shows agent-declared attention ahead of a run error", async () => {
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [agentAttentionRow()]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-    );
+  it.each(["key", "hourglass"] as const)(
+    "shows %s attention ahead of a run error",
+    async (attention) => {
+      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+      setRows(sessionsHarness, [
+        agentAttentionRow(sessionKey, {
+          agentStatus: {
+            note: "Blocked: need the staging password",
+            attention,
+            expiresAt: Date.now() + 60_000,
+          },
+        }),
+      ]);
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessionsHarness.sessions,
+      );
 
-    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Blocked: need the staging password");
-    expect(sidebar.textContent).not.toContain("Run failed:");
-  });
+      expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+      expect(sidebar.querySelector('[data-session-attention="agent"] svg circle')).not.toBeNull();
+      expect(sidebar.textContent).toContain("Blocked: need the staging password");
+      expect(sidebar.textContent).not.toContain("Run failed:");
+    },
+  );
 
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);

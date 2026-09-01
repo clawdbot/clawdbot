@@ -5,6 +5,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "./session-manager-codec.js";
+import type { SessionEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 describe("session manager codec compatibility", () => {
@@ -81,35 +82,6 @@ describe("session manager codec compatibility", () => {
     expect(context).toContain("after");
   });
 
-  it("returns instead of looping when the parent chain forms a cycle", () => {
-    // buildSessionContext walks parentId links directly off the map it is given, so a
-    // caller that hands it a cycle drives the walk forever. Every other parent-chain walk
-    // in this directory already guards against that -- getBranch
-    // (session-manager-entries.ts), resolveCanonicalParentId (session-manager-core.ts),
-    // and the branch walk in session-manager-branching.ts all carry a visited set.
-    const entries = [
-      {
-        type: "message",
-        id: "cyc-a",
-        parentId: "cyc-b",
-        message: { role: "user", content: "first" },
-      },
-      {
-        type: "message",
-        id: "cyc-b",
-        parentId: "cyc-a",
-        message: { role: "user", content: "second" },
-      },
-    ] as unknown as Parameters<typeof buildSessionContext>[0];
-    const byId = new Map(entries.map((entry) => [entry.id, entry]));
-
-    const context = buildSessionContext(entries, "cyc-a", byId);
-
-    // Terminating at all is the assertion. Each entry is visited at most once, so the
-    // walk yields the cycle members and stops rather than growing the path forever.
-    expect(context.messages.length).toBeLessThanOrEqual(2);
-  }, 5_000);
-
   it("parses opaque tree links without widening their variants", () => {
     expect(parseParentLinkedOpaqueEntry({ type: "future", id: "f1", parentId: null })).toEqual({
       id: "f1",
@@ -124,4 +96,78 @@ describe("session manager codec compatibility", () => {
     ).toEqual({ id: "leaf1", parentId: null, targetId: null });
     expect(parseOpaqueLeafEntry({ type: "leaf", id: "leaf1", parentId: null })).toBeUndefined();
   });
+});
+
+class BoundedEntryMap extends Map<string, SessionEntry> {
+  private readsRemaining = 100;
+
+  override get(key: string): SessionEntry | undefined {
+    // Fail a cyclic regression before an unbounded walk exhausts the test worker.
+    if (this.readsRemaining-- === 0) {
+      throw new Error("Session ancestry traversal exceeded its read budget");
+    }
+    return super.get(key);
+  }
+}
+
+const parentTraversalCases: Array<{
+  name: string;
+  parents: Array<[string, string | null]>;
+  leaf: string | null;
+  expected: string[];
+}> = [
+  {
+    name: "two-entry cycle",
+    parents: [
+      ["a", "b"],
+      ["b", "a"],
+    ],
+    leaf: "a",
+    expected: ["b", "a"],
+  },
+  { name: "self cycle", parents: [["a", "a"]], leaf: "a", expected: ["a"] },
+  {
+    name: "tail entering a cycle",
+    parents: [
+      ["a", "b"],
+      ["b", "a"],
+      ["c", "a"],
+    ],
+    leaf: "c",
+    expected: ["b", "a", "c"],
+  },
+  {
+    name: "acyclic selected branch",
+    parents: [
+      ["a", null],
+      ["b", "a"],
+      ["other", null],
+    ],
+    leaf: "b",
+    expected: ["a", "b"],
+  },
+  { name: "missing parent", parents: [["a", "missing"]], leaf: "a", expected: ["a"] },
+  { name: "explicit empty branch", parents: [["a", "a"]], leaf: null, expected: [] },
+];
+
+describe("session context parent traversal", () => {
+  it.each(parentTraversalCases)(
+    "returns each selected entry once for $name",
+    ({ parents, leaf, expected }) => {
+      const entries: SessionEntry[] = parents.map(([id, parentId]) => ({
+        type: "message",
+        id,
+        parentId,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: id, timestamp: 0 },
+      }));
+      const before = structuredClone(entries);
+      const byId = new BoundedEntryMap(entries.map((entry) => [entry.id, entry]));
+
+      expect(buildSessionContext(entries, leaf, byId).messages).toEqual(
+        expected.map((content) => ({ role: "user", content, timestamp: 0 })),
+      );
+      expect(entries).toEqual(before);
+    },
+  );
 });

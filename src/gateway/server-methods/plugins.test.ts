@@ -12,6 +12,7 @@ const managementMocks = vi.hoisted(() => ({
   inspect: vi.fn(),
   install: vi.fn(),
   list: vi.fn(),
+  refreshMetadata: vi.fn(),
   setEnabled: vi.fn(),
   uninstall: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("../../plugins/management-service.js", () => ({
   inspectManagedPlugin: (...args: unknown[]) => managementMocks.inspect(...args),
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
+  refreshManagedPluginMetadata: (...args: unknown[]) => managementMocks.refreshMetadata(...args),
   setManagedPluginEnabled: (...args: unknown[]) => managementMocks.setEnabled(...args),
   uninstallManagedPlugin: (...args: unknown[]) => managementMocks.uninstall(...args),
 }));
@@ -87,16 +89,42 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.inspect.mockReset();
     managementMocks.install.mockReset();
     managementMocks.list.mockReset();
+    managementMocks.refreshMetadata.mockReset();
     managementMocks.setEnabled.mockReset();
     managementMocks.uninstall.mockReset();
     searchMock.mockReset();
   });
 
-  it("signals the config reloader after persisted plugin metadata changes", async () => {
+  it("signals that refreshed plugin metadata requires a Gateway restart", async () => {
+    const config = { plugins: { enabled: true } };
+    const result = await callHandler("plugins.refresh", {}, config);
+
+    expect(managementMocks.refreshMetadata).toHaveBeenCalledWith({ config });
+    expect(pluginMetadataChanged).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      ok: true,
+      response: { ok: true, restartRequired: true },
+      error: undefined,
+    });
+  });
+
+  it("reports inventory refresh failures while still requesting the required restart", async () => {
+    managementMocks.refreshMetadata.mockImplementationOnce(() => {
+      throw new Error("plugin index unavailable");
+    });
+
     const result = await callHandler("plugins.refresh", {});
 
     expect(pluginMetadataChanged).toHaveBeenCalledOnce();
-    expect(result).toEqual({ ok: true, response: { ok: true }, error: undefined });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message:
+          "Plugin inventory refresh failed: plugin index unavailable. Restart the Gateway to load updated plugins.",
+        details: { restartRequired: true },
+      },
+    });
   });
 
   it("returns cold Workboard inventory without claiming runtime loaded state", async () => {

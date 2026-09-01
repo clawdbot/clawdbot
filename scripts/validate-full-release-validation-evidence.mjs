@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Binds Full Release Validation run metadata to its v3 evidence manifest.
+// Binds Full Release Validation run metadata to its supported evidence manifest.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -172,9 +172,9 @@ export function validateFullReleaseValidationEvidence({
     );
   }
 
-  if (manifest.version !== 3) {
+  if (manifest.version !== 3 && manifest.version !== 4) {
     throw new Error(
-      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
+      `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
     );
   }
   const manifestChecks = [
@@ -230,19 +230,20 @@ export function validateFullReleaseValidationEvidence({
       `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
     );
   }
-  if (protectedTag) {
-    if (run.headSha !== expectedTrustedWorkflowSha) {
-      throw new Error(
-        `Protected-tag release evidence workflow SHA ${run.headSha} does not match trusted tooling ${expectedTrustedWorkflowSha}.`,
-      );
-    }
-    return { run, source: "sha-pinned-protected-tag" };
+  // The protected tag authenticates the current publisher. An older validation
+  // producer remains trusted only through its independent current-main lineage.
+  const historicalProtectedProducer = protectedTag && run.headSha !== expectedTrustedWorkflowSha;
+  if ((historicalProtectedProducer || !protectedTag) && !isTrustedMainAncestor?.(run.headSha)) {
+    const subject = protectedTag
+      ? "Protected-tag release evidence workflow SHA"
+      : "SHA-pinned validation workflow";
+    throw new Error(`${subject} ${run.headSha} is not reachable from current main.`);
   }
-  if (!isTrustedMainAncestor?.(run.headSha)) {
-    throw new Error(
-      `SHA-pinned validation workflow ${run.headSha} is not reachable from current main.`,
-    );
-  }
+  const source = protectedTag
+    ? historicalProtectedProducer
+      ? "sha-pinned-protected-tag-main-ancestor"
+      : "sha-pinned-protected-tag"
+    : "sha-pinned-main";
   if (Object.hasOwn(manifest, "evidenceReuse")) {
     const reuse = manifest.evidenceReuse;
     const exactTarget =
@@ -275,7 +276,7 @@ export function validateFullReleaseValidationEvidence({
       targetSha: expectedTargetSha,
     });
     if (
-      strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
+      strictEvidence?.schema !== `openclaw.release-validation-evidence/v${manifest.version}` ||
       strictEvidence.valid !== true ||
       scalarString(strictEvidence.current?.runId) !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||
@@ -292,7 +293,7 @@ export function validateFullReleaseValidationEvidence({
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
   }
-  return { run, source: "sha-pinned-main" };
+  return { run, source };
 }
 
 /**

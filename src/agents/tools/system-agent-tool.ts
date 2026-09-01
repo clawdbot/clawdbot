@@ -4,15 +4,23 @@
  * per-run scope, and every action funnels through OpenClaw's typed operation
  * union with approval assertions and the audit log.
  */
-import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
+  isSystemAgentNavigationOperation,
+  type SystemAgentNavigationOperation,
+} from "../../system-agent/operation-types.js";
+import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
+  SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
+  SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
+import {
+  hashSystemAgentOperation,
+  type SystemAgentProposalRef,
+} from "../../system-agent/operator-approval.js";
 import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
 import { stringEnum } from "../schema/typebox.js";
 import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
@@ -20,6 +28,8 @@ import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } fr
 export type SystemAgentToolOptions = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
+  /** Delegated proposals require operator UI approval, never a chat reply. */
+  operatorApprovalOnly?: boolean;
   /**
    * Host-verified consent for THIS turn: true only when the host judged the
    * user's actual message to be an explicit approval. The model-supplied
@@ -32,7 +42,7 @@ export type SystemAgentToolOptions = {
    * its canonical hash here (host-owned, survives turns), and an armed turn
    * may execute only a call matching that hash. Cleared after use.
    */
-  proposalRef?: { current?: string; operation?: SystemAgentOperation };
+  proposalRef?: SystemAgentProposalRef;
   /**
    * Host handoff channel for actions the tool cannot perform itself
    * (interactive channel setup, external onboarding guidance, opening the
@@ -44,25 +54,8 @@ export type SystemAgentToolOptions = {
 
 /** Host directives the hosting chat engine handles after the turn. */
 export type SystemAgentToolDirective =
-  | { kind: "channel-setup"; channel: string }
-  | { kind: "skills-setup" }
-  | { kind: "search-setup" }
-  | { kind: "gateway-config-setup" }
-  | { kind: "memory-import" }
-  | { kind: "model-setup"; workspace?: string }
-  | { kind: "open-tui"; agentId?: string; workspace?: string }
-  | Extract<SystemAgentOperation, { kind: "open-setup" }>
+  | SystemAgentNavigationOperation
   | { kind: "approved-operation"; operation: SystemAgentOperation };
-
-type SystemAgentHostNavigationDirective = Exclude<
-  SystemAgentToolDirective,
-  { kind: "approved-operation" }
->;
-
-/** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
-export function hashSystemAgentOperation(operation: SystemAgentOperation): string {
-  return createHash("sha256").update(stableStringify(operation)).digest("hex");
-}
 
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
 const SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX = "needs-approval:";
@@ -91,43 +84,10 @@ export function resolveSystemAgentDirectiveTransition(params: {
     ) {
       return { kind: "approved-operation", operation };
     }
-    return directiveForOperation(operation);
+    return isSystemAgentNavigationOperation(operation) ? operation : null;
   } catch {
     return null;
   }
-}
-
-function directiveForOperation(
-  operation: SystemAgentOperation,
-): SystemAgentHostNavigationDirective | null {
-  if (operation.kind === "channel-setup") {
-    return { kind: "channel-setup", channel: operation.channel };
-  }
-  if (
-    operation.kind === "skills-setup" ||
-    operation.kind === "search-setup" ||
-    operation.kind === "gateway-config-setup" ||
-    operation.kind === "memory-import"
-  ) {
-    return operation;
-  }
-  if (operation.kind === "model-setup") {
-    return {
-      kind: "model-setup",
-      ...(operation.workspace ? { workspace: operation.workspace } : {}),
-    };
-  }
-  if (operation.kind === "open-tui") {
-    return {
-      kind: "open-tui",
-      ...(operation.agentId ? { agentId: operation.agentId } : {}),
-      ...(operation.workspace ? { workspace: operation.workspace } : {}),
-    };
-  }
-  if (operation.kind === "open-setup") {
-    return operation;
-  }
-  return null;
 }
 
 /**
@@ -417,8 +377,11 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const operation = operationForAction(params);
-      const directive = directiveForOperation(operation);
+      const directive = isSystemAgentNavigationOperation(operation) ? operation : null;
       if (directive) {
+        if (options.operatorApprovalOnly) {
+          return textResult(SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF, {});
+        }
         // Not a write: the host chat performs the interactive handoff after
         // this turn (the wizard itself collects explicit user answers).
         if (options.directiveRef && options.directiveRef.current?.kind !== "approved-operation") {
@@ -487,8 +450,11 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             options.proposalRef.current = operationHash;
             options.proposalRef.operation = operation;
           }
+          const approvalHint = options.operatorApprovalOnly
+            ? `The proposal is registered for operator approval. Do not request conversational approval. ${SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF}`
+            : "The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).";
           return textResult(
-            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).`,
+            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\nThis action changes state. ${approvalHint}`,
             { needsApproval: true },
           );
         }

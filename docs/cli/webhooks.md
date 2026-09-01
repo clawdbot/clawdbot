@@ -96,6 +96,8 @@ This command connects Gmail transport but does not create a restricted reader ag
 
 <Warning>Setup output is sensitive: `--json` includes `hookToken` and `pushToken`, and the push endpoint printed in either format can contain its token. Redact output before sharing it.</Warning>
 
+Command failures show bounded tails from both stdout and stderr, with terminal colors and progress redraws removed. Exit codes and recorded termination reasons distinguish timeouts, signals, and output limits; exit code `124` alone does not mean a timeout. An omission marker (`…`) indicates truncated output. These diagnostics can still contain sensitive command output: redact them before sharing.
+
 `--port`, `--max-bytes`, and `--renew-minutes` require positive integers, without unit suffixes. `--include-body` has no negative CLI flag: set `hooks.gmail.includeBody: false` and let `run` inherit it.
 
 ## `webhooks gmail run`

@@ -31,11 +31,15 @@ type WizardStepControlsProps = {
   onToggleSensitiveVisibility?: () => void;
 };
 
-export function renderWizardBusyButton(label: string) {
+export function renderWizardBusyButton(
+  statusLabel: string,
+  buttonLabel = t("modelSetup.wizard.continue"),
+) {
   return html`
-    <button type="button" class="btn primary" disabled aria-busy="true">
+    <button type="button" class="btn primary" disabled aria-busy="true" aria-label=${buttonLabel}>
+      <span class="btn__label">${buttonLabel}</span>
       <span class="btn__spinner" aria-hidden="true"></span>
-      <span class="sr-only" role="status" aria-live="polite">${label}</span>
+      <span class="sr-only" role="status" aria-live="polite">${statusLabel}</span>
     </button>
   `;
 }

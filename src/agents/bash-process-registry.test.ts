@@ -10,7 +10,6 @@ import {
   addSession,
   appendOutput,
   deleteSession,
-  drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   isProcessSessionIdTaken,
@@ -19,6 +18,7 @@ import {
   markBackgrounded,
   markExited,
   markTerminalPollObserved,
+  prepareSessionPoll,
   recordNotifyOnExitRemoval,
   setJobTtlMs,
   tail,
@@ -26,6 +26,8 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createSessionSlug } from "./session-slug.js";
+
+const drainSession = (session: ProcessSession) => prepareSessionPoll(session, undefined);
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureInt: vi.fn(() => 0),

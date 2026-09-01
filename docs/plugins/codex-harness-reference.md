@@ -151,8 +151,13 @@ enumeration errors, cycles, or safety-limit exhaustion. Confirmation still
 covers unknown native clients and the status-to-archive race. A supervised
 model-locked Chat cannot be deleted while it protects the native binding.
 Active sources cannot create a branch or be archived, but an existing supervised
-Chat can still be opened. Every paired-node row stays read-only; the node
-transport does not yet provide the streaming lifecycle needed by the harness.
+Chat can still be opened. Paired-node continuation requires `operator.admin`, a
+stored or idle interactive thread, and a connected node advertising and
+permitting the catalog list, transcript read, and `codex.cli.session.resume`
+commands. It binds Chat to native CLI resume on that node, not the local branch
+flow or a streaming App Server harness. Other paired-node rows remain readable,
+and paired-node archive is unavailable. See
+[paired-node limits](/plugins/codex-supervision#understand-paired-node-limits).
 
 `appServer.homeScope: "user"` alone changes which Codex home a managed harness
 process uses; it does not publish the fleet catalog. Enabling supervision does
@@ -172,7 +177,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.150.1`):
+with the official plugin (currently `@openai/codex` `0.151.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -317,7 +322,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.150.1`. Explicit custom
+The plugin manages stable Codex app-server `0.151.0`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -446,7 +451,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.150.1` app-server.
+This preview path uses the pinned Codex `0.151.0` app-server.
 
 ```json5
 {
@@ -488,8 +493,15 @@ cloud worker is a separate, placement-owned execution path and does not require
 app-server and provider auth local, while the authorized node runs the managed,
 pinned Codex exec-server over its existing duplex connection. It requires
 explicit `gateway.nodes.commands.allow` authorization for
-`codex.exec-server.stdio.v1`, the approved pairing surface, and separate
-allow-once node invocation approval for each attempt. The node receives a
+`codex.exec-server.stdio.v1`, the approved pairing surface, and launch
+authorization for each attempt. A deliberately selected session **Full access**
+permission can replace the critical allow-once prompt only while the exact
+admitted turn and placement remain current and both node-local `tools.exec`
+and exec-approvals floors allow full/off execution. Ordinary and raw callers
+still require human approval. Local deny blocks either launch; local ask and
+allowlist policies cannot be bypassed with Full access. Changed local policy
+during setup refuses the launch. Gateway and node must both support this
+authorization path; missing node policy support fails closed. The node receives a
 fresh private home and sanitized environments, never Gateway provider, cloud,
 or GitHub credentials. A lost node connection terminates the attempt and
 process instead of resuming it. Each node-backed attempt uses its own Gateway
@@ -512,7 +524,19 @@ and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-wo
 In the default per-agent home, stdio launches use Codex's ephemeral credential
 store, including custom commands selected by `appServer.command` or
 `OPENCLAW_CODEX_APP_SERVER_BIN`. Command wrappers must forward Codex's `-c`
-configuration arguments. OpenClaw supplies auth in this order:
+configuration arguments. For stdio launches with an explicit `app-server`
+subcommand, OpenClaw groups `-c` / `--config` overrides before that subcommand,
+preserving their order and leaving wrapper prefixes and other arguments in place.
+This prevents Codex from dropping earlier overrides when flags appear on both
+sides of `app-server`. OpenClaw's ephemeral credential-store override remains
+last when OpenClaw owns auth; native user-home auth is unchanged.
+Workspace-write turns also preserve explicit `sandbox_workspace_write` temporary
+root exclusions from these arguments, including attached `-ckey=value` flags
+and TOML comments after boolean values. The last explicit value wins.
+Explicit turn sandbox policies and network-proxy permission profiles keep their
+existing precedence.
+
+OpenClaw supplies auth in this order:
 
 1. An explicit or ordered OpenClaw auth profile for the agent.
 2. For an API-key route only, a prepared key or local stdio fallback from
@@ -766,6 +790,49 @@ points `appServer.command` at a different Codex binary. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
+Automatic discovery and hosted-search model selection use visible picker entries.
+Bounded turns with an explicit model selection, including image understanding,
+structured extraction, isolated completion, and settled-turn finalization, also
+look up hidden entries returned by `model/list`. The model must still be listed
+and support the required input modalities. Listing does not prove account
+entitlement.
+
+Native discovery reads `model/list` and `account/read` from the same scoped
+app-server client. An API-key account remains API-key authentication; model
+listing does not imply a ChatGPT transport or endpoint. Picker readiness is
+valid only while that native owner and its account/config observation remain
+current. A missing account, failed refresh, account/config mutation, or retired
+client leaves native models unavailable until discovery succeeds again.
+
+Use the Models page **Refresh** action (`models.list` with `view: "all"` and
+`refresh: true`) to publish the full catalog for the selected agent. Prepared-only
+reads do not start discovery. Native configuration changes outside OpenClaw
+require the native owner's supported reload/restart and a catalog refresh;
+OpenClaw does not poll native home files for readiness. Authored host routes and
+explicit profile selections retain their existing auth and compatibility checks.
+
+Native catalog identifiers are runtime identifiers, not privacy labels. A
+deployment using a broker-owned alias must supply an alias-safe native catalog
+before starting app-server: both `id` and `model` in `model/list` must be the
+alias, with the desired `displayName`. Different native runtime identifiers are
+preserved in OpenClaw model parameters. Renaming the picker label does not hide
+those identifiers from requests or session state.
+
+Codex's startup `model_catalog_json` setting can supply a native catalog; a
+per-thread override does not reload it. Preserve the complete model capability,
+instruction, compaction, and reviewer metadata. Catalog membership does not
+reject arbitrary model overrides, so the broker must enforce allowed selectors
+on every request. Disable native session discovery with
+`sessionCatalog.enabled: false` when no native history should be imported.
+
+A custom endpoint is not automatically a supported Codex route. Explicit
+`agentRuntime.id: "codex"` does not bypass prepared-route compatibility or the
+trusted-endpoint requirement for model-backed approval review. A workload API
+key also does not provide ChatGPT account identity or subscription refresh.
+Verify those contracts before using a broker with the native harness; do not
+substitute a custom provider, remove safety metadata, or weaken review to make
+an inference smoke test pass.
+
 If discovery is temporarily unavailable or times out, the subscription route
 uses offline hints derived from the bundled OpenAI model manifest, with Codex
 plugin fallbacks for `gpt-5.5` and `gpt-5.5-pro` reasoning efforts:
@@ -781,21 +848,18 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.150.1`. A live `model/list`
-probe against the official `0.150.1` app-server returned these public picker
-rows:
+The current bundled harness is `@openai/codex` `0.151.0`. A live `model/list`
+probe against the official `0.151.0` app-server verified this public subset of
+picker rows:
 
-| Model id        | Input modalities | Reasoning efforts               |
-| --------------- | ---------------- | ------------------------------- |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to

@@ -10,6 +10,7 @@ import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 
@@ -21,6 +22,7 @@ type ManagerCreateInFlight = {
 };
 
 type AdvertisedScopedCatalogEntry = {
+  configFingerprint: string;
   servers: Map<string, McpServerCatalog>;
   toolsByServer: Map<string, McpCatalogTool[]>;
   signaturesByServer: Map<string, string>;
@@ -113,12 +115,21 @@ export type SessionMcpRuntimeManagerLifecycle = {
   ensureIdleSweepTimer: () => void;
   clearIdleSweepTimer: () => void;
   disposeRuntimeKeyNow: (runtimeKey: string) => Promise<void>;
+  disposeRuntimeKeys: (runtimeKeys: Iterable<string>) => Promise<void>;
   disposeManagedSession: (
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
   ) => Promise<void>;
-  rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
+  rememberAdvertisedScopedCatalog: (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
+  reconcileAdvertisedScopedCatalogConfig: (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ) => void;
 };
 
 function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
@@ -282,16 +293,29 @@ export function createSessionMcpRuntimeManagerLifecycle(
 
   const disposeRuntimeKeyNow = async (runtimeKey: string): Promise<void> => {
     const inFlight = store.createInFlight.get(runtimeKey);
+    const runtime = store.runtimesBySessionId.get(runtimeKey);
+    // Revoke publication before yielding. The captured producer disposes its own
+    // late result, while a newly admitted replacement keeps its maps and claim.
     store.createInFlight.delete(runtimeKey);
-    let runtime = store.runtimesBySessionId.get(runtimeKey);
-    if (!runtime && inFlight) {
-      runtime = await inFlight.promise.catch(() => undefined);
-    }
     store.runtimesBySessionId.delete(runtimeKey);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
-    if (runtime) {
-      await runtime.dispose();
+    try {
+      await runtime?.dispose();
+    } finally {
+      await inFlight?.promise.catch(() => undefined);
     }
+  };
+
+  const disposeRuntimeKeys = async (runtimeKeys: Iterable<string>): Promise<void> => {
+    // Keep requester chains owned until teardown runs; clearing them early lets
+    // replacement installs overlap the resolve/install work being drained.
+    await Promise.allSettled(
+      [...runtimeKeys].map((runtimeKey) =>
+        runtimeKey.startsWith("{")
+          ? runExclusiveOnRuntimeKey(runtimeKey, () => disposeRuntimeKeyNow(runtimeKey))
+          : disposeRuntimeKeyNow(runtimeKey),
+      ),
+    );
   };
 
   const disposeManagedSession = async (
@@ -314,26 +338,20 @@ export function createSessionMcpRuntimeManagerLifecycle(
         runtimeKeys.add(runtimeKey);
       }
     }
-    // Serialize disposal with in-flight requester work for composite keys.
-    await Promise.allSettled(
-      [...runtimeKeys].map((runtimeKey) =>
-        runtimeKey.startsWith("{")
-          ? runExclusiveOnRuntimeKey(runtimeKey, () => disposeRuntimeKeyNow(runtimeKey))
-          : disposeRuntimeKeyNow(runtimeKey),
-      ),
-    );
     forgetSessionKeysForSessionId(sessionId);
+    await disposeRuntimeKeys(runtimeKeys);
   };
 
-  const rememberAdvertisedScopedCatalog = (sessionId: string, catalog: McpToolCatalog): void => {
-    let entry = store.advertisedScopedCatalogBySessionId.get(sessionId);
-    if (!entry) {
-      entry = {
-        servers: new Map(),
-        toolsByServer: new Map(),
-        signaturesByServer: new Map(),
-      };
-      store.advertisedScopedCatalogBySessionId.set(sessionId, entry);
+  const rememberAdvertisedScopedCatalog = (
+    handle: RequesterScopedMcpRuntimeHandle,
+    catalog: McpToolCatalog,
+  ): void => {
+    const { runtime, advertisedCatalogConfigFingerprint } = handle;
+    // An older requester may finish after reconciliation; reject its catalog
+    // instead of allowing stale tools to repopulate the session cache.
+    const entry = store.advertisedScopedCatalogBySessionId.get(runtime.sessionId);
+    if (entry?.configFingerprint !== advertisedCatalogConfigFingerprint) {
+      return;
     }
     const toolsByServerName = new Map<string, McpCatalogTool[]>();
     for (const tool of catalog.tools) {
@@ -382,6 +400,23 @@ export function createSessionMcpRuntimeManagerLifecycle(
     };
   };
 
+  const reconcileAdvertisedScopedCatalogConfig = (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ): void => {
+    const current = store.advertisedScopedCatalogBySessionId.get(sessionId);
+    if (current?.configFingerprint === fingerprint || (!current && !preparePublication)) {
+      return;
+    }
+    store.advertisedScopedCatalogBySessionId.set(sessionId, {
+      configFingerprint: fingerprint,
+      servers: new Map(),
+      toolsByServer: new Map(),
+      signaturesByServer: new Map(),
+    });
+  };
+
   return {
     store,
     forgetSessionKeysForSessionId,
@@ -393,8 +428,10 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer,
     clearIdleSweepTimer,
     disposeRuntimeKeyNow,
+    disposeRuntimeKeys,
     disposeManagedSession,
     rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog,
+    reconcileAdvertisedScopedCatalogConfig,
   };
 }

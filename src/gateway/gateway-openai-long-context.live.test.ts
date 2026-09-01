@@ -1,9 +1,10 @@
 // Process-owned Gateway proof for first-class OpenAI Responses long-context compaction.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   aggregateOpenAILongContextMetric,
@@ -31,6 +32,7 @@ import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { GatewayClient } from "./client.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
@@ -242,13 +244,13 @@ async function requestTurn(params: {
     throw new Error(`OpenAI long-context turn failed with status ${String(response.status)}`);
   }
   const elapsedMs = Date.now() - startedAt;
-  const events = params.allEvents
-    .slice(eventOffset)
-    .filter((event) => !event.sessionKey || event.sessionKey === SESSION_KEY);
-  const runId = response.runId ?? events.find((event) => event.runId)?.runId;
+  const runId = response.runId;
   if (!runId) {
     throw new Error(`OpenAI long-context ${params.phase} turn omitted its run id`);
   }
+  const events = params.allEvents
+    .slice(eventOffset)
+    .filter((event) => event.runId === runId && event.sessionKey === SESSION_KEY);
   const firstAssistant = events.find(
     (event) => event.stream === "assistant" && event.receivedAt !== undefined,
   );
@@ -262,6 +264,48 @@ async function requestTurn(params: {
   });
   expect(transport.serviceTier).toBe("priority");
   expect(transport.contextManagement).toBe(true);
+  // The start diagnostic describes prepared params, not continuation/retry egress.
+  // Require every final request in this exact run to retain the assembled prompt.
+  const observations = (
+    await loadSqliteTrajectoryRuntimeEvents({
+      agentId: AGENT_ID,
+      sessionId: params.sessionId,
+      storePath: path.join(params.instance.state.agentDir(AGENT_ID), "openclaw-agent.sqlite"),
+    })
+  ).filter((event) => event.type === "provider.prompt.observed" && event.runId === runId);
+  expect(
+    observations.length,
+    `${params.phase} omitted final-request prompt evidence`,
+  ).toBeGreaterThan(0);
+  for (const observation of observations) {
+    expect(observation).toMatchObject({ sessionId: params.sessionId, sessionKey: SESSION_KEY });
+    expect(observation.data).toMatchObject({
+      promptSource: "instructions",
+      matchesAssembledPrompt: true,
+    });
+    expect(observation.data?.expectedChars).toBeGreaterThan(0);
+    expect(observation.data?.observedChars).toBe(observation.data?.expectedChars);
+    // Both rejected continuation and stripped compaction can rebuild full history.
+    expect(["initial", "reasoning-stripped"]).toContain(observation.data?.payloadVariant);
+  }
+  if (requireSettings().emitMetrics) {
+    console.error(
+      `[gateway-openai-long-context-proof] ${JSON.stringify({
+        phase: params.phase,
+        sessionIdHash: createHash("sha256").update(params.sessionId).digest("hex"),
+        runIdHash: createHash("sha256").update(runId).digest("hex"),
+        preparedRequest: transport,
+        finalPrompts: observations.map(({ data }) => ({
+          egress: data?.egress,
+          payloadVariant: data?.payloadVariant,
+          promptSource: data?.promptSource,
+          expectedChars: data?.expectedChars,
+          observedChars: data?.observedChars,
+          matchesAssembledPrompt: data?.matchesAssembledPrompt,
+        })),
+      })}`,
+    );
+  }
   const result: TurnResult = {
     text: extractResultText(response.result),
     events,
@@ -326,7 +370,21 @@ function markerStatus(text: string, markers: LongOutputMarkers): Record<string, 
 }
 
 function expectAllMarkers(text: string, markers: LongOutputMarkers): void {
-  expect(markerStatus(text, markers)).toEqual({ begin: true, middle: true, end: true });
+  // Diagnose recall failures without retaining provider text or marker values.
+  const diagnostic = {
+    responseChars: text.length,
+    responseHash: createHash("sha256").update(text).digest("hex"),
+    caseInsensitive: markerStatus(text.toLowerCase(), {
+      begin: markers.begin.toLowerCase(),
+      middle: markers.middle.toLowerCase(),
+      end: markers.end.toLowerCase(),
+    }),
+  };
+  expect(markerStatus(text, markers), JSON.stringify(diagnostic)).toEqual({
+    begin: true,
+    middle: true,
+    end: true,
+  });
 }
 
 function promptTokens(result: TurnResult): number | undefined {
@@ -357,15 +415,11 @@ function assertReplayEgress(
   if (latest.idHash) {
     expect(transport.compactionIdHashes).toContain(latest.idHash);
   }
-  const compactionIndex = transport.inputItemShape.indexOf("compaction");
-  expect(compactionIndex).toBeGreaterThan(0);
-  expect(transport.compactionInputIndexes).toEqual([compactionIndex]);
+  // Inline checkpoints prune the earlier input; the prompt lives in instructions.
+  // Standalone /responses/compact instead requires its entire returned window.
+  expect(transport.inputItemShape[0]).toBe("compaction");
+  expect(transport.compactionInputIndexes).toEqual([0]);
   expect(transport.inputItems).toBe(transport.inputItemShape.length);
-  expect(
-    transport.inputItemShape
-      .slice(0, compactionIndex)
-      .every((item) => /^message:(developer|system)$/u.test(item)),
-  ).toBe(true);
   expect(transport.inputItemShape.at(-1)).toBe("message:user");
 }
 
@@ -419,6 +473,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
         token: instance.gatewayToken,
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
+        caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
         deviceIdentity,
         requestTimeoutMs: profile.requestTimeoutMs + 30_000,
         timeoutMs: 60_000,
@@ -645,6 +700,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
         token: instance.gatewayToken,
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
+        caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
         deviceIdentity,
         requestTimeoutMs: profile.requestTimeoutMs + 30_000,
         timeoutMs: 60_000,

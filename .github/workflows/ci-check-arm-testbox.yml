@@ -62,12 +62,6 @@ jobs:
           cache-mode: restore
           install-bun: "false"
           install-trufflehog: "true"
-      - name: Ensure Testbox base commit
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
@@ -82,6 +76,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}

@@ -16,6 +16,7 @@ import {
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
   resolveInternalSessionEffectsTarget,
@@ -178,6 +179,71 @@ describe("internal session effects", () => {
       ]);
     });
   });
+
+  it.each([true, false])(
+    "cleans only the latest tracked hidden identities when enabled=%s",
+    async (enabled) => {
+      await withTestDir({ prefix: "openclaw-internal-effects-cleanup-" }, async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const errors: unknown[] = [];
+        const cleanup = createInternalSessionEffectsCleanup({
+          enabled,
+          agentId: "main",
+          runId: "tracked-run",
+          storePath,
+          onError: (error) => errors.push(error),
+        });
+        const initial = await prepareInternalSessionEffectsSession({
+          agentId: "main",
+          runId: "tracked-run",
+          storePath,
+        });
+        const rotated = {
+          agentId: initial.agentId,
+          sessionId: "rotated-hidden-session",
+          sessionKey: initial.sessionKey,
+          storePath,
+        };
+        await upsertSessionEntryCore(rotated, { sessionId: rotated.sessionId, updatedAt: 2 });
+        const additional = await prepareInternalSessionEffectsSession({
+          agentId: "main",
+          runId: "additional-binding",
+          storePath,
+        });
+        const untracked = await prepareInternalSessionEffectsSession({
+          agentId: "main",
+          runId: "other-run",
+          storePath,
+        });
+        const untrackedBefore = structuredClone(loadExactSessionEntry(untracked));
+        expect(untrackedBefore).toBeDefined();
+        for (const target of [rotated, additional]) {
+          await appendTranscriptMessage(target, {
+            message: { role: "assistant", content: "private", timestamp: 3 },
+          });
+          cleanup.track(target);
+        }
+
+        await cleanup.cleanup();
+
+        expect(errors).toEqual([]);
+        expect(loadExactSessionEntry(untracked)).toEqual(untrackedBefore);
+        for (const target of [rotated, additional]) {
+          if (enabled) {
+            expect(loadExactSessionEntry(target)).toBeUndefined();
+            await expect(loadTranscriptEvents(target)).resolves.toEqual([]);
+          } else {
+            expect(loadExactSessionEntry(target)?.entry.sessionId).toBe(target.sessionId);
+            await expect(loadTranscriptEvents(target)).resolves.toContainEqual(
+              expect.objectContaining({
+                message: expect.objectContaining({ role: "assistant", content: "private" }),
+              }),
+            );
+          }
+        }
+      });
+    },
+  );
 
   it("hard-deletes the hidden entry and transcript rows", async () => {
     await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {

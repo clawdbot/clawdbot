@@ -176,6 +176,13 @@ function isCurrentWorkspaceOpenRequest(
   );
 }
 
+export function isSessionWorkspaceItemLoading(state: SessionWorkspaceHost): boolean {
+  const workspace = state.sessionWorkspaceState;
+  return Boolean(
+    workspace && isCurrentSessionWorkspace(state, workspace) && workspace.openRequest !== undefined,
+  );
+}
+
 function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -184,11 +191,11 @@ function openWorkspaceItem<T>(
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
 ) {
+  if (!state.client || !state.connected) {
+    return;
+  }
   const request = beginWorkspaceOpenRequest(workspace, itemId);
   void (async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
     state.handleOpenSidebar(null);
     workspace.error = null;
     try {
@@ -208,6 +215,9 @@ function openWorkspaceItem<T>(
         workspace.error = formatUiError(error);
       }
     } finally {
+      if (workspace.openRequest === request) {
+        delete workspace.openRequest;
+      }
       requestWorkspaceUpdate(state);
     }
   })();

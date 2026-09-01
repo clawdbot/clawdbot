@@ -4,6 +4,7 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -50,6 +51,7 @@ import {
 import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
+  sessionEntryMetadataJson,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -65,21 +67,17 @@ import {
   collectSessionEntryLookupKeys,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;
-  legacyKeys: string[];
   row: SessionEntryRow;
 };
-type SqliteSessionEntrySelectionSnapshot = {
-  selected: ResolvedSessionEntryRow | undefined;
-  selectedRows: Array<{ entry: SessionEntry; sessionKey: string }>;
-};
 
+/** Decodes a fresh owned entry, including its nested JSON, owner and participant values. */
 export function parseReadableSqliteSessionEntryRow(
   database: Pick<OpenClawAgentDatabase, "db">,
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
@@ -169,29 +167,22 @@ function readSessionEntryRowUnchecked(
     if (!entry || row.session_key !== sessionKey.trim()) {
       continue;
     }
-    selected = { entry, legacyKeys: [], row };
+    selected = { entry, row };
   }
   return selected;
 }
 
-// Async updaters prepare against this complete selection. Capturing alias rows
-// prevents the commit phase from deleting a concurrently changed legacy key.
+// Runtime patches own only the exact canonical row. Folded lookup candidates
+// can be distinct case-sensitive rooms and must not join its mutation snapshot.
 export function readSessionEntrySelectionSnapshot(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   exact: boolean,
-): SqliteSessionEntrySelectionSnapshot {
+): SqliteLifecycleTargetSnapshot {
   const selected = exact
     ? readExactSessionEntryRow(database, sessionKey)
     : readSessionEntryRow(database, sessionKey);
-  const selectedKeys = collectSessionEntryLookupKeys(database, sessionKey).toSorted();
-  return {
-    selected,
-    selectedRows: selectedKeys.flatMap((candidateKey) => {
-      const row = readExactSessionEntryRow(database, candidateKey);
-      return row ? [{ entry: cloneSessionEntry(row.entry), sessionKey: candidateKey }] : [];
-    }),
-  };
+  return selected ? [{ entry: selected.entry, sessionKey: selected.row.session_key }] : [];
 }
 
 export function readExactSessionEntryRow(
@@ -207,7 +198,7 @@ export function readExactSessionEntryRow(
     return undefined;
   }
   const entry = parseReadableSqliteSessionEntryRow(database, row);
-  return entry ? { entry, legacyKeys: [], row } : undefined;
+  return entry ? { entry, row } : undefined;
 }
 
 export function readExactSessionEntryJson(
@@ -237,10 +228,10 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
-  ).rows;
+  );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
     // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
@@ -255,33 +246,43 @@ export function readSessionEntryStore(
 
 export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select("entry_json"),
-  ).rows;
-  return rows.reduce((count, row) => count + (parseSessionEntryRow(row) ? 1 : 0), 0);
+    db.selectFrom("session_nodes").select(sessionEntryMetadataJson),
+  );
+  let count = 0;
+  for (const row of rows) {
+    count += parseSessionEntryRow(row) ? 1 : 0;
+  }
+  return count;
 }
 
 export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
   const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
+  const keys: string[] = [];
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["entry_json", "session_key"])
+      .select([sessionEntryMetadataJson, "session_key"])
       .orderBy("session_key", "asc"),
-  ).rows.flatMap((row) => (parseSessionEntryRow(row) ? [row.session_key] : []));
+  )) {
+    if (parseSessionEntryRow(row)) {
+      keys.push(row.session_key);
+    }
+  }
+  return keys;
 }
 
 export function resolveLifecyclePrimaryEntry(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
   options: { allowCanonicalMove?: boolean } = {},
-): { key: string; entry: SessionEntry } | undefined {
+): SqliteLifecycleTargetSnapshot[number] | undefined {
   const rows = target.storeKeys.flatMap((key) => {
     const sessionKey = key.trim();
     const row = readExactSessionEntryRow(database, sessionKey);
-    return row ? [{ key: sessionKey, entry: row.entry }] : [];
+    return row ? [{ sessionKey, entry: row.entry }] : [];
   });
   if (rows.length > 1) {
     throw canonicalSessionKeyMigrationRequiredError(
@@ -289,7 +290,7 @@ export function resolveLifecyclePrimaryEntry(
     );
   }
   const [row] = rows;
-  if (row && row.key !== target.canonicalKey && options.allowCanonicalMove !== true) {
+  if (row && row.sessionKey !== target.canonicalKey && options.allowCanonicalMove !== true) {
     throw canonicalSessionKeyMigrationRequiredError(
       `non-canonical persisted row resolves to session key ${target.canonicalKey}`,
     );
@@ -304,13 +305,8 @@ export function readLifecycleTargetSnapshot(
 ): SqliteLifecycleTargetSnapshot {
   assertCanonicalSqliteSessionKeysCurrent(database);
   const normalized = normalizeLifecycleTarget(target);
-  return {
-    primary: resolveLifecyclePrimaryEntry(database, normalized, options),
-    rows: normalized.storeKeys.flatMap((sessionKey) => {
-      const row = readExactSessionEntryRow(database, sessionKey);
-      return row ? [{ entry: cloneSessionEntry(row.entry), sessionKey }] : [];
-    }),
-  };
+  const row = resolveLifecyclePrimaryEntry(database, normalized, options);
+  return row ? [row] : [];
 }
 
 export function normalizeLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
@@ -344,14 +340,19 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  const survivingNodes = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["current_session_id", "entry_json", "session_key"])
-      .where("session_key", "!=", sessionKey)
-      .orderBy("session_key", "asc"),
-  ).rows;
+  // Maintenance may have reclaimed every window already. Only scan surviving
+  // prompts when a retained window needs an owner; otherwise each deletion reads the whole store.
+  const survivingNodes =
+    windows.length > 0
+      ? executeSqliteQuerySync(
+          database.db,
+          db
+            .selectFrom("session_nodes")
+            .select(["current_session_id", "entry_json", "session_key"])
+            .where("session_key", "!=", sessionKey)
+            .orderBy("session_key", "asc"),
+        ).rows
+      : [];
   for (const window of windows) {
     const survivingNode = survivingNodes.find((node) => {
       if (node.current_session_id === window.session_id) {
@@ -598,6 +599,11 @@ export function writeSessionEntry(
         { agentId: database.agentId, sessionKey },
       );
     }
+  }
+  // Doctor/import owners validate and select a whole creator stamp across aliases.
+  // Preserve their selection unless this canonical node already owns required isolation;
+  // ordinary writes cannot restamp a logical node's creator.
+  if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
   }
   const previousEntry =
@@ -731,5 +737,3 @@ export function writeSessionEntry(
   publishSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
   return normalizedEntry;
 }
-
-/** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

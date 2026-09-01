@@ -33,16 +33,23 @@ export function availableComputerActions(
     : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
 }
 
-export function createComputerToolSchema(actions: readonly ComputerUseV2ActionName[]) {
+export function createComputerToolSchema(
+  actions: readonly ComputerUseV2ActionName[],
+  targetScope: "paired" | "session" = "paired",
+) {
   return Type.Object({
     action: stringEnum(actions),
-    ...gatewayCallOptionSchemaProperties(),
-    node: Type.Optional(
-      Type.String({
-        description:
-          "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
-      }),
-    ),
+    ...(targetScope === "paired"
+      ? {
+          ...gatewayCallOptionSchemaProperties(),
+          node: Type.Optional(
+            Type.String({
+              description:
+                "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
+            }),
+          ),
+        }
+      : {}),
     // Codex accepts a single schema in array `items`, not tuple item arrays.
     // Fixed bounds preserve the coordinate-pair contract across runtimes.
     coordinate: Type.Optional(

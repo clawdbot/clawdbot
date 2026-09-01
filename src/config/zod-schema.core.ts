@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";
 import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -263,6 +264,59 @@ const ModelApiSchema = z.enum(MODEL_APIS, {
       : undefined,
 });
 
+const RoutingPercentileCutoffsSchema = z
+  .object({
+    p50: z.number().optional(),
+    p75: z.number().optional(),
+    p90: z.number().optional(),
+    p99: z.number().optional(),
+  })
+  .strict();
+
+const OpenRouterRoutingSchema = z
+  .object({
+    allow_fallbacks: z.boolean().optional(),
+    require_parameters: z.boolean().optional(),
+    data_collection: z.enum(["deny", "allow"]).optional(),
+    zdr: z.boolean().optional(),
+    enforce_distillable_text: z.boolean().optional(),
+    order: z.array(z.string()).optional(),
+    only: z.array(z.string()).optional(),
+    ignore: z.array(z.string()).optional(),
+    quantizations: z.array(z.string()).optional(),
+    sort: z
+      .union([
+        z.string(),
+        z
+          .object({
+            by: z.string().optional(),
+            partition: z.string().nullable().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
+    max_price: z
+      .object({
+        prompt: z.union([z.number(), z.string()]).optional(),
+        completion: z.union([z.number(), z.string()]).optional(),
+        image: z.union([z.number(), z.string()]).optional(),
+        audio: z.union([z.number(), z.string()]).optional(),
+        request: z.union([z.number(), z.string()]).optional(),
+      })
+      .strict()
+      .optional(),
+    preferred_min_throughput: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+    preferred_max_latency: z.union([z.number(), RoutingPercentileCutoffsSchema]).optional(),
+  } satisfies Record<keyof OpenRouterRouting, z.ZodType>)
+  .strict();
+
+const VercelGatewayRoutingSchema = z
+  .object({
+    only: z.array(z.string()).optional(),
+    order: z.array(z.string()).optional(),
+  } satisfies Record<keyof VercelGatewayRouting, z.ZodType>)
+  .strict();
+
 const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
@@ -293,7 +347,15 @@ const ModelCompatSchema = z
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     toolCallArgumentsEncoding: z.string().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
-  })
+    openRouterRouting: OpenRouterRoutingSchema.optional(),
+    vercelGatewayRouting: VercelGatewayRoutingSchema.optional(),
+    zaiToolStream: z.boolean().optional(),
+    cacheControlFormat: z.literal("anthropic").optional(),
+    sendSessionAffinityHeaders: z.boolean().optional(),
+    sendSessionIdHeader: z.boolean().optional(),
+    supportsEagerToolInputStreaming: z.boolean().optional(),
+    supportsLongCacheRetention: z.boolean().optional(),
+  } satisfies Record<keyof ModelCompatConfig, z.ZodType>)
   .strict()
   .optional();
 type AssertAssignable<_Left extends _Right, _Right> = true;
@@ -631,10 +693,6 @@ export const TypingModeSchema = z.union([
   z.literal("message"),
 ]);
 
-// GroupPolicySchema: controls how group messages are handled
-// Used with .default("allowlist").optional() pattern:
-//   - .optional() allows field omission in input config
-//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);

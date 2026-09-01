@@ -13,20 +13,16 @@ import {
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import {
-  collectNodeRunnerIssuesByNodeId,
-  collectNodeWorkerBundleStatusByNodeId,
-  collectNodeWorkerCapacityByNodeId,
-  isNodeRunnerSessionHost,
-} from "../node-registry-private.js";
+import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
 import { formatForLog } from "../ws-log.js";
@@ -159,46 +155,15 @@ export async function listGatewayEnvironments(
   const visibleDevices = devices.paired.filter(
     (device) => !managedCloudNodeIds.has(device.deviceId),
   );
-  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
-  for (const device of visibleDevices) {
-    const state = resolveNodePairingState(device);
-    if (state) {
-      currentPairingStates.set(state.identity.nodeId, {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      });
-    }
-  }
-  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(currentPairingStates);
-  const sessionHostNodeIds = new Set(
-    connectedNodes.flatMap((node) =>
-      isNodeRunnerSessionHost({
-        registry: context.nodeRegistry,
-        nodeId: node.nodeId,
-        connId: node.connId,
-        pairingGeneration: node.pairingGeneration,
-      })
-        ? [node.nodeId]
-        : [],
-    ),
+  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
+    projectPairedDeviceNodeBindings(visibleDevices),
   );
-  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(context.nodeRegistry, connectedNodes);
-  const workerSlotsByNodeId = collectNodeWorkerCapacityByNodeId(
-    context.nodeRegistry,
-    connectedNodes,
-  );
-  const workerBundleByNodeId = collectNodeWorkerBundleStatusByNodeId(
-    context.nodeRegistry,
-    connectedNodes,
-  );
+  const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
     connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
-    sessionHostNodeIds,
-    workerSlotsByNodeId,
-    workerBundleByNodeId,
-    issuesByNodeId,
+    ...runtimeState,
   });
   const config = context.getRuntimeConfig();
   const gateway =

@@ -20,19 +20,22 @@ import {
   handleMarkdownTableInteraction,
   releaseMarkdownTables,
 } from "../../../components/markdown-tables.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
+import {
+  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+  renderChatHistoryBoundary,
+} from "./chat-history-boundary.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import {
-  ChatTranscriptController,
-  type ChatTranscriptSession,
-} from "./chat-transcript-controller.ts";
+import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 
 const markdownTableOwnerRefs = new WeakMap<
@@ -62,61 +65,6 @@ function markdownTableOwnerRef(
   return callback;
 }
 
-function renderLoadingSkeleton() {
-  return html`
-    <div class="chat-loading-skeleton" aria-label=${t("chat.thread.loading")}>
-      <div class="chat-line assistant">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div
-              class="skeleton skeleton-line skeleton-line--medium"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line user" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div class="skeleton skeleton-line skeleton-line--medium"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line assistant" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function renderHistorySentinel(loading: boolean) {
-  return html`
-    <div class="chat-history-sentinel">
-      ${loading
-        ? html`
-            <div class="chat-history-loading" role="status">
-              <span class="session-run-spinner" aria-hidden="true"></span>
-              <span>${t("common.loading")}</span>
-            </div>
-          `
-        : nothing}
-    </div>
-  `;
-}
-
 export function renderChatThread(
   props: ChatThreadProps,
   transcript: ChatTranscriptController,
@@ -131,20 +79,39 @@ function renderTranscriptShell(
   transcript: ChatTranscriptSession,
 ): TemplateResult {
   const projection = projectChatTranscript(props, transcript);
-  const historySentinel =
-    props.historyLoading === undefined ? nothing : renderHistorySentinel(props.historyLoading);
+  // The sentinel is an out-of-flow IntersectionObserver target pinned over the
+  // virtualized rows; it stays empty because content here paints on top of real
+  // messages. The visible affordance is the in-flow history boundary header.
+  const historySentinel = props.historyPagination
+    ? html`<div class="chat-history-sentinel"></div>`
+    : nothing;
+  // The boundary renders above the virtualized block and is charged to the
+  // virtualizer as scrollMargin, so prepends re-anchor on message rows and the
+  // viewport never follows the boundary itself.
+  const historyHeader = props.historyPagination
+    ? {
+        template: renderChatHistoryBoundary(props.historyPagination),
+        height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+      }
+    : null;
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
           <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
-            ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+            ${historySentinel}
+            ${projection.isEmpty && !projection.showLoadingSkeleton && historyHeader
+              ? historyHeader.template
+              : nothing}
+            ${projection.showLoadingSkeleton
+              ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+              : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen
               ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `
               : nothing}
           </div>
         `
-      : projection.renderRows(historySentinel);
+      : projection.renderRows(historySentinel, historyHeader);
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"

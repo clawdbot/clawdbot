@@ -19,10 +19,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
-import {
-  buildCurrentOpenClawCliCommand,
-  buildCurrentOpenClawCliExecEnv,
-} from "./commands-openclaw-cli.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
@@ -245,7 +242,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
     approvalKind: "exec",
     id: "diagnostics-private-route",
     request: {
-      command: buildGatewayDiagnosticsExportJsonCommand(),
+      command: buildGatewayDiagnosticsExportJsonRequest().command,
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
@@ -258,8 +255,8 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
   };
 }
 
-function buildGatewayDiagnosticsExportJsonCommand(): string {
-  return buildCurrentOpenClawCliCommand(["gateway", "diagnostics", "export", "--json"]);
+function buildGatewayDiagnosticsExportJsonRequest() {
+  return buildCurrentOpenClawCliExecRequest(["gateway", "diagnostics", "export", "--json"]);
 }
 
 async function deliverPrivateDiagnosticsReply(params: {
@@ -283,7 +280,7 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const command = buildGatewayDiagnosticsExportJsonCommand();
+  const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -310,8 +307,7 @@ async function requestGatewayDiagnosticsExportApproval(
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
-      env: buildCurrentOpenClawCliExecEnv(),
-      security: "allowlist",
+      env,
       ask: "always",
       background: true,
       timeoutSeconds: timeoutSec,

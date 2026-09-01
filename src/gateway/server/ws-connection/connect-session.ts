@@ -1,7 +1,6 @@
 // Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -18,6 +17,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -50,7 +50,7 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { MAX_PAYLOAD_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
+import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
@@ -63,6 +63,7 @@ import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
+import { prepareGatewayReceiverHandoff } from "./request-start.js";
 
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
@@ -75,13 +76,6 @@ type AuthenticatedNodePairingAdmission = {
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
-  const receiver = (socket as { _receiver?: { _maxPayload?: number } })["_receiver"];
-  if (receiver) {
-    receiver["_maxPayload"] = maxPayload;
-  }
 }
 
 export async function attachAuthenticatedGatewayConnect(
@@ -250,7 +244,11 @@ export async function attachAuthenticatedGatewayConnect(
       ? []
       : rolePolicy
         ? effectiveScopes.scopes.filter((scope) =>
-            rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
+            roleScopesAllow({
+              role: "operator",
+              requestedScopes: [scope],
+              allowedScopes: rolePolicy.scopes,
+            }),
           )
         : effectiveScopes.scopes;
   state.scopes = scopes;
@@ -476,7 +474,6 @@ export async function attachAuthenticatedGatewayConnect(
       expiresAtMs: entry.expiresAtMs,
     });
   }
-  setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
 
   // Version mismatch: kick the local node host so the OS supervisor restarts it.
   // Only applies when the connecting node is the same-install local node (verified by
@@ -546,6 +543,15 @@ export async function attachAuthenticatedGatewayConnect(
     close(4001, "gateway auth changed");
     return;
   }
+  const handoffReceiver = prepareGatewayReceiverHandoff(socket, role);
+  if (!handoffReceiver) {
+    const message = "unsupported Gateway WebSocket receiver";
+    markHandshakeFailure("unsupported-websocket-receiver", {});
+    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message);
+    await releasePendingNodePairingCleanup();
+    close(1011, message);
+    return;
+  }
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
@@ -554,6 +560,9 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
+  // Only registered operators use bounded router starts. Node lifecycle traffic,
+  // workers and preauth retain native yielding and their existing queue/drain rules.
+  handoffReceiver();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
   logWs("in", "connect", {

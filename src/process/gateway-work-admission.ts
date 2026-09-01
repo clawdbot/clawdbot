@@ -16,6 +16,7 @@ export class GatewayDrainingError extends Error {
 }
 
 type GatewayRootWorkAdmission = {
+  origin: string;
   references: number;
   released: boolean;
   retiredByReset?: true;
@@ -23,6 +24,7 @@ type GatewayRootWorkAdmission = {
 
 type GatewayWorkAdmissionState = {
   restartDraining: boolean;
+  restartDrainController: AbortController;
   restartSignalPending: boolean;
   restartSignalGeneration: number;
   suspendPhase: GatewaySuspendAdmissionPhase;
@@ -39,6 +41,7 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayWorkAdmissionState"),
   (): GatewayWorkAdmissionState => ({
     restartDraining: false,
+    restartDrainController: new AbortController(),
     restartSignalPending: false,
     restartSignalGeneration: 0,
     suspendPhase: "accepting",
@@ -79,8 +82,18 @@ export type GatewayRestartSignalAdmissionLease = {
   rollback: () => boolean;
 };
 
-function createGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLease {
-  const admission: GatewayRootWorkAdmission = { references: 1, released: false };
+const GATEWAY_ROOT_WORK_ORIGIN_MAX_CHARS = 80;
+
+function createGatewayRootWorkAdmission(origin: string): GatewayRootWorkAdmissionLease {
+  const normalizedOrigin = origin
+    .trim()
+    .replaceAll(/\s+/g, " ")
+    .slice(0, GATEWAY_ROOT_WORK_ORIGIN_MAX_CHARS);
+  const admission: GatewayRootWorkAdmission = {
+    origin: normalizedOrigin || "gateway",
+    references: 1,
+    released: false,
+  };
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.add(admission);
   const release = createGatewayRootWorkRelease(admission);
   return {
@@ -185,6 +198,10 @@ export function isGatewayRestartDraining(): boolean {
   );
 }
 
+export function getGatewayRestartDrainSignal(): AbortSignal {
+  return GATEWAY_WORK_ADMISSION_STATE.restartDrainController.signal;
+}
+
 export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
   return error instanceof GatewayDrainingError && isGatewayRestartDraining();
 }
@@ -199,6 +216,9 @@ export function markGatewayRestartDraining(): void {
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = true;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
+    new GatewayDrainingError("gateway is draining for restart"),
+  );
   resolveSuspendOpenWaiters();
   logAdmissionClosed("restart drain");
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
@@ -246,7 +266,9 @@ export function rollbackGatewayRestartSignalFence(): boolean {
 }
 
 /** Root RPC/timer admission. Nested work in the same async chain counts once. */
-export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+export function tryBeginGatewayRootWorkAdmission(
+  origin = "gateway",
+): GatewayRootWorkAdmissionLease | null {
   const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (current && !current.released) {
     return {
@@ -264,7 +286,7 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
   ) {
     return null;
   }
-  return createGatewayRootWorkAdmission();
+  return createGatewayRootWorkAdmission(origin);
 }
 
 /**
@@ -279,7 +301,7 @@ export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWor
   ) {
     return null;
   }
-  return createGatewayRootWorkAdmission();
+  return createGatewayRootWorkAdmission("restart-startup");
 }
 
 /**
@@ -295,11 +317,13 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
   ) {
     return null;
   }
-  return createGatewayRootWorkAdmission();
+  return createGatewayRootWorkAdmission("restart-prepared");
 }
 
 /** Independent detached work counts separately even when launched by an admitted parent. */
-function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+function tryBeginGatewayIndependentRootWorkAdmission(
+  origin = "independent",
+): GatewayRootWorkAdmissionLease | null {
   if (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
@@ -307,16 +331,18 @@ function tryBeginGatewayIndependentRootWorkAdmission(): GatewayRootWorkAdmission
   ) {
     return null;
   }
-  return createGatewayRootWorkAdmission();
+  return createGatewayRootWorkAdmission(origin);
 }
 
 /** Waits through a prepared lease, then joins the root-work set atomically. */
-export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRootWorkAdmissionLease> {
+export async function beginGatewayRootWorkAdmissionWhenOpen(
+  origin = "gateway",
+): Promise<GatewayRootWorkAdmissionLease> {
   while (true) {
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError();
     }
-    const admission = tryBeginGatewayRootWorkAdmission();
+    const admission = tryBeginGatewayRootWorkAdmission(origin);
     if (admission) {
       return admission;
     }
@@ -328,12 +354,13 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRo
 
 export async function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
+  origin?: string,
 ): Promise<T> {
   while (true) {
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError("gateway is draining for restart");
     }
-    const admission = tryBeginGatewayIndependentRootWorkAdmission();
+    const admission = tryBeginGatewayIndependentRootWorkAdmission(origin);
     if (admission) {
       try {
         return await admission.run(run);
@@ -350,23 +377,24 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
 /** Re-admits preserved work whose inherited root was retired before it could run. */
 export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Promise<T> =>
   GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore()?.retiredByReset
-    ? runWithGatewayIndependentRootWorkAdmission(run)
+    ? runWithGatewayIndependentRootWorkAdmission(run, "runtime:readmission")
     : run();
 
 /**
  * Detaches required follow-up from the current admitted transaction.
  * A live parent synchronously reserves a tracked root even after restart or
- * suspension closes admission; callers without a live parent use the normal
- * independent-root fence.
+ * suspension closes admission. The detached root keeps its caller origin
+ * because it can outlive the parent; otherwise the normal fence applies.
  */
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
+  origin = "independent",
 ): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
-    return runWithGatewayIndependentRootWorkAdmission(run);
+    return runWithGatewayIndependentRootWorkAdmission(run, origin);
   }
-  const admission = createGatewayRootWorkAdmission();
+  const admission = createGatewayRootWorkAdmission(origin);
   return admission.run(run).finally(admission.release);
 }
 
@@ -446,6 +474,21 @@ export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean 
   return Math.max(0, count);
 }
 
+/** Bounded, deterministic root-owner inventory for shutdown diagnostics. */
+export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolean }): string[] {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  const counts = new Map<string, number>();
+  for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
+    if (opts?.excludeCurrent === true && admission === current) {
+      continue;
+    }
+    counts.set(admission.origin, (counts.get(admission.origin) ?? 0) + 1);
+  }
+  return [...counts]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([origin, count]) => (count > 1 ? `${origin} (${count})` : origin));
+}
+
 /** Atomically closes new suspension admission before synchronous inspection. */
 export function tryBeginGatewaySuspendAdmission(
   onInvalidated: () => void,
@@ -500,6 +543,7 @@ export function resetGatewayWorkAdmission(): void {
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
   GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController = new AbortController();
   GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
   GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {

@@ -414,7 +414,16 @@ function renderRun(
   const bodySource =
     entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
-  const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
+  const suppressionReason = formatUiExternalText(entry.deliverySuppressionReason);
+  const facts = [
+    delivery,
+    suppressionReason
+      ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason })
+      : null,
+    entry.model,
+    entry.provider,
+    usageSummary,
+  ].filter(Boolean);
   const highlighted = Boolean(highlightedRunId && cronRunEntryMatchesLink(highlightedRunId, entry));
   return html`
     <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">

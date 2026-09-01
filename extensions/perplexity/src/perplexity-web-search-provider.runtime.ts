@@ -446,7 +446,8 @@ export async function executePerplexitySearch(
     maxTokens,
     maxTokensPerPage,
   ]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -518,7 +519,7 @@ export async function executePerplexitySearch(
   }
 
   signal?.throwIfAborted();
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 

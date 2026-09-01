@@ -10,18 +10,6 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const catalogRetryProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-catalog-retry",
-);
-const skeletonGapProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-skeleton-gap",
-);
 
 function catalogDiscoveryRequests(
   requests: Array<{ params?: unknown }>,
@@ -38,7 +26,7 @@ function catalogDiscoveryRequests(
 suite.define(() => {
   it("keeps composer actions fixed while model metadata loads", async () => {
     if (captureUiProof) {
-      await mkdir(skeletonGapProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -79,7 +67,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(skeletonGapProofDir, "after.png"),
+          path: path.join(path.join(suite.artifactDir, "new-session-skeleton-gap"), "after.png"),
         });
       }
 
@@ -290,14 +278,19 @@ suite.define(() => {
 
   it("recovers a failed CLI-agent catalog without reloading model metadata for its retry", async () => {
     if (captureUiProof) {
-      await mkdir(catalogRetryProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "new-session-catalog-retry"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProof
-        ? { recordVideo: { dir: catalogRetryProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "new-session-catalog-retry"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -372,7 +365,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(catalogRetryProofDir, "01-cli-agents-retry.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "new-session-catalog-retry"),
+            "01-cli-agents-retry.png",
+          ),
         });
       }
 
@@ -422,7 +418,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(catalogRetryProofDir, "02-cli-agents-recovered.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "new-session-catalog-retry"),
+            "02-cli-agents-recovered.png",
+          ),
         });
       }
     } finally {

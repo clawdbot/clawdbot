@@ -225,11 +225,58 @@ describe("A2A outbound channel delivery", () => {
       "invalid A2A JSON-RPC response",
     );
     await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
-      SyntaxError,
+      "peer hermes A2A response: malformed JSON response",
     );
     await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
       "A2A response without a result",
     );
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("bounds oversized peer JSON responses before parsing", async () => {
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      url: "https://hermes.example/a2a/v1",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      createA2aJsonResponse({
+        jsonrpc: "2.0",
+        result: { task: { id: "remote-task-1" } },
+        padding: "x".repeat(16 * 1024 * 1024),
+      }),
+    );
+
+    await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
+      "peer hermes A2A response: JSON response exceeds 16777216 bytes",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain reflected outbound credentials in malformed responses", async () => {
+    const outboundToken = "outbound-secret-token";
+    const cfg = createA2aOutboundConfig({
+      token: "inbound-token",
+      outboundToken,
+      url: "https://hermes.example/a2a/v1",
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(`{"reflected":"${outboundToken}"`, {
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const failure = await sendA2aChannelText({ cfg, to: "hermes", text: "hello" }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected malformed peer response to reject");
+    }
+    expect(failure.message).toBe("peer hermes A2A response: malformed JSON response");
+    expect(failure.message).not.toContain(outboundToken);
+    expect(String(failure.cause)).not.toContain(outboundToken);
+    expect(failure.cause).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

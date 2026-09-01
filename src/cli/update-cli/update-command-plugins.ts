@@ -1,10 +1,11 @@
 // Plugin synchronization and convergence after the core update.
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
+import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -20,6 +21,7 @@ import {
   type PluginUpdateOutcome,
 } from "../../plugins/update.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import {
   convergenceWarningsToOutcomes,
@@ -200,10 +202,18 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const warnings: PostUpdatePluginWarning[] = [];
+  const capabilityConsent = resolvePluginCapabilityConsentCliOptions({
+    acceptCapabilities: params.opts.acceptCapabilities,
+    action: "update",
+    allowPrompt: !params.opts.json,
+  });
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
-  const pluginUpdateChannel = params.channel;
   const coreVersion = await readPackageVersion(params.root);
+  const pluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: params.channel,
+    currentVersion: coreVersion,
+  });
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
@@ -217,6 +227,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       workspaceDir: params.root,
     }),
     logger: pluginLogger,
+    ...capabilityConsent,
   });
   for (const error of syncResult.summary.errors) {
     warnings.push(createPostUpdatePluginWarning({ reason: error }));
@@ -290,6 +301,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
+      ...capabilityConsent,
     });
     pluginConfig = repairResult.config;
     pluginsChanged ||= repairResult.changed;
@@ -315,6 +327,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
+    ...capabilityConsent,
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
@@ -367,7 +380,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
     env: process.env,
+    compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
+    ...capabilityConsent,
   });
   for (const change of convergence.changes) {
     if (!params.opts.json) {
@@ -436,24 +451,36 @@ export async function updatePluginsAfterCoreUpdate(params: {
     });
   }
 
+  const status =
+    convergenceErrored ||
+    pluginUpdateOutcomes.some(
+      (outcome) =>
+        outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    )
+      ? "error"
+      : warnings.length > 0
+        ? "warning"
+        : "ok";
+  const result: PostCorePluginUpdateResult = {
+    status,
+    changed: pluginsChanged,
+    warnings,
+    sync: {
+      changed: syncResult.changed,
+      switchedToBundled: syncResult.summary.switchedToBundled,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      warnings: syncResult.summary.warnings,
+      errors: syncResult.summary.errors,
+    },
+    npm: {
+      changed: npmPluginsChanged,
+      outcomes: pluginUpdateOutcomes,
+    },
+    integrityDrifts,
+  };
+
   if (params.opts.json) {
-    return {
-      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
-      changed: pluginsChanged,
-      warnings,
-      sync: {
-        changed: syncResult.changed,
-        switchedToBundled: syncResult.summary.switchedToBundled,
-        switchedToNpm: syncResult.summary.switchedToNpm,
-        warnings: syncResult.summary.warnings,
-        errors: syncResult.summary.errors,
-      },
-      npm: {
-        changed: npmPluginsChanged,
-        outcomes: pluginUpdateOutcomes,
-      },
-      integrityDrifts,
-    };
+    return result;
   }
 
   const summarizeList = (list: string[]) => {
@@ -513,21 +540,5 @@ export async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.warn(outcome.message));
   }
 
-  return {
-    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
-    changed: pluginsChanged,
-    warnings,
-    sync: {
-      changed: syncResult.changed,
-      switchedToBundled: syncResult.summary.switchedToBundled,
-      switchedToNpm: syncResult.summary.switchedToNpm,
-      warnings: syncResult.summary.warnings,
-      errors: syncResult.summary.errors,
-    },
-    npm: {
-      changed: npmPluginsChanged,
-      outcomes: pluginUpdateOutcomes,
-    },
-    integrityDrifts,
-  };
+  return result;
 }

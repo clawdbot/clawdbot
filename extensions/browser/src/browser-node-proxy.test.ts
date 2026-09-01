@@ -193,6 +193,40 @@ describe("Browser node proxy nested watchdogs", () => {
     );
   });
 
+  it.each(["unreachable", "upload-unsupported"] as const)(
+    "does not switch browsers after a node action when the next request is %s",
+    async (failure) => {
+      const proxy = createBrowserNodeProxyRequest({
+        nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
+        allowAutomaticHostFallback: true,
+      });
+      await proxy({ method: "POST", path: "/navigate", profile: "work" });
+      runtimeMocks.fetchBrowserJson.mockResolvedValue({ ok: true, profile: "wrong-host" });
+      if (failure === "unreachable") {
+        runtimeMocks.callGatewayTool.mockRejectedValueOnce(
+          new Error("Browser control host is not reachable on 127.0.0.1:18791."),
+        );
+      }
+      const request =
+        failure === "unreachable"
+          ? { method: "GET", path: "/snapshot", profile: "work" }
+          : {
+              method: "POST",
+              path: "/hooks/file-chooser",
+              profile: "work",
+              body: { paths: ["/tmp/openclaw/uploads/report.txt"] },
+            };
+
+      await expect(proxy(request)).rejects.toThrow(
+        failure === "unreachable"
+          ? "Browser control host is not reachable"
+          : "browser node does not support remote upload transfer",
+      );
+      expect(proxy.isHostFallbackActive()).toBe(false);
+      expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
+    },
+  );
+
   it("names the selected node and host-status recovery for an invalid proxy envelope", async () => {
     runtimeMocks.callGatewayTool.mockResolvedValueOnce({
       payload: {},

@@ -55,7 +55,6 @@ type SessionCatalogRenderSnapshot = {
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  nativeSessionsHaveMore?: boolean;
 }) {
   const { host, section } = params;
   const totalRowCount = section.totalRowCount;
@@ -66,22 +65,26 @@ function renderSessionSection(params: {
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
     ? personOwner.label || personOwner.id
-    : section.groups
-      ? t("chat.sidebar.groups")
-      : section.work
-        ? t("chat.sidebar.coding")
-        : group
-          ? group
-          : t("chat.sidebar.otherSessions");
+    : section.project
+      ? section.project.name
+      : section.groups
+        ? t("chat.sidebar.groups")
+        : section.work
+          ? t("chat.sidebar.coding")
+          : group
+            ? group
+            : t("chat.sidebar.otherSessions");
   const zone = personOwner
     ? "person"
-    : section.groups
-      ? "groups"
-      : section.work
-        ? "coding"
-        : group
-          ? "category"
-          : "threads";
+    : section.project
+      ? "project"
+      : section.groups
+        ? "groups"
+        : section.work
+          ? "coding"
+          : group
+            ? "category"
+            : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -95,7 +98,10 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const sectionDropEnabled = groupWriteAccess.allowed && !personOwner;
+  // Person/project sections are derived, not stored: dropping a session on
+  // them cannot persist anything, so they take no drags at all.
+  const derivedSection = Boolean(personOwner || section.project);
+  const sectionDropEnabled = groupWriteAccess.allowed && !derivedSection;
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -130,7 +136,7 @@ function renderSessionSection(params: {
       ${section.renderHeader
         ? renderSidebarSessionSectionHeader({
             sectionId: section.id,
-            draggable: !personOwner,
+            draggable: !derivedSection,
             disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
             onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
             onFinishDrag: () => host.finishSidebarSectionDrag(),
@@ -146,6 +152,7 @@ function renderSessionSection(params: {
                 class="sidebar-session-group-toggle"
                 aria-expanded=${String(!collapsed)}
                 aria-label=${label}
+                title=${section.project?.path ?? nothing}
                 @click=${() => host.toggleSection(section.id)}
               >
                 <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
@@ -155,6 +162,7 @@ function renderSessionSection(params: {
                 </span>
                 ${personOwner
                   ? html`<openclaw-viewer-avatar
+                      .identity=${personOwner.identity}
                       .user=${{
                         id: personOwner.id,
                         name: personOwner.label,
@@ -238,24 +246,55 @@ function renderSessionSection(params: {
                   )}
                 </div>`
               : nothing}
-            ${renderSessionPagination({
-              host,
-              section,
-              nativeSessionsHaveMore: params.nativeSessionsHaveMore ?? false,
-            })}
+            ${renderSessionPagination({ host, section })}
           `}
     </div>
   `;
 }
 
+/** Fetching a page is useless if the new rows land behind a section's local cap,
+ *  so an explicit roster load reveals a page in every section too -- otherwise
+ *  the click can look like nothing happened. */
+function renderRosterLoadMore(
+  host: SidebarSessionListHost,
+  sections: RenderableSessionSection[],
+  hasMore: boolean | undefined,
+) {
+  if (!hasMore) {
+    return nothing;
+  }
+  return html`
+    <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+      <button
+        type="button"
+        class="sidebar-session-pagination__button"
+        aria-label=${t("chat.selectors.loadMoreRosterSessions")}
+        @click=${() => {
+          void host.loadMoreSidebarSessions().then(() => {
+            for (const section of sections) {
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
+            }
+          });
+        }}
+      >
+        ${t("chat.selectors.loadMoreRosterSessions")}
+      </button>
+    </div>
+  `;
+}
+
+/** Section paging only reveals rows the roster already holds. Fetching the next
+ *  roster page is a list-level action because it feeds every section at once --
+ *  bolting it to one section left the others unable to recover missing rows. */
 function renderSessionPagination(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  nativeSessionsHaveMore: boolean;
 }) {
   const { host, section } = params;
-  const canLoadMore = section.id === "ungrouped" && params.nativeSessionsHaveMore;
-  const canShowMore = section.visibleRowCount < section.totalRowCount || canLoadMore;
+  const canShowMore = section.visibleRowCount < section.totalRowCount;
   const canShowLess =
     section.visibleRowCount > SIDEBAR_SESSION_SEE_LESS_THRESHOLD &&
     section.visibleRowCount > section.collapsedVisibleRowCount;
@@ -270,11 +309,10 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              const nextLimit = section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE;
-              host.setVisibleSessionLimit(section.id, nextLimit);
-              if (canLoadMore && nextLimit > section.totalRowCount) {
-                void host.loadMoreSidebarSessions();
-              }
+              host.setVisibleSessionLimit(
+                section.id,
+                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
+              );
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -404,11 +442,7 @@ function renderSessionListBody(params: {
         ) {
           return nothing;
         }
-        return renderSessionSection({
-          host,
-          section,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-        });
+        return renderSessionSection({ host, section });
       },
     )}
   `;
@@ -496,6 +530,7 @@ export function renderSessionList(params: {
           catalogs: params.catalogs,
           catalogRenderer: params.catalogRenderer,
         })}
+        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
         ${host.sessionsStatusFilter === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"
               >${t("sessionsView.noArchivedSessions")}</span

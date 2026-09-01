@@ -1,14 +1,6 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  acquireAgentRunPreparedModelRuntime,
-  loadPublishedGatewayReplyDispatchRuntime,
-} from "../../agents/prepared-model-runtime.js";
-import type {
-  PreparedModelRuntimePluginGeneration,
-  PreparedModelRuntimeSnapshot,
-} from "../../agents/prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -27,7 +19,7 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -50,66 +42,6 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
-
-type CronRunPluginGenerationLease = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-  borrowSnapshot: () => PreparedModelRuntimeSnapshot | undefined;
-  release: () => void;
-};
-
-/**
- * Gateway-hosted isolated runs reuse the published plugin generation instead of
- * rebuilding metadata snapshots per run (#125596 carried this for the channel
- * path; hook/cron turns share the invariant). Standalone hosts (no Gateway
- * lifecycle) and startup/replacement races return undefined so the embedded
- * orchestrator admits on whatever generation is current at execution time.
- */
-async function acquireCronRunPluginGeneration(context: {
-  agentId: string;
-  workspaceDir: string;
-  abortSignal?: AbortSignal;
-}): Promise<CronRunPluginGenerationLease | undefined> {
-  try {
-    const dispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
-      agentId: context.agentId,
-      abortSignal: context.abortSignal,
-    });
-    if (!dispatchRuntime) {
-      return undefined;
-    }
-    // Holding this static lease across the run anchors the admitted generation:
-    // a config/plugin reload mid-run lets nested embedded admissions borrow the
-    // leased snapshot instead of failing on the superseded configured owner.
-    const lease = await acquireAgentRunPreparedModelRuntime(
-      {
-        config: dispatchRuntime.config,
-        agentId: dispatchRuntime.agentId,
-        agentDir: dispatchRuntime.agentDir,
-        allowGatewaySubagentBinding: true,
-        workspaceDir: context.workspaceDir,
-      },
-      {
-        catalogMode: "static",
-        pluginGeneration: dispatchRuntime.pluginGeneration,
-        abortSignal: context.abortSignal,
-      },
-    );
-    let leaseActive = true;
-    return {
-      pluginGeneration: dispatchRuntime.pluginGeneration,
-      borrowSnapshot: () => (leaseActive ? lease.snapshot : undefined),
-      release: () => {
-        leaseActive = false;
-        lease.release();
-      },
-    };
-  } catch (error) {
-    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
-      return undefined;
-    }
-    throw error;
-  }
-}
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -193,6 +125,12 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
+  let preparedRuntimeLease: PreparedModelRuntimeLease | undefined =
+    prepared.context.preparedModelRuntimeLease;
+  const releasePreparedRuntime = () => {
+    preparedRuntimeLease?.release();
+    preparedRuntimeLease = undefined;
+  };
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   const ownsRunContext = params.job.sessionTarget === "isolated";
@@ -250,6 +188,7 @@ export async function runCronIsolatedAgentTurn(params: {
       lifecycle.markProcessing();
       return lifecycle;
     } catch (error) {
+      releasePreparedRuntime();
       prepared.context.sessionWorkAdmission.release();
       throw error;
     }
@@ -257,7 +196,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
-  let cronRunSessionCleanupAttempted = false;
+  let cronRunSessionCleanupHandled = false;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -332,34 +271,29 @@ export async function runCronIsolatedAgentTurn(params: {
     const runExecutionWithAdmission = () =>
       prepared.context.sessionWorkAdmission.run(() =>
         withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-          withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
-            executeCronRun(executionParams),
+          withPluginRuntimeGenerationScope(
+            prepared.context.preparedModelRuntimeLease.snapshot,
+            () => executeCronRun(executionParams),
           ),
         ),
       );
-    const pluginGenerationLease = await acquireCronRunPluginGeneration({
-      ...prepared.context,
-      abortSignal,
-    });
     let execution: Awaited<ReturnType<typeof runExecutionWithAdmission>>;
     try {
-      execution = pluginGenerationLease
-        ? await withPreparedModelRuntimePluginGenerationScope(
-            pluginGenerationLease.pluginGeneration,
-            runExecutionWithAdmission,
-            pluginGenerationLease.borrowSnapshot,
-          )
-        : await runExecutionWithAdmission();
+      execution = await withPreparedModelRuntimePluginGenerationScope(
+        prepared.context.preparedModelRuntimeLease.pluginGeneration,
+        runExecutionWithAdmission,
+        () => preparedRuntimeLease?.snapshot,
+      );
     } finally {
-      pluginGenerationLease?.release();
+      releasePreparedRuntime();
     }
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
       abortReason,
       isAborted,
-      markCronRunSessionCleanupAttempted: () => {
-        cronRunSessionCleanupAttempted = true;
+      markCronRunSessionCleanupHandled: () => {
+        cronRunSessionCleanupHandled = true;
       },
       // Self-deleting sessions must release before their own lifecycle mutation.
       // Other runs retain admission through delivery and release in finally.
@@ -406,6 +340,7 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
+    releasePreparedRuntime();
     try {
       await prepared.context.runContinuationSession?.seal();
     } catch (sealError) {
@@ -426,7 +361,7 @@ export async function runCronIsolatedAgentTurn(params: {
       });
     } finally {
       try {
-        if (!cronRunSessionCleanupAttempted) {
+        if (!cronRunSessionCleanupHandled) {
           await cleanupCronRunSessionAfterRun({
             job: params.job,
             agentSessionKey: prepared.context.agentSessionKey,

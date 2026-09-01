@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -109,6 +110,7 @@ export function makeChatHost(
     },
   };
   const host = {
+    chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
@@ -148,7 +150,6 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
     refreshSessionsAfterChat: new Map(),

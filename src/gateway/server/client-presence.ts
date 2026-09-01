@@ -1,4 +1,5 @@
 import { upsertPresence } from "../../infra/system-presence.js";
+import { presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayClient } from "../server-methods/types.js";
@@ -9,10 +10,12 @@ function isLiveClient(client: GatewayWsClient): boolean {
 }
 
 function presenceIdentity(client: GatewayWsClient): string | undefined {
-  return (
-    client.authenticatedUserProfile?.profileId ??
-    (client.authenticatedGitHubIdentitySync ? undefined : client.authenticatedUserId)
-  );
+  const profileId = client.authenticatedUserProfile?.profileId;
+  return profileId
+    ? presenceUserKey({ id: profileId, identity: { type: "profile", id: profileId } })
+    : client.authenticatedUserId && !client.authenticatedGitHubIdentitySync
+      ? presenceUserKey({ id: client.authenticatedUserId })
+      : undefined;
 }
 
 /** Reconciles canonical identity and timing using only currently registered sockets. */
@@ -34,7 +37,7 @@ export function refreshClientPresence(
       presenceIdentity(peer) === identity &&
       (peer === client || (client.personPresence && peer.personPresence)),
   );
-  const timing = client.personPresence;
+  const timing = client.personPresence ? { ...client.personPresence } : undefined;
   for (const peer of peers) {
     if (timing && peer.personPresence) {
       timing.onlineSince = Math.min(timing.onlineSince, peer.personPresence.onlineSince);
@@ -45,10 +48,10 @@ export function refreshClientPresence(
     }
   }
   for (const peer of peers) {
-    // Nodes retain their device lifecycle. Only person sockets share the interval,
-    // including its original start after the oldest socket closes or a profile merges.
+    // Copy interval facts so later profile qualification cannot leave raw and
+    // profile sockets sharing mutable activity. Nodes retain their device lifecycle.
     if (timing && peer.personPresence) {
-      peer.personPresence = timing;
+      peer.personPresence = { ...timing };
     }
     upsertPresence(peer.presenceKey!, {
       user: buildAuthenticatedPresenceUser(peer),
@@ -73,7 +76,7 @@ export function recordClientPresenceActivity(
     ) {
       continue;
     }
-    live.personPresence.lastActivityAt = Date.now();
+    live.personPresence = { ...live.personPresence, lastActivityAt: Date.now() };
     return refreshClientPresence(clients, live);
   }
   return false;

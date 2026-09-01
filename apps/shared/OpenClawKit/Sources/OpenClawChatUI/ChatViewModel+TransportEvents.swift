@@ -31,6 +31,9 @@ extension OpenClawChatViewModel {
                 self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
+                Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+            } else if !ok {
+                self.invalidateComposerCapabilities()
             }
         case .tick:
             let context = self.currentSessionSnapshot()
@@ -67,9 +70,13 @@ extension OpenClawChatViewModel {
             self.swarmEnabled = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
         case .seqGap:
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             self.errorText = nil
             self.swarmEnabled = false
             self.resetSwarmProgress()
@@ -259,9 +266,13 @@ extension OpenClawChatViewModel {
             snapshot: snapshot,
             phase: phase,
             activeRunIDs: change.activeRunIds,
-            activeRunIDsPresent: change.activeRunIdsPresent)
+            activeRunIDsPresent: change.activeRunIdsPresent,
+            color: change.color,
+            colorPresent: change.colorPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
-        self.persistSessionsToCache(self.sessions)
+        self.persistSessionsToCache(
+            self.sessions,
+            agentID: self.currentSessionSnapshot().deliveryAgentID)
         return .merged
     }
 
@@ -327,9 +338,14 @@ extension OpenClawChatViewModel {
         snapshot: OpenClawChatSessionEntry,
         phase: String,
         activeRunIDs: [String]?,
-        activeRunIDsPresent: Bool) -> OpenClawChatSessionEntry
+        activeRunIDsPresent: Bool,
+        color: String?,
+        colorPresent: Bool) -> OpenClawChatSessionEntry
     {
         var merged = existing
+        if colorPresent {
+            merged.color = color
+        }
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
         merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun

@@ -21,6 +21,11 @@ function imageId(ref: string): string {
   return `sha256:${createHash("sha256").update(ref).digest("hex")}`;
 }
 
+// Docker config IDs are fixture data; the production archive digest stays independently checked.
+const imageIdCases = IMAGE_REFS.flatMap((ref) => [ref, `mismatch:${ref}`])
+  .map((ref) => `    '${ref}') printf '%s' '${imageId(ref)}' ;;`)
+  .join("\n");
+
 function writeExecutable(path: string, contents: string): void {
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
@@ -100,14 +105,17 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 
 image_id() {
-  printf '%s' "$1" | sha256sum | awk '{print "sha256:" $1}'
+  case "$1" in
+${imageIdCases}
+    *) echo "unexpected fixture image ref: $1" >&2; return 2 ;;
+  esac
 }
 
 if [[ "$1" == "image" && "$2" == "inspect" ]]; then
   ref="\${5:?image ref required}"
   id="$(image_id "$ref")"
   if [[ "\${FAKE_DOCKER_FORCE_ID_MISMATCH:-0}" == "1" ]]; then
-    id="sha256:$(printf 'mismatch:%s' "$ref" | sha256sum | awk '{print $1}')"
+    id="$(image_id "mismatch:$ref")"
   fi
   printf '%s\\n' "$id"
   exit 0

@@ -199,6 +199,27 @@ describe("cron view list pane", () => {
     expect(onSelectJob).not.toHaveBeenCalled();
   });
 
+  it("gives row actions job-specific accessible names", () => {
+    const jobs = [
+      createJob("job-a", { name: "Daily backup", enabled: true }),
+      createJob("job-b", { name: "Weekly report", enabled: false }),
+    ];
+    const container = renderView({ jobs, canManage: true });
+    const labels = jobs.map((job) => {
+      const row = getElement(container, `[data-test-id="cron-row-${job.id}"]`, HTMLDivElement);
+      return [
+        getElement(row, ".cron-row-run", HTMLButtonElement).getAttribute("aria-label"),
+        getElement(row, ".cron-job-menu__trigger", HTMLButtonElement).getAttribute("aria-label"),
+        getElement(row, "wa-switch", HTMLElement).textContent?.trim(),
+      ];
+    });
+
+    expect(labels).toEqual([
+      ["Run now: Daily backup", "More actions for Daily backup", "Pause: Daily backup"],
+      ["Run now: Weekly report", "More actions for Weekly report", "Resume: Weekly report"],
+    ]);
+  });
+
   it("opens the create panel from the New task button and suggestions", () => {
     const onOpenCreate = vi.fn();
     const container = renderView({ onOpenCreate });
@@ -214,9 +235,9 @@ describe("cron view list pane", () => {
       payloadKind: "agentTurn",
       scheduleKind: "cron",
       cronExpr: "0 9 * * 1-5",
-      deliveryMode: "announce",
       name: "Repo pulse",
     });
+    expect(patch).not.toHaveProperty("deliveryMode");
     expect(String(patch.payloadText)).toContain("overnight activity");
   });
 
@@ -254,6 +275,81 @@ describe("cron view list pane", () => {
     expect(findStarterSection(renderView({ error: "Unable to load automations." }))).toBeNull();
     expect(findStarterSection(renderView({ jobsQuery: "x" }))).toBeNull();
     expect(findStarterSection(renderView({ jobsEnabledFilter: "enabled" }))).toBeNull();
+  });
+
+  it("renders a truthful inventory state matrix for the tasks table", () => {
+    // Initial pending: polite loading status, not a false completed-empty message.
+    const pending = renderView({ loading: true, hasLoaded: false, jobs: [], jobsTotal: 0 });
+    const pendingStatus = getElement(pending, '[data-test-id="cron-jobs-loading"]', HTMLDivElement);
+    expect(pendingStatus.getAttribute("role")).toBe("status");
+    expect(pendingStatus.getAttribute("aria-live")).toBe("polite");
+    expect(pendingStatus.textContent).toContain("Loading...");
+    expect(pending.textContent).not.toContain("No automations yet");
+    expect(getElement(pending, ".cron-table", HTMLDivElement).getAttribute("aria-busy")).toBe(
+      "true",
+    );
+
+    // Loaded empty: completed empty guidance with no busy state.
+    const loadedEmpty = renderView({ loading: false, hasLoaded: true, jobs: [], jobsTotal: 0 });
+    expect(loadedEmpty.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
+    const empty = getElement(loadedEmpty, ".cron-empty-state", HTMLDivElement);
+    expect(empty.textContent).toContain("No automations yet");
+    expect(empty.textContent).toContain("Describe what OpenClaw should do");
+    expect(
+      getElement(loadedEmpty, ".cron-table", HTMLDivElement).getAttribute("aria-busy"),
+    ).toBeNull();
+
+    // Filtered empty keeps the matching-copy variant.
+    const filtered = renderView({ loading: false, hasLoaded: true, jobs: [], jobsQuery: "zzz" });
+    expect(getElement(filtered, ".cron-empty-state", HTMLDivElement).textContent).toContain(
+      "No automations match the current filters.",
+    );
+
+    // Refresh with retained rows keeps the rows and marks the region busy.
+    const refreshing = renderView({
+      loading: true,
+      hasLoaded: true,
+      jobs: [createJob("refresh-me")],
+      jobsTotal: 1,
+    });
+    expect(refreshing.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
+    expect(getElement(refreshing, ".cron-table", HTMLDivElement).getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(refreshing.textContent).toContain("Daily ping");
+
+    // Refresh of a loaded-empty inventory keeps the empty message (no false loading copy).
+    const refreshingEmpty = renderView({ loading: true, hasLoaded: true, jobs: [], jobsTotal: 0 });
+    expect(refreshingEmpty.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
+    expect(getElement(refreshingEmpty, ".cron-empty-state", HTMLDivElement).textContent).toContain(
+      "No automations yet",
+    );
+
+    // A first list failure reports its own error instead of claiming the inventory is empty.
+    const failed = renderView({
+      loading: false,
+      hasLoaded: false,
+      jobs: [],
+      listError: "Unable to load automations.",
+    });
+    expect(failed.querySelector(".cron-empty-state")).toBeNull();
+    expect(failed.querySelector('[data-test-id="cron-jobs-loading"]')).toBeNull();
+    const failedAlert = getElement(failed, ".cron-error-banner", HTMLDivElement);
+    expect(failedAlert.getAttribute("role")).toBe("alert");
+    expect(failedAlert.textContent).toContain("Unable to load automations.");
+
+    // A non-list failure cannot hide a successfully loaded empty inventory.
+    const unrelatedFailure = renderView({
+      hasLoaded: true,
+      jobs: [],
+      error: "Run history unavailable.",
+    });
+    expect(unrelatedFailure.querySelector(".cron-empty-state")?.textContent).toContain(
+      "No automations yet",
+    );
+    expect(
+      unrelatedFailure.querySelector('.cron-error-banner[role="alert"]')?.textContent,
+    ).toContain("Run history unavailable.");
   });
 
   it("shows a scheduler banner only while the scheduler is off", () => {
@@ -343,14 +439,14 @@ describe("cron view selects", () => {
       container.querySelectorAll<HTMLElement & { value: string }>("wa-select"),
     ).find((select) => select.querySelector('[slot="label"]')?.textContent === "Unit");
     expect(unit?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("minutes");
-    // Negative control: the delivery-mode default is also the first option, so
-    // this passes before and after the fix and proves the harness reads selects.
+    // The targetless create form keeps delivery internal until the operator
+    // explicitly selects a channel delivery mode.
     const delivery = getElement(
       container,
       "wa-select#cron-delivery-mode",
       HTMLElement,
     ) as HTMLElement & { value: string };
-    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("announce");
+    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("none");
   });
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {

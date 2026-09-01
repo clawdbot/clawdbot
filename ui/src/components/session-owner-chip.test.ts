@@ -1,17 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { listAssignableSessionOwners, type SessionCreatedActor } from "./session-owner-chip.ts";
-
-type OwnerChipElement = HTMLElement & {
-  owner: SessionCreatedActor | null;
-  participants: readonly SessionCreatedActor[];
-  participantCount: number;
-  attribution: "created" | "owned" | "archived";
-  size: "row" | "header";
-  updateComplete: Promise<boolean>;
-};
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -19,7 +11,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function waitForChipUpdate(chip: OwnerChipElement) {
+async function waitForChipUpdate(chip: HTMLElementTagNameMap["openclaw-session-owner-chip"]) {
   await chip.updateComplete;
   // The parent's update does not include the nested avatar's render.
   await Promise.all(
@@ -27,9 +19,8 @@ async function waitForChipUpdate(chip: OwnerChipElement) {
   );
 }
 
-async function mount(params: { participants?: SessionCreatedActor[]; participantCount?: number }) {
-  // SAFETY: the imported module registers this custom element with these reactive properties.
-  const chip = document.createElement("openclaw-session-owner-chip") as OwnerChipElement;
+async function mount(params: { participants?: SessionParticipant[]; participantCount?: number }) {
+  const chip = document.createElement("openclaw-session-owner-chip");
   chip.owner = { type: "human", id: "profile-ada", label: "Ada" };
   chip.attribution = "owned";
   chip.size = "row";
@@ -53,7 +44,11 @@ it("keeps the single owner chip unchanged without participants", async () => {
 it("renders one participant behind the owner with combined accessibility", async () => {
   const chip = await mount({
     participants: [
-      { type: "agent", id: "research", label: "Research", avatarUrl: "/avatar/research" },
+      {
+        identity: { type: "agent", id: "research" },
+        label: "Research",
+        avatarUrl: "/avatar/research",
+      },
     ],
     participantCount: 1,
   });
@@ -74,6 +69,7 @@ it.each(["row", "header"] as const)(
     chip.owner = {
       type: "agent",
       id: "research",
+      identity: { type: "agent", id: "research" },
       label: "Research",
       avatarUrl: "/avatar/research",
     };
@@ -88,8 +84,8 @@ it.each(["row", "header"] as const)(
 it("renders the total participant count in the back slot for three identities", async () => {
   const chip = await mount({
     participants: [
-      { type: "human", id: "profile-bob", label: "Bob" },
-      { type: "agent", id: "research", label: "Research" },
+      { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+      { identity: { type: "agent", id: "research" }, label: "Research" },
     ],
     participantCount: 2,
   });
@@ -122,11 +118,33 @@ it("treats a present owner facet as authoritative before adding self and configu
       self: { id: "profile-self", name: "Self" },
     }),
   ).toEqual([
-    { type: "agent", id: "avatar-only", label: "Avatar Only", avatarUrl: "/avatar/avatar-only" },
-    { type: "agent", id: "configured-agent", label: "Configured Agent" },
-    { type: "agent", id: "facet-agent", label: "Facet Agent", avatarUrl: "/avatar/facet-agent" },
+    {
+      type: "agent",
+      id: "avatar-only",
+      identity: { type: "agent", id: "avatar-only" },
+      label: "Avatar Only",
+      avatarUrl: "/avatar/avatar-only",
+    },
+    {
+      type: "agent",
+      id: "configured-agent",
+      identity: { type: "agent", id: "configured-agent" },
+      label: "Configured Agent",
+    },
+    {
+      type: "agent",
+      id: "facet-agent",
+      identity: { type: "agent", id: "facet-agent" },
+      label: "Facet Agent",
+      avatarUrl: "/avatar/facet-agent",
+    },
     { type: "human", id: "profile:channel:opaque", label: "Opaque Person" },
-    { type: "human", id: "profile-self", label: "Self" },
+    {
+      type: "human",
+      id: "profile-self",
+      identity: { type: "profile", id: "profile-self" },
+      label: "Self",
+    },
   ]);
 });
 

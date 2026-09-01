@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -8,13 +9,19 @@ import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntryReadOnly,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   normalizeHeartbeatReply,
   normalizeHeartbeatToolNotification,
 } from "./heartbeat-delivery-normalization.js";
+import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { handleHeartbeatFailureNotice } from "./heartbeat-failure-notice.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
@@ -33,8 +40,13 @@ import {
   type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
+import {
+  resolveOutboundPayloadMirrorText,
+  type NormalizedOutboundPayload,
+} from "./outbound/payloads.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
-import { consumeSelectedSystemEventEntries } from "./system-events.js";
+import { withSystemEventOwner } from "./system-event-ownership.js";
+import { consumeSelectedSystemEventEntries, enqueueSystemEvent } from "./system-events.js";
 
 const log = heartbeatLog;
 
@@ -48,6 +60,95 @@ const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
   'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
+
+type HeartbeatTargetProjection = {
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  expectedSessionId: string;
+  expectedLifecycleRevision: string | undefined;
+  idempotencyKey: string;
+};
+
+function resolveHeartbeatTargetProjection(params: {
+  agentId: string;
+  storePath: string;
+  runSessionKey: string;
+  targetSessionKey?: string;
+  startedAt: number;
+}): HeartbeatTargetProjection | undefined {
+  const sessionKey = params.targetSessionKey?.trim();
+  if (!sessionKey || sessionKey === params.runSessionKey) {
+    return undefined;
+  }
+  try {
+    if (resolveAgentIdFromSessionKey(sessionKey, params.agentId) !== params.agentId) {
+      return undefined;
+    }
+    const entry = loadExactSessionEntryReadOnly({ storePath: params.storePath, sessionKey })?.entry;
+    if (!entry?.sessionId) {
+      return undefined;
+    }
+    return {
+      agentId: params.agentId,
+      sessionKey,
+      storePath: params.storePath,
+      expectedSessionId: entry.sessionId,
+      expectedLifecycleRevision: entry.lifecycleRevision,
+      idempotencyKey: `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`,
+    };
+  } catch (error) {
+    log.warn("heartbeat: failed to resolve existing target session projection", {
+      error: formatErrorMessage(error),
+    });
+    return undefined;
+  }
+}
+
+function queueHeartbeatTargetAwareness(params: {
+  projection: HeartbeatTargetProjection;
+  payload: NormalizedOutboundPayload;
+}) {
+  try {
+    // Recheck the exact pre-send lifecycle before publishing awareness. Resets
+    // can preserve sessionId while rotating lifecycleRevision.
+    const latest = loadExactSessionEntryReadOnly({
+      storePath: params.projection.storePath,
+      sessionKey: params.projection.sessionKey,
+    })?.entry;
+    if (
+      latest?.sessionId !== params.projection.expectedSessionId ||
+      latest.lifecycleRevision !== params.projection.expectedLifecycleRevision
+    ) {
+      return;
+    }
+    const deliveredText = resolveMirroredTranscriptText({
+      text: params.payload.hookContent ?? resolveOutboundPayloadMirrorText(params.payload),
+      mediaUrls: params.payload.mediaUrls,
+    });
+    if (!deliveredText) {
+      return;
+    }
+    const text = truncateUtf16Safe(deliveredText, MAX_HEARTBEAT_TARGET_AWARENESS_CHARS);
+    const suffix = text.length < deliveredText.length ? "\n[truncated]" : "";
+    enqueueSystemEvent(
+      `A heartbeat delivered this message to this channel:\n${text}${suffix}`,
+      withSystemEventOwner(
+        {
+          sessionKey: params.projection.sessionKey,
+          contextKey: params.projection.idempotencyKey,
+        },
+        params.projection.agentId,
+      ),
+    );
+  } catch (error) {
+    // Platform delivery already succeeded; projection remains best-effort bookkeeping.
+    log.warn("heartbeat: failed to queue target session awareness", {
+      error: formatErrorMessage(error),
+    });
+  }
+}
 
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
@@ -424,6 +525,13 @@ export async function finalizeHeartbeatOutcome(params: {
     }
   }
 
+  const targetProjection = resolveHeartbeatTargetProjection({
+    agentId,
+    storePath,
+    runSessionKey,
+    targetSessionKey: delivery.targetSessionKey,
+    startedAt,
+  });
   const send = await sendDurableMessageBatchCore({
     cfg,
     channel: delivery.channel,
@@ -441,6 +549,9 @@ export async function finalizeHeartbeatOutcome(params: {
     ],
     deps: params.opts.deps,
     silent: normalized.silent,
+    onDeliveredPayload: targetProjection
+      ? (payload) => queueHeartbeatTargetAwareness({ projection: targetProjection, payload })
+      : undefined,
   }).catch((error: unknown) => {
     recordUnconfirmedAlert(formatErrorMessage(error));
     throw error;

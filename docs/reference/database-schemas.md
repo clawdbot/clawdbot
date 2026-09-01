@@ -28,9 +28,19 @@ Each database records its schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
 
+When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
+
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+
+Agent schema 19 records collected input consumption in the nullable
+`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
+first-use ensure add it when needed; the schema version stays 19. The supported
+beta upgrade runs Doctor from the upcoming release. Intermediate builds that
+already validate the optional pending-input table may reject the added column
+despite sharing version 19. Consumed source receipts remain until their session
+window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
 The placement-move table uses this same-version rule for its nullable bare
 `abandon_source INTEGER` column. The feature lazily ensures the column on first
@@ -45,12 +55,57 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+Transcript context eligibility uses a bare nullable
+`session_transcript_active_events.context_eligible INTEGER` column without
+changing agent schema 18. Database open installs the column and a non-unique
+partial index of unclassified rows. `1` includes an entry in bounded context
+acquisition, `0` excludes display-only activity, and `NULL` means the projection
+still needs reconciliation. Bootstrap control markers remain eligible; history
+counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
+
+Older same-version writers can append or rebuild without supplying eligibility.
+The existing transcript reconciler detects their `NULL` rows even when its
+sequence watermark is current, then rebuilds from raw events before publishing
+readiness. Readers return a retryable projection-unavailable result while this
+work is pending; they do not parse every payload or guess eligibility. Initial
+index creation scans projection metadata once, and startup awaits reconciliation
+with off-thread parsing and bounded write chunks. Total rebuild cost remains
+proportional to history. Rewrites invalidate or rebuild the projection in their
+own transaction, and transcript deletion removes its eligibility rows. Downgrade
+leaves the additive column and index intact; re-upgrade reconciles unknown rows.
+
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
 column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database
 safely.
 
+Web Push subscription ownership uses the same rule for nullable bare
+`web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
+`preferences_json TEXT` columns. Web Push lazily ensures all three columns on
+first use. Existing rows remain unbound and test-only until the browser
+reconnects; older readers ignore the columns and continue reading or updating
+the endpoint and key fields safely.
+
+Approval-notification cleanup uses the same-version additive
+`web_push_approval_deliveries` table. It records the approval/subscription
+identifiers plus the request-time device/profile binding for notifications that
+may have reached a browser. A terminal or restarted Gateway sends only when the
+current subscription still has that binding. The table is lazily created on
+first use, rows cascade away with their approval or subscription, and older
+readers ignore it safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
+
+Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy
+per-agent `session_goal_operations` table without changing the schema version.
+Goal start/resume commits the Goal transition, input turn, run lifecycle, and
+operation receipt in one transaction. Management operations commit the Goal
+transition and receipt together. Older readers ignore the added table.
+Receipts survive Goal clear and session reset/deletion until their 24-hour
+validity expires; later Goal writes prune expired rows. They retain the
+original result and a keyed request fingerprint, not a second raw request.
+There is no backfill or configuration switch. Downgrading preserves the table
+but disables the new structured controls; upgrading can read retained receipts.
 
 ## Review checkpoint for material changes
 
@@ -110,8 +165,34 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 | 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
+| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
+| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Creator namespace migration
+
+Agent schema **19** and shared-state schema **14** add a source discriminator to human creator actors in the existing session and cron JSON records. No table, sidecar, or separate identity ledger is added. The session node remains the immutable creator owner; mutable owner assignments and explicit sharing grants are unchanged.
+
+Historical human creators stamped directly by `operator` or `run` creation become `profile`; channel creation becomes `channel`. Origin-losing cron, inherited spawn or Talk, legacy `createdBy`, and missing-source history remain `unknown`. The migration preserves IDs, attribution, creation times, content, and existing sandbox restrictions. A UUID, profile lookup, participant, current route, or required sandbox never supplies missing creator authority. Recovery from incomplete physical projections also produces unknown human attribution.
+
+Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Canonical data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
+
+Older builds refuse the new versions. For rollback, stop all writers and restore the verified pre-upgrade backups with their matching older build. Do not decrement either schema marker: an older writer cannot maintain the creator-source contract. Unknown historical provenance is irrecoverable from the stored ID alone. Administrators retain sharing management access; assigning responsibility does not restore an implicit creator grant.
+
+Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use canonical-session isolation, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
+
+### Participant identity migration
+
+Agent schema 18 rebuilds `session_participants` with the unique key `(session_key, identity_namespace, actor_id)`. The raw actor ID remains separate from its namespace. This replaces the old `(session_key, actor_type, actor_id)` key; it is not a same-version additive change. Both schema markers advance together. No companion table or per-input ledger is added.
+
+Before upgrading existing data, take a verified, WAL-aware backup and stop the Gateway and other agent-database writers. Run `openclaw doctor --fix` with the new build. The migration uses the existing maintenance lease to reject active writers and fence new claims. Ordinary runtime opens refuse the old participant schema rather than migrating it behind active readers. Earlier structural and media migrations run in their historical order before participant convergence. Explicit Doctor repair exits nonzero if an existing configured, default-layout, or registered database still fails runtime schema readiness, including when a live writer or an unknown table dependency blocks this migration. Readiness uses the same target discovery as migration without registering, pruning, or creating stores. Archive migration warnings remain advisory when required database schemas are ready.
+
+Membership and recorded contribution aggregates survive. Historical profile timestamps are unknown because earlier source promotion could contaminate them even when a contribution count was present. Supported agent and channel-only observation times remain; an unresolved historical channel domain stays unresolved. Migration does not invent missing channel rows or inspect transcripts to reconstruct identities. New observations do not turn an unknown first input time into a claimed first-ever time.
+
+The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
+
+Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
 
 ## State schema history
 
@@ -130,6 +211,16 @@ Version 3 was an unshipped development step folded into version 4.
 | 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | Unreleased          |
 | 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | Unreleased          |
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
+| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
+| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
+
+### State schema 15
+
+Schema 15 removes `target_agent_id` and `target_session_id` from `current_conversation_bindings`. The target index uses the complete `target_session_key` and remains non-unique: several conversations may point at the same destination. This lets plugin-owned targets persist without inventing an OpenClaw agent owner. Channel/account isolation, plugin approvals, binding identifiers, target keys, JSON metadata, expiry, and detach behavior are unchanged.
+
+Startup and `openclaw doctor --fix` run the migration in the existing exclusive write transaction. They remove only the two projections and replace the target index, preserving all other row values. A dependent trigger, index, or failed schema check rolls the transaction back; migration does not discard an unknown dependency to force the upgrade. Column removal rewrites the binding table, so upgrade cost scales with its size.
+
+Stop older writers and create a verified, WAL-aware backup before upgrading. Builds supporting shared-state schema 14 or earlier refuse the migrated database. To return to an older build, restore that pre-upgrade backup into a separate state directory; do not lower the version markers or reconstruct an agent projection. See [downgrade limitations](#downgrades-are-unsupported) for the general recovery contract.
 
 ### State schema 13
 
@@ -177,9 +268,16 @@ A newer OpenClaw build wrote your databases, and the running build is older. The
 
 Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
 
-A linked source checkout is the case where the commit misleads: `openclaw --version` reports the checkout's git HEAD, but the code actually executing is whatever `dist/` was last built. If the install root is a checkout, rebuild it (`pnpm build`) before concluding the version is wrong.
+When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+Config reads also save health fingerprints to this database. If that write fails,
+`Config health-state write failed` reports the first failure for that database
+in the current process. Repeated identical failures are suppressed while writes
+continue to be attempted. A different error, or a failure after a successful
+health-state write, is reported again. Suppressing duplicates does not resolve
+the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 

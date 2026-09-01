@@ -14,7 +14,11 @@ import {
 } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
-import { renderMicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.ts";
+import {
+  renderChatVoiceStatus,
+  renderMicrophoneActivity,
+  voiceStatusLabel,
+} from "./chat-voice-activity.ts";
 
 export type ChatRunControlsProps = {
   canAbort: boolean;
@@ -26,6 +30,7 @@ export type ChatRunControlsProps = {
   followUpMode?: ControlUiFollowUpMode;
   alternateFollowUpMode?: ChatFollowUpMode;
   suggestionComposer?: boolean;
+  submissionLabel?: string;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -368,13 +373,13 @@ export function renderComposerDictationSendAction(
     return nothing;
   }
   return html`
-    <span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
-      >${dictation.finalizing
-        ? t("chat.composer.dictationFinalizing")
-        : dictation.connecting
-          ? t("chat.composer.dictationConnecting")
-          : t("chat.composer.dictationListening")}</span
-    >
+    ${dictation.connecting
+      ? nothing
+      : html`<span class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+          >${dictation.finalizing
+            ? t("chat.composer.dictationFinalizing")
+            : t("chat.composer.dictationListening")}</span
+        >`}
     <openclaw-tooltip .content=${t("chat.runControls.send")}>
       <button
         class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
@@ -400,7 +405,13 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
   if (!dictation?.active) {
     return nothing;
   }
-  const listening = !dictation.connecting && !dictation.finalizing;
+  if (dictation.connecting) {
+    return renderChatVoiceStatus({
+      status: "connecting",
+      detail: t("chat.composer.microphoneAccessPending"),
+    });
+  }
+  const listening = !dictation.finalizing;
   return html`
     <div class="agent-chat__composer-status-stack">
       <div
@@ -411,11 +422,9 @@ export function renderComposerDictationStatus(dictation?: ComposerDictationContr
             ? " agent-chat__dictation-phase--listening"
             : ""}"
         >
-          ${dictation.connecting
-            ? t("chat.composer.dictationConnecting")
-            : dictation.finalizing
-              ? t("chat.composer.dictationFinalizing")
-              : t("chat.composer.dictationListening")}
+          ${dictation.finalizing
+            ? t("chat.composer.dictationFinalizing")
+            : t("chat.composer.dictationListening")}
         </span>
       </div>
     </div>
@@ -426,24 +435,28 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const steersActiveRun = props.followUpMode === "steer";
   const interruptsActiveRun = props.followUpMode === "interrupt";
-  const activeRunActionLabel = props.suggestionComposer
-    ? t("chat.sessionSuggestions.suggest")
-    : !props.canAbort || props.followUpMode === undefined
-      ? t("chat.runControls.send")
-      : steersActiveRun
-        ? t("chat.queue.steer")
-        : interruptsActiveRun
-          ? t("chat.runControls.send")
-          : t("chat.runControls.queue");
-  const activeRunActionDescription = props.suggestionComposer
-    ? t("chat.sessionSuggestions.suggestMessage")
-    : !props.canAbort || props.followUpMode === undefined
-      ? t("chat.runControls.sendMessage")
-      : steersActiveRun
-        ? t("chat.followUpModeSteer")
-        : interruptsActiveRun
-          ? t("chat.runControls.sendMessage")
-          : t("chat.runControls.queueMessage");
+  const activeRunActionLabel =
+    props.submissionLabel ??
+    (props.suggestionComposer
+      ? t("chat.sessionSuggestions.suggest")
+      : !props.canAbort || props.followUpMode === undefined
+        ? t("chat.runControls.send")
+        : steersActiveRun
+          ? t("chat.queue.steer")
+          : interruptsActiveRun
+            ? t("chat.runControls.send")
+            : t("chat.runControls.queue"));
+  const activeRunActionDescription =
+    props.submissionLabel ??
+    (props.suggestionComposer
+      ? t("chat.sessionSuggestions.suggestMessage")
+      : !props.canAbort || props.followUpMode === undefined
+        ? t("chat.runControls.sendMessage")
+        : steersActiveRun
+          ? t("chat.followUpModeSteer")
+          : interruptsActiveRun
+            ? t("chat.runControls.sendMessage")
+            : t("chat.runControls.queueMessage"));
   const alternateActionLabel = t(
     props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer",
   );
@@ -601,7 +614,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             </openclaw-tooltip>
             ${props.microphonePicker}
           </span>
-          ${voiceErrored
+          ${voiceErrored || props.voiceStatus === "connecting"
             ? nothing
             : html`
                 <span

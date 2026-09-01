@@ -1,4 +1,5 @@
 // Runs the post-plugin migration pass without retaining pre-update plugin modules.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
@@ -7,6 +8,7 @@ import {
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -18,7 +20,7 @@ import {
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
-} from "./update-command-service.js";
+} from "./update-command-service-env.js";
 
 type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
 
@@ -99,6 +101,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   root: string;
   yes: boolean;
   json: boolean;
+  workspaceSuggestions?: boolean;
   timeoutMs: number;
   nodeRunner?: string;
   entryPath?: string;
@@ -112,29 +115,42 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     "doctor",
     "--repair",
     "--non-interactive",
-    "--no-workspace-suggestions",
+    ...(params.workspaceSuggestions ? [] : ["--no-workspace-suggestions"]),
     ...(params.yes ? ["--yes"] : []),
   ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
-  const result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
-    cwd: params.root,
-    timeoutMs: params.timeoutMs,
-    maxBuffer: 4 * 1024 * 1024,
-    logOutput: false,
-    baseEnv,
-    env: {
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
-      [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
-      ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
-    },
-  });
-  if (!params.json) {
-    if (result.stdout.trim()) {
-      defaultRuntime.log(result.stdout.trimEnd());
+  let result: { stdout?: unknown; stderr?: unknown } | undefined;
+  try {
+    result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
+      cwd: params.root,
+      timeoutMs: params.timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+      logOutput: false,
+      baseEnv,
+      env: {
+        // The outer updater owns service refresh and activation after every
+        // migration finishes; a fresh Doctor must not resume its parked service.
+        ...buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          deferConfiguredPluginInstallRepair: true,
+        }),
+        ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
+      },
+    });
+  } catch (error) {
+    if (isRecord(error)) {
+      result = error;
     }
-    if (result.stderr.trim()) {
+    throw error;
+  } finally {
+    // Clack writes directly to the child's stdout. Preserve diagnostics on either
+    // exit path without letting them share the parent's JSON result stream.
+    if (typeof result?.stdout === "string" && result.stdout.trim()) {
+      defaultRuntime[params.json ? "error" : "log"](result.stdout.trimEnd());
+    }
+    if (typeof result?.stderr === "string" && result.stderr.trim()) {
       defaultRuntime.error(result.stderr.trimEnd());
     }
   }

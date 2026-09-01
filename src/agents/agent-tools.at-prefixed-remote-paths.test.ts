@@ -32,6 +32,11 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       await fs.writeFile(path.join(remoteRoot, "@notes.md"), "literal original", "utf8");
       await fs.writeFile(path.join(remoteRoot, "notes.md"), "sibling original", "utf8");
       await fs.writeFile(path.join(remoteRoot, "reference.md"), "reference", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "obsolete.md"), "obsolete", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "move-source.md"), "move source", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "@replace-absent.md"), "old literal", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "@replace-present.md"), "old literal", "utf8");
+      await fs.writeFile(path.join(remoteRoot, "replace-present.md"), "sibling", "utf8");
       await fs.mkdir(path.join(remoteRoot, "@projects"));
       await fs.mkdir(path.join(remoteRoot, "projects"));
       await fs.writeFile(path.join(remoteRoot, "projects", "new.md"), "sibling child", "utf8");
@@ -171,6 +176,67 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
       });
       await expect(fs.readFile(path.join(remoteRoot, "notes.md"), "utf8")).resolves.toBe(
         "sibling original",
+      );
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+        "remote-at-shorthand-patch",
+        {
+          input: [
+            "*** Begin Patch",
+            "*** Update File: @reference.md",
+            "@@",
+            "-reference",
+            "+reference patched",
+            "*** Add File: @added.md",
+            "+added",
+            "*** Delete File: @obsolete.md",
+            "*** Update File: @move-source.md",
+            "*** Move to: @moved.md",
+            "@@",
+            "-move source",
+            "+move target",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "reference.md"), "utf8")).resolves.toBe(
+        "reference patched",
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "added.md"), "utf8")).resolves.toBe("added\n");
+      await expect(fs.stat(path.join(remoteRoot, "obsolete.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(path.join(remoteRoot, "move-source.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.readFile(path.join(remoteRoot, "moved.md"), "utf8")).resolves.toBe(
+        "move target",
+      );
+      await createApplyPatchTool({ cwd: hostRoot, sandbox: { root: hostRoot, bridge } }).execute(
+        "remote-at-replace-patch",
+        {
+          input: [
+            "*** Begin Patch",
+            "*** Delete File: @replace-absent.md",
+            "*** Add File: @replace-absent.md",
+            "+new literal",
+            "*** Delete File: @replace-present.md",
+            "*** Add File: @replace-present.md",
+            "+new literal",
+            "*** End Patch",
+          ].join("\n"),
+        },
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "@replace-absent.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      await expect(fs.stat(path.join(remoteRoot, "replace-absent.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.readFile(path.join(remoteRoot, "@replace-present.md"), "utf8")).resolves.toBe(
+        "new literal\n",
+      );
+      await expect(fs.readFile(path.join(remoteRoot, "replace-present.md"), "utf8")).resolves.toBe(
+        "sibling",
       );
       await expect(fs.stat(path.join(hostRoot, "@notes.md"))).rejects.toMatchObject({
         code: "ENOENT",

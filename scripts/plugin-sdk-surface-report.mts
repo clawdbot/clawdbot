@@ -119,10 +119,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 3,
   "plugin-entry": 1,
   routing: 1,
-  // +2: the shipped default-agent resolvers remain available through
+  // +4: shipped default/session-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
   health: 1,
-  "agent-scope-runtime": 2,
+  "agent-scope-runtime": 4,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
@@ -143,8 +143,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "agent-runtime": 3,
-  "memory-host-core": 1,
+  "agent-runtime": 4,
+  "memory-host-core": 2,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
@@ -197,7 +197,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
-      // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
+      // +1: diagnostic flag checks without event, trace, or redaction initialization.
       147,
       env,
     ),
@@ -309,7 +309,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: named bounded structured-input surface for native harness protocol adapters.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -2: retire the uncalled secret-plan target resolver and its result type.
-      // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +2: embedded foreground prompt context builder and its public context type.
@@ -323,7 +322,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      4349,
+      // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
+      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
+      // +1: prepared model-provider builder preserves the stable builder's return contract.
+      // +1: canonical SecretRef default-alias predicate for plugin binding parity.
+      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
+      // +1: manifest-owned plugin capability secret availability guard.
+      // +1: canonical diagnostic flag checker through its focused subpath.
+      4353,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -412,7 +418,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the test-only channel activity reset export.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -1: retire the uncalled secret-plan target resolver.
-      // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +1: embedded foreground prompt context builder.
@@ -423,7 +428,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
       // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
-      2585,
+      // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
+      // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
+      // +1: prepared model-provider builder preserves the stable builder's return contract.
+      // +1: canonical SecretRef default-alias predicate for plugin binding parity.
+      // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
+      // +1: manifest-owned plugin capability secret availability guard.
+      // +1: canonical diagnostic flag checker through its focused subpath.
+      2591,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -97,6 +97,46 @@ describe("loadControlUiSessionPullRequests", () => {
     });
   });
 
+  it("carries the PR author from the list payload without another GitHub call", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      githubJson([
+        pullListItem({
+          merged_at: "2026-07-09T10:00:00Z",
+          user: {
+            login: "octocat",
+            avatar_url: "https://avatars.githubusercontent.com/u/583231?v=4",
+          },
+        }),
+      ]),
+    );
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    // Login only: avatar_url is deliberately dropped so the browser never hotlinks GitHub.
+    expect(result.pullRequests[0]?.author).toEqual({ login: "octocat" });
+    // Merged PRs skip the diff/checks calls, so the author must have come from the list.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the author when GitHub returns no user for the PR", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z", user: null })]),
+      );
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests[0]?.author).toBeUndefined();
+  });
+
   it("retries stale optional authentication anonymously for session PRs", async () => {
     vi.stubEnv("GH_TOKEN", "stale-github-token");
     const fetchImpl = vi
@@ -438,6 +478,7 @@ describe("loadControlUiSessionPullRequests", () => {
       signal: null,
       killed: false,
       termination: "exit" as const,
+      timeoutMs: 120_000,
     }));
     const load = (sessionKey: string, refresh = false) =>
       loadControlUiSessionPullRequests(
@@ -686,7 +727,10 @@ describe("loadControlUiSessionPullRequests", () => {
         headers: { "Content-Type": "application/json", "x-ratelimit-remaining": "0" },
       });
     const routes = [
-      { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
+      {
+        match: "/pulls?head=",
+        response: () => githubJson([pullListItem({ user: { login: "octocat" } })]),
+      },
       { match: "/pulls/103469", response: rateLimitedResponse },
       { match: "/check-runs", response: rateLimitedResponse },
     ];
@@ -707,6 +751,8 @@ describe("loadControlUiSessionPullRequests", () => {
         title: "fix(macos): tighten the link-browser tab header",
         url: "https://github.com/openclaw/openclaw/pull/103469",
         state: "open",
+        // The list fetch succeeded, so its author survives the degraded chip.
+        author: { login: "octocat" },
       },
     ]);
 

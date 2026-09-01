@@ -47,6 +47,7 @@ import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-packa
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { resolvePackageExtensionEntries } from "./package-manifest.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
@@ -162,17 +163,33 @@ function resolvePluginArtifactManifests(
   return registry.plugins;
 }
 
+function inspectPluginArtifact(
+  rootDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  context: PluginArtifactInspectionContext = {},
+) {
+  // Consent inspects the current artifact, including after an approval callback yields.
+  // Runtime or earlier review facts must never authorize replacement bytes.
+  return withPluginCache(createPluginCache(), () => {
+    const manifests = resolvePluginArtifactManifests(rootDir, env, context);
+    return {
+      manifest: manifests[0],
+      declared: mergePluginDeclaredSurfaces(
+        manifests.map(
+          (manifest) => buildPluginCapabilitySummary({ manifest, origin: "global" }).declared,
+        ),
+      ),
+    };
+  });
+}
+
 /** Read only validated manifest surfaces belonging to the actual artifact on disk. */
 export function resolvePluginArtifactDeclaredSurface(
   rootDir: string,
   env: NodeJS.ProcessEnv = process.env,
   context: PluginArtifactInspectionContext = {},
 ): PluginAcceptedDeclaredSurface {
-  return mergePluginDeclaredSurfaces(
-    resolvePluginArtifactManifests(rootDir, env, context).map(
-      (manifest) => buildPluginCapabilitySummary({ manifest, origin: "global" }).declared,
-    ),
-  );
+  return inspectPluginArtifact(rootDir, env, context).declared;
 }
 
 export function diffDeclaredSurfaceWidening(
@@ -358,6 +375,7 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   metadata?: PluginMetadataSnapshot;
 }): Promise<void> {
   const env = params.env ?? process.env;
@@ -366,6 +384,7 @@ export async function resolvePluginCapabilityConsent(params: {
     const metadata =
       params.metadata ??
       resolvePluginMetadataSnapshot({
+        allowCurrent: false,
         config: params.config,
         env,
         ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
@@ -412,6 +431,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!acknowledgment) {
       throwManagedPluginCapabilityConsentRequired(review);
     }
+    await params.beforePersistentEffect?.();
     const records = await loadInstalledPluginIndexInstallRecords({ env });
     const persistedRecord = records[installOwner];
     if (!persistedRecord?.installPath) {
@@ -453,21 +473,17 @@ async function resolvePluginArtifactCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   previousDeclared?: PluginAcceptedDeclaredSurface;
   previousRecord?: PluginInstallRecord;
   mode?: "install" | "update";
 }): Promise<PluginAcceptedDeclaredSurface> {
   const artifactContext = { config: params.config, currentArtifactDir: params.currentArtifactDir };
-  const declared = resolvePluginArtifactDeclaredSurface(
+  const { declared, manifest } = inspectPluginArtifact(
     params.artifactDir,
     params.env,
     artifactContext,
   );
-  const manifest = resolvePluginArtifactManifests(
-    params.artifactDir,
-    params.env,
-    artifactContext,
-  )[0];
   const review = buildPluginCapabilityConsentReview({
     pluginId: params.pluginId,
     manifest: manifest ?? { name: params.pluginId },
@@ -476,22 +492,27 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     declared,
     ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
   });
+  let acceptanceCurrent = false;
   if (params.mode === "update" && params.previousDeclared) {
     const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
     const priorAcceptanceCurrent =
       params.previousRecord !== undefined &&
       resolveAcceptedSurfaceCurrent(params.previousRecord, params.previousDeclared) &&
       resolvePluginInstallRecordIntegrity(params.previousRecord) !== undefined;
-    if (!hasWidening && priorAcceptanceCurrent) {
-      return declared;
-    }
+    acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
     // Managed installs activate the package, even when its previous version was disabled.
     // Update-only flows preserve disablement in preparePluginUpdateCapabilityConsent instead.
   }
-  const acknowledgment =
-    params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review));
+  const acknowledgment = acceptanceCurrent
+    ? { reviewToken: review.reviewToken }
+    : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
+  // Review and staged-package rollback remain cancellable. Lock only when
+  // accepting this artifact, then recheck its bytes after the callback yields.
+  if (acknowledgment) {
+    await params.beforePersistentEffect?.();
+  }
   // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
-  const finalDeclared = resolvePluginArtifactDeclaredSurface(
+  const { declared: finalDeclared, manifest: finalManifest } = inspectPluginArtifact(
     params.artifactDir,
     params.env,
     artifactContext,
@@ -503,11 +524,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
         ? review
         : buildPluginCapabilityConsentReview({
             pluginId: params.pluginId,
-            manifest: resolvePluginArtifactManifests(
-              params.artifactDir,
-              params.env,
-              artifactContext,
-            )[0] ?? {
+            manifest: finalManifest ?? {
               name: params.pluginId,
             },
             record: params.record,
@@ -530,6 +547,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  beforePersistentEffect?: () => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
 }): {
@@ -589,6 +607,7 @@ export function createManagedPluginArtifactConsentHandler(params: {
         },
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
         ...(previousRecord ? { previousRecord } : {}),
         ...(previousDeclared ? { previousDeclared } : {}),
         mode: artifact.mode,
@@ -621,6 +640,7 @@ export async function prepareManagedPluginArtifactConsentHandler(
   const metadata =
     Object.keys(previousRecords).length > 0
       ? resolvePluginMetadataSnapshot({
+          allowCurrent: false,
           config: params.config,
           env,
           ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),

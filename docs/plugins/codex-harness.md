@@ -58,6 +58,14 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
+Stopping an active Codex run interrupts its turn, then stops the native background
+terminals listed on that Codex thread before releasing the run. Other Codex
+threads and deliberately backgrounded `gateway_process` jobs are unaffected.
+If native terminal cleanup fails, the run reports an error instead of silently
+claiming cleanup succeeded. Inspect that thread's running terminals before
+starting more work. This uses Codex's terminal ownership; it does not guarantee
+cleanup of commands that deliberately detach from that ownership.
+
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
 Codex also receives `node_exec` for commands on paired nodes. Native shell
 remains on the Codex app-server host and workspace
@@ -91,8 +99,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.150.1`. The plugin ships and manages
-  `@openai/codex` `0.150.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.151.0`. The plugin ships and manages
+  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -191,8 +199,16 @@ capability and `codex.exec-server.stdio.v1` command. If enabling the plugin
 changes an existing node's command surface, reconnect the node, inspect
 `openclaw nodes pending`, and approve the updated pairing with
 `openclaw nodes approve <requestId>`. The persistent command allowlist does not
-replace the normal node invocation approval: deny starts no Codex process, and
-allow-once authorizes exactly one exec-server launch.
+replace launch authorization. Ordinarily, a critical allow-once decision
+authorizes exactly one exec-server launch; deny starts no process. Explicitly
+selected session **Full access** can substitute for that prompt only during
+the exact admitted turn and placement, and only when the node's own
+`tools.exec` policy and exec-approvals floors both allow full/off execution.
+Node-local deny always blocks. Local ask or allowlist restrictions require a
+human decision; Full access does not erase them. If a Full launch is refused
+by local policy, use an ordinary session permission mode to request approval,
+or deliberately change the node's local policy and reconnect it.
+Policy tightening during launch preparation refuses the stale launch.
 
 Codex launches its node exec-server directly rather than starting an OpenClaw
 worker, so a paired host remains eligible when all worker slots are occupied.
@@ -255,8 +271,9 @@ plugin and its pinned platform-native Codex binary. Crabbox validates the
 bundled or prepared installation and preserves its provenance in the disposable
 node's isolated state without installing a plugin during enrollment. The Gateway
 checks the cloud node's current pairing and
-effectively invocable command before starting a Codex process; approve the
-critical allow-once request for each exec-server attempt.
+effectively invocable command before starting a Codex process. The same
+per-attempt approval or explicitly selected Full access rules apply, including
+the cloud node's local exec policy and approvals floors.
 
 Codex runs its managed exec-server over the enrolled node's authenticated
 outbound connection without starting an OpenClaw worker child or consuming a
@@ -345,9 +362,14 @@ snapshot, canonical branch, and later turns while ordinary Codex sessions remain
 agent-scoped. The first canonical start uses exactly the model and provider that
 Codex returns for the snapshot fork. Later resumes leave selection to Codex's
 native configuration; the outer OpenClaw model and fallback chain never replace
-it. Stored and idle rows can be archived after explicit no-other-runner
+it. Stored and idle local rows can be archived after explicit no-other-runner
 confirmation. Active sources cannot create a branch or be archived; an existing
-supervised Chat can still be opened. Paired-node sessions remain metadata-only.
+supervised Chat can still be opened. Paired-node sessions expose bounded,
+paginated transcripts. Eligible stored or idle paired-node rows also support
+continuation for `operator.admin` when the node advertises and permits the
+required catalog and CLI-resume commands. That flow resumes the exact native
+thread on the node rather than creating a Gateway-local branch; paired-node
+archive remains unavailable.
 
 See [Supervise Codex sessions](/plugins/codex-supervision) for setup, branching
 rules, paired-node limits, metadata exposure, and troubleshooting.
@@ -981,6 +1003,10 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
+  The permissions argument `default` (also `guardian`, `guarded`, or `approve`)
+  selects `guarded`; it does not clear the session permission mode. `yolo`
+  selects full access and requires `operator.admin`, even for an owner sender.
+  Status displays `default` only when no session permission mode is set.
 - `/codex compact` runs the same completion and session-accounting pipeline as
   `/compact`, then reports whether Codex compacted the session and the resulting
   token count. If compaction is skipped or fails, the reply includes the reason.
@@ -1490,6 +1516,8 @@ The Codex harness changes the low-level embedded agent executor only.
   channel history, search, `/new`, `/reset`, and future model or harness
   switching, but does not replace Codex compaction with an OpenClaw or
   context-engine summarizer.
+  Completed commentary and tool activity are saved during the turn rather than
+  waiting for its final answer, preserving completed work across Gateway interruption.
 - Media generation, media understanding, TTS, approvals, and messaging-tool
   output continue through the matching OpenClaw provider/model settings.
 - `tool_result_persist` applies to OpenClaw-owned transcript tool results,

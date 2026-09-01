@@ -109,17 +109,6 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
-  it("does not prepare package restart for a service owned by another root", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesMutationRoot: false,
-      }),
-    ).toBe(false);
-  });
-
   it("keeps non-package updates tied to the matching loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({
@@ -159,9 +148,9 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
 });
 
 describe("resolveUpdatedGatewayRestartPort", () => {
-  it("uses the managed service port ahead of the caller environment", () => {
+  it("uses the managed service port ahead of the caller environment", async () => {
     expect(
-      resolveUpdatedGatewayRestartPort({
+      await resolveUpdatedGatewayRestartPort({
         config: { gateway: { port: 19000 } } as never,
         processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
         serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
@@ -169,9 +158,9 @@ describe("resolveUpdatedGatewayRestartPort", () => {
     ).toBe(19002);
   });
 
-  it("falls back to the post-update config when no service port is available", () => {
+  it("falls back to the post-update config when no service port is available", async () => {
     expect(
-      resolveUpdatedGatewayRestartPort({
+      await resolveUpdatedGatewayRestartPort({
         config: { gateway: { port: 19000 } } as never,
         processEnv: {},
         serviceEnv: {},
@@ -181,49 +170,22 @@ describe("resolveUpdatedGatewayRestartPort", () => {
 });
 
 describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it("keeps package restart preparation anchored to the pre-update service env", () => {
-    const processEnv = {
-      OPENCLAW_STATE_DIR: "/source/state",
-      OPENCLAW_CONFIG_PATH: "/source/openclaw.json",
-    } as NodeJS.ProcessEnv;
-    const prePackageServiceEnv = {
-      OPENCLAW_STATE_DIR: "/managed/state",
-      OPENCLAW_CONFIG_PATH: "/managed/openclaw.json",
-    } as NodeJS.ProcessEnv;
+  it.each(["git", "npm", "pnpm", "bun"] as const)(
+    "keeps %s restart preparation anchored to the pre-update service env",
+    (updateMode) => {
+      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
+      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
+      expect(
+        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
+      ).toEqual(preManagedServiceEnv);
+    },
+  );
 
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "npm",
-        processEnv,
-        prePackageServiceEnv,
-      }),
-    ).toBe(prePackageServiceEnv);
-  });
-
-  it("keeps git updates tied to the caller environment", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
-    const prePackageServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
-
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "git",
-        processEnv,
-        prePackageServiceEnv,
-      }),
-    ).toBe(processEnv);
-  });
-
-  it("uses the managed service environment for git updates stopped by this updater", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
-    const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
-
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "git",
-        processEnv,
-        preManagedServiceEnv,
-      }),
-    ).toBe(preManagedServiceEnv);
+  it("uses the caller environment when no managed service context was captured", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
+    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
+      processEnv,
+    );
   });
 });
 
@@ -718,43 +680,52 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
 });
 
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
-  it("re-bootstraps an installed-but-not-loaded macOS LaunchAgent after update", async () => {
-    const service = {} as never;
-    const serviceEnv = { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv;
-    const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" } as NodeJS.ProcessEnv;
-    const readState = vi.fn(async () => ({
-      installed: true,
-      loadState: { status: "not-loaded" },
-      running: false,
-      env: recoveredEnv,
-      command: null,
-      runtime: { status: "unknown", missingSupervision: true },
-    }));
-    const recover = vi.fn(async () => ({
-      result: "restarted" as const,
-      loaded: true as const,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    }));
+  it.each(["recovered", "failed", "system owner"] as const)(
+    "reports installed-but-not-loaded LaunchAgent recovery: %s",
+    async (outcome) => {
+      const service = {} as never;
+      const serviceEnv = { OPENCLAW_PROFILE: "stomme" };
+      const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" };
+      const readState = vi.fn(async () => ({
+        installed: true,
+        loadState: { status: "not-loaded" },
+        running: false,
+        env: recoveredEnv,
+        command: null,
+        runtime: { status: "unknown", missingSupervision: true },
+      }));
+      const message =
+        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+      const guidance = "System LaunchDaemon system/ai.openclaw.stomme owns this label";
+      const recover = vi.fn(async () => {
+        if (outcome === "system owner") {
+          throw new Error(guidance);
+        }
+        return outcome === "recovered" ? { result: "restarted", loaded: true, message } : null;
+      });
 
-    await expect(
-      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
-        service,
-        env: serviceEnv,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
-      }),
-    ).resolves.toEqual({
-      attempted: true,
-      recovered: true,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    });
-
-    expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
-    expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
-  });
+      await expect(
+        updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
+          service,
+          env: serviceEnv,
+          deps: { platform: "darwin", readState: readState as never, recover: recover as never },
+        }),
+      ).resolves.toEqual(
+        outcome === "recovered"
+          ? { attempted: true, recovered: true, message }
+          : {
+              attempted: true,
+              recovered: false,
+              detail:
+                outcome === "system owner"
+                  ? guidance
+                  : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+            },
+      );
+      expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
+      expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+    },
+  );
 
   it("does not touch non-macOS service managers", async () => {
     const readState = vi.fn();
@@ -799,63 +770,6 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 
     expect(recover).not.toHaveBeenCalled();
   });
-
-  it("returns an explicit failed recovery state when bootstrap repair fails", async () => {
-    const readState = vi.fn(async () => ({
-      installed: true,
-      loadState: { status: "not-loaded" },
-      running: false,
-      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
-      command: null,
-      runtime: { status: "unknown", missingSupervision: true },
-    }));
-    const recover = vi.fn(async () => null);
-
-    await expect(
-      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
-        service: {} as never,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
-      }),
-    ).resolves.toEqual({
-      attempted: true,
-      recovered: false,
-      detail:
-        "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
-    });
-  });
-
-  it("preserves system LaunchDaemon recovery guidance", async () => {
-    const readState = vi.fn(async () => ({
-      installed: true,
-      loadState: { status: "not-loaded" },
-      running: false,
-      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
-      command: null,
-      runtime: { status: "unknown", missingSupervision: true },
-    }));
-    const recover = vi.fn(async () => {
-      throw new Error("System LaunchDaemon system/ai.openclaw.stomme owns this label");
-    });
-
-    await expect(
-      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
-        service: {} as never,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
-      }),
-    ).resolves.toEqual({
-      attempted: true,
-      recovered: false,
-      detail: "System LaunchDaemon system/ai.openclaw.stomme owns this label",
-    });
-  });
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
@@ -889,6 +803,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         service,
         port: 18790,
         expectedVersion: "2026.5.3",
+        expectedBuildId: "new-build",
         env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
         deps: { recoverLaunchAgent, waitForHealthy },
       }),
@@ -906,6 +821,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       service,
       port: 18790,
       expectedVersion: "2026.5.3",
+      expectedBuildId: "new-build",
       env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
       supervisorKeepsAlive: true,
     });

@@ -3,10 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "../plugins/loader-runtime-load.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "../plugins/runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "../plugins/runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getTaskFlowByIdForOwner, listTaskFlowsForOwner } from "./task-flow-owner-access.js";

@@ -608,6 +608,7 @@ async function runConsolidationGroup(params: {
       disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-consolidation:${params.sessionKey}`,
       lightContext: true,
       deliver: false,

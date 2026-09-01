@@ -154,12 +154,20 @@ For contributors or anyone who wants to run from a local checkout:
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
+corepack enable
 pnpm install && pnpm build && pnpm ui:build
-pnpm link --global
+pnpm add --global "openclaw@link:$PWD"
 openclaw onboard --install-daemon
 ```
 
-Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
+`pnpm add --global "openclaw@link:$PWD"` links the CLI to this checkout without changing its package files. If pnpm reports that its global bin directory is not on `PATH`, run `pnpm setup`, reopen your shell, and retry.
+
+Corepack selects the exact pnpm version from `package.json` (currently pnpm 12).
+If Corepack is unavailable, install that version explicitly with
+`npm install -g pnpm@12.1.0 --allow-scripts=pnpm@12.1.0`; keep npm install scripts and optional dependencies
+enabled so pnpm can provision its native executable.
+
+Or skip the global install and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
 ### Install from the GitHub main checkout
 
@@ -175,9 +183,6 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     Optional dependency installer and package-script runner.
-  </Card>
-  <Card title="ClawDock" href="/install/clawdock" icon="container">
-    Community Docker Compose setup and shell helpers.
   </Card>
   <Card title="Docker" href="/install/docker" icon="container">
     Containerized or headless deployments.

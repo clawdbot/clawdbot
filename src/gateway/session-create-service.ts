@@ -1,24 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
+  type FastMode,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   type ErrorShape,
   type SessionVisibility,
   errorShape,
   missingScopeErrorShape,
+  normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
+import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -105,7 +111,7 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
 
-export function resolveSessionCreateModelSelection(
+function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
@@ -126,6 +132,7 @@ export function resolveSessionCreateModelSelection(
   // remains the sole live-catalog availability validator.
   const resolved = resolveSessionPatchModelSelection({
     cfg,
+    agentId,
     catalog: [],
     raw: model,
     defaultProvider: defaults.provider,
@@ -145,7 +152,7 @@ export function resolveSessionCreateModelSelection(
   };
 }
 
-async function existingModelSelectionWouldChange(params: {
+async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
@@ -155,6 +162,7 @@ async function existingModelSelectionWouldChange(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   requestedModel?: string;
   requestedContextWindow?: string;
+  requestedFastMode?: FastMode;
   requestedThinkingLevel?: string;
   subagentModelHint?: string;
 }): Promise<boolean> {
@@ -166,6 +174,12 @@ async function existingModelSelectionWouldChange(params: {
   }
   const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
   const requestedContextWindow = normalizeOptionalString(params.requestedContextWindow);
+  if (
+    params.requestedFastMode !== undefined &&
+    params.requestedFastMode !== params.existingEntry.fastMode
+  ) {
+    return true;
+  }
   if (
     requestedContextWindow &&
     requestedContextWindow !== normalizeOptionalString(params.existingEntry.contextWindow)
@@ -191,6 +205,7 @@ async function existingModelSelectionWouldChange(params: {
   const catalog = await params.loadGatewayModelCatalog();
   const resolved = resolveSessionPatchModelSelection({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog,
     raw: requestedModel,
     defaultProvider: params.defaultProvider,
@@ -209,6 +224,7 @@ async function existingModelSelectionWouldChange(params: {
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
       cfg: params.cfg,
+      agentId: params.agentId,
       catalog,
       raw: params.subagentModelHint,
       defaultProvider: params.defaultProvider,
@@ -260,6 +276,7 @@ type CreatedGatewaySession = {
 
 type TrustedInitialSessionEntry = {
   agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
+  color?: string;
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
@@ -292,13 +309,17 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
+  /** In-process create-only title seed; never populated from public Gateway params. */
+  displayName?: string;
   category?: string;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
+  fastMode?: FastMode;
   /** Registry identity recorded only when this request creates a logical session node. */
   projectId?: string;
   pendingProjectGitUrl?: string;
+  pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
@@ -364,6 +385,9 @@ export async function createGatewaySession(params: {
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 }): Promise<CreateGatewaySessionResult> {
+  // Presentation titles do not claim labels. Bound the snapshot at the shared
+  // creator so every native owner gets the same surrogate-safe storage contract.
+  const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const projectId = normalizeOptionalString(params.projectId);
@@ -725,6 +749,14 @@ export async function createGatewaySession(params: {
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.sessionRoot ? { sessionRoot: params.sessionRoot } : {}),
         ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
+        ...(params.fastMode !== undefined
+          ? {
+              fastModeSelection: {
+                value: params.fastMode,
+                allowExistingChange: params.allowExistingModelSelection === true,
+              },
+            }
+          : {}),
         ...(params.prepareLifecycle ? { prepareLifecycle: params.prepareLifecycle } : {}),
         ...(params.onLifecycleCleanupError
           ? { onLifecycleCleanupError: params.onLifecycleCleanupError }
@@ -873,6 +905,16 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
+    const existingOwnershipError = resolvePluginSessionOwnershipError({
+      action: "adopt",
+      entry: currentTargetEntry,
+      key: target.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (existingOwnershipError) {
+      return { ok: false, error: existingOwnershipError };
+    }
     if (!currentTargetEntry) {
       const creationError = authorizeGatewaySessionCreation({
         cfg: params.cfg,
@@ -931,15 +973,6 @@ export async function createGatewaySession(params: {
             return { ok: false, error: creationError };
           }
         }
-        const existingOwnershipError = resolvePluginSessionOwnershipError({
-          action: "adopt",
-          entry: existingEntry,
-          key: target.canonicalKey,
-          pluginOwnerId: params.authorizedPluginId,
-        });
-        if (existingOwnershipError) {
-          return { ok: false, error: existingOwnershipError };
-        }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
           !authorizedHarnessCreation &&
@@ -980,12 +1013,12 @@ export async function createGatewaySession(params: {
             ),
           };
         }
-        if (pendingProjectGitUrl && existingEntry !== undefined) {
+        if ((pendingProjectGitUrl || params.pendingWorktree) && existingEntry !== undefined) {
           return {
             ok: false,
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "remote project preparation requires a new session",
+              "workspace preparation requires a new session",
             ),
           };
         }
@@ -1031,12 +1064,13 @@ export async function createGatewaySession(params: {
         const requestedModel = normalizeOptionalString(params.model);
         const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        const requestedFastMode = params.fastMode;
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
           const gateDefaultModel = resolveDefaultModelForAgent({
             cfg: params.cfg,
             agentId: target.agentId,
           });
-          const modelSelectionWouldChange = await existingModelSelectionWouldChange({
+          const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
             agentId: target.agentId,
             cfg: params.cfg,
             catalogModel,
@@ -1046,6 +1080,7 @@ export async function createGatewaySession(params: {
             loadGatewayModelCatalog: params.loadGatewayModelCatalog,
             requestedModel,
             requestedContextWindow,
+            requestedFastMode,
             requestedThinkingLevel,
             subagentModelHint: isSubagentSessionKey(target.canonicalKey)
               ? resolveSubagentConfiguredModelSelection({
@@ -1054,7 +1089,7 @@ export async function createGatewaySession(params: {
                 })
               : undefined,
           });
-          if (modelSelectionWouldChange) {
+          if (sessionSelectionWouldChange) {
             return {
               ok: false,
               error: missingScopeErrorShape({
@@ -1086,6 +1121,7 @@ export async function createGatewaySession(params: {
             ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
             ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
+            ...(requestedFastMode !== undefined ? { fastMode: requestedFastMode } : {}),
             ...(requestedToolOverrides ? { toolOverrides: params.toolOverrides } : {}),
             ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
           },
@@ -1115,6 +1151,11 @@ export async function createGatewaySession(params: {
         const initialAgentHarnessId = params.initialEntry
           ? normalizeOptionalString(params.initialEntry.agentHarnessId)
           : undefined;
+        // Initializers compare their callback snapshot with the stored row during finalization.
+        // Normalize before both so persistence cannot make this creation look like external drift.
+        const initialColor = params.initialEntry?.color
+          ? normalizeSessionColorValue(params.initialEntry.color)
+          : null;
         if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
           return {
             ok: false,
@@ -1143,6 +1184,7 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
+          ...(createdNewEntry && displayName ? { displayName } : {}),
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
           ...(existingEntry === undefined && patched.entry.delivery === undefined
@@ -1162,6 +1204,9 @@ export async function createGatewaySession(params: {
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(projectId && createdNewEntry ? { projectId } : {}),
           ...(pendingProjectGitUrl && createdNewEntry ? { pendingProjectGitUrl } : {}),
+          ...(params.pendingWorktree && createdNewEntry
+            ? { pendingWorktree: params.pendingWorktree }
+            : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -1184,6 +1229,7 @@ export async function createGatewaySession(params: {
               }
             : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(initialColor ? { color: initialColor } : {}),
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
             : {}),
@@ -1247,6 +1293,11 @@ export async function createGatewaySession(params: {
         if (requestedToolOverrides) {
           delete inheritedSelection.toolOverrides;
         }
+        if (requestedFastMode !== undefined) {
+          // The create-time choice belongs to the new session; parent inheritance must not
+          // replace it after the canonical patch has validated and stored it.
+          delete inheritedSelection.fastMode;
+        }
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,
@@ -1265,6 +1316,33 @@ export async function createGatewaySession(params: {
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
           };
         }
+        const childModel = resolveSessionModelRef(params.cfg, entry, target.agentId);
+        const childCatalog = params.loadGatewayModelCatalog
+          ? await params.loadGatewayModelCatalog()
+          : [];
+        const childCatalogEntry = findModelCatalogEntry(childCatalog, {
+          provider: childModel.provider,
+          modelId: childModel.model,
+        });
+        const childContextWindow = resolveModelContextWindowProfile({
+          catalogEntry: childCatalogEntry,
+          selected: entry.contextWindow,
+        });
+        const resolvedForkMaxTokens = resolveContextTokensForModel({
+          cfg: params.cfg,
+          provider: childModel.provider,
+          model: childModel.model,
+          modelContextTokens: childCatalogEntry?.contextTokens,
+          modelContextWindow: childContextWindow.contextTokens,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        });
+        const forkMaxTokens = childContextWindow.contextTokens
+          ? Math.min(
+              resolvedForkMaxTokens ?? childContextWindow.contextTokens,
+              childContextWindow.contextTokens,
+            )
+          : resolvedForkMaxTokens;
         // The storage owner selects one source for both size admission and copying,
         // so an active tail cannot make a smaller stable prefix fail the cap.
         const forkResult = await forkSessionFromParentWithDecision({
@@ -1274,6 +1352,7 @@ export async function createGatewaySession(params: {
           parentSessionKey: forkParentSessionKey,
           sessionKey: target.canonicalKey,
           storePath: parentSessionTarget.storePath,
+          ...(forkMaxTokens ? { maxTokens: forkMaxTokens } : {}),
           // Keep the fork transcript owned by the child store across agent boundaries.
           targetStorePath: target.storePath,
           ...(params.forkFrom ? { forkFrom: params.forkFrom } : {}),

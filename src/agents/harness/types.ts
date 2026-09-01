@@ -97,6 +97,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
@@ -160,6 +161,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -518,6 +521,14 @@ type AgentHarnessModelCatalogCapability = {
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  /**
+   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
+   * picker metadata only, never execution authorization or a host-route credential.
+   */
+  readModelCatalogReadiness?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): { accountType: string } | undefined;
 };
 
 /**

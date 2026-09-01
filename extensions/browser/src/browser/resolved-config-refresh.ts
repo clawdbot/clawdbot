@@ -103,7 +103,8 @@ function applyResolvedConfig(
       !lifecycle?.transitionReason &&
       !lifecycle?.cleanupRelays.has(relay) &&
       profile?.driver === "extension" &&
-      profile.cdpPort === relay.port
+      profile.cdpPort === relay.port &&
+      relay.ownership !== "borrowed"
     ) {
       extensionRelayInternalTokens[name] = relay.internalToken;
     }

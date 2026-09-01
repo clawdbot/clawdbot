@@ -1,4 +1,6 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -7,8 +9,6 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
-  prepareProjectUiProof,
-  projectProofArtifactDir,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
@@ -20,7 +20,6 @@ const gatewayEnvironment = {
 };
 suite.define(() => {
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {
-    await prepareProjectUiProof();
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const repoRoot = "/recorded/openclaw";
@@ -80,7 +79,7 @@ suite.define(() => {
       await pathInput.press("Enter");
       const register = place.getByRole("button", { name: "Register as project" });
       await register.waitFor();
-      await captureProjectUiProof(page, "project-register-action.png");
+      await captureProjectUiProof(suite, page, "project-register-action.png");
       await register.click();
 
       const request = await gateway.waitForRequest("projects.register");
@@ -150,11 +149,12 @@ suite.define(() => {
   it.each(["recovery scope", "system info"] as const)(
     "updates Gateway place labels after late %s",
     async (late) => {
-      await prepareProjectUiProof();
       const context = await suite.browser.newContext({
         locale: "en-US",
         serviceWorkers: "block",
-        ...(captureUiProofEnabled ? { recordVideo: { dir: projectProofArtifactDir } } : {}),
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: path.join(suite.artifactDir, "project-registry") } }
+          : {}),
       });
       const page = await context.newPage();
       if (late === "recovery scope") {
@@ -200,7 +200,7 @@ suite.define(() => {
         const local = place.locator('[data-value="gateway"]');
         if (late === "recovery scope") {
           await trigger.click();
-          await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
           await gateway.waitForRequest("environments.list", { after: catalogRequests });
@@ -216,19 +216,23 @@ suite.define(() => {
         if (late === "system info") {
           await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · local");
           await gateway.resolveDeferred("system.info", systemInfo);
-          await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
-        await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
+        await captureProjectUiProof(suite, page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
 
         await page.keyboard.press("Escape");
         await replaceGatewayClient(page);
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
         await trigger.click();
-        await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
       } finally {
         try {
-          await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}-final.png`);
+          await captureProjectUiProof(
+            suite,
+            page,
+            `gateway-name-${late.replaceAll(" ", "-")}-final.png`,
+          );
         } finally {
           await context.close();
         }
@@ -351,7 +355,7 @@ suite.define(() => {
       await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
+      await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");

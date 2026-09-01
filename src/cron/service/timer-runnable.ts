@@ -79,6 +79,11 @@ export function isRunnableJob(params: {
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
+    // The recovery owner recorded pending work after checking the exact task
+    // identity. Its scheduled slot remains due even when the old run started later.
+    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+      return nowMs >= next;
+    }
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     // Terminal history belongs to the old occurrence. A matching newer

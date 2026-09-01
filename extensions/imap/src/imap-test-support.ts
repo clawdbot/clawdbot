@@ -1,11 +1,13 @@
 import type { AuthenticateResult } from "mailauth";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
-import { createImapState } from "./state.js";
+import { createImapState, type ImapCursor } from "./state.js";
 
 export function createImapTestRuntime() {
   const namespaces = new Map<string, Map<string, unknown>>();
+  let cursorChanged = createDeferred<void>();
   const dispatchHookAgentTurn = vi.fn<
     OpenClawPluginApi["runtime"]["hooks"]["dispatchHookAgentTurn"]
   >(async () => ({ ok: true, runId: "mail-run" }));
@@ -20,7 +22,14 @@ export function createImapTestRuntime() {
         }
         const entries = values;
         return {
-          register: async (key: string, value: T) => void entries.set(key, value),
+          register: async (key: string, value: T) => {
+            entries.set(key, value);
+            if (options.namespace === "cursor") {
+              const previous = cursorChanged;
+              cursorChanged = createDeferred<void>();
+              previous.resolve();
+            }
+          },
           registerIfAbsent: async (key: string, value: T) => {
             if (entries.has(key)) {
               return false;
@@ -42,7 +51,29 @@ export function createImapTestRuntime() {
       },
     },
   });
-  return { runtime, state: createImapState(runtime), dispatchHookAgentTurn };
+  const state = createImapState(runtime);
+  return {
+    runtime,
+    state,
+    dispatchHookAgentTurn,
+    waitForCursor: async (
+      accountId: string,
+      expected: Pick<ImapCursor, "uidValidity" | "lastSeenUid">,
+    ) => {
+      for (;;) {
+        // Capture the notification before lookup so a concurrent write cannot be missed.
+        const changed = cursorChanged.promise;
+        const cursor = await state.cursors.lookup(accountId);
+        if (
+          cursor?.uidValidity === expected.uidValidity &&
+          cursor.lastSeenUid === expected.lastSeenUid
+        ) {
+          return cursor;
+        }
+        await changed;
+      }
+    },
+  };
 }
 
 type AuthenticationStatus = Exclude<AuthenticateResult["dmarc"], false>["status"]["result"];

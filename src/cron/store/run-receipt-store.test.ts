@@ -21,6 +21,7 @@ import {
   CronRunReceiptRevisionError,
   findActiveCronRunReceiptInDatabase,
   finishCronRunReceipt,
+  listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
@@ -95,25 +96,29 @@ function makeForeignOwner(handle: CronRunReceiptHandle) {
 }
 
 describe("cron run receipt store", () => {
-  it("lazily creates receipt storage for direct transactional lookups", async () => {
-    const { storePath } = await makeStorePath();
-    const job = makeJob("lazy-lookup");
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
+  it.each(["single", "batch"] as const)(
+    "lazily creates receipt storage for a direct $case lookup",
+    async (testCase) => {
+      const { storePath } = await makeStorePath();
+      const job = makeJob("lazy-lookup");
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      openOpenClawStateDatabase().db.exec("DROP TABLE cron_run_receipts");
 
-    expect(
-      runOpenClawStateWriteTransaction(({ db }) =>
-        findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id }),
-      ),
-    ).toBeUndefined();
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
-        )
-        .get(),
-    ).toEqual({ name: "cron_run_receipts" });
-  });
+      const result = runOpenClawStateWriteTransaction(({ db }) =>
+        testCase === "single"
+          ? findActiveCronRunReceiptInDatabase({ database: db, storePath, jobId: job.id })
+          : listActiveCronRunReceiptJobIdsInDatabase(db, storePath),
+      );
+      expect(result).toEqual(testCase === "single" ? undefined : new Set());
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'cron_run_receipts'",
+          )
+          .get(),
+      ).toEqual({ name: "cron_run_receipts" });
+    },
+  );
 
   it("records one durable active run and rejects an overlapping claimant", async () => {
     const { storePath } = await makeStorePath();
@@ -292,11 +297,12 @@ describe("cron run receipt store", () => {
     expect(
       openOpenClawStateDatabase()
         .db.prepare(
-          `SELECT owner_id
-           FROM execution_owner_lifecycle_bindings
-           WHERE owner_kind = 'cron'`,
+          `SELECT binding.owner_id
+           FROM execution_owner_lifecycle_bindings AS binding
+           JOIN cron_run_receipts AS receipt ON receipt.receipt_id = binding.owner_id
+           WHERE binding.owner_kind = 'cron' AND receipt.store_key = ?`,
         )
-        .all(),
+        .all(cronStoreKey(storePath)),
     ).toEqual([{ owner_id: replacement.receiptId }]);
 
     finishCronRunReceipt({ handle: replacement, status: "ok", finishedAtMs: 250 });

@@ -24,15 +24,6 @@ const internalAgentTurnFacade = vi.hoisted(() => ({
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
-vi.mock("./agent-turn/internal-facade.runtime.js", () => ({
-  createInternalAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
-    internalAgentTurnFacade.create(options);
-    return {
-      dispatch: internalAgentTurnFacade.dispatch,
-      wait: internalAgentTurnFacade.wait,
-    };
-  },
-}));
 
 type ServerPluginsModule = typeof import("./server-plugins.js") & {
   clearFallbackGatewayContext: () => void;
@@ -52,6 +43,13 @@ function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestCo
   return {
     label,
     getRuntimeConfig: () => cfg,
+    createAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
+      internalAgentTurnFacade.create(options);
+      return {
+        dispatch: internalAgentTurnFacade.dispatch,
+        wait: internalAgentTurnFacade.wait,
+      };
+    },
   } as unknown as GatewayRequestContext;
 }
 

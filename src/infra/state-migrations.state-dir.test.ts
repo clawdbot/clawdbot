@@ -4,16 +4,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import { hashJson } from "../plugins/installed-plugin-index-hash.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.js";
+} from "./state-migrations.state-dir.js";
 
 async function withStateDirFixture(run: (root: string) => Promise<void>): Promise<void> {
   try {

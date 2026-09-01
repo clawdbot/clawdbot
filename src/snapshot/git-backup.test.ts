@@ -37,6 +37,7 @@ vi.mock("../infra/git-exec.js", async (importOriginal) => {
           signal: null,
           killed: false,
           termination: "exit",
+          timeoutMs: args[2]?.timeoutMs ?? actual.GIT_TIMEOUT_MS,
         };
       }
       return await actual.executeGitCommand(...args);

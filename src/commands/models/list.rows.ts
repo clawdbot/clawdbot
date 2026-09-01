@@ -483,7 +483,7 @@ export async function appendConfiguredProviderRows(params: {
             provider,
             stripSelfProviderModelPrefix(provider, configuredModel.id),
             {
-              manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
+              manifestPlugins: params.context.metadataSnapshot,
             },
           )
         : configuredModel.id;

@@ -325,6 +325,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "share-build"),
     sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
@@ -397,7 +398,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string, buildOutDir: strin
   return {
     name: "control-ui-service-worker-build-id",
     apply: "build",
-    closeBundle() {
+    writeBundle() {
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
@@ -465,7 +466,9 @@ function controlUiAssetManifestPlugin(buildOutDir: string): Plugin {
   return {
     name: "control-ui-asset-manifest",
     apply: "build",
-    closeBundle() {
+    // Rolldown runs writeBundle hooks sequentially; this plugin follows precompression.
+    // closeBundle can run again without an error after a failed build, masking its diagnostic.
+    writeBundle() {
       const assets = collectControlUiAssetManifestEntries(buildOutDir);
       const manifest = {
         version: CONTROL_UI_ASSET_MANIFEST_VERSION,

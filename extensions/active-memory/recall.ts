@@ -322,20 +322,15 @@ async function resolveActiveRecall(
         scheduleTimeoutCleanup();
       }
       const elapsedMs = Date.now() - startedAt;
-      const result: ActiveRecallResult = fallbackHasUsableMemoryResult
-        ? {
-            status: "timeout",
-            elapsedMs,
-            summary: null,
-            searchDebug: fallbackSearchDebug,
-          }
-        : await buildTimeoutRecallResult({
-            elapsedMs,
-            maxSummaryChars: params.config.maxSummaryChars,
-            transcriptSources,
-            subagentPromise,
-            toolsAllow: params.config.toolsAllow,
-          });
+      const result = await buildTimeoutRecallResult({
+        elapsedMs,
+        maxSummaryChars: params.config.maxSummaryChars,
+        transcriptSources,
+        subagentPromise,
+        hasUsableMemoryResult: fallbackHasUsableMemoryResult,
+        searchDebug: fallbackSearchDebug,
+        toolsAllow: params.config.toolsAllow,
+      });
       if (params.config.logging) {
         params.api.logger.info?.(
           `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -432,9 +427,7 @@ async function resolveActiveRecall(
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         transcriptSources,
-        rawReply: partialTimeoutData.rawReply,
-        searchDebug: partialTimeoutData.searchDebug,
-        hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
+        ...partialTimeoutData,
         toolsAllow: params.config.toolsAllow,
       });
       if (params.config.logging) {

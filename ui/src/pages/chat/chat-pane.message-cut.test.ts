@@ -1,84 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import "./chat-pane.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-
-type TestChatPane = HTMLElement & {
-  connectedClient: GatewayBrowserClient | null;
-  connectionGeneration: number;
-  context: ApplicationContext;
-  forkFromMessage: (entryId: string) => Promise<void>;
-  onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
-  paneId: string;
-  state: ChatPageHost;
-};
-
-function createSessionContext(
-  client: GatewayBrowserClient,
-  sessions: SessionCapability,
-): ApplicationContext {
-  return {
-    gateway: {
-      snapshot: {
-        client,
-        phase: "connected",
-        hello: { features: { methods: [] } },
-      },
-    },
-    agents: { state: { agentsList: null } },
-    sessions,
-  } as unknown as ApplicationContext;
-}
-
-function createTestChatPane(params: { client: GatewayBrowserClient; sessions: SessionCapability }) {
-  const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
-  Object.defineProperty(pane, "isConnected", {
-    configurable: true,
-    value: true,
-  });
-  const requestUpdate = vi.fn();
-  const state = {
-    agentsList: null,
-    assistantAgentId: null,
-    chatError: null,
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatAttachments: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    client: params.client,
-    connected: true,
-    connectionEpoch: 4,
-    hello: null,
-    lastError: null,
-    requestUpdate,
-    sessionKey: "agent:main:current",
-    sessions: params.sessions,
-    sessionsError: null,
-    sessionsLoading: false,
-    sidebarContent: null,
-    sidebarLayout: { columns: [] },
-    // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    chatScrollGeneration: 0,
-    chatScrollCommitCleanup: null,
-    handleChatScroll: vi.fn(),
-    handleChatDraftChange: vi.fn(),
-    renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-  } as unknown as ChatPageHost;
-  pane.context = createSessionContext(params.client, params.sessions);
-  pane.state = state;
-  pane.connectedClient = params.client;
-  pane.connectionGeneration = 4;
-  return { pane, state };
-}
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane message cuts", () => {
   it("restores forked prompt attachments into the new session composer", async () => {
@@ -153,23 +78,83 @@ describe("chat pane message cuts", () => {
     expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
   });
 
-  it("does not paint a stale fork error after the selected session changes", async () => {
-    let rejectFork!: (error: Error) => void;
-    const forked = new Promise<never>((_resolve, reject) => {
-      rejectFork = reject;
-    });
+  it("does not navigate or seed a draft after leaving and returning to the retained source", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText: string }>();
     const sessions = {
-      forkAtMessage: vi.fn(() => forked),
+      forkAtMessage: vi.fn(() => forked.promise),
     } as unknown as SessionCapability;
     const client = {} as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions });
+    pane.sessionKey = state.sessionKey;
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
 
-    const pending = pane.forkFromMessage("user-entry");
-    state.sessionKey = "agent:main:replacement";
-    rejectFork(new Error("stale fork failed"));
+    try {
+      const pending = pane.forkFromMessage("user-entry");
+      // A -> B -> A retains A's component, session key, and connection.
+      pane.presented = false;
+      pane.presented = true;
+      state.chatMessage = "newer source draft";
+      forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
 
-    await pending;
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
+      await pending;
+      expect(navigate).not.toHaveBeenCalled();
+      expect(
+        consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
+      ).toBeNull();
+      expect(state.sessionKey).toBe("agent:main:current");
+      expect(state.chatMessage).toBe("newer source draft");
+    } finally {
+      pane.presented = false;
+    }
+  });
+
+  it.each([
+    { presentation: "hidden", returnToSource: false },
+    { presentation: "shown again", returnToSource: true },
+  ])(
+    "does not paint a stale fork error in a retained source that is $presentation",
+    async ({ returnToSource }) => {
+      const forked = createDeferred<never>();
+      const sessions = {
+        forkAtMessage: vi.fn(() => forked.promise),
+      } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+      pane.sessionKey = state.sessionKey;
+
+      try {
+        const pending = pane.forkFromMessage("user-entry");
+        pane.presented = false;
+        if (returnToSource) {
+          pane.presented = true;
+        }
+        forked.reject(new Error("stale fork failed"));
+
+        await pending;
+        expect(state.lastError).toBeNull();
+        expect(state.chatError).toBeNull();
+      } finally {
+        pane.presented = false;
+      }
+    },
+  );
+
+  it("shows a current fork error after the retained source is presented again", async () => {
+    const sessions = {
+      forkAtMessage: vi.fn().mockRejectedValue(new Error("current fork failed")),
+    } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    pane.sessionKey = state.sessionKey;
+
+    try {
+      pane.presented = false;
+      pane.presented = true;
+      await pane.forkFromMessage("user-entry");
+
+      expect(state.lastError).toBe("current fork failed");
+      expect(state.chatError).toBe("current fork failed");
+    } finally {
+      pane.presented = false;
+    }
   });
 });

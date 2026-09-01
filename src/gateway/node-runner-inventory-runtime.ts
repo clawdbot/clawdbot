@@ -7,6 +7,17 @@ import {
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 
+type NodeWorkerHostClientId =
+  | typeof GATEWAY_CLIENT_IDS.NODE_HOST
+  | typeof GATEWAY_CLIENT_IDS.MACOS_APP;
+
+/** Both first-party hosts run the shared node runtime without changing client identity. */
+export function isNodeWorkerHostClientId(
+  clientId: string | undefined,
+): clientId is NodeWorkerHostClientId {
+  return clientId === GATEWAY_CLIENT_IDS.NODE_HOST || clientId === GATEWAY_CLIENT_IDS.MACOS_APP;
+}
+
 export type NodeWorkerBundleStatusObservation = {
   bundleHash: string;
   status: NodeWorkerBundleStatus;
@@ -40,7 +51,7 @@ export type NodeWorkerSupervisorNodeProof = {
   connId: string;
   pairingIdentity: string;
   pairingGeneration: string;
-  clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
+  clientId: NodeWorkerHostClientId;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
   workerHost: Extract<NodeWorkerHostDeclaration, { enabled: true }>;
@@ -125,7 +136,7 @@ export function resolveNodeWorkerSupervisorProof(
     !declaration ||
     !node.pairingIdentity ||
     !node.pairingGeneration ||
-    node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
+    !isNodeWorkerHostClientId(node.clientId) ||
     node.clientMode !== "node" ||
     declaration.nodeId !== node.nodeId ||
     declaration.pairingIdentity !== node.pairingIdentity ||
@@ -142,7 +153,7 @@ export function resolveNodeWorkerSupervisorProof(
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
     pairingGeneration: node.pairingGeneration,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
@@ -164,7 +175,9 @@ export function resolveNodeRunnerInventoryIssue(
     declaration.pairingIdentity === node.pairingIdentity &&
     declaration.pairingGeneration !== undefined &&
     declaration.pairingGeneration === node.pairingGeneration &&
-    declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    isNodeWorkerHostClientId(node.clientId) &&
+    declaration.clientId === node.clientId &&
+    node.clientMode === "node" &&
     declaration.clientMode === "node" &&
     declaration.protocolFeatures.length === 1 &&
     declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE

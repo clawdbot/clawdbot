@@ -257,7 +257,6 @@ const legacyConfigMigrationForTest = await vi.hoisted(async () => {
   let partiallyValidOverride: boolean | undefined;
 
   return {
-    migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
       const partiallyValid = partiallyValidOverride;
@@ -730,11 +729,11 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
   };
 
   return {
-    resolveSingleAccountKeysToMove: resolveKeys,
     resolveSingleAccountPromotion: (params: {
       channelKey: string;
       channel: Record<string, unknown>;
     }) => ({
+      kind: "promote",
       keysToMove: resolveKeys(params),
       shouldDeferPromotion:
         !Object.hasOwn(declaredSingleAccountKeys, params.channelKey) &&
@@ -1383,43 +1382,6 @@ vi.mock("./doctor-config-preflight.js", async () => {
     return process.env.OPENCLAW_CONFIG_PATH || pathLocal.join(stateDir, "openclaw.json");
   }
 
-  function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
-    const channels =
-      cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
-        ? (cfg.channels as Record<string, unknown>)
-        : null;
-    const discord =
-      channels?.discord && typeof channels.discord === "object" && !Array.isArray(channels.discord)
-        ? (channels.discord as Record<string, unknown>)
-        : null;
-    if (
-      !discord ||
-      (!("streamMode" in discord) &&
-        typeof discord.streaming !== "boolean" &&
-        typeof discord.streaming !== "string")
-    ) {
-      return cfg;
-    }
-    const next = structuredClone(cfg);
-    const nextDiscord = ((next.channels as Record<string, unknown> | undefined)?.discord ??
-      {}) as Record<string, unknown>;
-    const nextStreaming =
-      nextDiscord.streaming && typeof nextDiscord.streaming === "object"
-        ? { ...(nextDiscord.streaming as Record<string, unknown>) }
-        : {};
-    if (!("mode" in nextStreaming)) {
-      nextStreaming.mode =
-        nextDiscord.streamMode === "block"
-          ? "partial"
-          : nextDiscord.streaming === false
-            ? "off"
-            : "partial";
-    }
-    delete nextDiscord.streamMode;
-    nextDiscord.streaming = nextStreaming;
-    return next;
-  }
-
   return {
     runDoctorConfigPreflight: vi.fn(async (options: unknown) => {
       runDoctorConfigPreflightOptionsMock(options);
@@ -1465,30 +1427,6 @@ vi.mock("./doctor-config-preflight.js", async () => {
           baseConfig: injectedEffectiveConfig,
         };
       }
-      if (injected?.preflightMode === "issues") {
-        const legacyIssues = findLegacyConfigIssues(
-          parsed,
-          parsed,
-          listPluginDoctorLegacyConfigRules({
-            pluginIds: collectRelevantDoctorPluginIds(parsed),
-          }),
-        );
-        return {
-          snapshot: {
-            exists,
-            path: configPath,
-            parsed,
-            agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
-            sourceConfigBeforeMigrations,
-            config: injectedEffectiveConfig,
-            sourceConfig: injectedEffectiveConfig,
-            valid: legacyIssues.length === 0,
-            warnings: [],
-            legacyIssues,
-          },
-          baseConfig: injectedEffectiveConfig,
-        };
-      }
       const legacyIssues = findLegacyConfigIssues(
         parsed,
         parsed,
@@ -1496,8 +1434,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           pluginIds: collectRelevantDoctorPluginIds(parsed),
         }),
       );
-      const compat = legacyConfigMigrationForTest.migrate(parsed);
-      const effectiveConfig = normalizeDiscordStreamingCompat(compat.next ?? parsed);
+      // The read path does not apply Doctor-only repairs before the migration owner runs.
       return {
         snapshot: {
           exists,
@@ -1505,14 +1442,13 @@ vi.mock("./doctor-config-preflight.js", async () => {
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
           sourceConfigBeforeMigrations,
-          config: effectiveConfig,
-          // The reader resolves source values but leaves legacy repairs to doctor.
+          config: injectedEffectiveConfig,
           sourceConfig: injectedEffectiveConfig,
           valid: legacyIssues.length === 0,
           warnings: [],
           legacyIssues,
         },
-        baseConfig: effectiveConfig,
+        baseConfig: injectedEffectiveConfig,
       };
     }),
   };
@@ -1582,13 +1518,6 @@ vi.mock("./doctor-config-analysis.js", () => {
     }),
   };
 });
-
-vi.mock("./doctor-state-migrations.js", () => ({
-  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
-  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
-  migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
-}));
 
 function resetTerminalNoteMock() {
   terminalNoteMock.mockClear();
