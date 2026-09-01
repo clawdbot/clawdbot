@@ -429,7 +429,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     }
   });
 
-  it("uses a profile-only credential for a provider-owned embedding destination", async () => {
+  it("does not select a profile when a provider-owned destination omits apiKey", async () => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-only-"));
     const profileId = "tenant-embeddings:profile-only";
     try {
@@ -469,7 +469,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
 
       await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-profile-only-key");
+      expect(requests[0]?.headers.authorization).toBeUndefined();
     } finally {
       closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
       closeOpenClawAgentDatabases(agentDir);

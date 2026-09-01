@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const repoRoot = process.env.OPENCLAW_PROOF_REPO?.trim() || path.resolve(import.meta.dirname, "..");
+const repoRoot = path.resolve(import.meta.dirname, "..");
 const { openAICompatibleEmbeddingProviderAdapter } = await import(
   pathToFileURL(path.join(repoRoot, "src/plugins/openai-compatible-embedding-provider.ts")).href
 );
@@ -18,17 +18,15 @@ const { closeOpenClawAgentDatabases } = await import(
 
 const profileId = "tenant-embeddings:profile-only";
 const profileKey = "synthetic-profile-only-key";
-const negativeControl = process.env.OPENCLAW_PROOF_MODE === "explicit-empty";
-const expectedAuthorization = process.env.OPENCLAW_PROOF_EXPECTED?.trim() || "profile";
 let server: Server | undefined;
-let receivedHeaders: IncomingHttpHeaders | undefined;
+const requests: Array<{ headers: IncomingHttpHeaders }> = [];
 const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-repro-134700-"));
 
 try {
   server = createServer((request, response) => {
     request.resume();
     request.once("end", () => {
-      receivedHeaders = request.headers;
+      requests.push({ headers: request.headers });
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ data: [{ index: 0, embedding: [0.25, 0.5, 0.75] }] }));
     });
@@ -55,7 +53,7 @@ try {
     agentDir,
   );
 
-  const result = await openAICompatibleEmbeddingProviderAdapter.create({
+  const createOptions = (apiKey?: string) => ({
     config: {
       auth: {
         profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } },
@@ -66,7 +64,7 @@ try {
           "tenant-embeddings": {
             api: "openai-completions",
             baseUrl,
-            ...(negativeControl ? { apiKey: "" } : {}),
+            ...(apiKey === undefined ? {} : { apiKey }),
             models: [],
           },
         },
@@ -76,24 +74,38 @@ try {
     provider: "tenant-embeddings",
     model: "tenant-embeddings/fixture-model",
   });
-  const embedding = await result.provider?.embed("hello");
-  const authorization = receivedHeaders?.authorization;
-  const authorizationClass =
-    authorization === `Bearer ${profileKey}` ? "profile" : authorization ? "other" : "missing";
-  const observation = `mode=${negativeControl ? "explicit-empty" : "profile-only"} authorization=${authorizationClass} embedding=${embedding?.length ?? 0}`;
-  console.log(observation);
-  if (authorizationClass !== expectedAuthorization) {
-    console.error(`${observation} expected=${expectedAuthorization}`);
-    process.exitCode = 1;
+
+  const omittedKey = await openAICompatibleEmbeddingProviderAdapter.create(createOptions());
+  await omittedKey.provider.embed("hello");
+
+  const explicitProfile = await openAICompatibleEmbeddingProviderAdapter.create(
+    createOptions(profileId),
+  );
+  await explicitProfile.provider.embed("hello");
+
+  const omittedAuthorization = requests[0]?.headers.authorization;
+  const explicitAuthorization = requests[1]?.headers.authorization;
+  console.log(`omitted-apiKey authorization=${omittedAuthorization ? "present" : "missing"}`);
+  console.log(
+    `explicit-profile-reference authorization=${
+      explicitAuthorization === `Bearer ${profileKey}` ? "profile" : "other"
+    }`,
+  );
+  if (omittedAuthorization !== undefined) {
+    throw new Error("omitted apiKey unexpectedly sent Authorization");
+  }
+  if (explicitAuthorization !== `Bearer ${profileKey}`) {
+    throw new Error("explicit profile reference did not send its stored credential");
   }
 } finally {
   closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
   closeOpenClawAgentDatabases(agentDir);
   await rm(agentDir, { force: true, recursive: true });
   server?.closeAllConnections();
-  if (server) {
+  const runningServer = server;
+  if (runningServer) {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
+      runningServer.close((error) => (error ? reject(error) : resolve()));
     });
   }
 }
