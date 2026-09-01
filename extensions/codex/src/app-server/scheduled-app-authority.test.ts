@@ -409,9 +409,9 @@ describe("scheduled Codex app authority", () => {
           open_world_enabled: false,
           approvals_reviewer: "user",
           tools: {
-            list: { approval_mode: "prompt" },
-            edit: { approval_mode: "prompt" },
-            newly_added: { approval_mode: "prompt" },
+            list: { enabled: true, approval_mode: "prompt" },
+            edit: { enabled: true, approval_mode: "prompt" },
+            newly_added: { enabled: true, approval_mode: "prompt" },
           },
         },
       },
@@ -491,7 +491,7 @@ describe("scheduled Codex app authority", () => {
     );
 
     expect(intersected.configPatch).toMatchObject({
-      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+      apps: { calendar: { tools: { edit: { enabled: true, approval_mode: expected } } } },
     });
   });
 

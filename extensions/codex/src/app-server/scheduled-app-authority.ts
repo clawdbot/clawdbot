@@ -560,6 +560,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
         return [
           toolName,
           {
+            enabled: true,
             approval_mode: intersectToolApprovalMode(
               intersectToolApprovalMode(capturedMode, storedAppCeiling),
               intersectToolApprovalMode(
