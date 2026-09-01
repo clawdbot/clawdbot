@@ -327,7 +327,8 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
       const ownsRollback = () =>
         createdTabs.get(tab.id) === created &&
         !deniedTabIds.has(tab.id) &&
-        epochIsCurrent(tab.id, created.epoch);
+        groupRevocations.isCreationCurrent(created) &&
+        epochMatches(tab.id, created.epoch);
       try {
         if (ownsRollback()) {
           const current = await chromeApi.tabs.get(tab.id);
@@ -514,9 +515,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
   async function inspectTab(tabId, epoch = capture(tabId)) {
     if (!isValidTabId(tabId)) {
       return { accessible: false, eligible: false, denied: false, reason: "missing", tab: null };
-    }
-    if (!enabled || transitioning || tabIsRevoking(tabId)) {
-      return { accessible: false, eligible: false, denied: false, reason: "revoked", tab: null };
     }
     if (!epochIsCurrent(tabId, epoch)) {
       return { accessible: false, eligible: false, denied: false, reason: "revoked", tab: null };
