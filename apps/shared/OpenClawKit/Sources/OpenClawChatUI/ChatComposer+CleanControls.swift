@@ -67,7 +67,6 @@ extension OpenClawChatComposer {
         } label: {
             CompactChatAttachmentLabel()
         }
-        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Composer options")
@@ -108,7 +107,6 @@ extension OpenClawChatComposer {
                 CleanChatContextUsageLabel(usage: usage)
             }
             #if os(macOS)
-            .menuStyle(.borderlessButton)
             .fixedSize()
             #endif
             .menuIndicator(.hidden)
@@ -140,16 +138,18 @@ extension OpenClawChatComposer {
     private func cleanInlineControls(compactModel: Bool) -> some View {
         HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
             self.cleanContextUsageMenu
-            if !self.cleanShowsCameraFlip {
-                #if os(macOS)
-                if self.viewModel.showsModelPicker {
-                    self.cleanInlineModelPicker(compact: compactModel)
-                }
-                #else
+            // Camera switching only displaces settings in the compact iOS footer.
+            #if os(macOS)
+            if self.viewModel.showsModelPicker {
                 self.cleanInlineModelPicker(compact: compactModel)
-                #endif
+            }
+            self.cleanInlineEffortMenu
+            #else
+            if !self.cleanShowsCameraFlip {
+                self.cleanInlineModelPicker(compact: compactModel)
                 self.cleanInlineEffortMenu
             }
+            #endif
             self.cleanCaptureAndPrimaryControls
         }
     }
@@ -189,9 +189,12 @@ extension OpenClawChatComposer {
                 }
             }
             .labelsHidden()
-            .disabled(
-                !self.viewModel.composerModelMutationAvailable ||
-                    self.viewModel.isUpdatingSessionSettings)
+            #if os(macOS)
+                .pickerStyle(.inline)
+            #endif
+                .disabled(
+                    !self.viewModel.composerModelMutationAvailable ||
+                        self.viewModel.isUpdatingSessionSettings)
             #if os(macOS)
             if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
                 Divider()
@@ -212,7 +215,6 @@ extension OpenClawChatComposer {
         #if os(macOS)
             // Mac session settings remain editable during a response; pinning is
             // local and stays available while a Gateway settings save is pending.
-                .menuStyle(.borderlessButton)
                 .fixedSize()
         #else
                 .disabled(
@@ -238,6 +240,7 @@ extension OpenClawChatComposer {
                 .truncationMode(.middle)
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .semibold))
+                .accessibilityHidden(true)
         }
         .font(OpenClawChatTypography.captionSemiBold)
         .foregroundStyle(.secondary)
@@ -318,7 +321,6 @@ extension OpenClawChatComposer {
             !self.viewModel.composerEffortMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings)
         #if os(macOS)
-            .menuStyle(.borderlessButton)
             .fixedSize()
         #else
             .disabled(self.viewModel.hasActiveRunForComposerSettings)

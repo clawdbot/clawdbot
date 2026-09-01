@@ -622,6 +622,9 @@ struct OpenClawChatComposer: View {
                 Spacer(minLength: 0)
                 self.cleanTrailingControls
             }
+            // Native borderless menus discard the custom context ring and effort dial.
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
             .padding(.bottom, CleanChatComposerMetrics.footerBlockInset)
         }
