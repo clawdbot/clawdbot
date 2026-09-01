@@ -253,9 +253,7 @@ export async function applyPersistentOperation(params: {
   runtime.log(`[openclaw] running: ${auditOperation}`);
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
-  const assertPersistentApply = opts.beforePersistentApply
-    ? () => opts.beforePersistentApply?.()
-    : undefined;
+  const assertPersistentApply = opts.beforePersistentApply;
   const commit: PersistentApplyContext["commit"] = async (effect) => {
     assertPersistentApply?.();
     return await effect();
