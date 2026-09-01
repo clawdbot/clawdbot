@@ -19,6 +19,7 @@ import {
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
 import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,
@@ -1078,6 +1079,87 @@ describe("runDoctorSessionSqlite", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    {
+      name: "identical",
+      repeated: { role: "assistant", content: "same replay" },
+      archived: true,
+    },
+    {
+      name: "divergent",
+      repeated: { role: "assistant", content: "different replay" },
+      archived: false,
+    },
+  ])(
+    "handles a $name replay against an existing destination and retry",
+    async ({ repeated, archived }) => {
+      const first = {
+        type: "message",
+        id: "reply",
+        parentId: "root",
+        message: { role: "assistant", content: "same replay" },
+      };
+      const sourceEvents = [
+        { type: "session", id: "session-1", version: 3 },
+        {
+          type: "message",
+          id: "root",
+          parentId: null,
+          message: { role: "user", content: "root" },
+        },
+        first,
+        { ...first, message: repeated },
+      ];
+      const store = createLegacyStore({
+        transcriptLines: sourceEvents.map((event) => JSON.stringify(event)),
+      });
+      await importSqliteSessionRows({
+        agentId: "main",
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+        entry: { sessionId: "session-1", updatedAt: 1000 },
+        readTranscriptEvents: (append) => sourceEvents.slice(0, 3).forEach(append),
+      });
+
+      const run = () =>
+        runDoctorSessionSqlite({
+          env: store.env,
+          mode: "import",
+          store: store.storePath,
+        });
+      const imported = await run();
+      expect(fs.existsSync(store.transcriptPath)).toBe(!archived);
+      expect(
+        readMigrationManifest(imported.migrationRun?.manifestPath).targets[0]?.completedMoves.some(
+          (item) => item.kind === "transcript",
+        ),
+      ).toBe(archived);
+      expect(
+        imported.targets[0]?.issues.some(
+          (issue) => issue.code === "sqlite_transcript_count_mismatch",
+        ),
+      ).toBe(!archived);
+      expect(
+        loadTranscriptEventsSync({
+          agentId: "main",
+          env: store.env,
+          sessionId: "session-1",
+        }).map((event) => (event as { id?: string }).id),
+      ).toEqual(["session-1", "root", "reply"]);
+
+      if (!archived) {
+        const retried = await run();
+        expect(
+          retried.targets[0]?.issues.some(
+            (issue) => issue.code === "sqlite_transcript_count_mismatch",
+          ),
+        ).toBe(true);
+        expect(fs.existsSync(store.transcriptPath)).toBe(true);
+      }
+    },
+  );
 
   it("retains a recreated archive while resuming an interrupted unlink", async () => {
     const { store, archivePath } = await createVerifiedRecoveryStore();
