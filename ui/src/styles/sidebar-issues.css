@@ -118,15 +118,6 @@
   min-height: 28px;
 }
 
-.sidebar-issues-panel__ask {
-  flex: 0 0 32px;
-}
-
-.sidebar-issues-panel__ask svg {
-  width: 20px;
-  height: 20px;
-}
-
 .sidebar-issues-panel__mobile-close {
   display: none;
 }
@@ -144,29 +135,6 @@
 
 .shell--mobile-nav .sidebar-issues-panel__mobile-close:active {
   transform: scale(0.97);
-}
-
-.shell--mobile-nav .sidebar-issues-panel__ask {
-  position: absolute;
-  z-index: 3;
-  inset-inline-end: 12px;
-  inset-block-end: calc(12px + env(safe-area-inset-bottom, 0px));
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-sm);
-}
-
-.shell--mobile-nav .sidebar-issues-panel__ask:hover,
-.shell--mobile-nav .sidebar-issues-panel__ask:focus-visible {
-  background: var(--bg-hover);
-}
-
-.shell--mobile-nav .sidebar-issues-panel__list {
-  padding-block-end: 58px;
-  scroll-padding-block-end: 58px;
 }
 
 .shell--mobile-nav .sidebar-issues-panel__dismiss {

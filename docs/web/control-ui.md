@@ -186,7 +186,7 @@ When your connection is bound to an authenticated Gateway profile, theme, theme 
 
 ## OpenClaw system care
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Toggle it from anywhere with the lobster button in the sidebar footer or the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
 
 If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
 
