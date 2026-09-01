@@ -1838,7 +1838,7 @@ src/agents/embedded-agent-runner/thinking.ts	25
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	5
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	9
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
-src/agents/embedded-agent-runner/tool-result-truncation.ts	23
+src/agents/embedded-agent-runner/tool-result-truncation.ts	22
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
