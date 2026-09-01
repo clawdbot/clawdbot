@@ -25,6 +25,7 @@ import {
   type JsonObject,
   isJsonObject,
 } from "./protocol.js";
+import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
@@ -51,7 +52,6 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
-  resolveReasoningEffort,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
@@ -1388,7 +1388,12 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("## Skill Workshop");
     expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
     expect(instructions).toContain("`skill_workshop`");
-    expect(instructions).toContain("Other generated work = pending proposal");
+    expect(instructions).toContain(
+      "unsolicited improvements stay pending proposals when supported",
+    );
+    expect(instructions).toContain(
+      "Publication-only create/update requires an explicit user request",
+    );
     expect(instructions).toContain("only explicit user ask");
   });
 
@@ -5759,7 +5764,7 @@ describe("Codex app-server thread lifecycle timing", () => {
   });
 });
 
-describe("resolveReasoningEffort (#71946)", () => {
+describe("resolveCodexAppServerReasoningEffort (#71946)", () => {
   const standardEfforts = ["low", "medium", "high", "xhigh"];
   const maxEfforts = [...standardEfforts, "max"];
   const ultraEfforts = [...maxEfforts, "ultra"];
@@ -5774,56 +5779,77 @@ describe("resolveReasoningEffort (#71946)", () => {
     { requested: "low", supported: ["medium", "high", "xhigh"], expected: "medium" },
     { requested: "max", supported: ["medium", "high", "xhigh"], expected: "xhigh" },
     { requested: "max", supported: maxEfforts, expected: "max" },
-    { requested: "ultra", supported: maxEfforts, expected: "max" },
+    { requested: "ultra", supported: maxEfforts, expected: "ultra" },
     { requested: "ultra", supported: ultraEfforts, expected: "ultra" },
     { requested: "high", supported: ["none", "max"], expected: "max" },
     { requested: "high", supported: ["none"], expected: null },
+    { requested: "high", supported: ["ultra"], expected: null },
   ] as const)(
     "maps $requested to $expected using provider-supported efforts",
     ({ requested, supported, expected }) => {
-      expect(resolveReasoningEffort(requested, "catalog-model", supported)).toBe(expected);
+      expect(
+        resolveCodexAppServerReasoningEffort({
+          thinkLevel: requested,
+          modelId: "catalog-model",
+          supportedReasoningEfforts: supported,
+        }),
+      ).toBe(expected);
     },
   );
 
-  it("preserves legacy compatibility when metadata is unavailable", () => {
-    expect(resolveReasoningEffort("minimal", "gpt-5.5")).toBe("low");
-    expect(resolveReasoningEffort("minimal", "gpt-4o")).toBe("minimal");
-    expect(resolveReasoningEffort("low", "gpt-5.5-pro")).toBe("medium");
-    expect(resolveReasoningEffort("max", "gpt-5.5-pro")).toBe("xhigh");
-    expect(resolveReasoningEffort("max", "gpt-5.6-sol")).toBeNull();
-    expect(resolveReasoningEffort("ultra", "gpt-5.6-sol")).toBeNull();
+  it.each([
+    { thinkLevel: "minimal", modelId: "gpt-5.5", expected: "low" },
+    { thinkLevel: "minimal", modelId: "gpt-4o", expected: "minimal" },
+    { thinkLevel: "low", modelId: "gpt-5.5-pro", expected: "medium" },
+    { thinkLevel: "max", modelId: "gpt-5.5-pro", expected: "xhigh" },
+    { thinkLevel: "max", modelId: "gpt-5.6-sol", expected: null },
+    { thinkLevel: "ultra", modelId: "gpt-5.6-sol", expected: "ultra" },
+  ] as const)("maps $thinkLevel for $modelId without effort metadata", (params) => {
+    expect(resolveCodexAppServerReasoningEffort(params)).toBe(params.expected);
   });
 
   it("omits non-effort think levels", () => {
-    expect(resolveReasoningEffort("off", "catalog-model", ultraEfforts)).toBeNull();
-    expect(resolveReasoningEffort("adaptive", "catalog-model", ultraEfforts)).toBeNull();
+    for (const thinkLevel of ["off", "adaptive"] as const) {
+      expect(
+        resolveCodexAppServerReasoningEffort({
+          thinkLevel,
+          modelId: "catalog-model",
+          supportedReasoningEfforts: ultraEfforts,
+        }),
+      ).toBeNull();
+    }
     expect(
-      resolveReasoningEffort("adaptive", "catalog-model", ["none", ...ultraEfforts]),
+      resolveCodexAppServerReasoningEffort({
+        thinkLevel: "adaptive",
+        modelId: "catalog-model",
+        supportedReasoningEfforts: ["none", ...ultraEfforts],
+      }),
     ).toBeNull();
   });
 });
 
 describe("native Codex Ultra turn mapping", () => {
   it.each([
-    { modelId: "gpt-5.6-sol", expected: "max" },
-    { modelId: "gpt-5.6-terra", expected: "max" },
-    { modelId: "gpt-5.6-luna", expected: "max" },
+    { modelId: "gpt-5.6-sol", requested: "ultra", expected: "ultra" },
+    { modelId: "gpt-5.6-terra", requested: "ultra", expected: "ultra" },
+    { modelId: "gpt-5.6-luna", requested: "max", expected: "max" },
   ] as const)(
-    "maps Ultra to $expected for $modelId with direct OpenAI API metadata",
-    ({ modelId, expected }) => {
+    "preserves resolved $requested for $modelId with direct OpenAI API metadata",
+    ({ modelId, requested, expected }) => {
       const params = createAttemptParams({
         provider: "openai",
         modelId,
         authProfileId: "openai:api-key",
         authProfileType: "api_key",
       });
-      params.thinkLevel = "ultra" as EmbeddedRunAttemptParams["thinkLevel"];
+      params.thinkLevel = requested;
+      const compat: ModelCompatConfig = {
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      };
       params.model = {
         ...createCodexTestModel("openai"),
         id: modelId,
-        compat: {
-          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-        } as never,
+        compat,
       };
 
       const request = buildTurnStartParams(params, {
@@ -5838,15 +5864,16 @@ describe("native Codex Ultra turn mapping", () => {
     },
   );
 
-  it("lets authoritative app-server model/list metadata override the fallback", () => {
+  it("preserves resolved Ultra independently of scalar reasoning presets", () => {
     const params = createAttemptParams({ provider: "codex", modelId: "gpt-5.6-sol" });
-    params.thinkLevel = "ultra" as EmbeddedRunAttemptParams["thinkLevel"];
+    params.thinkLevel = "ultra";
+    const compat: ModelCompatConfig = {
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    };
     params.model = {
       ...createCodexTestModel("codex"),
       id: "gpt-5.6-sol",
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-      } as never,
+      compat,
     };
 
     const request = buildTurnStartParams(params, {
@@ -5855,8 +5882,8 @@ describe("native Codex Ultra turn mapping", () => {
       appServer: createAppServerOptions() as never,
     });
 
-    expect(request.effort).toBe("max");
-    expect(request.collaborationMode?.settings.reasoning_effort).toBe("max");
+    expect(request.effort).toBe("ultra");
+    expect(request.collaborationMode?.settings.reasoning_effort).toBe("ultra");
     expect(request).not.toHaveProperty("multiAgentMode");
   });
 });

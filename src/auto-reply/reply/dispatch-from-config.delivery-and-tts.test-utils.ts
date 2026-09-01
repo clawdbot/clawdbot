@@ -93,6 +93,74 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it.each([
+    { name: "channel-owned final", outcomes: ["channel_transform"], fallback: false },
+    { name: "ordinary invisible final", outcomes: ["no_visible_result"], fallback: true },
+    {
+      name: "later invisible final",
+      outcomes: ["channel_transform", "no_visible_result"],
+      fallback: true,
+    },
+    {
+      name: "later cancelled final",
+      outcomes: ["channel_transform", "cancelled"],
+      fallback: true,
+    },
+    {
+      name: "later pre-send failure",
+      outcomes: ["channel_transform", "failed"],
+      fallback: true,
+    },
+  ])("preserves post-hook suppression without masking $name", async ({ outcomes, fallback }) => {
+    setNoAbort();
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: (payload) => {
+        if (payload.text === "cancelled") {
+          return null;
+        }
+        if (payload.text === "failed") {
+          throw new Error("pre-send failure");
+        }
+        return { ...payload, text: `checked:${payload.text}` };
+      },
+      deliver: async (payload) => {
+        delivered.push(payload);
+        return {
+          visibleReplySent: false,
+          suppression: {
+            reason:
+              payload.text === "checked:channel_transform"
+                ? "channel_transform"
+                : "no_visible_result",
+          },
+        };
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:main:discord:direct:owner",
+        CommandSource: "native",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => outcomes.map((text) => ({ text }))),
+    });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(
+      delivered.filter((payload) => payload.text === "checked:channel_transform"),
+    ).toHaveLength(outcomes.includes("channel_transform") ? 1 : 0);
+    expect(delivered.some((payload) => payload.text?.includes("No reply was generated"))).toBe(
+      fallback,
+    );
+    expect(result.noVisibleReplyFallbackEligible === true).toBe(fallback);
+    expect(receipt?.anyVisibleDelivered).toBe(false);
+  });
+
   it("does not dispatch a settled final reply after its session writer is replaced", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

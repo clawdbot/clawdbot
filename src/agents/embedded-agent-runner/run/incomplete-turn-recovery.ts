@@ -15,10 +15,9 @@ import {
   resolveCurrentAttemptAssistant,
 } from "./attempt-terminal-evidence.js";
 import {
+  classifyAssistantTurn,
   hasOnlySilentAssistantReply,
   hasPositiveOutputTokenUsage,
-  isEmptyResponseAssistantTurn,
-  isNonVisibleAssistantTurnEligibleForSilentReply,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
   isUnsignedThinkingOnlyAssistantTurn,
@@ -144,10 +143,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
     return false;
   }
-  return isNonVisibleAssistantTurnEligibleForSilentReply({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
+  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
 }
 
 /**
@@ -338,10 +334,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt,
-    }),
+    classifyAssistantTurn(params).emptyResponse,
   );
   if (
     params.payloadCount !== 0 ||
@@ -397,16 +390,12 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  const assistantState = classifyAssistantTurn(params);
+  if (!assistantState.emptyResponse) {
     return null;
   }
 
-  const assistant = resolveCurrentAttemptAssistant(params.attempt) ?? null;
+  const assistant = assistantState.assistant ?? null;
   if (
     assistant?.stopReason === "stop" &&
     isOllamaIncompleteTurnProvider(params.provider) &&

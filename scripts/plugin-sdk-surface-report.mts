@@ -199,7 +199,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: bounded provider streams and read-only SecretRef resolution.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
       // +1: restore the shipped read-only conversation-binding inspection facade.
-      148,
+      // +1: canonical node CLI owners for plugin-provided node commands.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -335,8 +336,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: bounded display-only error diagnostic attachment and rendering.
       // +1: shared presentation delivery policy for core and channel plugins.
       // +2: shipped conversation-binding inspection function and result type.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      4365,
+      4369,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -447,8 +449,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: bounded display-only error diagnostic attachment and rendering.
       // +1: shared presentation delivery policy for core and channel plugins.
       // +1: shipped read-only conversation-binding inspection function.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      2599,
+      2603,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

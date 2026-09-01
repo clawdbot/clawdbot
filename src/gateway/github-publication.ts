@@ -17,7 +17,10 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { createGitHubPublicationCoordinatorMethods } from "./github-publication-coordinator-methods.js";
+import {
+  createGitHubPublicationCoordinatorMethods,
+  type GitHubPublicationClaimRequest,
+} from "./github-publication-coordinator-methods.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
@@ -29,7 +32,9 @@ import {
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   isGitHubPublicationExecutionOwner as ownsExecution,
+  listGitHubPublicationsForClaim,
   projectGitHubPublicationResult as publicationResult,
+  readGitHubPublicationRequest,
   type GitHubPublicationRow as PublicationRow,
 } from "./github-publication-store.js";
 import type {
@@ -117,25 +122,12 @@ export function createGitHubPublicationCoordinator(params: {
   const readById = (requestId: string): PublicationRow | undefined => {
     ensureSchema();
     const db = openOpenClawStateDatabase().db;
-    return executeSqliteQuerySync(
-      db,
-      publicationDb(db)
-        .selectFrom("github_publication_requests")
-        .selectAll()
-        .where("request_id", "=", requestId),
-    ).rows[0];
+    return readGitHubPublicationRequest(db, { requestId });
   };
 
-  const requestForClaim = async (request: {
-    claim: WorkerSessionTurnClaim;
-    sessionKey: string;
-    agentId: string;
-    idempotencyKey: string;
-    title?: string;
-    body?: string;
-    assertCurrent?: () => void;
-    expectedPublisher?: import("../../packages/gateway-protocol/src/schema/session-github-publication.js").GitHubPublicationPublisher;
-  }): Promise<SessionGitHubPublicationResult> => {
+  const requestForClaim = async (
+    request: GitHubPublicationClaimRequest,
+  ): Promise<SessionGitHubPublicationResult> => {
     ensureSchema();
     request.assertCurrent?.();
     if (!params.placements.validateTurnClaim(request.claim)) {
@@ -219,13 +211,7 @@ export function createGitHubPublicationCoordinator(params: {
           agentId: input.row.agent_id,
         });
         const query = publicationDb(db);
-        const current = executeSqliteQuerySync(
-          db,
-          query
-            .selectFrom("github_publication_requests")
-            .selectAll()
-            .where("request_id", "=", input.row.request_id),
-        ).rows[0];
+        const current = readGitHubPublicationRequest(db, { requestId: input.row.request_id });
         if (
           !current ||
           current.claim_id !== input.claim.claimId ||
@@ -320,18 +306,7 @@ export function createGitHubPublicationCoordinator(params: {
   const prepareClaimWorkspace = async (claim: WorkerSessionTurnClaim): Promise<void> => {
     ensureSchema();
     params.placements.closeWorkerTurnToolAdmission(claim);
-    const db = openOpenClawStateDatabase().db;
-    const rows = executeSqliteQuerySync(
-      db,
-      publicationDb(db)
-        .selectFrom("github_publication_requests")
-        .selectAll()
-        .where("session_id", "=", claim.sessionId)
-        .where("claim_id", "=", claim.claimId)
-        .where("run_id", "=", claim.runId)
-        .where("status", "in", ["requested", "publishing"])
-        .orderBy("created_at_ms"),
-    ).rows;
+    const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
     if (rows.length === 0) {
       return;
     }
@@ -389,18 +364,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const deferClaimPreparation = (claim: WorkerSessionTurnClaim): void => {
     ensureSchema();
-    const db = openOpenClawStateDatabase().db;
-    const rows = executeSqliteQuerySync(
-      db,
-      publicationDb(db)
-        .selectFrom("github_publication_requests")
-        .selectAll()
-        .where("session_id", "=", claim.sessionId)
-        .where("claim_id", "=", claim.claimId)
-        .where("run_id", "=", claim.runId)
-        .where("status", "in", ["requested", "publishing"])
-        .orderBy("created_at_ms"),
-    ).rows;
+    const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
     deferRequests(rows.map((row) => row.request_id));
   };
 

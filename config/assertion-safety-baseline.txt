@@ -716,7 +716,7 @@ extensions/matrix/src/setup-core.ts	8
 extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	10
 extensions/matrix/src/tool-actions.ts	2
-extensions/mattermost/src/channel.ts	11
+extensions/mattermost/src/channel.ts	8
 extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	9
 extensions/mattermost/src/mattermost/directory.ts	2
@@ -754,7 +754,7 @@ extensions/memory-core/src/memory/manager-source-state.ts	2
 extensions/memory-core/src/memory/manager-sync-base.ts	5
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager-watch-ops.ts	4
-extensions/memory-core/src/memory/manager.ts	3
+extensions/memory-core/src/memory/manager.ts	2
 extensions/memory-core/src/memory/project-ranking.ts	1
 extensions/memory-core/src/memory/search-deadline.ts	1
 extensions/memory-core/src/migration/doctor-host-event-sources.ts	1
@@ -1768,7 +1768,7 @@ src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	60
+src/agents/embedded-agent-runner/replay-history.ts	59
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
@@ -2409,7 +2409,6 @@ src/cli/startup-metadata.ts	1
 src/cli/subprocess-exit-code.ts	1
 src/cli/test-runtime-capture.ts	1
 src/cli/update-cli.ts	2
-src/cli/update-cli/plugin-payload-validation.ts	2
 src/cli/update-cli/shared.ts	1
 src/cli/update-cli/update-command-config.ts	6
 src/cli/update-cli/update-command-plugins.ts	1
@@ -2695,7 +2694,7 @@ src/config/sessions/transcript-recent-window.ts	1
 src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
-src/config/sessions/transcript.ts	16
+src/config/sessions/transcript.ts	15
 src/config/sessions/types.ts	1
 src/config/state-dir-dotenv.ts	1
 src/config/talk.ts	1
@@ -2821,7 +2820,7 @@ src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/live-chat-projector.ts	1
 src/gateway/local-request-context.ts	2
-src/gateway/managed-image-attachments.ts	8
+src/gateway/managed-image-attachments.ts	5
 src/gateway/mcp-app-operations.ts	3
 src/gateway/mcp-app-reconstruction.ts	3
 src/gateway/mcp-grant-store.ts	2
@@ -2887,7 +2886,7 @@ src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
-src/gateway/server-methods/chat-transcript-inject.ts	2
+src/gateway/server-methods/chat-transcript-inject.ts	1
 src/gateway/server-methods/chat-transcript-persistence.ts	7
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/chat.ts	2
@@ -3995,7 +3994,7 @@ ui/src/pages/chat/chat-page.ts	1
 ui/src/pages/chat/chat-pane-board.ts	2
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	4
-ui/src/pages/chat/chat-pane-render.ts	4
+ui/src/pages/chat/chat-pane-render.ts	3
 ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-realtime.ts	1
@@ -4034,7 +4033,7 @@ ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-swarm-progress.ts	2
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
-ui/src/pages/chat/components/chat-thread-interactions.ts	6
+ui/src/pages/chat/components/chat-thread-interactions.ts	3
 ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/session-diff-menus.ts	1
 ui/src/pages/chat/components/session-diff-panel.ts	2
@@ -4076,7 +4075,6 @@ ui/src/pages/connection/connection-page.ts	1
 ui/src/pages/connection/view.ts	3
 ui/src/pages/cron/view-runs.ts	3
 ui/src/pages/cron/view.ts	9
-ui/src/pages/custodian/custodian-session-store.ts	1
 ui/src/pages/custodian/custodian-surface.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/debug/view.ts	3

@@ -384,7 +384,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates.ts",
-      "text": "openclaw update status --json openclaw update"
+      "text": "openclaw triage openclaw update status --json openclaw update"
     },
     {
       "count": 1,
@@ -469,6 +469,20 @@
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-detail.ts",
+      "text": "SKILL.md"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-view.ts",
+      "text": "SKILL.md"
     },
     {
       "count": 1,

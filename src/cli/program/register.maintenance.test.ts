@@ -643,6 +643,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     { args: [], options: { json: false, noExport: false, run: false } },
     { args: ["--json", "--no-export"], options: { json: true, noExport: true, run: false } },
     { args: ["--run"], options: { json: false, noExport: false, run: true } },
+    {
+      args: ["--non-interactive", "--update-result", "/tmp/update-failure.json"],
+      options: {
+        json: false,
+        noExport: false,
+        run: false,
+        nonInteractive: true,
+        updateResult: "/tmp/update-failure.json",
+      },
+    },
   ])("forwards triage options for $args", async ({ args, options }) => {
     triageCommand.mockResolvedValue(undefined);
 
@@ -657,6 +667,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(triageCommand).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(
       jsonFailure("triage --json cannot be combined with --run."),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects embedded execution in explicitly non-interactive triage", async () => {
+    await runMaintenanceCli(["triage", "--non-interactive", "--run"]);
+
+    expect(triageCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "triage --non-interactive cannot be combined with --run.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

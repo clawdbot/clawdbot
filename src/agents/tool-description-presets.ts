@@ -20,7 +20,7 @@ export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answe
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
-  "Manage reusable-skill proposals; inspect can select one stored artifact and returns complete content only when it fits the model budget.";
+  "Author reusable skills under the available tool's publication and review policy. Read one complete artifact when it fits the model budget.";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable

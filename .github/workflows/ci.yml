@@ -2492,6 +2492,16 @@ jobs:
           --configLoader runner
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
 
+      - name: Test Control UI media transcript replay with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -3196,19 +3206,17 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            # Top light-run pole (~186s of shard work); oxlint shard
-            # concurrency scales with cores at similar billed core-minutes.
+            # Oxlint shard concurrency scales with observed CPU and memory capacity.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            # Concurrent Knip scans need cores and memory headroom; the wall
-            # clock roughly halves for similar billed core-minutes.
+            # Concurrent Knip scans need CPU and memory headroom.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
-            # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
-            # PR critical path for roughly the same billed core-minutes.
-            runner: blacksmith-16vcpu-ubuntu-2404
+            # The 16 label delivered 4 CPUs/15 GiB; 32 delivered 8 CPUs/31 GiB.
+            # Keep type checks above the constrained-host threshold; see docs/ci.md#blacksmith-runner-capacity.
+            runner: blacksmith-32vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3229,8 +3237,8 @@ jobs:
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            # Older targets build this boundary through their candidate-owned
-            # runner, but cannot produce the v2 cache fingerprint safely.
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -3394,12 +3402,18 @@ jobs:
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
+              hosted_extension_stripe=""
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ]; then
-                # Five dedicated hosted jobs own the aggregated core Programs. Keep
-                # extension preparation in this sixth lane except when the exact
-                # merge-tree release lint job already owns it.
+                # Five dedicated hosted jobs own the aggregated core Programs.
+                # Historical and hybrid targets keep extension ownership here.
                 lint_args=(--only=extensions --only=scripts --threads=1)
                 if [ "$RELEASE_GATE" = "true" ]; then
+                  lint_args=(--only=scripts --threads=1)
+                elif [ "$RUNNER_PROFILE" = "github" ] &&
+                  grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+                  # Six existing hosted lint jobs divide the independently bounded
+                  # extension Programs without running two Programs concurrently.
+                  hosted_extension_stripe="6/6"
                   lint_args=(--only=scripts --threads=1)
                 fi
                 export GOMAXPROCS=2
@@ -3417,11 +3431,17 @@ jobs:
                 # The candidate's older shard runner owns all three source
                 # groups; do not split core stripes it cannot represent.
                 pnpm lint
-              elif [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint "${lint_args[@]}"
               else
-                echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
+                if [ -n "$hosted_extension_stripe" ]; then
+                  node --import tsx scripts/run-oxlint-shards.mts \
+                    --only=extensions --extension-stripe="$hosted_extension_stripe" --threads=1
+                fi
+                if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
+                  pnpm lint "${lint_args[@]}"
+                else
+                  echo "[skip] changed scope cannot affect control-UI i18n catalogs"
+                  node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
+                fi
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -3564,10 +3584,41 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Compute extension boundary input fingerprint
+        id: extension-boundary-inputs
+        if: needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/prepare-extension-package-boundary-artifacts.mts ]]; then
+            fingerprint="$(git rev-parse HEAD)"
+            echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache extension package boundary artifacts for hosted core lint
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate && steps.extension-boundary-inputs.outputs.enabled == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/plugin-sdk/dist
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ steps.extension-boundary-inputs.outputs.fingerprint }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v4-
+
       - name: Run hosted core lint stripe
         env:
           GOMAXPROCS: "2"
           OPENCLAW_LOCAL_CHECK: "0"
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
         run: |
           set -euo pipefail
           # Older candidates run their complete lint set in check-lint; their
@@ -3578,21 +3629,24 @@ jobs:
           fi
           node --import tsx scripts/run-oxlint-shards.mts \
             --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
+          if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
+            grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+            node --import tsx scripts/run-oxlint-shards.mts \
+              --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
+          fi
 
-  # The github/hybrid planner profile stripes the 14 serial core test-type
-  # graphs (~34-42s per graph on either runner class; tsgo saturates a machine
-  # per graph) across four jobs; the check-test-types row keeps the
-  # extensions/root/scripts tail. All-Blacksmith mode keeps the single
-  # 16-vCPU test-types job.
+  # Stripe core test-type graphs across five jobs; each graph can saturate a machine.
+  # check-test-types keeps the extensions/root/scripts tail in github/hybrid mode;
+  # all-Blacksmith mode uses one 32-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-    # Measured 232-269s per stripe on hosted 4-core; hybrid attempt 1 rides
-    # the 8 vCPU class like the compact large rows, retries stay hosted.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
+    # Preserve two graphs per stripe and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -3666,16 +3720,13 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
-            # Light-run critical-path pole: cold runs spend ~100s in nine
-            # parallel plugin-sdk dts builds plus ~58s compiling 122 plugins
-            # at concurrency 6 on 8 vCPUs. Both phases scale with cores at
-            # similar billed core-minutes.
+            # Cold SDK declaration builds and plugin compilation need CPU and memory headroom.
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
-            # Measured 274s on hosted 4-core and ~170s on 4 vCPU; the 8 vCPU
-            # class keeps this off the hybrid critical path.
-            runner: blacksmith-8vcpu-ubuntu-2404
+            # The 8 label delivered only 2 CPUs/8 GiB in the capacity probe.
+            # Request 32 for measured 8 CPUs/31 GiB; see docs/ci.md#blacksmith-runner-capacity.
+            runner: blacksmith-32vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       # The report is dispatch-only; fetching its inputs can otherwise fail skipped PR work.
@@ -3709,8 +3760,8 @@ jobs:
             echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            # Older targets build this boundary through their candidate-owned
-            # runner, but cannot produce the v2 cache fingerprint safely.
+            # Historical targets without this preparer retain their own
+            # declaration setup and do not consume the shared archive.
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -3786,8 +3837,8 @@ jobs:
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
-          # Matches the boundary lane's 32 vCPU runner (cores/2); the
-          # script's default caps at 6 to protect laptops.
+          # Keep the existing CI worker budget; the requested runner label is not a CPU count.
+          # The script's resource-based default caps at 6 outside this explicit override.
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 16
         shell: bash
         run: |

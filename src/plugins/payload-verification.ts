@@ -1,18 +1,26 @@
 // Static payload checks for installed plugins after a core update swaps package files.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
-import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
-import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { pathExists } from "../infra/fs-safe.js";
+import { resolveUserPath } from "../utils.js";
+import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
+import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "./official-external-install-records.js";
+import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
   auditOpenClawPeerDependencyLink,
   resolveOpenClawHostDependency,
-} from "../../plugins/plugin-peer-link.js";
-import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
-import { resolveUserPath } from "../../utils.js";
+} from "./plugin-peer-link.js";
+import type { PluginVerificationFailureReason } from "./runtime-degraded-state.js";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
@@ -27,6 +35,82 @@ export type PluginPayloadSmokeResult = {
 };
 
 const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "marketplace"]);
+
+export type MissingPluginInstallPayload = {
+  pluginId: string;
+  installPath?: string;
+  reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
+};
+
+/** Finds tracked install records whose package payload is absent on disk. */
+export async function collectMissingPluginInstallPayloads(params: {
+  records: Record<string, PluginInstallRecord>;
+  config?: OpenClawConfig;
+  skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<MissingPluginInstallPayload[]> {
+  const env = params.env ?? process.env;
+  const normalizedPluginConfig =
+    params.skipDisabledPlugins && params.config
+      ? normalizePluginsConfig(params.config.plugins)
+      : undefined;
+  const missing: MissingPluginInstallPayload[] = [];
+  for (const [pluginId, record] of Object.entries(params.records).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (!TRACKED_SOURCES.has(record.source)) {
+      continue;
+    }
+    const officialNpmSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      : undefined;
+    const officialClawHubSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      : undefined;
+    if (normalizedPluginConfig && params.config) {
+      const enableState = resolveEffectiveEnableState({
+        id: pluginId,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.config,
+      });
+      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
+        continue;
+      }
+    }
+    const rawInstallPath = normalizeOptionalString(record.installPath);
+    if (!rawInstallPath) {
+      missing.push({ pluginId, reason: "missing-install-path" });
+      continue;
+    }
+    const installPath = resolveUserPath(rawInstallPath, env);
+    if (!(await pathExists(installPath))) {
+      missing.push({ pluginId, installPath, reason: "missing-package-dir" });
+      continue;
+    }
+    const bundlePayload = resolveBundleInstallRecordPayload({ record, installPath });
+    if (bundlePayload.isBundlePayload) {
+      if (await hasNativePackageInstallPayload(installPath)) {
+        continue;
+      }
+      const bundleFailure = validateBundleInstallRecordPayload({
+        pluginId,
+        installPath,
+        record,
+        bundleFormat: bundlePayload.bundleFormat,
+      });
+      if (bundleFailure) {
+        missing.push({ pluginId, installPath, reason: "missing-package-json" });
+      }
+      continue;
+    }
+    if (!(await pathExists(path.join(installPath, "package.json")))) {
+      missing.push({ pluginId, installPath, reason: "missing-package-json" });
+    }
+  }
+  return missing;
+}
 
 /**
  * Verify that each tracked plugin install record on disk is structurally
@@ -162,6 +246,7 @@ async function readPackagePayloadManifest(
   try {
     return {
       status: "present",
+      // SAFETY: Package manifest consumers below validate every field they read from parsed JSON.
       manifest: JSON.parse(packageJson) as PackagePayloadManifest,
     };
   } catch (err) {
@@ -203,7 +288,7 @@ function hasNativePackageMetadata(manifest: PackageManifest): boolean {
   return resolvePackageExtensionEntries(manifest).status !== "missing";
 }
 
-export async function hasNativePackageInstallPayload(installPath: string): Promise<boolean> {
+async function hasNativePackageInstallPayload(installPath: string): Promise<boolean> {
   const packagePayload = await readPackagePayloadManifest(installPath);
   return packagePayload.status === "present" && hasNativePackageMetadata(packagePayload.manifest);
 }
@@ -296,11 +381,12 @@ async function validatePackagePayload(params: {
 
 function isBundleInstallRecord(record: PluginInstallRecord): boolean {
   return (
+    // SAFETY: Persisted bundle records may carry legacy format metadata outside the current type.
     (record as { format?: unknown }).format === "bundle" || record.clawhubFamily === "bundle-plugin"
   );
 }
 
-export function resolveBundleInstallRecordPayload(params: {
+function resolveBundleInstallRecordPayload(params: {
   record: PluginInstallRecord;
   installPath: string;
 }): { isBundlePayload: boolean; bundleFormat: PluginBundleFormat | null } {
@@ -315,7 +401,7 @@ export function resolveBundleInstallRecordPayload(params: {
   };
 }
 
-export function validateBundleInstallRecordPayload(params: {
+function validateBundleInstallRecordPayload(params: {
   pluginId: string;
   installPath: string;
   record: PluginInstallRecord;

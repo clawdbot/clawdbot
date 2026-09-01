@@ -1352,10 +1352,10 @@ jobs:
               echo "- OpenClaw npm publish: skipped by input"
             fi
             if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Android APK: dispatched alongside the OpenClaw npm publish; monitor and approve its run separately, completion does not block core publication"
+              echo "- Android APK: dispatched after the ClawHub receipt without waiting for core npm completion; monitor and approve its run separately, completion does not block core publication"
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- Windows Hub promotion: promoted concurrently with the OpenClaw npm publish; required before the GitHub release can be published"
+              echo "- Windows Hub promotion: starts after the ClawHub receipt without waiting for core npm completion; required before the GitHub release can be published"
             fi
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
@@ -1401,7 +1401,6 @@ jobs:
             echo "- plugin-clawhub-release.yml: no normal OIDC candidates" >> "$GITHUB_STEP_SUMMARY"
           fi
           plugin_clawhub_bootstrap_run_id=""
-          plugin_clawhub_bootstrap_completed="false"
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args bootstrap
@@ -1453,6 +1452,87 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Start core npm publication
+        id: core_start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
+          RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
+          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
+          CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: ${{ steps.children.outputs.openclaw_npm_already_published }}
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+          plugin_npm_run_id="${CHILD_PLUGIN_NPM_RUN_ID}"
+          verify_release_tag_target
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
+            echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
+            for child_run_id in "${CHILD_PLUGIN_CLAWHUB_RUN_ID}" "${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID}"; do
+              if [[ -n "${child_run_id}" ]]; then
+                gh run cancel --repo "$GITHUB_REPOSITORY" "${child_run_id}" >/dev/null 2>&1 || true
+              fi
+            done
+            exit 1
+          fi
+          echo "plugin_npm_completed=true" >> "$GITHUB_OUTPUT"
+
+          if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
+            echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          prepared_release_notes_file="${RUNNER_TEMP}/release-notes-prepublish.md"
+          create_or_update_github_release
+          if [[ "${CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED}" == "true" ]]; then
+            echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          evidence_args=(-f release_evidence_mode="${RELEASE_EVIDENCE_MODE}")
+          if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
+            evidence_args+=(
+              -f focused_release_evidence_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"
+              -f focused_release_evidence_run_attempt="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}"
+            )
+          else
+            evidence_args+=(
+              -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
+              -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
+            )
+          fi
+          openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
+            -f tag="${RELEASE_TAG}" \
+            -f preflight_only=false \
+            -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
+            -f release_publish_run_id="${GITHUB_RUN_ID}" \
+            -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+            -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
+            -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
+            -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
+            -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
+            "${evidence_args[@]}")"
+          echo "openclaw_npm_run_id=${openclaw_npm_run_id}" >> "$GITHUB_OUTPUT"
+          echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
+          # Pass the child environment gate before waiting for ClawHub receipts;
+          # the remote publisher can advance without a cross-step watcher.
+          if ! wait_for_run openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" publish_openclaw_npm true npm-release; then
+            gh run cancel --repo "$GITHUB_REPOSITORY" "${openclaw_npm_run_id}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+
       - name: Authorize exact ClawHub package transactions
         id: clawhub_authorization
         if: steps.children.outputs.plugin_clawhub_run_id != ''
@@ -1468,6 +1548,7 @@ jobs:
             --output "$RUNNER_TEMP/clawhub-parent-authorization/authorization.json"
 
       - name: Upload immutable ClawHub parent authorization
+        id: clawhub_receipt
         if: steps.children.outputs.plugin_clawhub_run_id != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -1477,6 +1558,7 @@ jobs:
           retention-days: 30
 
       - name: Complete publish workflows
+        if: ${{ always() && !cancelled() && steps.core_start.outputs.plugin_npm_completed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
@@ -1513,6 +1595,10 @@ jobs:
           CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: ${{ steps.children.outputs.openclaw_npm_already_published }}
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: ${{ steps.children.outputs.openclaw_npm_expected_workflow_ref }}
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: ${{ steps.children.outputs.openclaw_npm_expected_workflow_sha }}
+          CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id }}
+          CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
+          CLAWHUB_AUTHORIZATION_OUTCOME: ${{ steps.clawhub_authorization.outcome }}
+          CLAWHUB_RECEIPT_OUTCOME: ${{ steps.clawhub_receipt.outcome }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1523,94 +1609,55 @@ jobs:
           openclaw_npm_already_published="${CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED}"
           openclaw_npm_expected_workflow_ref="${CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF}"
           openclaw_npm_expected_workflow_sha="${CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA}"
+          openclaw_npm_run_id="${CHILD_OPENCLAW_NPM_RUN_ID}"
           plugin_clawhub_bootstrap_completed="false"
-          prepared_release_notes_file="${RUNNER_TEMP}/release-notes-prepublish.md"
-          prepared_release_notes_metadata_file="${RUNNER_TEMP}/release-notes-prepublish.json"
           resolve_clawhub_release_plan
-          verify_release_tag_target
-          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"; then
-            echo "Plugin npm publish failed; cancelling dispatched ClawHub child workflows." >&2
-            if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
-            fi
-            if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
-              gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_bootstrap_run_id}" >/dev/null 2>&1 || true
-            fi
-            exit 1
+          failed=0
+          clawhub_failed=0
+          clawhub_authorized=true
+          release_target_current=true
+          if ! (verify_release_tag_target); then
+            failed=1
+            release_target_current=false
           fi
-
-          if [[ -n "${plugin_clawhub_bootstrap_run_id}" && "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-            echo "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish."
-            if wait_for_run plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
-              plugin_clawhub_bootstrap_completed="true"
-            else
-              if [[ -n "${plugin_clawhub_run_id}" ]]; then
-                gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
-              fi
-              exit 1
-            fi
+          if [[ "${CORE_START_OUTCOME}" != "success" ]]; then
+            failed=1
           fi
-
-          openclaw_npm_run_id=""
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-            # The draft release page is the only shared prerequisite for the
-            # Windows/Android promotions and the core npm publish; create it
-            # first so those stages can run concurrently.
-            create_or_update_github_release
-            if [[ "${openclaw_npm_already_published}" == "true" ]]; then
-              echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
-            else
-              evidence_args=(-f release_evidence_mode="${RELEASE_EVIDENCE_MODE}")
-              if [[ "${RELEASE_EVIDENCE_MODE}" == "authorized-beta-focused-v1" ]]; then
-                evidence_args+=(
-                  -f focused_release_evidence_run_id="${FOCUSED_RELEASE_EVIDENCE_RUN_ID}"
-                  -f focused_release_evidence_run_attempt="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}"
-                )
-              else
-                evidence_args+=(
-                  -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
-                  -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
-                )
-              fi
-              openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
-                -f tag="${RELEASE_TAG}" \
-                -f preflight_only=false \
-                -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
-                -f release_publish_run_id="${GITHUB_RUN_ID}" \
-                -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
-                -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
-                -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
-                -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
-                -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
-                "${evidence_args[@]}")"
-              echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          else
-            echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "${plugin_clawhub_run_id}" && ( "${CLAWHUB_AUTHORIZATION_OUTCOME}" != "success" || "${CLAWHUB_RECEIPT_OUTCOME}" != "success" ) ]]; then
+            failed=1
+            clawhub_failed=1
+            clawhub_authorized=false
+            echo "ClawHub authorization did not complete; collecting the already-started core publication." >&2
           fi
 
           clawhub_result=""
           clawhub_pid=""
           clawhub_bootstrap_result=""
           clawhub_bootstrap_pid=""
+          approve_clawhub=true
+          if [[ "${failed}" != "0" ]]; then
+            approve_clawhub=false
+            for child_run_id in "${plugin_clawhub_run_id}" "${plugin_clawhub_bootstrap_run_id}"; do
+              if [[ -n "${child_run_id}" ]]; then
+                gh run cancel --repo "$GITHUB_REPOSITORY" "${child_run_id}" >/dev/null 2>&1 || true
+                clawhub_failed=1
+              fi
+            done
+          fi
           if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}" "${approve_clawhub}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
-              if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
-                echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
-              else
-                clawhub_bootstrap_result="$RUNNER_TEMP/clawhub-bootstrap-result.txt"
-                wait_run_pid=""
-                wait_for_run_background plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}" "${clawhub_bootstrap_result}"
-                clawhub_bootstrap_pid="${wait_run_pid}"
-              fi
+              clawhub_bootstrap_result="$RUNNER_TEMP/clawhub-bootstrap-result.txt"
+              wait_run_pid=""
+              wait_for_run_background plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}" "${clawhub_bootstrap_result}" "${approve_clawhub}"
+              clawhub_bootstrap_pid="${wait_run_pid}"
             fi
-          else
+          elif [[ "${failed}" == "0" ]]; then
             # Detached mode deliberately leaves protected ClawHub approvals to
             # the operator monitoring the linked child runs. Polling for those
             # gates here would put plugin fan-out back on the core release path.
@@ -1620,11 +1667,7 @@ jobs:
               echo "- plugin-clawhub-release.yml: no normal OIDC publish to await" >> "$GITHUB_STEP_SUMMARY"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
-              if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
-                echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
-              else
-                echo "- plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
-              fi
+              echo "- plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- plugin-clawhub-new.yml: no bootstrap publish to await" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -1635,7 +1678,9 @@ jobs:
           if [[ -n "${openclaw_npm_run_id}" ]]; then
             openclaw_result="$RUNNER_TEMP/openclaw-npm-result.txt"
             wait_run_pid=""
-            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "${openclaw_result}"
+            # The start step owns approval. Collection must never retry a
+            # failed or ambiguous approval mutation after another step failed.
+            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "${openclaw_result}" false
             openclaw_pid="${wait_run_pid}"
           fi
 
@@ -1645,7 +1690,7 @@ jobs:
           android_release_note=""
           windows_promote_result=""
           windows_promote_pid=""
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${failed}" == "0" ]]; then
             if ! promote_android_release_asset; then
               android_release_note="- Android APK publication dispatch could not be confirmed; inspect Android Release runs before retrying."
               echo "::warning::Android publication dispatch could not be confirmed; core publication will continue."
@@ -1662,33 +1707,23 @@ jobs:
             windows_promote_pid=$!
           fi
 
-          failed=0
           openclaw_failed=0
-          if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
-            failed=1
-            openclaw_failed=1
-          fi
-          if [[ -n "${openclaw_result}" && -f "${openclaw_result}" && "$(cat "${openclaw_result}")" != "success" ]]; then
+          if [[ -n "${openclaw_pid}" ]] && { ! wait "${openclaw_pid}" || [[ ! -f "${openclaw_result}" || "$(cat "${openclaw_result}")" != "success" ]]; }; then
             failed=1
             openclaw_failed=1
           fi
 
-          clawhub_failed=0
-          if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
+          if [[ -n "${clawhub_pid}" ]] && { ! wait "${clawhub_pid}" || [[ ! -f "${clawhub_result}" || "$(cat "${clawhub_result}")" != "success" ]]; }; then
             failed=1
             clawhub_failed=1
           fi
-          if [[ -f "${clawhub_result}" && "$(cat "${clawhub_result}")" != "success" ]]; then
-            failed=1
-            clawhub_failed=1
-          fi
-          if [[ -n "${clawhub_bootstrap_pid}" ]] && ! wait "${clawhub_bootstrap_pid}"; then
-            failed=1
-            clawhub_failed=1
-          fi
-          if [[ -f "${clawhub_bootstrap_result}" && "$(cat "${clawhub_bootstrap_result}")" != "success" ]]; then
-            failed=1
-            clawhub_failed=1
+          if [[ -n "${clawhub_bootstrap_pid}" ]]; then
+            if wait "${clawhub_bootstrap_pid}" && [[ -f "${clawhub_bootstrap_result}" && "$(cat "${clawhub_bootstrap_result}")" == "success" ]]; then
+              plugin_clawhub_bootstrap_completed=true
+            else
+              failed=1
+              clawhub_failed=1
+            fi
           fi
 
           if [[ -n "${windows_promote_pid}" ]]; then
@@ -1699,14 +1734,8 @@ jobs:
           fi
           windows_node_run_id="$(cat "${RUNNER_TEMP}/windows-node-run-id.txt" 2>/dev/null || true)"
 
-          if [[ ( -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ) || "${openclaw_npm_already_published}" == "true" ]]; then
-            # Only a ClawHub failure skips ClawHub verification; unrelated
-            # promotion failures must not reduce the recorded evidence.
-            if [[ "${clawhub_failed}" == "0" ]]; then
-              verify_published_release
-            else
-              verify_published_release true
-            fi
+          if [[ "${release_target_current}" == "true" && ( ( -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ) || "${openclaw_npm_already_published}" == "true" ) ]]; then
+            verify_published_release
             upload_dependency_evidence_release_asset
             upload_release_evidence_assets
             append_release_proof_to_github_release

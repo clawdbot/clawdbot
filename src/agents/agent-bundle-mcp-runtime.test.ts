@@ -3604,6 +3604,30 @@ describe("requester-scoped MCP connection resolution", () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     const { resolveSessionMcpConfigSummary } = await import("./agent-bundle-mcp-tools.js");
     const manager = testing.createSessionMcpRuntimeManager();
+    const expectBareRuntimeParity = async (params: {
+      sessionId: string;
+      cfg: NonNullable<RuntimeParams["cfg"]>;
+      expectedServerNames: string[];
+      toolOverrides?: RuntimeParams["toolOverrides"];
+      requesterSenderId?: string;
+    }) => {
+      const summary = resolveSessionMcpConfigSummary({
+        workspaceDir: "/workspace",
+        cfg: params.cfg,
+        ...(params.toolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+      });
+      await manager.getOrCreate({
+        sessionId: params.sessionId,
+        workspaceDir: "/workspace",
+        cfg: params.cfg,
+        ...(params.toolOverrides ? { toolOverrides: params.toolOverrides } : {}),
+        ...(params.requesterSenderId ? { requesterSenderId: params.requesterSenderId } : {}),
+      });
+      expect(summary.serverNames).toEqual(params.expectedServerNames);
+      expect(summary.fingerprint).toBe(
+        manager.peekSession({ sessionId: params.sessionId })?.configFingerprint,
+      );
+    };
     const cfg = {
       mcp: {
         servers: {
@@ -3611,48 +3635,66 @@ describe("requester-scoped MCP connection resolution", () => {
           "user-mail": { transport: "streamable-http", url: "https://static.example.test" },
         },
       },
-    };
+    } satisfies NonNullable<RuntimeParams["cfg"]>;
 
-    // Static-only config: the summary must match the bare runtime byte-for-byte.
-    const staticRuntime = await manager.getOrCreate({
+    await expectBareRuntimeParity({
       sessionId: "session-parity-static",
-      workspaceDir: "/workspace",
-      cfg: cfg as never,
+      cfg,
+      expectedServerNames: ["shared", "user-mail"],
     });
-    expect(
-      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
-    ).toBe(staticRuntime.configFingerprint);
 
     const toolOverrides = { mcpServers: { shared: false } };
-    const overriddenSummary = resolveSessionMcpConfigSummary({
-      workspaceDir: "/workspace",
-      cfg: cfg as never,
-      toolOverrides,
-    });
-    const overriddenRuntime = await manager.getOrCreate({
+    await expectBareRuntimeParity({
       sessionId: "session-parity-overridden",
-      workspaceDir: "/workspace",
-      cfg: cfg as never,
+      cfg,
+      expectedServerNames: ["user-mail"],
       toolOverrides,
     });
-    expect(overriddenSummary.serverNames).toEqual(["user-mail"]);
-    expect(overriddenSummary.fingerprint).toBe(overriddenRuntime.configFingerprint);
+
+    await expectBareRuntimeParity({
+      sessionId: "session-parity-denials",
+      cfg,
+      expectedServerNames: ["shared", "user-mail"],
+      toolOverrides: { mcpToolsDeny: { shared: ["private", "private"] } },
+    });
+
+    await expectBareRuntimeParity({
+      sessionId: "session-parity-empty",
+      cfg: {},
+      expectedServerNames: [],
+    });
+
+    // Full-set declaration order owns safe-name collision suffixes even though
+    // requester-scoped OAuth servers stay out of the bare runtime partition.
+    await expectBareRuntimeParity({
+      sessionId: "session-parity-oauth",
+      cfg: {
+        mcp: {
+          servers: {
+            "shared name": { command: "true" },
+            "shared-name": {
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+              url: "https://scoped.example.test",
+            },
+          },
+        },
+      },
+      expectedServerNames: ["shared name", "shared-name"],
+    });
 
     // With a resolver registered, tools.effective peeks the bare static-partition
     // runtime; summary parity keeps it from reporting stale-config forever.
     resolverTesting.setMcpServerConnectionResolversForTest([
       { serverName: "user-mail", resolve: async () => null },
     ]);
-    await manager.getOrCreate({
+    await expectBareRuntimeParity({
       sessionId: "session-parity-scoped",
-      workspaceDir: "/workspace",
-      cfg: cfg as never,
+      cfg,
+      expectedServerNames: ["shared", "user-mail"],
       requesterSenderId: "sender-a",
     });
-    const peeked = manager.peekSession({ sessionId: "session-parity-scoped" });
-    expect(peeked?.configFingerprint).toBe(
-      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
-    );
 
     await manager.disposeAll();
   });

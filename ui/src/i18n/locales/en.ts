@@ -510,15 +510,7 @@ export const en: TranslationMap & {
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     confirm: {
-      message: "Installs the available update on the connected Gateway and restarts it.",
-      macMessage:
-        "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
-      impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
-      versions: "Installed {installed} · Available {available}",
-      versionsBehind: "Installed {installed} · {available}",
       action: "Update and restart",
-      macAction: "Update Mac app and restart",
     },
     target: {
       version: "v{version}",
@@ -536,10 +528,7 @@ export const en: TranslationMap & {
       waitingForIdle: "Waiting for active work",
     },
     dialog: {
-      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
       restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
-      notStarted:
-        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
     },
     channel: {},
     installKind: {},
@@ -548,16 +537,16 @@ export const en: TranslationMap & {
       "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
     error: "Update error: {error}",
     status: "Update {status}: {reason}. {guidance}",
-    verificationFailed:
-      "Update installed but running version did not change — restart may have been blocked.",
-    verificationFailedWithVersions:
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     verificationFailedWithIdentity:
-      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}. Run `openclaw triage` on the Gateway host before retrying.",
     handoffTimeout:
-      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
+      "Update completion was not confirmed. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     outcomeUnknown:
-      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
+      "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
+    triage: {
+      hostHint:
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host. Diagnose the cause before retrying.",
+    },
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",

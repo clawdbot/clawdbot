@@ -43,14 +43,13 @@ import {
   renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
   type AssistantMessageDisclosure,
+  type MessageActionDetails,
 } from "./chat-message-markdown.ts";
 import {
   extractImages,
+  extractMessageAttachments,
   extractPairingQrExpiryNotices,
-  extractStructuredSvgAttachments,
-  extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
-  type AssistantAttachmentItem,
   type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
@@ -218,7 +217,7 @@ export function renderGroupedMessage(
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
-    actionMarkdown?: string;
+    messageActions?: MessageActionDetails | null;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     onRequestUpdate?: () => void;
@@ -277,27 +276,8 @@ export function renderGroupedMessage(
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
-  const actionText = opts.actionMarkdown ?? displayMarkdown;
-  const assistantAttachments = normalizedMessage.content.filter(
-    (item): item is AssistantAttachmentItem =>
-      item.type === "attachment" || item.type === "attachment_error",
-  );
-  const attachmentUrls = new Set<string>();
-  const visibleAttachments = [
-    ...assistantAttachments,
-    ...extractStructuredSvgAttachments(message),
-    ...extractTranscriptAttachments(message),
-  ].filter((item) => {
-    if (item.type === "attachment_error") {
-      return true;
-    }
-    const { attachment } = item;
-    if (attachmentUrls.has(attachment.url)) {
-      return false;
-    }
-    attachmentUrls.add(attachment.url);
-    return true;
-  });
+  const actionText = opts.messageActions?.markdown ?? displayMarkdown;
+  const visibleAttachments = extractMessageAttachments(message, normalizedMessage.content);
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
@@ -305,7 +285,8 @@ export function renderGroupedMessage(
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown =
-    (normalizedRole === "user" ? opts.actionMarkdown : undefined) ?? (displayMarkdown || null);
+    (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
+    (displayMarkdown || null);
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -494,6 +475,7 @@ export function renderGroupedMessage(
       data-message-id=${messageKey}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
+      .messageActions=${opts.messageActions}
     >
       ${renderReplyPreview(
         normalizedMessage.replyTarget,

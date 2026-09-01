@@ -1417,7 +1417,7 @@ describe("cron method validation", () => {
   it.each(["profile", "channel", "unknown"] as const)(
     "retains %s creator provenance through agent-created cron jobs",
     async (source) => {
-      loadGatewaySessionEntry.mockReturnValueOnce({
+      loadGatewaySessionEntry.mockReturnValue({
         canonicalKey: "agent:ops:main",
         entry: {
           sessionId: "session-ops-main",

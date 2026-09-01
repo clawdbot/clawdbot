@@ -121,6 +121,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (deriveAvatarInitial(cardName || cardAgentId) || "?");
   const newSessionAccess = host.readNewSessionAccess();
+  const collapseLabel = t("nav.collapse");
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
@@ -131,7 +132,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
-        .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
@@ -151,10 +151,37 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
+        <openclaw-tooltip
+          .content=${`${collapseLabel} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
+        >
+          <button
+            type="button"
+            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__collapse"
+            aria-label=${collapseLabel}
+            aria-expanded="true"
+            ?disabled=${!host.onToggleSidebar}
+            @click=${() => host.onToggleSidebar?.()}
+          >
+            ${icons.panelLeftClose}
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip
+          .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+        >
+          <button
+            type="button"
+            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__search"
+            aria-label=${t("chat.openCommandPalette")}
+            ?disabled=${!host.onOpenPalette}
+            @click=${() => host.onOpenPalette?.()}
+          >
+            ${icons.search}
+          </button>
+        </openclaw-tooltip>
         ${renderNewSessionLink({
           basePath: host.basePath,
           agentId: host.expandedAgentId(),
-          className: "sidebar-brand__icon sidebar-brand__new-thread",
+          className: "shell-chrome-controls__button sidebar-brand__new-thread",
           label: t("chat.runControls.newSession"),
           disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
           onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
@@ -166,7 +193,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
 
 /** Home: the first page. Opens the rolling main session on its saved face. */
 export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
-  const agentId = host.activeChipAgent().activeId;
+  const agentId = host.expandedAgentId();
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
   const attention = host.resolveHomeSessionAttention(mainKey, mainRow);

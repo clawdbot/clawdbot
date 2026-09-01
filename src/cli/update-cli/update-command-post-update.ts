@@ -43,6 +43,7 @@ import {
 import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  UpdateCommandFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import {
@@ -118,31 +119,32 @@ export async function finishUpdate(params: {
       });
     }
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
-    printFinalResult(recoverService ? completedResult(result) : finalResult);
+    const reported = recoverService ? completedResult(result) : finalResult;
+    printFinalResult(reported);
+    return reported;
   };
   const restoreWindowsAutoStart = async (result: UpdateRunResult) => {
     try {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop);
-      return true;
     } catch (err) {
       defaultRuntime.error(
         `Failed to restore Windows Scheduled Task autostart after package update: ${String(err)}`,
       );
-      await reportResult({
+      const failed = await reportResult({
         ...result,
         status: "error",
         reason: "windows-task-autostart-restore-failed",
       });
-      defaultRuntime.exit(1);
-      return false;
+      throw new UpdateCommandFailure(failed);
     }
   };
 
   if (params.result.status === "error") {
-    if (!(await restoreWindowsAutoStart(params.result))) {
-      return;
-    }
-    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
+    await restoreWindowsAutoStart(params.result);
+    const failed = await reportResult(
+      params.result,
+      params.result.recovery?.serviceRestartSafe === true,
+    );
     if (params.result.recovery?.serviceRestartSafe === false) {
       if (!params.opts.json) {
         const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
@@ -163,19 +165,20 @@ export async function finishUpdate(params: {
     }
     // The helper only recovers a service it parked that this CLI could not own
     // (for example, an unloaded LaunchAgent). Never retry a handled restart.
-    defaultRuntime.exit(
+    throw new UpdateCommandFailure(
+      failed,
       params.preManagedServiceStop?.stopped
         ? 1
         : resolveManagedServiceUpdateFailureExitCode(params.result),
     );
-    return;
   }
 
   if (params.result.status === "skipped") {
-    if (!(await restoreWindowsAutoStart(params.result))) {
-      return;
-    }
-    await reportResult(params.result, params.result.recovery?.serviceRestartSafe === true);
+    await restoreWindowsAutoStart(params.result);
+    const skipped = await reportResult(
+      params.result,
+      params.result.recovery?.serviceRestartSafe === true,
+    );
     if (params.result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -199,7 +202,8 @@ export async function finishUpdate(params: {
         ),
       );
     }
-    defaultRuntime.exit(
+    throw new UpdateCommandFailure(
+      skipped,
       !params.preManagedServiceStop?.stopped &&
         resolveManagedServiceUpdateFailureExitCode(params.result) !== 1
         ? resolveManagedServiceUpdateFailureExitCode(params.result)
@@ -207,7 +211,6 @@ export async function finishUpdate(params: {
           ? 1
           : 0,
     );
-    return;
   }
 
   const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
@@ -263,13 +266,14 @@ export async function finishUpdate(params: {
         }),
     );
     if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsAutoStart(params.result))) {
-        return;
-      }
-      await reportResult({ ...params.result, status: "error", reason: "post-core-update-failed" });
+      await restoreWindowsAutoStart(params.result);
+      const failed = await reportResult({
+        ...params.result,
+        status: "error",
+        reason: "post-core-update-failed",
+      });
       // A nested process exit is not this updater's verified recovery verdict.
-      defaultRuntime.exit(1);
-      return;
+      throw new UpdateCommandFailure(failed, 1, freshProcessResult.error);
     }
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
@@ -321,7 +325,8 @@ export async function finishUpdate(params: {
             configSnapshot: postUpdateConfigSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: params.opts,
+            json: params.opts.json,
+            acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
             pluginInstallRecords,
           });
@@ -368,12 +373,8 @@ export async function finishUpdate(params: {
     postCorePluginUpdate?.status === "error" &&
     postCorePluginUpdate.reason !== POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON
   ) {
-    if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
-      return;
-    }
-    await reportResult(resultWithPostUpdate);
-    defaultRuntime.exit(1);
-    return;
+    await restoreWindowsAutoStart(resultWithPostUpdate);
+    throw new UpdateCommandFailure(await reportResult(resultWithPostUpdate));
   }
 
   const restartConfigSnapshot =
@@ -486,13 +487,12 @@ export async function finishUpdate(params: {
             ? formatErrorMessage(err)
             : "Stopped gateway service could not be revalidated; inspect it before restarting manually.";
         defaultRuntime.error(message);
-        await reportResult({
+        const failed = await reportResult({
           ...resultWithPostUpdate,
           status: "error",
           reason: "service-revalidation-failed",
         });
-        defaultRuntime.exit(1);
-        return;
+        throw new UpdateCommandFailure(failed, 1, message);
       }
       serviceMutationAllowed = false;
       serviceMutationSkipMessage =
@@ -510,9 +510,7 @@ export async function finishUpdate(params: {
     jsonMode: Boolean(params.opts.json),
   });
 
-  if (!(await restoreWindowsAutoStart(resultWithPostUpdate))) {
-    return;
-  }
+  await restoreWindowsAutoStart(resultWithPostUpdate);
   const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
     maybeRestartService({
       shouldRestart: params.shouldRestart && serviceMutationAllowed,
@@ -541,11 +539,13 @@ export async function finishUpdate(params: {
       reason: "restart-unhealthy",
       jsonMode: Boolean(params.opts.json),
     });
-    printFinalResult(
-      completedResult({ ...resultWithPostUpdate, status: "error", reason: "restart-unhealthy" }),
-    );
-    defaultRuntime.exit(1);
-    return;
+    const failed = completedResult({
+      ...resultWithPostUpdate,
+      status: "error",
+      reason: "restart-unhealthy",
+    });
+    printFinalResult(failed);
+    throw new UpdateCommandFailure(failed);
   }
 
   // Restart and health verification own recovery of the service stopped for this update.
@@ -581,24 +581,22 @@ export async function finishUpdate(params: {
         reason: "wrapper-retirement-failed",
         jsonMode: Boolean(params.opts.json),
       });
-      printFinalResult(
-        completedResult({
-          ...resultWithPostUpdate,
-          status: "error",
-          reason: "wrapper-retirement-failed",
-        }),
-      );
-      defaultRuntime.exit(1);
-      return;
+      const failed = completedResult({
+        ...resultWithPostUpdate,
+        status: "error",
+        reason: "wrapper-retirement-failed",
+      });
+      printFinalResult(failed);
+      throw new UpdateCommandFailure(failed, 1, retirement.error);
     }
   }
 
   if (resultWithPostUpdate.status === "error") {
     // The recovering Gateway may have consumed the recorded Doctor failure.
     // Keep that outcome without publishing a second notification after activation.
-    printFinalResult(completedResult(resultWithPostUpdate));
-    defaultRuntime.exit(1);
-    return;
+    const failed = completedResult(resultWithPostUpdate);
+    printFinalResult(failed);
+    throw new UpdateCommandFailure(failed);
   }
   await reportResult(resultWithPostUpdate);
   if (!params.opts.json) {

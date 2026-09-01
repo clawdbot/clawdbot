@@ -221,6 +221,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
+  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+  [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
+  measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
+  larger requests as a measured capacity workaround, never as worker counts.
+  Keep existing routing, fanout, and resource-based worker limits; reassess
+  sizing after provider allocation changes. See `docs/ci.md` for the full table.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
