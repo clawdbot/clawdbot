@@ -1,9 +1,8 @@
 // Wire types derive from the cron schemas without importing the ProtocolSchemas registry.
 import type { Static } from "typebox";
+import type { CronAddResultSchema, CronDeclarativeAddResultSchema } from "./cron-add-result.js";
 import type {
   CronAddParamsSchema,
-  CronAddResultSchema,
-  CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
   CronListParamsSchema,

@@ -17227,15 +17227,25 @@ public struct CronDeclarativeAddResult: Codable, Sendable {
     public let created: Bool
     public let updated: Bool?
     public let job: CronJob
+    public let deliverypreviews: [String: AnyCodable]
 
     public init(
         created: Bool,
         updated: Bool? = nil,
-        job: CronJob)
+        job: CronJob,
+        deliverypreviews: [String: AnyCodable])
     {
         self.created = created
         self.updated = updated
         self.job = job
+        self.deliverypreviews = deliverypreviews
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case created
+        case updated
+        case job
+        case deliverypreviews = "deliveryPreviews"
     }
 }
 

@@ -695,35 +695,6 @@ export const CronAddParamsSchema = closedObject({
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
 });
 
-/** User-visible dry-run delivery route label/detail. */
-export const CronDeliveryPreviewSchema = closedObject({
-  label: Type.String(),
-  detail: Type.String(),
-});
-
-/** Delivery route previews keyed by cron job id. */
-export const CronDeliveryPreviewsSchema = Type.Record(Type.String(), CronDeliveryPreviewSchema);
-
-/** Successful declaration-key convergence result. */
-export const CronDeclarativeAddResultSchema = closedObject({
-  created: Type.Boolean(),
-  updated: Type.Optional(Type.Boolean()),
-  job: CronJobSchema,
-  deliveryPreviews: CronDeliveryPreviewsSchema,
-});
-
-/** Successful imperative create result with its creation-time delivery route preview. */
-export const CronImperativeAddResultSchema = closedObject({
-  ...CronJobSchema.properties,
-  deliveryPreviews: CronDeliveryPreviewsSchema,
-});
-
-/** Successful result from imperative create or declaration-key convergence. */
-export const CronAddResultSchema = Type.Union([
-  CronImperativeAddResultSchema,
-  CronDeclarativeAddResultSchema,
-]);
-
 /** Mutable cron job fields accepted by update APIs. */
 const CronJobPatchSchema = closedObject({
   name: Type.Optional(NonEmptyString),
