@@ -197,15 +197,39 @@ async function resolveConfiguredProviderApiKey(params: {
     value: params.configuredProvider?.apiKey,
     path: `models.providers.${params.providerId}.apiKey`,
   });
-  if (!apiKey) {
-    return undefined;
-  }
+  const hasConfiguredApiKey = Object.hasOwn(params.configuredProvider ?? {}, "apiKey");
   const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
     await import("../agents/agent-scope-config.js");
   const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
   const agentDir =
     params.options.agentDir?.trim() ||
     (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  if (!apiKey) {
+    // A present-but-empty field intentionally disables profile discovery.
+    if (
+      hasConfiguredApiKey ||
+      !agentDir ||
+      (!params.options.config.auth?.profiles && !params.options.config.auth?.order)
+    ) {
+      return undefined;
+    }
+    const { resolveApiKeyForProviderCore } = await import("../agents/model-auth-provider.js");
+    const { isProviderAuthError } = await import("../agents/model-auth-runtime-shared.js");
+    try {
+      const auth = await resolveApiKeyForProviderCore({
+        provider: params.providerId,
+        cfg: params.options.config,
+        agentDir,
+        modelApi: params.configuredProvider?.api,
+      });
+      return auth.apiKey;
+    } catch (error) {
+      if (isProviderAuthError(error, "missing-provider-auth")) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
   // Without an owned auth store, a configured string retains its literal meaning.
   if (!agentDir) {
     return apiKey;
