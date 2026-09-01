@@ -131,9 +131,10 @@ function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
   );
 }
 
-function getAgentMemorySearchRecord(agent: unknown): Record<string, unknown> | null {
-  const record = getRecord(agent);
-  return getRecord(record?.memorySearch) ?? getRecord(getRecord(record?.memory)?.search);
+function getAgentMemorySearchRecord(
+  agent: Record<string, unknown>,
+): Record<string, unknown> | null {
+  return getRecord(agent.memorySearch) ?? getRecord(getRecord(agent.memory)?.search);
 }
 
 function someAgentEntry(
@@ -285,7 +286,7 @@ const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
         typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
       const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
       return someAgentEntry(value, (agent) => {
-        const agentTools = getRecord(getRecord(agent)?.tools);
+        const agentTools = getRecord(agent.tools);
         return toolProfileConfiguredSectionsNeedExplicitRepair(
           agentTools,
           inheritedProfile,
@@ -593,7 +594,8 @@ function migrateUnsupportedSandboxBrowserNetworks(
   const defaultBrowser = getSandboxBrowserConfig(defaults);
   const defaultNetworkUnsupported = isUnsupportedSandboxBrowserNetwork(defaultBrowser?.network);
   const defaultBrowserEnabled = defaultBrowser?.enabled === true;
-  const migrateAgentBrowser = (agent: unknown, pathLabel: string): void => {
+  visitAgentEntries(raw, (agent, path) => {
+    const pathLabel = `${path}.sandbox.browser`;
     if (defaultNetworkUnsupported) {
       migrateAgentBrowserInheritedFromUnsupportedDefault({
         agent,
@@ -607,9 +609,7 @@ function migrateUnsupportedSandboxBrowserNetworks(
     if (browser) {
       migrateExplicitUnsupportedSandboxBrowserNetwork(browser, pathLabel, changes);
     }
-  };
-
-  visitAgentEntries(raw, (agent, path) => migrateAgentBrowser(agent, `${path}.sandbox.browser`));
+  });
 
   if (defaultBrowser) {
     migrateExplicitUnsupportedSandboxBrowserNetwork(
@@ -1248,7 +1248,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         inheritedProfile,
       );
       visitAgentEntries(raw, (agent, path) => {
-        const agentTools = getRecord(getRecord(agent)?.tools);
+        const agentTools = getRecord(agent.tools);
         const configuredGrants = collectEffectiveConfiguredToolSectionGrants(
           globalTools,
           agentTools,
