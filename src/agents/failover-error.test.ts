@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { getFailoverErrorCode } from "./failover/error.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
 
 // Classification here is message/status table behavior. Provider-attributed
 // structured signals (e.g. moonshot + 429) otherwise cross the plugin-consult
@@ -59,6 +60,27 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it.each([
+    {
+      message: "handoff refused",
+      cause: { status: 401, code: "INVALID_API_KEY", message: "API key has been revoked" },
+    },
+    {
+      message: "handoff refused: 529 OVERLOADED",
+      cause: { status: 529, code: "OVERLOADED", message: "overloaded" },
+    },
+    { message: "503 service unavailable; reconnect before continuing", cause: { status: 503 } },
+  ])(
+    "does not promote a direct preflight into a provider failure: $message",
+    ({ message, cause }) => {
+      const error = new AgentHarnessPreflightError(message, { cause });
+      expect(resolveFailoverReasonFromError(error)).toBeNull();
+      expect(coerceToFailoverError(error)).toBeNull();
+      expect(describeFailoverError(error)).toEqual({ message });
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      expect(error.cause).toBe(cause);
+    },
+  );
   it("finds structured CLI timeout context through aggregate wrappers", () => {
     const timeout = new FailoverError("CLI exceeded timeout", {
       reason: "timeout",
