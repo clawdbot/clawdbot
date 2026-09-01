@@ -312,6 +312,28 @@ export function requiresAgentHarnessPluginSelection(
   );
 }
 
+/** Returns the selected plugin-owned runtime when no activatable owner provides it. */
+export function resolveMissingAgentHarnessRuntime(params: {
+  selection: AgentHarnessPluginSelection;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): string | undefined {
+  if (!requiresAgentHarnessPluginSelection(params.selection, params.config)) {
+    return undefined;
+  }
+  const runtime = resolveSelectedAgentHarnessRuntime(params.selection, params.config);
+  return resolveAgentHarnessOwnerPluginIds({
+    runtime,
+    provider: params.selection.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+  }).length === 0
+    ? runtime
+    : undefined;
+}
+
 /** Folds selected harness, memory, and context-engine owners into one deterministic load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;

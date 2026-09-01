@@ -1,4 +1,5 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
+import { resolveMissingAgentHarnessRuntime } from "../../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderKey,
@@ -74,7 +75,11 @@ type ModelSelectionPreparation =
       catalog: ModelCatalogEntry[];
       runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
     }
-  | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
+  | {
+      status: "rejected";
+      reason: "invalid-runtime" | "unknown-provider" | "missing-harness";
+      message: string;
+    };
 
 /** Prepare runtime and capabilities for the selected route before any session mutation. */
 export async function prepareModelSelectionRuntime(params: {
@@ -84,6 +89,7 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
+  workspaceDir: string;
   sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): Promise<ModelSelectionPreparation> {
   const runtime = resolveModelRuntimeDirective(params);
@@ -96,6 +102,28 @@ export async function prepareModelSelectionRuntime(params: {
       status: "rejected",
       reason: "unknown-provider",
       message: `Unknown provider "${params.provider}". Use /models to list providers.`,
+    };
+  }
+  const missingHarnessRuntime = resolveMissingAgentHarnessRuntime({
+    selection: {
+      provider: params.provider,
+      modelId: params.model,
+      runtime:
+        runtime.kind === "set"
+          ? runtime.runtime
+          : runtime.kind === "unchanged"
+            ? params.sessionEntry?.agentRuntimeOverride
+            : undefined,
+      agentId: params.agentId,
+    },
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  if (missingHarnessRuntime) {
+    return {
+      status: "rejected",
+      reason: "missing-harness",
+      message: `Model ${params.provider}/${params.model} requires agent harness "${missingHarnessRuntime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
     };
   }
   if (selected?.reasoning !== undefined) {

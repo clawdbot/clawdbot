@@ -13,10 +13,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import {
-  requiresAgentHarnessPluginSelection,
-  resolveAgentHarnessOwnerPluginIds,
-} from "../agents/harness/runtime-plugin-load-plan.js";
+import { resolveMissingAgentHarnessRuntime } from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -522,21 +519,20 @@ export async function projectSessionsPatchEntry(params: {
         runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
         agentId: sessionAgentId,
       };
-      if (
-        !readAcpSessionMetaForEntry({
-          sessionKey: storeKey,
-          agentId: sessionAgentId,
-          entry: next,
-        }) &&
-        requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
-        resolveAgentHarnessOwnerPluginIds({
-          ...harnessSelection,
-          config: cfg,
-          workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
-        }).length === 0
-      ) {
+      const missingHarnessRuntime = readAcpSessionMetaForEntry({
+        sessionKey: storeKey,
+        agentId: sessionAgentId,
+        entry: next,
+      })
+        ? undefined
+        : resolveMissingAgentHarnessRuntime({
+            selection: harnessSelection,
+            config: cfg,
+            workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+          });
+      if (missingHarnessRuntime) {
         return invalid(
-          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+          `Model ${selection.provider}/${selection.model} requires agent harness "${missingHarnessRuntime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
         );
       }
       applyModelOverrideWithAuthProfileCompatibility({

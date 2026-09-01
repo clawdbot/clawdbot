@@ -1673,6 +1673,29 @@ describe("/model chat UX", () => {
     expect(persisted.directiveAck?.text).toContain("Runtime set to codex for this session.");
   });
 
+  it("rejects model directives when the selected harness is denied", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+    });
+    const initialSessionEntry = { ...sessionEntry };
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o --runtime codex hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry,
+      cfg: {
+        ...baseConfig(),
+        plugins: { deny: ["codex"] },
+      },
+    });
+
+    expect(persisted.errorText).toBe(
+      'Model openai/gpt-4o requires agent harness "codex", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+    );
+    expect(sessionEntry).toEqual(initialSessionEntry);
+  });
+
   it("normalizes legacy Codex app-server runtime overrides during persistence", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime codex-app-server hello",

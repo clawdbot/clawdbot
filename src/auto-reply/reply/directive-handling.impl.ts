@@ -179,6 +179,7 @@ export async function handleDirectiveOnly(
       model: resolvedModel,
       catalog: thinkingCatalog ?? [],
       rawRuntime: directives.rawModelRuntime,
+      workspaceDir: params.workspaceDir,
       sessionEntry,
     });
     if (prepared.status === "rejected") {
