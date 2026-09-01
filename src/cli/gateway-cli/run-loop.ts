@@ -65,17 +65,6 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
-async function stopGatewayManagedProviderLocalServices(): Promise<void> {
-  const { hasManagedProviderLocalServices } =
-    await import("../../agents/provider-runtime-lifecycle.js");
-  if (!hasManagedProviderLocalServices()) {
-    return;
-  }
-  const { stopManagedProviderLocalServices } =
-    await import("../../agents/provider-local-service.js");
-  await stopManagedProviderLocalServices();
-}
-
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ host, port });
@@ -190,9 +179,11 @@ export async function runGatewayLoop(params: {
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
-    await stopGatewayManagedProviderLocalServices().catch((error: unknown) => {
-      gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
-    });
+    await eagerLifecycleRuntime
+      .stopGatewayManagedProviderLocalServices()
+      .catch((error: unknown) => {
+        gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
+      });
     flushDiagnosticsTimeline();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const flushed = await Promise.race([
