@@ -1,0 +1,139 @@
+{
+  "cases": [
+    {
+      "name": "binding matches when env key order changes",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "binding": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE_A": "1", "SAFE_B": "2" }
+        }
+      },
+      "invoke": {
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE_B": "2", "SAFE_A": "1" }
+        }
+      },
+      "expected": { "ok": true }
+    },
+    {
+      "name": "binding rejects env mismatch",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "binding": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE": "1" }
+        }
+      },
+      "invoke": {
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE": "2" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
+    },
+    {
+      "name": "binding rejects mismatched Windows-compatible env values",
+      "request": {
+        "host": "node",
+        "command": "cmd.exe /c echo ok",
+        "binding": {
+          "argv": ["cmd.exe", "/c", "echo", "ok"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "C:\\Program Files (x86)" }
+        }
+      },
+      "invoke": {
+        "argv": ["cmd.exe", "/c", "echo", "ok"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "ProgramFiles(x86)": "D:\\malicious" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
+    },
+    {
+      "name": "binding rejects unbound env overrides",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "binding": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "invoke": {
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "GIT_EXTERNAL_DIFF": "/tmp/pwn.sh" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_BINDING_MISSING" }
+    },
+    {
+      "name": "missing binding rejects requests even with matching argv",
+      "request": {
+        "host": "node",
+        "command": "echo SAFE",
+        "commandArgv": ["echo", "SAFE"]
+      },
+      "invoke": {
+        "argv": ["echo", "SAFE"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_REQUEST_MISMATCH" }
+    },
+    {
+      "name": "binding stays authoritative when legacy command text diverges",
+      "request": {
+        "host": "node",
+        "command": "echo STALE",
+        "commandArgv": ["echo", "STALE"],
+        "binding": {
+          "argv": ["echo", "SAFE"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "invoke": {
+        "argv": ["echo", "SAFE"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "expected": { "ok": true }
+    }
+  ]
+}

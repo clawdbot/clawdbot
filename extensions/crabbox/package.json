@@ -1,0 +1,23 @@
+{
+  "name": "@openclaw/crabbox-provider",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "OpenClaw cloud worker provider backed by the Crabbox CLI",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./assets/openclaw-worker-wallpaper.png",
+          "output": "assets/openclaw-worker-wallpaper.png"
+        }
+      ]
+    }
+  }
+}

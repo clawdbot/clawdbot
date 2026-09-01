@@ -1,0 +1,54 @@
+// Private runtime barrel for the bundled Google Chat extension.
+// Keep this barrel thin and avoid broad plugin-sdk surfaces during bootstrap.
+
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+export {
+  createActionGate,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
+export { buildChannelConfigSchema, GoogleChatConfigSchema } from "./config-api.js";
+export type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
+export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
+export {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
+export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+export type {
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+export { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
+export {
+  registerWebhookTargetWithPluginRoute,
+  resolveWebhookTargetWithAuthOrReject,
+  withResolvedWebhookRequestPipeline,
+} from "openclaw/plugin-sdk/webhook-targets";
+export {
+  createWebhookInFlightLimiter,
+  readJsonWebhookBodyOrReject,
+  type WebhookInFlightLimiter,
+} from "openclaw/plugin-sdk/webhook-request-guards";
+export { setGoogleChatRuntime } from "./src/runtime.js";

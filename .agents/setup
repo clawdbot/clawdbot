@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+node_toolchain_root="$HOME/.local/share/openclaw-orb/node"
+node_bin="$node_toolchain_root/current/bin"
+profile_marker="# OpenClaw orb toolchain"
+
+cd "$repo_root"
+
+run_step() {
+  local label="$1"
+  shift
+  local started_at=$SECONDS
+  printf '[orb setup] %s\n' "$label"
+  "$@"
+  printf '[orb setup] %s completed in %ss\n' "$label" "$((SECONDS - started_at))"
+}
+
+install_system_packages() {
+  local packages=(build-essential ca-certificates cmake curl git python3 xz-utils)
+  local missing=()
+  local package
+  for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}\n' "$package" 2>/dev/null | grep -Fqx 'install ok installed'; then
+      missing+=("$package")
+    fi
+  done
+
+  if ((${#missing[@]} == 0)); then
+    echo "[orb setup] System packages already installed"
+    return
+  fi
+
+  if ((EUID == 0)); then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  else
+    sudo apt-get update
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+  fi
+}
+
+install_node() {
+  if [[ -x "$node_bin/node" ]]; then
+    export PATH="$node_bin:$PATH"
+  fi
+  export OPENCLAW_NODE_TOOLCHAIN_ROOT="$node_toolchain_root"
+  # Reuse the repository's Node release-floor and download contract used by CI.
+  # shellcheck disable=SC1091
+  source "$repo_root/.github/actions/setup-pnpm-store-cache/ensure-node.sh"
+  openclaw_ensure_node "24.x"
+
+  local node_prefix
+  node_prefix="$(dirname "$(dirname "$(readlink -f "$(node -p 'process.execPath')")")")"
+  mkdir -p "$node_toolchain_root"
+  ln -sfn "$node_prefix" "$node_toolchain_root/current"
+  export PATH="$node_bin:$PATH"
+}
+
+install_pnpm() {
+  local package_manager
+  package_manager="$(node -p 'require("./package.json").packageManager')"
+
+  if [[ ! -x "$node_bin/corepack" ]]; then
+    echo "[orb setup] Node toolchain does not include Corepack; remove $node_toolchain_root and rerun setup" >&2
+    return 1
+  fi
+  "$node_bin/corepack" enable --install-directory "$node_bin"
+
+  local attempt
+  for attempt in 1 2 3; do
+    if COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$node_bin/corepack" prepare "$package_manager" --activate; then
+      break
+    fi
+    if ((attempt == 3)); then
+      return 1
+    fi
+    sleep $((attempt * 5))
+  done
+
+  local expected_version="${package_manager#pnpm@}"
+  expected_version="${expected_version%%+*}"
+  local actual_version
+  actual_version="$(pnpm --version)"
+  if [[ "$actual_version" != "$expected_version" ]]; then
+    echo "[orb setup] Expected pnpm $expected_version, found $actual_version" >&2
+    return 1
+  fi
+}
+
+install_dependencies() {
+  CI=true pnpm install \
+    --frozen-lockfile \
+    --prefer-offline \
+    --ignore-scripts=false \
+    --config.engine-strict=false \
+    --config.enable-pre-post-scripts=true \
+    --config.side-effects-cache=true
+}
+
+configure_login_shell() {
+  touch "$HOME/.bash_profile"
+  if grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
+    return
+  fi
+
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+if [[ "\${PWD}" == "$repo_root" || "\${PWD}" == "$repo_root/"* ]]; then
+  export PATH="$node_bin:\${PATH}"
+fi
+EOF
+}
+
+run_step "Checking system packages" install_system_packages
+run_step "Preparing Node 24" install_node
+run_step "Activating the repository pnpm version" install_pnpm
+run_step "Installing workspace dependencies" install_dependencies
+run_step "Configuring login shells" configure_login_shell
+
+printf '[orb setup] Ready: Node %s, pnpm %s\n' "$(node --version)" "$(pnpm --version)"

@@ -1,0 +1,1172 @@
+/* ===========================================
+   Config Page
+   ===========================================
+
+   The schema-driven form itself renders through the settings design
+   language (settings-section/settings-group/settings-row; see
+   ui/src/styles/settings.css). This file keeps only the config page
+   chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
+   pieces layered on top of the settings primitives. */
+
+/* Mode Toggle */
+.config-mode-toggle {
+  display: flex;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  gap: 1px;
+}
+
+:root[data-theme-mode="light"] .config-mode-toggle {
+  background: white;
+}
+
+.config-mode-toggle__btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px; /* was 11px */
+  font-weight: 600;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.config-mode-toggle__btn:hover:not(.active) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.config-mode-toggle__btn.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+/* ===========================================
+   Lead column (toolbar / banner / nav above the form)
+   =========================================== */
+
+/* Mirrors the .settings-page column so config chrome lines up with it. */
+.config-lead {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Toolbar: mode toggle / section tabs */
+.config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* Raw mode file operations (open / discard / save) */
+.config-raw-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.config-action-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.config-action-spinner svg {
+  width: 14px;
+  height: 14px;
+  animation: spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-action-spinner svg {
+    animation: none;
+  }
+}
+
+/* Diff Panel */
+.config-diff {
+  margin: 12px 20px 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--accent-subtle);
+  overflow: hidden;
+}
+
+.config-diff__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+}
+
+.config-diff__summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-diff__chevron {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-diff__chevron svg {
+  width: 100%;
+  height: 100%;
+}
+
+.config-diff[open] .config-diff__chevron {
+  transform: rotate(180deg);
+}
+
+.config-diff__content {
+  padding: 0 16px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.config-diff__item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: 11.5px;
+  font-family: var(--mono);
+}
+
+:root[data-theme-mode="light"] .config-diff__item {
+  background: white;
+}
+
+.config-diff__path {
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.config-diff__values {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.config-diff__from {
+  color: var(--danger);
+  opacity: 0.85;
+}
+
+.config-diff__arrow {
+  color: var(--muted);
+}
+
+.config-diff__to {
+  color: var(--ok);
+}
+
+/* Content Area */
+.config-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 22px;
+  min-width: 0;
+  scroll-behavior: smooth;
+}
+
+/* The schema form nests a full settings-page inside this scroller; both carry
+   top padding, which stacks into a dead band between the accordion nav and
+   the first section. Keep one spacing owner. */
+.config-lead + .config-content {
+  padding-top: 0;
+}
+
+/* Tabs sit between the route introduction and the active section. Remove the
+   generic lead inset; the workspace gap plus 4px content inset then matches
+   the 24px introduction-to-tabs rhythm. */
+.config-lead:has(.config-sections-hub-tabs) {
+  padding-top: 0;
+}
+
+.config-lead:has(.config-sections-hub-tabs) + .config-content {
+  padding-top: var(--space-1);
+}
+
+.config-content > .settings-page {
+  padding-top: 0;
+}
+
+.config-content-callout {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.config-content-callout .callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.config-content-callout__text {
+  min-width: 0;
+  flex: 1 1 420px;
+}
+
+/* ===========================================
+   Appearance custom pickers (theme + text scale)
+   =========================================== */
+
+.settings-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.settings-theme-card {
+  position: relative;
+  display: grid;
+  /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
+     long theme name (imported tweakcn labels) overflowed the card's border. */
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.settings-theme-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+/* Selection is carried by this skin alone (aria-pressed owns the semantics),
+   so it stays stronger than the hover state at every accent. */
+.settings-theme-card--active {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.settings-theme-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.settings-theme-card__icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.settings-theme-card__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-theme-card--active .settings-theme-card__label {
+  color: var(--text-strong);
+}
+
+/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
+   base.css (claw = the default :root palette); keep both in sync when
+   retuning a theme. The custom card reads the live variables instead — it is
+   only rendered with chips while the imported theme is active. */
+.settings-theme-card__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-theme-card__chip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.settings-theme-card__chip--bg {
+  background: var(--theme-chip-bg);
+}
+
+.settings-theme-card__chip--accent {
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}
+
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
+/* stylelint-disable color-no-hex */
+.settings-theme-card--claw,
+.settings-accent-theme--claw {
+  --theme-chip-bg: #0e1015;
+  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent-2: #14b8a6;
+}
+
+.settings-theme-card--knot,
+.settings-accent-theme--knot {
+  --theme-chip-bg: #080808;
+  --theme-chip-accent: #e5243b;
+  --theme-chip-accent-2: #b8bdc4;
+}
+
+.settings-theme-card--dash,
+.settings-accent-theme--dash {
+  --theme-chip-bg: #1a1210;
+  --theme-chip-accent: #cf8b4d;
+  --theme-chip-accent-2: #dcb878;
+}
+
+.settings-theme-card--absolutely,
+.settings-accent-theme--absolutely {
+  --theme-chip-bg: #1c1c1a;
+  --theme-chip-accent: #d97757;
+  --theme-chip-accent-2: #b8926a;
+}
+
+.settings-theme-card--tide,
+.settings-accent-theme--tide {
+  --theme-chip-bg: #10151b;
+  --theme-chip-accent: #5ab6d8;
+  --theme-chip-accent-2: #7f9bb5;
+}
+
+.settings-theme-card--beacon,
+.settings-accent-theme--beacon {
+  --theme-chip-bg: #000000;
+  --theme-chip-accent: #ffc233;
+  --theme-chip-accent-2: #8ecdff;
+}
+
+.settings-theme-card--phosphor,
+.settings-accent-theme--phosphor {
+  --theme-chip-bg: #0a0f0a;
+  --theme-chip-accent: #4ade80;
+  --theme-chip-accent-2: #8fd6a5;
+}
+
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #090a09;
+  --theme-chip-accent: #e8e8e8;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
+  --theme-chip-bg: #211e18;
+  --theme-chip-accent: #8fa8e0;
+  --theme-chip-accent-2: #cfa85e;
+}
+
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
+  --theme-chip-bg: #191724;
+  --theme-chip-accent: #ebbcba;
+  --theme-chip-accent-2: #f6c177;
+}
+
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
+  --theme-chip-bg: #140f1e;
+  --theme-chip-accent: #f472b6;
+  --theme-chip-accent-2: #5fd7e8;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
+  --theme-chip-bg: #faf9f7;
+  --theme-chip-accent: #bd4531;
+  --theme-chip-accent-2: #0d9488;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
+  --theme-chip-bg: #f9f9fb;
+  --theme-chip-accent: #c41e30;
+  --theme-chip-accent-2: #5a626e;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
+  --theme-chip-bg: #f7f2ec;
+  --theme-chip-accent: #8a512c;
+  --theme-chip-accent-2: #7d6027;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--absolutely, .settings-accent-theme--absolutely) {
+  --theme-chip-bg: #faf9f5;
+  --theme-chip-accent: #a8452a;
+  --theme-chip-accent-2: #8a6a44;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
+  --theme-chip-bg: #f7f9fb;
+  --theme-chip-accent: #1f6f8f;
+  --theme-chip-accent-2: #3d6d88;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
+  --theme-chip-bg: #ffffff;
+  --theme-chip-accent: #6e4a00;
+  --theme-chip-accent-2: #09428d;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
+  --theme-chip-bg: #f4f7f4;
+  --theme-chip-accent: #10693a;
+  --theme-chip-accent-2: #2f6b47;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
+  --theme-chip-bg: #f5f5f4;
+  --theme-chip-accent: #1f1f1f;
+  --theme-chip-accent-2: #7a5d10;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
+  --theme-chip-bg: #f6f1e4;
+  --theme-chip-accent: #31549b;
+  --theme-chip-accent-2: #7d6118;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
+  --theme-chip-bg: #faf4ed;
+  --theme-chip-accent: #9c4f66;
+  --theme-chip-accent-2: #286983;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
+  --theme-chip-bg: #f7f3f6;
+  --theme-chip-accent: #b0246f;
+  --theme-chip-accent-2: #0f6f7d;
+}
+/* stylelint-enable color-no-hex */
+
+.settings-theme-card--custom,
+.settings-accent-theme--custom {
+  --theme-chip-bg: var(--bg);
+  --theme-chip-accent: var(--accent);
+  --theme-chip-accent-2: var(--accent-2);
+}
+
+.settings-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-accent-status {
+  min-height: 3em;
+}
+
+.settings-accent-status__scope {
+  opacity: 0.72;
+}
+
+.settings-accent-status__scope::before {
+  content: " ·\00a0";
+}
+
+.settings-accent-swatch {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: var(--settings-accent-swatch, var(--accent));
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-accent-swatch--active {
+  box-shadow:
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 4px var(--accent);
+}
+
+.settings-accent-swatch__check {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-foreground);
+}
+
+.settings-accent-swatch__check svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-accent-swatch--custom {
+  position: relative;
+  overflow: hidden;
+}
+
+.settings-accent-swatch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+}
+
+.settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+  outline: 2px solid var(--text-strong);
+  outline-offset: 4px;
+}
+
+.settings-accent-swatch__picker {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+  pointer-events: none;
+}
+
+.settings-accent-swatch__picker svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (forced-colors: active) {
+  .settings-accent-swatch__picker {
+    color: CanvasText;
+  }
+
+  .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+.settings-theme-import {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.settings-theme-import__copy {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-theme-import__title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.settings-theme-import__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.settings-theme-import__external {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.settings-theme-import__external:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.settings-theme-import__external svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  flex: 0 0 auto;
+}
+
+.settings-theme-import__inline-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.settings-theme-import__inline-hint strong {
+  color: var(--text);
+}
+
+.settings-theme-import__field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-theme-import__label {
+  font-size: 12px; /* was 11px */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settings-theme-import__input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-theme-import__input::placeholder {
+  color: var(--muted);
+}
+
+.settings-theme-import__input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: var(--focus-ring);
+}
+
+.settings-theme-import__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-theme-import__meta {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-theme-import__meta-label {
+  font-size: 12px; /* was 11px */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settings-theme-import__meta-value {
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.settings-theme-import__message {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-theme-import__message--success {
+  background: var(--ok-subtle);
+  color: var(--text);
+}
+
+.settings-theme-import__message--error {
+  background: var(--danger-subtle);
+  color: var(--text);
+}
+
+.settings-text-scale {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.settings-text-scale__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.settings-text-scale__btn {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.settings-text-scale__btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.settings-text-scale__btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-text-scale__sample {
+  font-weight: 650;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.settings-text-scale__label {
+  color: var(--muted);
+  font-size: 12px; /* was 11px */
+  line-height: 1.2;
+}
+
+.settings-text-scale__btn.active .settings-text-scale__label {
+  color: var(--accent);
+}
+
+.config-raw-field textarea {
+  min-height: 500px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.config-raw-field .config-raw-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+  min-width: 32px;
+}
+
+/* Loading State */
+.config-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 80px 24px;
+  color: var(--muted);
+}
+
+.config-loading__spinner {
+  width: 32px;
+  height: 32px;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===========================================
+   Form specifics layered on settings rows
+   =========================================== */
+
+/* Inline validation/unsupported-node message inside a settings-row. */
+.cfg-field__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-content :is(input, textarea, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* Redacted click-to-reveal inputs/textareas. */
+.cfg-redacted {
+  opacity: 0.7;
+}
+
+/* Hairline dividers around form sub-blocks (collapsible objects, arrays,
+   maps) so they chain with sibling settings-rows inside one group. */
+.cfg-block + .cfg-block,
+.settings-row + .cfg-block,
+.cfg-block + .settings-row,
+.settings-subrows + .cfg-block,
+.cfg-block + .settings-subrows {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* Collapsible nested-object summary behaves like a nav row. */
+.cfg-object__summary {
+  cursor: var(--cursor-action);
+  list-style: none;
+  transition: background var(--duration-fast) ease;
+}
+
+.cfg-object__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-object__summary:hover {
+  background: var(--bg-hover);
+}
+
+.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
+  transform: rotate(180deg);
+}
+
+/* Hint tags (searchable via tag: filters). */
+.cfg-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cfg-tag {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  font-size: 12px; /* was 11px */
+  color: var(--muted);
+  background: var(--bg-elevated);
+  white-space: nowrap;
+}
+
+:root[data-theme-mode="light"] .cfg-tag {
+  background: white;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .settings-theme-import__input,
+  .config-raw-field textarea {
+    font-size: 16px;
+  }
+}
+
+/* MCP */
+.mcp-page {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+/* Memory */
+.memory-page {
+  display: grid;
+  gap: 0;
+}
+
+/* Memory subviews vary substantially in height. Keep the shared hero anchored
+   when switching between a view that needs the content scrollbar and one that
+   does not. */
+.shell--settings .content:has(.memory-page) {
+  scrollbar-gutter: stable;
+}
+
+.memory-page__panel {
+  display: grid;
+  gap: 14px;
+}
+
+/* Overview and Memories render a .settings-page descendant, while Dreams does
+   not. Keep the shared header on the settings-page padding rhythm regardless
+   of which tab is active so its title and actions do not jump by one space. */
+.shell--settings .content:has(.memory-page) .content-header.hub-page-header {
+  max-width: 1120px;
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
+}
+
+.memory-page__panel .settings-page,
+.memory-page__panel .config-lead,
+.memory-page__panel .config-content-callout {
+  margin-inline: 0;
+}
+
+.memory-page__link {
+  color: var(--accent);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.mcp-command-card__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.mcp-command-card__grid code,
+.mcp-server-row .settings-row__control code {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-server-row__launch {
+  font-family: var(--mono);
+}
+
+/* Shared inline form stays in config.css because the app-wide stylesheet
+ * serves both the MCP settings page and the Plugins inventory. */
+.mcp-server-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(150px, 190px) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.mcp-server-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mcp-server-form label span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+}
+
+.mcp-server-form__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mcp-server-message {
+  margin: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--ok-subtle);
+  color: var(--ok);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.mcp-server-message--error {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+/* Advanced Settings accordion navigation, rendered by view.ts. */
+.config-accordion-nav {
+  margin-bottom: 20px;
+}
+
+.config-accordion-group {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+  overflow: hidden;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group:hover {
+  border-color: var(--border);
+}
+
+.config-accordion-group__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--card) 50%);
+  border: none;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__header:hover,
+.config-accordion-group__header--active {
+  background: var(--bg-hover);
+}
+
+.config-accordion-group__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.config-accordion-group__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.config-accordion-group__chevron {
+  margin-left: auto;
+  opacity: 0.35;
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.config-accordion-group__chevron--open {
+  transform: rotate(180deg);
+}
+
+.config-accordion-group__items {
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 4px 0;
+  background: var(--card);
+}
+
+.config-accordion-group__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 16px 9px 40px;
+  font-size: 0.8125rem;
+  font-weight: 450;
+  color: var(--muted);
+  background: none;
+  border: none;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.config-accordion-group__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.config-accordion-group__item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.config-accordion-group__item-icon {
+  display: flex;
+  align-items: center;
+  opacity: 0.45;
+}
+
+.config-accordion-group__item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+@media (max-width: 900px) {
+  .mcp-command-card__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-server-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+}

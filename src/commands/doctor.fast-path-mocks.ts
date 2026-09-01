@@ -1,0 +1,180 @@
+/** Fast-path module mocks for doctor command tests that do not need full integrations. */
+import { vi } from "vitest";
+
+vi.mock("./doctor-completion.js", () => ({
+  doctorShellCompletion: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-bootstrap-size.js", () => ({
+  noteBootstrapFileSize: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
+  maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
+    changes: [],
+    configOwnerMigrationApplied: false,
+    warnings: [],
+  }),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor-auth-legacy-oauth.js", () => ({
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
+}));
+
+vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
+  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-browser.js", () => ({
+  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
+  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-claude-cli.js", () => ({
+  noteClaudeCliHealth: vi.fn(),
+}));
+
+vi.mock("./doctor-command-owner.js", () => ({
+  noteCommandOwnerHealth: vi.fn(),
+}));
+
+vi.mock("./doctor-config-audit-scrub.js", () => ({
+  maybeScrubConfigAuditLog: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-usage-cost-cache.js", () => ({
+  maybeRepairLegacyRuntimeFiles: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor/cron/index.js", () => ({
+  maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
+  noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor/cron/legacy-repair.js", () => ({
+  collectCronCodexRuntimePolicyTargetsReadOnly: vi
+    .fn()
+    .mockResolvedValue({ targets: [], warnings: [] }),
+  repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
+vi.mock("./doctor-device-pairing.js", () => ({
+  noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-gateway-daemon-flow.js", () => ({
+  maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-gateway-health.js", () => ({
+  checkGatewayHealth: vi.fn().mockResolvedValue({ healthOk: false }),
+  probeGatewayMemoryStatus: vi
+    .fn()
+    .mockResolvedValue({ checked: false, ready: false, skipped: false }),
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-plugin-manifests.js", () => ({
+  maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-plugin-registry.js", () => ({
+  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
+}));
+
+vi.mock("./doctor-platform-notes.js", () => ({
+  noteStartupOptimizationHints: vi.fn(),
+  noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+  noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-sandbox.js", () => ({
+  maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
+  noteSandboxScopeWarnings: vi.fn(),
+}));
+
+vi.mock("./doctor-security.js", () => ({
+  noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-install-policy.js", () => ({
+  noteInstallPolicyHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-session-transcripts.js", () => ({
+  noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-session-snapshots.js", () => ({
+  noteSessionSnapshotHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-skills.js", () => ({
+  maybeRepairSkillReadiness: vi.fn(async ({ cfg }: { cfg: unknown }) => cfg),
+}));
+
+vi.mock("./doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: vi.fn(() => null),
+  noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
+  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("./doctor-ui.js", () => ({
+  maybeRepairUiProtocolFreshness: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-whatsapp-responsiveness.js", () => ({
+  noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-workspace-status.js", () => ({
+  noteWorkspaceStatus: vi.fn(),
+}));
+
+vi.mock("../flows/doctor-startup-channel-maintenance.js", () => ({
+  maybeRunDoctorStartupChannelMaintenance: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
+  collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
+  maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
+vi.mock("./doctor-heartbeat-scratch-migration.js", () => ({
+  collectHeartbeatScratchMigrationFindings: vi.fn().mockResolvedValue([]),
+  maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
+vi.mock("./doctor-heartbeat-task-migration.js", () => ({
+  collectHeartbeatTaskMigrationFindings: vi.fn().mockResolvedValue([]),
+  maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
+vi.mock("../plugins/provider-openai-chatgpt-oauth-tls.js", () => ({
+  noteOpenAIOAuthTlsPrerequisites: vi.fn().mockResolvedValue(undefined),
+}));

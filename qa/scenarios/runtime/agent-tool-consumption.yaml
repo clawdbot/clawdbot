@@ -1,0 +1,141 @@
+title: Agent tool result consumption
+
+scenario:
+  id: agent-tool-consumption
+  surface: agent-runtime
+  coverage:
+    primary:
+      - agent-runtime.tool-switching
+      - agent-runtime.tool-no-fake-progress
+      - agent-runtime.tool-evidence
+  objective: Verify one agent turn consumes two distinct real tool results in order before producing one evidence-backed terminal response.
+  successCriteria:
+    - The agent calls memory_search and memory_get in strict sequence with distinct call identities.
+    - Each tool result reaches the next provider request with the matching call identity.
+    - No terminal response is emitted until both tool results have been consumed.
+    - The single terminal response quotes a nonce available only from the memory_get result.
+  docsRefs:
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/attempt.ts
+    - extensions/memory-core/src/tools.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Consume an ordered memory_search and memory_get chain before one evidence-backed terminal response.
+    providerMode: mock-openai
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      memoryQuery: hidden project codename
+      expectedMemoryPath: memory/qa-agent-tool-consumption.md
+      promptSnippet: "Memory tools check"
+      prompt: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first. Do not guess, narrate progress, or claim completion before both tool results are available."
+
+flow:
+  steps:
+    - name: consumes both matched tool results before replying
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: reset
+        - set: nonce
+          value:
+            expr: "`ORBIT-${parseInt(randomUUID().replaceAll('-', '').slice(0, 8), 16)}`"
+        - set: memoryFact
+          value:
+            expr: "`Hidden QA fact: the project codename is ${nonce}.`"
+        - assert:
+            expr: "!config.prompt.includes(nonce)"
+            message: tool-only nonce leaked into the user prompt
+        - call: fs.mkdir
+          args:
+            - expr: "path.dirname(path.join(env.gateway.workspaceDir, config.expectedMemoryPath))"
+            - recursive: true
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, config.expectedMemoryPath)"
+            - expr: "`${memoryFact}\\n`"
+            - utf8
+        - call: forceMemoryIndex
+          args:
+            - env:
+                ref: env
+              query:
+                expr: config.memoryQuery
+              expectedNeedle:
+                ref: nonce
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:tool-consumption:${randomUUID().slice(0, 8)}`"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.prompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - assert:
+            expr: scenarioRequests.length === 3
+            message:
+              expr: "`expected exactly three provider requests, got ${JSON.stringify(scenarioRequests)}`"
+        - set: searchPlanRequest
+          value:
+            expr: scenarioRequests[0]
+        - set: searchResultRequest
+          value:
+            expr: scenarioRequests[1]
+        - set: getResultRequest
+          value:
+            expr: scenarioRequests[2]
+        - assert:
+            expr: "searchPlanRequest.plannedToolName === 'memory_search' && typeof searchPlanRequest.plannedToolCallId === 'string' && searchPlanRequest.plannedToolCallId.length > 0 && !searchPlanRequest.toolOutputCallId && !String(searchPlanRequest.allInputText ?? '').includes(nonce)"
+            message:
+              expr: "`first request did not exclusively plan memory_search without the nonce: ${JSON.stringify(searchPlanRequest)}`"
+        - assert:
+            expr: "searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId && searchResultRequest.toolOutputStructuredError !== true && String(searchResultRequest.toolOutput ?? '').includes(config.expectedMemoryPath) && String(searchResultRequest.toolOutput ?? '').includes(nonce) && String(searchResultRequest.allInputText ?? '').includes(nonce) && searchResultRequest.plannedToolName === 'memory_get' && searchResultRequest.plannedToolArgs?.path === config.expectedMemoryPath && typeof searchResultRequest.plannedToolCallId === 'string' && searchResultRequest.plannedToolCallId.length > 0 && searchResultRequest.plannedToolCallId !== searchPlanRequest.plannedToolCallId"
+            message:
+              expr: "`memory_search result did not causally plan a distinct memory_get call: ${JSON.stringify(searchResultRequest)}`"
+        - assert:
+            expr: "getResultRequest.toolOutputCallId === searchResultRequest.plannedToolCallId && getResultRequest.toolOutputStructuredError !== true && String(getResultRequest.toolOutput ?? '').includes(nonce) && String(getResultRequest.allInputText ?? '').includes(nonce) && !getResultRequest.plannedToolName"
+            message:
+              expr: "`memory_get result was not consumed before terminal generation: ${JSON.stringify(getResultRequest)}`"
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(nonce)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - set: terminalOutbounds
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+        - assert:
+            expr: "terminalOutbounds.length === 1 && terminalOutbounds[0].id === outbound.id"
+            message:
+              expr: "`expected exactly one visible terminal outcome after both results: ${JSON.stringify(terminalOutbounds)}`"
+        - assert:
+            expr: "outbound.text.includes(nonce) && (outbound.text.match(new RegExp(nonce, 'g')) ?? []).length === 1"
+            message:
+              expr: "`terminal response did not quote the tool-only nonce exactly once: ${outbound.text}`"
+      detailsExpr: "`${outbound.text}; tools=${searchPlanRequest.plannedToolName}->${searchResultRequest.plannedToolName}; matched=${searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId && getResultRequest.toolOutputCallId === searchResultRequest.plannedToolCallId}; terminalOutcomes=${terminalOutbounds.length}`"

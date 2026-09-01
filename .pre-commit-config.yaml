@@ -1,0 +1,111 @@
+# Pre-commit hooks for openclaw
+# Install: prek install
+# Run manually: prek run --all-files
+#
+# See https://pre-commit.com for more information
+
+repos:
+  # Basic file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '^(docs/|dist/|vendor/|.*\.snap$)'
+      - id: end-of-file-fixer
+        exclude: '^(docs/|dist/|vendor/|.*\.snap$)'
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
+        exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
+  # Shell script linting
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+        args: [--rcfile=config/shellcheckrc, --severity=error] # Only fail on errors, not warnings/info
+        # Exclude vendor and scripts with embedded code or known issues
+        exclude: "^(vendor/|scripts/e2e/)"
+
+  # GitHub Actions linting
+  - repo: https://github.com/rhysd/actionlint
+    rev: 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7 # ShellCheck stdin deadlock fix (#651)
+    hooks:
+      - id: actionlint
+
+  # GitHub Actions security audit
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # v1.29.0
+    hooks:
+      - id: zizmor
+        args:
+          [
+            --config,
+            .github/zizmor.yml,
+            --persona=regular,
+            --min-severity=medium,
+            --min-confidence=medium,
+          ]
+        exclude: "^(vendor/|apps/swabble/)"
+
+  # Python checks for skills scripts
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: aab412d509121cb5f7533134b7e67f9fab59c682 # v0.16.4
+    hooks:
+      - id: ruff
+        files: "^skills/.*\\.py$"
+        args: [--config, skills/pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: skills-python-tests
+        name: skills python tests
+        entry: pytest -q -c skills/pyproject.toml skills
+        language: python
+        additional_dependencies: ["pytest>=9,<10"]
+        pass_filenames: false
+        files: "^skills/.*\\.py$"
+
+  # Project checks (same commands as CI)
+  - repo: local
+    hooks:
+      # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+      - id: pnpm-audit-prod
+        name: pnpm-audit-prod
+        entry: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        language: system
+        pass_filenames: false
+
+      # oxlint --type-aware src test
+      - id: oxlint
+        name: oxlint
+        entry: scripts/pre-commit/run-node-tool.sh oxlint --type-aware src test
+        language: system
+        pass_filenames: false
+        types_or: [javascript, jsx, ts, tsx]
+
+      # oxfmt --check src test
+      - id: oxfmt
+        name: oxfmt
+        entry: scripts/pre-commit/run-node-tool.sh oxfmt --check src test
+        language: system
+        pass_filenames: false
+        types_or: [javascript, jsx, ts, tsx]
+
+      # swiftlint (same as CI)
+      - id: swiftlint
+        name: swiftlint
+        entry: swiftlint lint --config config/swiftlint.yml
+        language: system
+        pass_filenames: false
+        types: [swift]
+
+      # swiftformat --lint (same as CI)
+      - id: swiftformat
+        name: swiftformat
+        entry: swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+        language: system
+        pass_filenames: false
+        types: [swift]

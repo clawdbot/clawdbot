@@ -1,0 +1,575 @@
+/** Reads Agent/Codex/Claude/Cursor bundle manifests into OpenClaw plugin manifest metadata. */
+import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isRecord } from "../utils.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
+import type { PluginManifestActivation } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  normalizeManifestActivation,
+  PLUGIN_MANIFEST_FILENAME,
+} from "./manifest.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheStatSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
+
+/** Relative manifest path for Codex-style plugin bundles. */
+export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
+export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
+export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
+export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const AGENT_BUNDLE_EXTENSION_NAMESPACE = "ai.openclaw";
+const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
+const log = createSubsystemLogger("plugins/bundle-manifest");
+
+/** Normalized bundle manifest shape consumed by plugin discovery. */
+type BundlePluginManifest = {
+  id: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  skills: string[];
+  settingsFiles?: string[];
+  // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
+  hooks: string[];
+  bundleFormat: PluginBundleFormat;
+  activation?: PluginManifestActivation;
+  capabilities: string[];
+};
+
+type BundleManifestLoadResult =
+  | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
+  | { ok: false; error: string; manifestPath: string };
+
+type BundleManifestFileLoadResult =
+  | { ok: true; raw: Record<string, unknown>; manifestPath: string }
+  | { ok: false; error: string; manifestPath: string };
+
+/** Normalizes string-or-list path fields from bundle manifests. */
+export function normalizeBundlePathList(value: unknown): string[] {
+  return normalizeUniqueSingleOrTrimmedStringList(value);
+}
+
+export function mergeBundlePathLists(...groups: string[][]): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const entry of group) {
+      if (seen.has(entry)) {
+        continue;
+      }
+      seen.add(entry);
+      merged.push(entry);
+    }
+  }
+  return merged;
+}
+
+function hasInlineCapabilityValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (isRecord(value)) {
+    return Object.keys(value).length > 0;
+  }
+  return value === true;
+}
+
+function slugifyPluginId(raw: string | undefined, rootDir: string): string {
+  const fallback = path.basename(rootDir);
+  const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
+  const slug = source
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "bundle-plugin";
+}
+
+function loadBundleManifestFile(params: {
+  rootDir: string;
+  rootRealPath?: string;
+  manifestRelativePath: string;
+  rejectHardlinks: boolean;
+  allowMissing?: boolean;
+  strictJson?: boolean;
+  maxBytes?: number;
+}): BundleManifestFileLoadResult {
+  const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
+  const file = readPluginCacheFile({
+    rootDir: params.rootDir,
+    rootRealPath: params.rootRealPath,
+    relativePath: params.manifestRelativePath,
+    rejectHardlinks: params.rejectHardlinks,
+    maxBytes: params.maxBytes ?? MAX_AGENT_BUNDLE_MANIFEST_BYTES,
+  });
+  if (!file.ok) {
+    return matchRootFileOpenFailure(file.failure, {
+      path: () => {
+        if (params.allowMissing) {
+          return { ok: true, raw: {}, manifestPath };
+        }
+        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        manifestPath,
+      }),
+    });
+  }
+  const result = parsePluginCacheJson(file, { json5: !params.strictJson });
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: `failed to parse plugin manifest: ${formatErrorMessage(result.error)}`,
+      manifestPath,
+    };
+  }
+  if (!isRecord(result.value)) {
+    return { ok: false, error: "plugin manifest must be an object", manifestPath };
+  }
+  return { ok: true, raw: result.value, manifestPath };
+}
+
+function resolveCodexSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  const declared = normalizeBundlePathList(raw.skills);
+  if (declared.length > 0) {
+    return declared;
+  }
+  return pluginCacheExistsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+}
+
+function resolveCodexHookDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  const declared = normalizeBundlePathList(raw.hooks);
+  if (declared.length > 0) {
+    return declared;
+  }
+  return pluginCacheExistsSync(path.join(rootDir, "hooks")) ? ["hooks"] : [];
+}
+
+function resolveCursorSkillsRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  const declared = normalizeBundlePathList(raw.skills);
+  const defaults = pluginCacheExistsSync(path.join(rootDir, "skills")) ? ["skills"] : [];
+  return mergeBundlePathLists(defaults, declared);
+}
+
+function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  const declared = normalizeBundlePathList(raw.commands);
+  const defaults = pluginCacheExistsSync(path.join(rootDir, ".cursor", "commands"))
+    ? [".cursor/commands"]
+    : [];
+  return mergeBundlePathLists(defaults, declared);
+}
+
+function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  return mergeBundlePathLists(
+    resolveCursorSkillsRootDirs(raw, rootDir),
+    resolveCursorCommandRootDirs(raw, rootDir),
+  );
+}
+
+function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  const declared = normalizeBundlePathList(raw.subagents ?? raw.agents);
+  const defaults = pluginCacheExistsSync(path.join(rootDir, ".cursor", "agents"))
+    ? [".cursor/agents"]
+    : [];
+  return mergeBundlePathLists(defaults, declared);
+}
+
+function hasCursorHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
+  return (
+    hasInlineCapabilityValue(raw.hooks) ||
+    pluginCacheExistsSync(path.join(rootDir, ".cursor", "hooks.json"))
+  );
+}
+
+function hasCursorRulesCapability(raw: Record<string, unknown>, rootDir: string): boolean {
+  return (
+    hasInlineCapabilityValue(raw.rules) ||
+    pluginCacheExistsSync(path.join(rootDir, ".cursor", "rules"))
+  );
+}
+
+function hasCursorMcpCapability(raw: Record<string, unknown>, rootDir: string): boolean {
+  return (
+    hasInlineCapabilityValue(raw.mcpServers) ||
+    pluginCacheExistsSync(path.join(rootDir, ".mcp.json"))
+  );
+}
+
+function resolveClaudeComponentPaths(
+  raw: Record<string, unknown>,
+  key: string,
+  rootDir: string,
+  defaults: string[],
+): string[] {
+  const declared = normalizeBundlePathList(raw[key]);
+  const existingDefaults = defaults.filter((candidate) =>
+    pluginCacheExistsSync(path.join(rootDir, candidate)),
+  );
+  return mergeBundlePathLists(existingDefaults, declared);
+}
+
+function resolveClaudeSkillsRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "skills", rootDir, ["skills"]);
+}
+
+function resolveClaudeCommandRootDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "commands", rootDir, ["commands"]);
+}
+
+function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  return mergeBundlePathLists(
+    resolveClaudeSkillsRootDirs(raw, rootDir),
+    resolveClaudeCommandRootDirs(raw, rootDir),
+    resolveClaudeAgentDirs(raw, rootDir),
+    resolveClaudeOutputStylePaths(raw, rootDir),
+  );
+}
+
+function resolveClaudeAgentDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "agents", rootDir, ["agents"]);
+}
+
+function resolveClaudeHookPaths(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "hooks", rootDir, ["hooks/hooks.json"]);
+}
+
+function resolveClaudeMcpPaths(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "mcpServers", rootDir, [".mcp.json"]);
+}
+
+function resolveClaudeLspPaths(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "lspServers", rootDir, [".lsp.json"]);
+}
+
+function resolveClaudeOutputStylePaths(raw: Record<string, unknown>, rootDir: string): string[] {
+  return resolveClaudeComponentPaths(raw, "outputStyles", rootDir, ["output-styles"]);
+}
+
+function resolveClaudeSettingsFiles(_raw: Record<string, unknown>, rootDir: string): string[] {
+  return pluginCacheExistsSync(path.join(rootDir, "settings.json")) ? ["settings.json"] : [];
+}
+
+function hasClaudeHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
+  return hasInlineCapabilityValue(raw.hooks) || resolveClaudeHookPaths(raw, rootDir).length > 0;
+}
+
+function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
+  const capabilities: string[] = [];
+  if (resolveCodexSkillDirs(raw, rootDir).length > 0) {
+    capabilities.push("skills");
+  }
+  if (resolveCodexHookDirs(raw, rootDir).length > 0) {
+    capabilities.push("hooks");
+  }
+  if (
+    hasInlineCapabilityValue(raw.mcpServers) ||
+    pluginCacheExistsSync(path.join(rootDir, ".mcp.json"))
+  ) {
+    capabilities.push("mcpServers");
+  }
+  if (
+    hasInlineCapabilityValue(raw.apps) ||
+    pluginCacheExistsSync(path.join(rootDir, ".app.json"))
+  ) {
+    capabilities.push("apps");
+  }
+  return capabilities;
+}
+
+function buildClaudeCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
+  const capabilities: string[] = [];
+  if (resolveClaudeSkillDirs(raw, rootDir).length > 0) {
+    capabilities.push("skills");
+  }
+  if (resolveClaudeCommandRootDirs(raw, rootDir).length > 0) {
+    capabilities.push("commands");
+  }
+  if (resolveClaudeAgentDirs(raw, rootDir).length > 0) {
+    capabilities.push("agents");
+  }
+  if (hasClaudeHookCapability(raw, rootDir)) {
+    capabilities.push("hooks");
+  }
+  if (hasInlineCapabilityValue(raw.mcpServers) || resolveClaudeMcpPaths(raw, rootDir).length > 0) {
+    capabilities.push("mcpServers");
+  }
+  if (hasInlineCapabilityValue(raw.lspServers) || resolveClaudeLspPaths(raw, rootDir).length > 0) {
+    capabilities.push("lspServers");
+  }
+  if (
+    hasInlineCapabilityValue(raw.outputStyles) ||
+    resolveClaudeOutputStylePaths(raw, rootDir).length > 0
+  ) {
+    capabilities.push("outputStyles");
+  }
+  if (resolveClaudeSettingsFiles(raw, rootDir).length > 0) {
+    capabilities.push("settings");
+  }
+  return capabilities;
+}
+
+function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
+  const capabilities: string[] = [];
+  if (resolveCursorSkillDirs(raw, rootDir).length > 0) {
+    capabilities.push("skills");
+  }
+  if (resolveCursorCommandRootDirs(raw, rootDir).length > 0) {
+    capabilities.push("commands");
+  }
+  if (resolveCursorAgentDirs(raw, rootDir).length > 0) {
+    capabilities.push("agents");
+  }
+  if (hasCursorHookCapability(raw, rootDir)) {
+    capabilities.push("hooks");
+  }
+  if (hasCursorRulesCapability(raw, rootDir)) {
+    capabilities.push("rules");
+  }
+  if (hasCursorMcpCapability(raw, rootDir)) {
+    capabilities.push("mcpServers");
+  }
+  return capabilities;
+}
+
+function resolveAgentSkillDirs(rootDir: string): string[] {
+  try {
+    return pluginCacheStatSync(path.join(rootDir, "skills"))?.isDirectory() ? ["skills"] : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildAgentCapabilities(rootDir: string): string[] {
+  const capabilities: string[] = [];
+  if (resolveAgentSkillDirs(rootDir).length > 0) {
+    capabilities.push("skills");
+  }
+  if (pluginCacheExistsSync(path.join(rootDir, "mcp.json"))) {
+    capabilities.push("mcpServers");
+  }
+  return capabilities;
+}
+
+function resolveAgentActivation(
+  raw: Record<string, unknown>,
+  manifestPath: string,
+): PluginManifestActivation | undefined {
+  if (raw.extensions === undefined) {
+    return undefined;
+  }
+  if (!isRecord(raw.extensions)) {
+    log.warn(`ignoring Agent Plugins extensions in ${manifestPath}: expected an object`);
+    return undefined;
+  }
+  const openclawExtension = raw.extensions[AGENT_BUNDLE_EXTENSION_NAMESPACE];
+  if (openclawExtension === undefined) {
+    return undefined;
+  }
+  if (!isRecord(openclawExtension)) {
+    log.warn(
+      `ignoring Agent Plugins ${AGENT_BUNDLE_EXTENSION_NAMESPACE} extension in ${manifestPath}: expected an object`,
+    );
+    return undefined;
+  }
+  return normalizeManifestActivation(openclawExtension.activation);
+}
+
+export function loadBundleManifest(params: {
+  rootDir: string;
+  rootRealPath?: string;
+  bundleFormat: PluginBundleFormat;
+  rejectHardlinks?: boolean;
+}): BundleManifestLoadResult {
+  const rejectHardlinks = params.rejectHardlinks ?? true;
+  const manifestRelativePath =
+    params.bundleFormat === "codex"
+      ? CODEX_BUNDLE_MANIFEST_RELATIVE_PATH
+      : params.bundleFormat === "cursor"
+        ? CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH
+        : params.bundleFormat === "agent"
+          ? AGENT_BUNDLE_MANIFEST_RELATIVE_PATH
+          : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
+  const loaded = loadBundleManifestFile({
+    rootDir: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
+    manifestRelativePath,
+    rejectHardlinks,
+    allowMissing: params.bundleFormat === "claude",
+    strictJson: params.bundleFormat === "agent",
+    ...(params.bundleFormat === "agent" ? { maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES } : {}),
+  });
+  if (!loaded.ok) {
+    return loaded;
+  }
+
+  const raw = loaded.raw;
+  const interfaceRecord = isRecord(raw.interface) ? raw.interface : undefined;
+  const name = normalizeOptionalString(raw.name);
+  const description =
+    normalizeOptionalString(raw.description) ??
+    normalizeOptionalString(raw.shortDescription) ??
+    normalizeOptionalString(interfaceRecord?.shortDescription);
+  const version = normalizeOptionalString(raw.version);
+
+  if (params.bundleFormat === "agent") {
+    if (raw.$schema !== AGENT_BUNDLE_MANIFEST_SCHEMA) {
+      return {
+        ok: false,
+        error: `root plugin.json is not an Agent Plugins manifest; expected $schema ${AGENT_BUNDLE_MANIFEST_SCHEMA}`,
+        manifestPath: loaded.manifestPath,
+      };
+    }
+    if (!name) {
+      return {
+        ok: false,
+        error: "agent plugin manifest name must be a non-empty string",
+        manifestPath: loaded.manifestPath,
+      };
+    }
+    return {
+      ok: true,
+      manifest: {
+        id: slugifyPluginId(name, params.rootDir),
+        name,
+        description,
+        version,
+        skills: resolveAgentSkillDirs(params.rootDir),
+        settingsFiles: [],
+        hooks: [],
+        bundleFormat: "agent",
+        activation: resolveAgentActivation(raw, loaded.manifestPath),
+        capabilities: buildAgentCapabilities(params.rootDir),
+      },
+      manifestPath: loaded.manifestPath,
+    };
+  }
+
+  if (params.bundleFormat === "codex") {
+    const skills = resolveCodexSkillDirs(raw, params.rootDir);
+    const hooks = resolveCodexHookDirs(raw, params.rootDir);
+    return {
+      ok: true,
+      manifest: {
+        id: slugifyPluginId(name, params.rootDir),
+        name,
+        description,
+        version,
+        skills,
+        settingsFiles: [],
+        hooks,
+        bundleFormat: "codex",
+        activation: normalizeManifestActivation(raw.activation),
+        capabilities: buildCodexCapabilities(raw, params.rootDir),
+      },
+      manifestPath: loaded.manifestPath,
+    };
+  }
+
+  if (params.bundleFormat === "cursor") {
+    return {
+      ok: true,
+      manifest: {
+        id: slugifyPluginId(name, params.rootDir),
+        name,
+        description,
+        version,
+        skills: resolveCursorSkillDirs(raw, params.rootDir),
+        settingsFiles: [],
+        hooks: [],
+        bundleFormat: "cursor",
+        activation: normalizeManifestActivation(raw.activation),
+        capabilities: buildCursorCapabilities(raw, params.rootDir),
+      },
+      manifestPath: loaded.manifestPath,
+    };
+  }
+
+  return {
+    ok: true,
+    manifest: {
+      id: slugifyPluginId(name, params.rootDir),
+      name,
+      description,
+      version,
+      skills: resolveClaudeSkillDirs(raw, params.rootDir),
+      settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
+      hooks: resolveClaudeHookPaths(raw, params.rootDir),
+      bundleFormat: "claude",
+      activation: normalizeManifestActivation(raw.activation),
+      capabilities: buildClaudeCapabilities(raw, params.rootDir),
+    },
+    manifestPath: loaded.manifestPath,
+  };
+}
+
+export function detectBundleManifestFormat(
+  rootDir: string,
+  hasPackageExtensions = false,
+): PluginBundleFormat | null {
+  // Explicit package entrypoints own native manifests; bundles only precede native fallback.
+  if (hasPackageExtensions && pluginCacheExistsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+    return null;
+  }
+  if (pluginCacheExistsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "codex";
+  }
+  if (pluginCacheExistsSync(path.join(rootDir, CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "cursor";
+  }
+  if (pluginCacheExistsSync(path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    return "claude";
+  }
+  if (pluginCacheExistsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+    return null;
+  }
+  // Client-specific bundle dirs and native OpenClaw manifests take precedence;
+  // the portable root manifest is the fallback when neither is present.
+  if (pluginCacheExistsSync(path.join(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH))) {
+    const agentManifest = loadBundleManifestFile({
+      rootDir,
+      manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
+      rejectHardlinks: false,
+      strictJson: true,
+      maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
+    });
+    if (agentManifest.ok && agentManifest.raw.$schema === AGENT_BUNDLE_MANIFEST_SCHEMA) {
+      return "agent";
+    }
+  }
+  if (
+    DEFAULT_PLUGIN_ENTRY_CANDIDATES.some((candidate) =>
+      pluginCacheExistsSync(path.join(rootDir, candidate)),
+    )
+  ) {
+    return null;
+  }
+  const manifestlessClaudeMarkers = [
+    path.join(rootDir, "skills"),
+    path.join(rootDir, "commands"),
+    path.join(rootDir, "agents"),
+    path.join(rootDir, "hooks", "hooks.json"),
+    path.join(rootDir, ".mcp.json"),
+    path.join(rootDir, ".lsp.json"),
+    path.join(rootDir, "settings.json"),
+  ];
+  if (manifestlessClaudeMarkers.some((candidate) => pluginCacheExistsSync(candidate))) {
+    return "claude";
+  }
+  return null;
+}

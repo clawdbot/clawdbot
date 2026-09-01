@@ -1,0 +1,31 @@
+{
+  "name": "@openclaw/memory-wiki",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "OpenClaw persistent wiki plugin",
+  "type": "module",
+  "dependencies": {
+    "mdast-util-from-markdown": "2.0.3",
+    "typebox": "1.3.17",
+    "yaml": "2.9.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/memory-core": "workspace:*",
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "id": "file-transfer",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "File Transfer",
+  "description": "Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.",
+  "cliCommands": [
+    {
+      "name": "file-transfer",
+      "description": "Review file-transfer standing approvals",
+      "hasSubcommands": true
+    }
+  ],
+  "doctorContract": {
+    "configRepair": true
+  },
+  "contracts": {
+    "tools": ["file_fetch", "dir_list", "dir_fetch", "file_write"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "policyVersion": {
+        "type": "integer",
+        "const": 2
+      },
+      "literalGrants": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nodeId", "command", "requestedPath", "canonicalPath"],
+          "properties": {
+            "nodeId": { "type": "string", "minLength": 1 },
+            "command": {
+              "type": "string",
+              "enum": ["file.fetch", "dir.list", "dir.fetch", "file.write"]
+            },
+            "requestedPath": { "type": "string", "minLength": 1 },
+            "canonicalPath": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "pendingReapprovals": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selector", "kind", "path"],
+          "properties": {
+            "selector": { "type": "string", "minLength": 1 },
+            "kind": { "type": "string", "enum": ["read", "write"] },
+            "path": { "type": "string", "minLength": 1 }
+          }
+        }
+      },
+      "nodes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ask": {
+              "type": "string",
+              "enum": ["off", "on-miss", "always"]
+            },
+            "allowReadPaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "allowWritePaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "denyPaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "maxBytes": {
+              "type": "number"
+            },
+            "followSymlinks": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

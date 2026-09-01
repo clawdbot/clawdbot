@@ -1,0 +1,77 @@
+// Qa Lab plugin module implements cron run wait behavior.
+import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
+type QaCronRunLogEntry = {
+  ts?: number;
+  status?: "ok" | "error" | "skipped";
+  summary?: string;
+  error?: string;
+  deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
+};
+
+type QaCronRunsPage = {
+  entries?: QaCronRunLogEntry[];
+};
+
+function resolveCronRunPollIntervalMs(intervalMs: number | undefined): number {
+  return resolveTimerTimeoutMs(intervalMs ?? 1_000, 1_000, 0);
+}
+
+export async function waitForCronRunCompletion(params: {
+  callGateway: (
+    method: string,
+    rpcParams?: unknown,
+    opts?: { timeoutMs?: number },
+  ) => Promise<unknown>;
+  jobId: string;
+  afterTs: number;
+  timeoutMs?: number;
+  intervalMs?: number;
+  gatewayCallTimeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 90_000;
+  const intervalMs = resolveCronRunPollIntervalMs(params.intervalMs);
+  const gatewayCallTimeoutMs = resolveTimerTimeoutMs(
+    params.gatewayCallTimeoutMs ?? 30_000,
+    30_000,
+    1,
+  );
+  const startedAt = Date.now();
+  let lastEntries: QaCronRunLogEntry[] = [];
+  while (Date.now() - startedAt < timeoutMs) {
+    const remainingCallMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingCallMs <= 0) {
+      break;
+    }
+    const page = (await params.callGateway(
+      "cron.runs",
+      {
+        id: params.jobId,
+        limit: 20,
+        sortDir: "desc",
+      },
+      { timeoutMs: Math.min(remainingCallMs, gatewayCallTimeoutMs) },
+    )) as QaCronRunsPage;
+    const entries = Array.isArray(page.entries) ? page.entries : [];
+    lastEntries = entries;
+    const completed = entries.find(
+      (entry) =>
+        typeof entry.ts === "number" &&
+        entry.ts >= params.afterTs &&
+        (entry.status === "ok" || entry.status === "error" || entry.status === "skipped"),
+    );
+    if (completed) {
+      return completed;
+    }
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(intervalMs, remainingMs));
+  }
+  throw new Error(
+    `timed out waiting for cron run completion for ${params.jobId}: ${formatErrorMessage(lastEntries)}`,
+  );
+}

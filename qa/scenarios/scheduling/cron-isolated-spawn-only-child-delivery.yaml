@@ -1,0 +1,219 @@
+title: Isolated cron spawn-only child delivery
+
+scenario:
+  id: cron-isolated-spawn-only-child-delivery
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+      - automation.run-history-cron
+      - channels.qa-channel-final-reply
+  regressionRefs:
+    - openclaw/openclaw#117308
+  objective: Verify naturally fired isolated one-shot cron parents with empty or heartbeat-only replies deliver their children's exact replies before retiring.
+  successCriteria:
+    - Each isolated parent successfully spawns exactly one child and finishes with either no assistant text or a heartbeat acknowledgment.
+    - Each child completes successfully and its exact reply reaches the QA channel once without leaking a heartbeat acknowledgment.
+    - Cron history records each successful delivery before its one-shot job is retired.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/channels/qa-channel.md
+    - docs/tools/subagents.md
+  codeRefs:
+    - src/cron/isolated-agent/run-finalize.ts
+    - src/cron/isolated-agent/delivery-dispatch.ts
+    - src/cron/isolated-agent/subagent-followup.ts
+    - src/cron/service/timer-outcomes.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns a naturally scheduled one-shot job, subagent lifecycle, and exact QA-channel delivery.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 180000
+    summary: Naturally fire empty-parent and heartbeat-parent isolated cron jobs and require each exact child delivery before one-shot retirement.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-room
+      fireDelayMs: 12000
+      duplicateWindowMs: 2000
+      promptSnippet: Subagent direct fallback QA check
+      workerSnippet: Subagent direct fallback worker
+      expectedLabel: qa-direct-fallback-worker
+      expectedMarker: QA-SUBAGENT-DIRECT-FALLBACK-OK
+      cases:
+        - name: empty-parent
+          terminalNeedle: Empty response exhaustion QA check
+          prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After the spawn is accepted, finish without assistant text. Empty response exhaustion QA check. Do not use ACP."
+        - name: heartbeat-parent
+          terminalNeedle: If nothing needs attention, reply NO_REPLY
+          prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After the spawn is accepted, reply NO_REPLY. Do not use ACP.\nIf nothing needs attention, reply NO_REPLY."
+
+flow:
+  steps:
+    - name: delivers child replies from empty and heartbeat-only isolated cron parents
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: verdicts
+          value:
+            expr: "[]"
+        - forEach:
+            items:
+              expr: config.cases
+            item: parentCase
+            actions:
+              - call: reset
+              - set: requestCursorBefore
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - set: runStartedAt
+                value:
+                  expr: "Date.now()"
+              - set: scheduledFor
+                value:
+                  expr: "new Date(runStartedAt + config.fireDelayMs).toISOString()"
+              - call: env.gateway.call
+                saveAs: addedJob
+                args:
+                  - cron.add
+                  - agentId: qa
+                    name:
+                      expr: "`qa-cron-${parentCase.name}-${randomUUID()}`"
+                    enabled: true
+                    deleteAfterRun: true
+                    schedule:
+                      kind: at
+                      at:
+                        ref: scheduledFor
+                    sessionTarget: isolated
+                    wakeMode: now
+                    payload:
+                      kind: agentTurn
+                      timeoutSeconds: 90
+                      toolsAllow:
+                        - sessions_spawn
+                        - read
+                      message:
+                        ref: parentCase.prompt
+                    delivery:
+                      mode: announce
+                      channel: qa-channel
+                      to:
+                        expr: "`channel:${config.channelId}`"
+                  - timeoutMs: 30000
+              - set: jobId
+                value:
+                  expr: "addedJob.id"
+              - assert:
+                  expr: "Boolean(jobId) && addedJob.sessionTarget === 'isolated' && addedJob.deleteAfterRun === true && JSON.stringify(addedJob.payload?.toolsAllow) === JSON.stringify(['sessions_spawn', 'read'])"
+                  message:
+                    expr: "`${parentCase.name}: expected an isolated delete-after-run job restricted to sessions_spawn and read, got ${JSON.stringify(addedJob)}`"
+              - call: waitForCronRunCompletion
+                saveAs: completedRun
+                args:
+                  - callGateway:
+                      expr: "env.gateway.call.bind(env.gateway)"
+                    jobId:
+                      ref: jobId
+                    afterTs:
+                      ref: runStartedAt
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, config.fireDelayMs + 90000)"
+              - assert:
+                  expr: "Date.now() >= new Date(scheduledFor).getTime()"
+                  message:
+                    expr: "`${parentCase.name}: one-shot cron completed before its natural scheduled time`"
+              - assert:
+                  expr: "completedRun.status === 'ok' && completedRun.delivered === true && completedRun.deliveryStatus === 'delivered'"
+                  message:
+                    expr: "`${parentCase.name}: expected a successfully delivered child handoff, got ${JSON.stringify(completedRun)}`"
+              - assert:
+                  expr: "String(completedRun.summary ?? '').trim() === config.expectedMarker"
+                  message:
+                    expr: "`${parentCase.name}: cron summary did not preserve the child's exact reply: ${JSON.stringify(completedRun)}`"
+              - set: scenarioRequests
+                value:
+                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+              - set: parentRequests
+                value:
+                  expr: "scenarioRequests.filter((request) => String(request.prompt ?? '').includes(config.promptSnippet))"
+              - set: spawnRequests
+                value:
+                  expr: "parentRequests.filter((request) => request.plannedToolName === 'sessions_spawn')"
+              - set: terminalRequests
+                value:
+                  expr: "parentRequests.filter((request) => !request.plannedToolName)"
+              - assert:
+                  expr: "parentRequests.length === 2 && spawnRequests.length === 1 && terminalRequests.length === 1 && spawnRequests[0].plannedToolArgs?.label === config.expectedLabel && spawnRequests[0].cursor < terminalRequests[0].cursor && String(terminalRequests[0].allInputText ?? '').includes(parentCase.terminalNeedle)"
+                  message:
+                    expr: "`${parentCase.name}: expected one accepted child spawn followed by its configured tool-free parent response, saw ${JSON.stringify(parentRequests.map((request) => ({ tool: request.plannedToolName ?? null, label: request.plannedToolArgs?.label ?? null })))}`"
+              - assert:
+                  expr: "parentCase.name !== 'heartbeat-parent' || (String(terminalRequests[0].prompt ?? '').split(String.fromCharCode(10)).some((line) => line.startsWith(parentCase.terminalNeedle)) && !/Internal task completion event/i.test(String(terminalRequests[0].allInputText ?? '')))"
+                  message:
+                    expr: "`${parentCase.name}: terminal provider request cannot prove a heartbeat reply instead of an empty completion-event response`"
+              - set: acceptedSpawn
+                value:
+                  expr: "(() => { let result = JSON.parse(String(terminalRequests[0].toolOutput ?? 'null')); if (result?.status === 'completed') result = result.value; return typeof result === 'string' ? JSON.parse(result) : result; })()"
+              - assert:
+                  expr: "acceptedSpawn?.status === 'accepted' && Boolean(String(acceptedSpawn.childSessionKey ?? '').trim()) && Boolean(String(acceptedSpawn.runId ?? '').trim())"
+                  message:
+                    expr: "`${parentCase.name}: parent did not receive a successful child-spawn result before its final response: ${JSON.stringify(acceptedSpawn)}`"
+              - set: childRequests
+                value:
+                  expr: "scenarioRequests.filter((request) => String(request.prompt ?? '').includes(config.workerSnippet))"
+              - assert:
+                  expr: "childRequests.length === 1 && !childRequests[0].plannedToolName"
+                  message:
+                    expr: "`${parentCase.name}: expected one child reply without additional tools, saw ${JSON.stringify(childRequests.map((request) => request.plannedToolName ?? null))}`"
+              - call: waitForOutboundMessage
+                saveAs: deliveredReply
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === config.channelId && String(candidate.text ?? '').trim() === config.expectedMarker"
+                  - expr: "liveTurnTimeoutMs(env, 30000)"
+              - call: sleep
+                args:
+                  - expr: "config.duplicateWindowMs"
+              - set: caseOutbound
+                value:
+                  expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId)"
+              - set: deliveredReplies
+                value:
+                  expr: "caseOutbound.filter((message) => String(message.text ?? '').trim() === config.expectedMarker)"
+              - assert:
+                  expr: "deliveredReplies.length === 1"
+                  message:
+                    expr: "`${parentCase.name}: expected exactly one child reply on qa-channel, saw ${deliveredReplies.length}: ${JSON.stringify(caseOutbound.map((message) => message.text))}`"
+              - assert:
+                  expr: "caseOutbound.every((message) => !String(message.text ?? '').includes('NO_REPLY'))"
+                  message:
+                    expr: "`${parentCase.name}: parent heartbeat acknowledgment leaked to qa-channel: ${JSON.stringify(caseOutbound.map((message) => message.text))}`"
+              - call: waitForCondition
+                saveAs: retiredJobs
+                args:
+                  - lambda:
+                      async: true
+                      expr: "env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 }).then((page) => page.jobs.some((job) => job.id === jobId) ? undefined : page.jobs)"
+                  - expr: "liveTurnTimeoutMs(env, 30000)"
+                  - 250
+              - assert:
+                  expr: "!retiredJobs.some((job) => job.id === jobId)"
+                  message:
+                    expr: "`${parentCase.name}: successful one-shot job was not retired after exact child delivery`"
+              - set: appendVerdict
+                value:
+                  expr: "verdicts.push({ parent: parentCase.name, child: config.expectedLabel, accepted: true, delivery: completedRun.deliveryStatus, reply: deliveredReply.text, outboundCount: deliveredReplies.length, heartbeatLeaked: false, retired: true })"
+      detailsExpr: "JSON.stringify(verdicts)"

@@ -1,0 +1,339 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  McpLoopbackToolCache,
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "./mcp-http.runtime.js";
+
+const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
+
+vi.mock("./tool-resolution.js", () => ({
+  resolveGatewayScopedTools,
+}));
+
+function scopedToolFixture(names: string[]) {
+  return {
+    agentId: "main",
+    tools: names.map((name) => ({ name, description: `${name} tool` })),
+  };
+}
+
+function scopeParams(overrides: Record<string, unknown> = {}) {
+  return {
+    cfg: {} as OpenClawConfig,
+    sessionKey: "agent:main:recall",
+    messageProvider: undefined,
+    currentChannelId: undefined,
+    currentThreadTs: undefined,
+    currentMessageId: undefined,
+    currentInboundAudio: undefined,
+    accountId: undefined,
+    inboundEventKind: undefined,
+    sourceReplyDeliveryMode: undefined,
+    senderIsOwner: false,
+    ...overrides,
+  } as Parameters<typeof resolveMcpLoopbackScopedTools>[0];
+}
+
+beforeEach(() => {
+  resolveGatewayScopedTools.mockReset();
+  resolveGatewayScopedTools.mockReturnValue(
+    scopedToolFixture(["memory_search", "memory_get", "message", "cron"]),
+  );
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("resolveMcpLoopbackScopedTools", () => {
+  it("keeps the full session scope without a grant allowlist", () => {
+    const scoped = resolveMcpLoopbackScopedTools(scopeParams());
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "memory_search",
+      "memory_get",
+      "message",
+      "cron",
+    ]);
+  });
+
+  it("hard-filters the surface to the grant allowlist", () => {
+    const scoped = resolveMcpLoopbackScopedTools(
+      scopeParams({ toolsAllow: ["memory_search", "memory_get"] }),
+    );
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "memory_search",
+      "memory_get",
+    ]);
+  });
+
+  it("keeps exact grant names exact instead of reinterpreting policy shorthand", () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
+
+    const scoped = resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: ["write"] }));
+
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(["write"]);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
+      mediatedToolNames: new Set(["write"]),
+    });
+  });
+
+  it("fails closed on an empty grant allowlist", () => {
+    const scoped = resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: [] }));
+    expect(scoped.tools).toEqual([]);
+  });
+
+  it("forwards the exact Skill Workshop revision into loopback tool construction", () => {
+    const proposalRevision = {
+      agentId: "proposal-owner",
+      workspaceDir: "/proposal-workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["skill_workshop"],
+        skillWorkshop: { proposalRevision },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
+      expect.objectContaining({ skillWorkshop: { proposalRevision } }),
+    );
+  });
+
+  it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
+
+    const scoped = resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["read", "exec", "browser"],
+        nodeExecAllowed: true,
+      }),
+    );
+
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "read",
+      "exec",
+      "browser",
+    ]);
+    const call = resolveGatewayScopedTools.mock.calls[0]?.[0] as {
+      excludeToolNames?: Set<string>;
+      mediatedToolNames?: Set<string>;
+      includeNodeExecTool?: boolean;
+    };
+    expect(call.includeNodeExecTool).toBe(false);
+    expect(call.excludeToolNames?.has("read")).toBe(false);
+    expect(call.excludeToolNames?.has("exec")).toBe(false);
+    expect(call.excludeToolNames?.has("write")).toBe(true);
+    expect(call.mediatedToolNames).toEqual(new Set(["read", "exec"]));
+  });
+
+  it.each([
+    { allow: ["write"], expected: ["write", "apply_patch"] },
+    { allow: ["apply-patch"], expected: ["apply_patch"] },
+    { allow: ["web_*"], expected: ["web_search", "web_fetch"] },
+    { allow: ["group:fs"], expected: ["read", "write", "edit", "apply_patch"] },
+    { allow: [] as string[], expected: [] },
+    { allow: ["unknown"], expected: [] },
+  ])(
+    "materializes policy expressions into concrete loopback tools: $allow",
+    ({ allow, expected }) => {
+      resolveGatewayScopedTools.mockReturnValue(
+        scopedToolFixture([
+          "read",
+          "write",
+          "edit",
+          "apply_patch",
+          "web_search",
+          "web_fetch",
+          "message",
+        ]),
+      );
+
+      const scoped = resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
+
+      expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    { allow: ["group:plugins"], expected: ["memory_search", "memory_get"] },
+    { allow: ["active-memory"], expected: ["memory_search", "memory_get"] },
+  ])("materializes plugin policy selectors: $allow", ({ allow, expected }) => {
+    const pluginTools = ["memory_search", "memory_get"].map((name) => ({
+      name,
+      description: `${name} tool`,
+    }));
+    for (const tool of pluginTools) {
+      setPluginToolMeta(tool as never, { pluginId: "active-memory", optional: false });
+    }
+    resolveGatewayScopedTools.mockReturnValue({
+      agentId: "main",
+      tools: [...pluginTools, { name: "message", description: "message tool" }],
+    });
+
+    const scoped = resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
+
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual(expected);
+  });
+});
+
+describe("McpLoopbackToolCache", () => {
+  it("expires at the ttl boundary and partitions rows by config identity", () => {
+    vi.useFakeTimers();
+    const cache = new McpLoopbackToolCache();
+    const cfgA = {} as OpenClawConfig;
+    const cfgB = {} as OpenClawConfig;
+    const paramsA = scopeParams({ cfg: cfgA });
+
+    cache.resolve(paramsA);
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+
+    cache.resolve(scopeParams({ cfg: cfgB }));
+    cache.resolve(paramsA);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not share cache rows across different grant allowlists", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    const unrestricted = cache.resolve(scopeParams({ cfg }));
+    const restricted = cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
+    const denied = cache.resolve(scopeParams({ cfg, toolsAllow: [] }));
+
+    expect(unrestricted.tools).toHaveLength(4);
+    expect(restricted.tools).toHaveLength(1);
+    expect(denied.tools).toHaveLength(0);
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+
+    // Same allowlist reuses the cached row.
+    cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not share cache rows across different runtime policy agents", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "worker" }));
+    cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share loopback tools across prepared vision capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: false }));
+    cache.resolve(scopeParams({ cfg, modelHasVision: true }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
+      modelHasVision: true,
+    });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      modelHasVision: false,
+    });
+  });
+
+  it("does not share loopback message tools across prepared reply modes", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "off" }));
+    cache.resolve(scopeParams({ cfg, replyToMode: "all" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({ replyToMode: "all" });
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ replyToMode: "off" });
+  });
+
+  it("evicts only the revoked grant's cached tool closures", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+
+    expect(cache.evictGrant("grant-a")).toBe(true);
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a" }));
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b" }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves the global 256-entry cache cap across grants", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    for (let index = 0; index < 256; index += 1) {
+      cache.resolve(
+        scopeParams({ cfg, grantToken: "grant-a", currentMessageId: `message-${index}` }),
+      );
+    }
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(257);
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-a", currentMessageId: "message-0" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
+
+    cache.resolve(scopeParams({ cfg, grantToken: "grant-b", currentMessageId: "message-b" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(258);
+  });
+
+  it("never reuses ordinary private-mode tools for a source-reply-only grant", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+    const params = scopeParams({
+      cfg,
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolsAllow: ["message"],
+    });
+
+    cache.resolve(params);
+    cache.resolve({ ...params, sourceReplyOnly: true });
+    cache.resolve(params);
+    cache.resolve({ ...params, sourceReplyOnly: true });
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("sourceReplyOnly");
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({ sourceReplyOnly: true });
+  });
+
+  it("does not share cache rows across delegation capabilities", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+
+    cache.resolve(scopeParams({ cfg }));
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+
+    // A restricted attempt must neither read nor seed the full-capability row
+    // for the same session context.
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedTools.mock.calls[1]?.[0]).toMatchObject({
+      delegationCapability: "report_only",
+    });
+
+    cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+});

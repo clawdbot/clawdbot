@@ -1,0 +1,930 @@
+// Discord plugin module implements message handler.preflight behavior.
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import {
+  buildMentionRegexes,
+  classifyChannelInboundEvent,
+  logInboundDrop,
+  recordChannelBotPairLoopAndCheckSuppression,
+  resolveInboundMentionDecision,
+  resolveUnmentionedGroupInboundPolicy,
+  toHistoryMediaEntries,
+  toInboundMediaFactsWithMetadata,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { logDebug } from "openclaw/plugin-sdk/logging-core";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { ChannelType, MessageType, type User } from "../internal/discord.js";
+import {
+  resolveDiscordGuildEntry,
+  resolveDiscordMemberAccessState,
+  resolveDiscordShouldRequireMention,
+} from "./allow-list.js";
+import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
+import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
+import {
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+} from "./message-channel-info.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessage,
+} from "./message-forwarded.js";
+import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
+import type { DiscordHistoryEntry } from "./message-handler.history.js";
+import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
+import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
+import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
+import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
+import {
+  hasRawDiscordUserMention,
+  isBoundThreadBotSystemMessage,
+  isDiscordThreadChannelMessage,
+  resolveDiscordMentionState,
+  resolveInjectedBoundThreadLookupRecord,
+  resolvePreflightMentionRequirement,
+  shouldIgnoreBoundThreadWebhookMessage,
+} from "./message-handler.preflight-helpers.js";
+import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
+import {
+  logDiscordPreflightChannelConfig,
+  logDiscordPreflightInboundSummary,
+} from "./message-handler.preflight-logging.js";
+import { resolveDiscordPreflightPluralKitInfo } from "./message-handler.preflight-pluralkit.js";
+import {
+  isPreflightAborted,
+  loadPreflightAudioRuntime,
+  loadSystemEventsRuntime,
+} from "./message-handler.preflight-runtime.js";
+import { resolveDiscordPreflightThreadContext } from "./message-handler.preflight-thread.js";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
+import { resolveDiscordPreflightRoute } from "./message-handler.routing-preflight.js";
+import { resolveForwardedMediaList, resolveMediaList } from "./message-media.js";
+import { resolveDiscordMessageText } from "./message-text.js";
+import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
+
+export type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
+
+export {
+  resolvePreflightMentionRequirement,
+  shouldIgnoreBoundThreadWebhookMessage,
+} from "./message-handler.preflight-helpers.js";
+
+const DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
+const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+const DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
+const DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
+
+function resolveDiscordPreflightConversationKind(params: {
+  isGuildMessage: boolean;
+  channelType?: ChannelType;
+}) {
+  const isGroupDm = params.channelType === ChannelType.GroupDM;
+  const isDirectMessage =
+    params.channelType === ChannelType.DM ||
+    (!params.isGuildMessage && !isGroupDm && params.channelType == null);
+  return { isDirectMessage, isGroupDm };
+}
+
+function isDiscordImageAttachmentCandidate(attachment: {
+  content_type?: string | null;
+  filename?: string | null;
+  url?: string | null;
+}) {
+  const contentType = attachment.content_type?.split(";")[0]?.trim().toLowerCase();
+  if (contentType?.startsWith("image/")) {
+    return true;
+  }
+  return Boolean(
+    mimeTypeFromFilePath(attachment.filename)?.startsWith("image/") ||
+    mimeTypeFromFilePath(attachment.url)?.startsWith("image/"),
+  );
+}
+
+async function resolveDiscordHistoryMediaForPendingRecord(params: {
+  preflight: DiscordMessagePreflightParams;
+  message: DiscordMessagePreflightContext["message"];
+}) {
+  const imageAttachments = (params.message.attachments ?? [])
+    .filter(isDiscordImageAttachmentCandidate)
+    .slice(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS);
+  const stickers = resolveDiscordMessageStickers(params.message).slice(
+    0,
+    Math.max(0, DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS - imageAttachments.length),
+  );
+  if (imageAttachments.length === 0 && stickers.length === 0) {
+    return [];
+  }
+  const rawData = (() => {
+    try {
+      return params.message.rawData;
+    } catch {
+      return {};
+    }
+  })();
+  const mediaMessage = Object.assign(
+    Object.create(Object.getPrototypeOf(params.message)),
+    params.message,
+  ) as typeof params.message;
+  Object.defineProperties(mediaMessage, {
+    attachments: { value: imageAttachments },
+    rawData: {
+      value: {
+        ...rawData,
+        attachments: imageAttachments,
+        sticker_items: stickers,
+        stickers,
+      },
+    },
+    stickers: { value: stickers },
+  });
+  const mediaList = await resolveMediaList(
+    mediaMessage,
+    Math.min(params.preflight.mediaMaxBytes, DISCORD_HISTORY_MEDIA_MAX_BYTES),
+    {
+      fetchImpl: params.preflight.discordRestFetch,
+      ssrfPolicy: params.preflight.cfg.browser?.ssrfPolicy,
+      readIdleTimeoutMs: DISCORD_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
+      totalTimeoutMs: DISCORD_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
+      abortSignal: params.preflight.abortSignal,
+    },
+  );
+  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
+  return (await toInboundMediaFactsWithMetadata(mediaList, { messageId: params.message.id })).map(
+    (media, index) => ({
+      path: media.path,
+      url: media.url,
+      contentType: media.contentType,
+      kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+      durationMs: media.durationMs,
+      width: media.width,
+      height: media.height,
+      transcribed: media.transcribed,
+      messageId: media.messageId,
+    }),
+  );
+}
+
+async function recordDiscordPendingHistoryEntry(params: {
+  preflight: DiscordMessagePreflightParams;
+  historyKey: string;
+  message: DiscordMessagePreflightContext["message"];
+  entry?: DiscordHistoryEntry;
+}) {
+  if (!params.entry || params.preflight.historyLimit <= 0) {
+    return;
+  }
+  await createChannelHistoryWindow<DiscordHistoryEntry>({
+    historyMap: params.preflight.guildHistories,
+  }).recordWithMedia({
+    historyKey: params.historyKey,
+    entry: params.entry,
+    limit: params.preflight.historyLimit,
+    mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
+    messageId: params.message.id,
+    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    media: async () =>
+      toHistoryMediaEntries(
+        await resolveDiscordHistoryMediaForPendingRecord({
+          preflight: params.preflight,
+          message: params.message,
+        }),
+        { messageId: params.message.id },
+      ),
+  });
+}
+
+export async function preflightDiscordMessage(
+  params: DiscordMessagePreflightParams,
+): Promise<DiscordMessagePreflightContext | null> {
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const logger = getChildLogger({ module: "discord-auto-reply" });
+  let message = params.data.message;
+  const author = params.data.author;
+  if (!author) {
+    return null;
+  }
+  const messageChannelId = resolveDiscordMessageChannelId({
+    message,
+    eventChannelId: params.data.channel_id,
+  });
+  if (!messageChannelId) {
+    logVerbose(`discord: drop message ${message.id} (missing channel id)`);
+    return null;
+  }
+
+  const allowBotsSetting = params.discordConfig?.allowBots;
+  const allowBotsMode =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting === true ? "all" : "off";
+  if (params.botUserId && author.id === params.botUserId) {
+    // Always ignore own messages to prevent self-reply loops
+    return null;
+  }
+
+  const hydration = await hydrateDiscordMessageIfNeeded({
+    client: params.client,
+    message,
+    messageChannelId,
+  });
+  message = hydration.message;
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+
+  const pluralkitConfig = params.discordConfig?.pluralkit;
+  const webhookId = resolveDiscordWebhookId(message);
+  // Shared turn admission cannot undo pending history recorded by channel preflight.
+  // Consult the same generic registry before mention/history drops can admit an echo.
+  if (
+    isRecentOutboundMessageIdentity({
+      channel: "discord",
+      accountId: params.accountId,
+      conversationId: messageChannelId,
+      messageId: message.id,
+      ...(webhookId ? { sourceId: webhookId } : {}),
+    })
+  ) {
+    logVerbose(`discord: drop recent outbound echo message ${message.id}`);
+    return null;
+  }
+  const isGuildMessage = Boolean(params.data.guild_id);
+  const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const { isDirectMessage, isGroupDm } = resolveDiscordPreflightConversationKind({
+    isGuildMessage,
+    channelType: channelInfo?.type,
+  });
+  const messageText = resolveDiscordMessageText(message, {
+    includeForwarded: true,
+  });
+  // Only bot/webhook traffic can be rejected before canonical routing; ordinary
+  // messages should reach the single authoritative binding lookup below.
+  const injectedBoundThreadBinding =
+    !isDirectMessage && !isGroupDm && (webhookId || author.bot)
+      ? resolveInjectedBoundThreadLookupRecord({
+          threadBindings: params.threadBindings,
+          threadId: messageChannelId,
+        })
+      : undefined;
+  if (
+    shouldIgnoreBoundThreadWebhookMessage({
+      threadId: messageChannelId,
+      webhookId,
+      threadBinding: injectedBoundThreadBinding,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
+    return null;
+  }
+  if (
+    isBoundThreadBotSystemMessage({
+      isBoundThreadSession:
+        Boolean(injectedBoundThreadBinding) &&
+        isDiscordThreadChannelMessage({
+          isGuildMessage,
+          message,
+          channelInfo,
+        }),
+      isBotAuthor: Boolean(author.bot),
+      text: messageText,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+    return null;
+  }
+  const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
+    message,
+    webhookId,
+    config: pluralkitConfig,
+    abortSignal: params.abortSignal,
+  });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const sender = resolveDiscordSenderIdentity({
+    author,
+    member: params.data.member,
+    pluralkitInfo,
+  });
+
+  if (author.bot) {
+    if (allowBotsMode === "off" && !sender.isPluralKit) {
+      logVerbose("discord: drop bot message (allowBots=false)");
+      return null;
+    }
+  }
+  const data = message === params.data.message ? params.data : { ...params.data, message };
+  logDebug(
+    `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
+  );
+
+  if (isGroupDm && !params.groupDmEnabled) {
+    logVerbose("discord: drop group dm (group dms disabled)");
+    return null;
+  }
+  if (isDirectMessage && !params.dmEnabled) {
+    logVerbose("discord: drop dm (dms disabled)");
+    return null;
+  }
+
+  const dmPolicy = params.dmPolicy;
+  const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
+  const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
+  let commandAuthorized = true;
+  let channelIngress;
+  let resolveChannelIngress;
+  if (isDirectMessage) {
+    const access = await resolveDiscordDmPreflightAccess({
+      preflight: params,
+      author,
+      sender,
+      dmPolicy,
+      resolvedAccountId,
+      allowNameMatching,
+      conversationId: messageChannelId,
+    });
+    if (isPreflightAborted(params.abortSignal)) {
+      return null;
+    }
+    if (!access) {
+      return null;
+    }
+    commandAuthorized = access.commandAuthorized;
+    channelIngress = access.channelIngress;
+    resolveChannelIngress = access.resolveChannelIngress;
+  }
+
+  const botId = params.botUserId;
+  const baseText = resolveDiscordMessageText(message, {
+    includeForwarded: false,
+  });
+
+  recordChannelActivity({
+    channel: "discord",
+    accountId: params.accountId,
+    direction: "inbound",
+  });
+
+  // Resolve thread parent early for binding inheritance
+  const channelName =
+    channelInfo?.name ??
+    (isGuildMessage || isGroupDm
+      ? resolveDiscordChannelNameSafe(
+          "channel" in message ? (message as { channel?: unknown }).channel : undefined,
+        )
+      : undefined);
+  const threadContext = await resolveDiscordPreflightThreadContext({
+    client: params.client,
+    isGuildMessage,
+    message,
+    channelInfo,
+    messageChannelId,
+    abortSignal: params.abortSignal,
+  });
+  if (!threadContext) {
+    return null;
+  }
+  const { earlyThreadChannel, earlyThreadParentId, earlyThreadParentName, earlyThreadParentType } =
+    threadContext;
+
+  // Routing inputs are payload-derived, but config must come from the boundary
+  // snapshot already threaded into the monitor path.
+  const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
+    ? params.data.rawMember.roles
+    : [];
+  const routeState = await resolveDiscordPreflightRoute({
+    preflight: params,
+    author,
+    isDirectMessage,
+    isGroupDm,
+    messageChannelId,
+    memberRoleIds,
+    earlyThreadParentId,
+  });
+  const {
+    conversationRuntime,
+    threadBinding,
+    configuredBinding,
+    boundSessionKey,
+    effectiveRoute,
+    boundAgentId,
+    baseSessionKey,
+  } = routeState;
+  if (
+    shouldIgnoreBoundThreadWebhookMessage({
+      threadId: messageChannelId,
+      webhookId,
+      threadBinding,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
+    return null;
+  }
+  const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
+  const bypassMentionRequirement = isBoundThreadSession;
+  if (
+    isBoundThreadBotSystemMessage({
+      isBoundThreadSession,
+      isBotAuthor: Boolean(author.bot),
+      text: messageText,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+    return null;
+  }
+  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId, {
+    provider: "discord",
+    conversationId: messageChannelId,
+    providerPolicy: params.discordConfig?.mentionPatterns,
+  });
+  const explicitlyMentioned = Boolean(
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
+  );
+  const hasAnyMention =
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 ||
+      (message.mentionedRoles?.length ?? 0) > 0 ||
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit)));
+  const hasUserOrRoleMention =
+    !isDirectMessage &&
+    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0);
+
+  if (
+    isGuildMessage &&
+    (message.type === MessageType.ChatInputCommand ||
+      message.type === MessageType.ContextMenuCommand)
+  ) {
+    logVerbose("discord: drop channel command message");
+    return null;
+  }
+
+  const guildInfo = isGuildMessage
+    ? resolveDiscordGuildEntry({
+        guild: params.data.guild ?? undefined,
+        guildId: params.data.guild_id ?? undefined,
+        guildEntries: params.guildEntries,
+      })
+    : null;
+  logDebug(
+    `[discord-preflight] guild_id=${params.data.guild_id} guild_obj=${Boolean(params.data.guild)} guild_obj_id=${params.data.guild?.id} guildInfo=${Boolean(guildInfo)} guildEntries=${params.guildEntries ? Object.keys(params.guildEntries).join(",") : "none"}`,
+  );
+  if (
+    isGuildMessage &&
+    params.guildEntries &&
+    Object.keys(params.guildEntries).length > 0 &&
+    !guildInfo
+  ) {
+    logDebug(
+      `[discord-preflight] guild blocked: guild_id=${params.data.guild_id} guildEntries keys=${Object.keys(params.guildEntries).join(",")}`,
+    );
+    logVerbose(
+      `Blocked discord guild ${params.data.guild_id ?? "unknown"} (not in discord.guilds)`,
+    );
+    return null;
+  }
+
+  // Reuse early thread resolution from above (for binding inheritance)
+  const threadChannel = earlyThreadChannel;
+  const threadParentId = earlyThreadParentId;
+  const threadParentName = earlyThreadParentName;
+  const threadParentType = earlyThreadParentType;
+  const {
+    threadName,
+    configChannelName,
+    configChannelSlug,
+    displayChannelName,
+    displayChannelSlug,
+    guildSlug,
+    channelConfig,
+  } = resolveDiscordPreflightChannelContext({
+    isGuildMessage,
+    messageChannelId,
+    channelName,
+    guildName: params.data.guild?.name,
+    guildInfo,
+    threadChannel,
+    threadParentId,
+    threadParentName,
+  });
+  const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
+  logDiscordPreflightChannelConfig({
+    channelConfig,
+    channelMatchMeta,
+    channelId: messageChannelId,
+  });
+  const channelAccess = resolveDiscordPreflightChannelAccess({
+    isGuildMessage,
+    isGroupDm,
+    groupPolicy: params.groupPolicy,
+    groupDmChannels: params.groupDmChannels,
+    messageChannelId,
+    displayChannelName,
+    displayChannelSlug,
+    guildInfo,
+    channelConfig,
+    channelMatchMeta,
+  });
+  if (!channelAccess.allowed) {
+    return null;
+  }
+  const { channelAllowlistConfigured, channelAllowed } = channelAccess;
+
+  const historyEntry = buildDiscordPreflightHistoryEntry({
+    isGuildMessage,
+    historyLimit: params.historyLimit,
+    message,
+    senderLabel: sender.label,
+    sender,
+    memberRoleIds,
+  });
+
+  const threadOwnerId = threadChannel
+    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+    : undefined;
+  const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
+    isGuildMessage,
+    isThread: Boolean(threadChannel),
+    botId,
+    threadOwnerId,
+    channelConfig,
+    guildInfo,
+  });
+  const shouldRequireMention = resolvePreflightMentionRequirement({
+    shouldRequireMention: shouldRequireMentionByConfig,
+    bypassMentionRequirement,
+  });
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig,
+    guildInfo,
+    memberRoleIds,
+    sender,
+    allowNameMatching,
+  });
+
+  if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
+    logDebug(`[discord-preflight] drop: member not allowed`);
+    // Keep stable Discord user IDs out of routine deny-path logs.
+    logVerbose("Blocked discord guild sender (not in users/roles allowlist)");
+    return null;
+  }
+
+  // Only authorized guild senders should reach the expensive transcription path.
+  const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
+  const { hasTypedText, transcript: preflightTranscript } =
+    await resolveDiscordPreflightAudioMentionContext({
+      message,
+      isDirectMessage,
+      shouldRequireMention,
+      mentionRegexes,
+      cfg: params.cfg,
+      abortSignal: params.abortSignal,
+    });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+
+  const mentionText = hasTypedText ? baseText : "";
+  const { implicitMentionKinds, wasMentioned } = resolveDiscordMentionState({
+    authorIsBot: Boolean(author.bot),
+    botId,
+    hasAnyMention,
+    isDirectMessage,
+    isExplicitlyMentioned: explicitlyMentioned,
+    mentionRegexes,
+    mentionText,
+    mentionedEveryone: message.mentionedEveryone,
+    referencedAuthorId: message.referencedMessage?.author?.id,
+    senderIsPluralKit: sender.isPluralKit,
+    transcript: preflightTranscript,
+  });
+  logDiscordPreflightInboundSummary({
+    messageId: message.id,
+    guildId: params.data.guild_id ?? undefined,
+    channelId: messageChannelId,
+    wasMentioned,
+    isDirectMessage,
+    isGroupDm,
+    hasContent: Boolean(messageText),
+  });
+
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg: params.cfg,
+    surface: "discord",
+  });
+  const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
+  const hasAbortRequest = isAbortRequestText(baseText);
+
+  if (!isDirectMessage) {
+    const resolveCommandIngress = async (
+      contextBinding?: Parameters<typeof resolveDiscordTextCommandAccess>[0]["contextBinding"],
+      conversation?: { parentId?: string; threadId?: string },
+    ) =>
+      await resolveDiscordTextCommandAccess({
+        accountId: params.accountId,
+        cfg: params.cfg,
+        ownerAllowFrom: params.allowFrom,
+        sender: {
+          id: sender.id,
+          name: sender.name,
+          tag: sender.tag,
+          isPluralKit: sender.isPluralKit,
+          authorKind: author.bot ? "bot" : "user",
+        },
+        memberAccessConfigured: hasAccessRestrictions,
+        memberAllowed,
+        allowNameMatching,
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
+        conversationId: messageChannelId,
+        conversationParentId: conversation?.parentId,
+        conversationThreadId: conversation?.threadId,
+        ...(contextBinding ? { contextBinding } : {}),
+      });
+    const commandAccess = await resolveCommandIngress();
+    commandAuthorized = commandAccess.commandAccess.authorized;
+    channelIngress = commandAccess;
+    resolveChannelIngress = resolveCommandIngress;
+
+    if (commandAccess.commandAccess.shouldBlockControlCommand) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "discord",
+        reason: "control command (unauthorized)",
+        target: sender.id,
+      });
+      return null;
+    }
+  }
+
+  const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned,
+      hasAnyMention,
+      implicitMentionKinds,
+    },
+    policy: {
+      isGroup: isGuildMessage,
+      requireMention: shouldRequireMention,
+      allowTextCommands,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    },
+  });
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel" },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg: params.cfg,
+      agentId: effectiveRoute.agentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest,
+  });
+  logDebug(
+    `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
+  );
+  if (isGuildMessage && shouldRequireMention) {
+    if (mentionDecision.shouldSkip) {
+      logDebug(`[discord-preflight] drop: no-mention`);
+      logVerbose(`discord: drop guild message (mention required, botId=${botId ?? "<missing>"})`);
+      logger.info(
+        {
+          channelId: messageChannelId,
+          reason: "no-mention",
+        },
+        "discord: skipping guild message",
+      );
+      await recordDiscordPendingHistoryEntry({
+        preflight: params,
+        historyKey: messageChannelId,
+        message,
+        entry: historyEntry,
+      });
+      return null;
+    }
+  }
+
+  if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || mentionDecision.implicitMention;
+    if (!botMentioned) {
+      logDebug(`[discord-preflight] drop: bot message missing mention (allowBots=mentions)`);
+      logVerbose("discord: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
+  }
+  const ignoreOtherMentions =
+    channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  const referencedReply = resolveDiscordReferencedReplyMessage(message);
+  const referencedWebhookId = referencedReply ? resolveDiscordWebhookId(referencedReply) : null;
+  const referencedAuthor = referencedReply?.author;
+  const replyTargetsOtherBot =
+    Boolean(botId) &&
+    Boolean(referencedAuthor?.bot) &&
+    referencedAuthor?.id !== botId &&
+    !referencedWebhookId;
+  if (
+    isGuildMessage &&
+    ignoreOtherMentions &&
+    (hasUserOrRoleMention || replyTargetsOtherBot) &&
+    !wasMentioned &&
+    !mentionDecision.implicitMention
+  ) {
+    logDebug(`[discord-preflight] drop: addressed-to-other`);
+    logVerbose(
+      `discord: drop guild message (addressed to another identity, ignoreOtherMentions=true, botId=${botId})`,
+    );
+    await recordDiscordPendingHistoryEntry({
+      preflight: params,
+      historyKey: messageChannelId,
+      message,
+      entry: historyEntry,
+    });
+    return null;
+  }
+
+  const systemLocation = resolveDiscordSystemLocation({
+    isDirectMessage,
+    isGroupDm,
+    guild: params.data.guild ?? undefined,
+    channelName: channelName ?? messageChannelId,
+  });
+  const { resolveDiscordSystemEvent } = await loadSystemEventsRuntime();
+  const systemText = resolveDiscordSystemEvent(message, systemLocation);
+  if (systemText) {
+    logDebug(`[discord-preflight] drop: system event`);
+    enqueueRoutedSystemEvent(systemText, effectiveRoute, {
+      contextKey: `discord:system:${messageChannelId}:${message.id}`,
+    });
+    return null;
+  }
+
+  const hasNativeMedia =
+    (message.attachments?.length ?? 0) > 0 || resolveDiscordMessageStickers(message).length > 0;
+  if (!messageText && !hasNativeMedia) {
+    logDebug(`[discord-preflight] drop: empty content`);
+    logVerbose(`discord: drop message ${message.id} (empty content)`);
+    return null;
+  }
+  if (configuredBinding) {
+    const ensured = await conversationRuntime.ensureConfiguredBindingRouteReady({
+      cfg: params.cfg,
+      bindingResolution: configuredBinding,
+    });
+    if (!ensured.ok) {
+      logVerbose(
+        `discord: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
+      );
+      return null;
+    }
+  }
+
+  const botLoopProtection =
+    author.bot &&
+    !sender.isPluralKit &&
+    allowBotsMode !== "off" &&
+    params.botUserId &&
+    author.id !== params.botUserId
+      ? {
+          scopeId: params.accountId,
+          conversationId: messageChannelId,
+          senderId: author.id,
+          receiverId: params.botUserId,
+          config: params.discordConfig?.botLoopProtection,
+          defaultsConfig: params.cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+          nowMs: resolveTimestampMs(message.timestamp),
+        }
+      : undefined;
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before media download, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return null;
+    }
+  }
+
+  const guildId = isGuildMessage
+    ? (data.guild?.id ?? data.guild_id ?? message.guild_id)
+    : undefined;
+  const conversationAvatar =
+    isDirectMessage || guildId
+      ? params.avatarResolver?.resolve({
+          client: params.client,
+          conversationId: messageChannelId,
+          author,
+          ...(guildId ? { guildId } : {}),
+        })
+      : undefined;
+
+  // Discord CDN attachment URLs expire; download now (receipt time) instead
+  // of after the run queue, which may delay processing past the URL TTL.
+  const mediaResolveOptions = {
+    fetchImpl: params.discordRestFetch,
+    ssrfPolicy: params.cfg.browser?.ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  };
+  const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const forwardedMedia = await resolveForwardedMediaList(
+    message,
+    params.mediaMaxBytes,
+    mediaResolveOptions,
+  );
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  preparedMedia.push(...forwardedMedia);
+
+  logDebug(
+    `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
+  );
+  return buildDiscordMessagePreflightContext({
+    preflightParams: params,
+    data,
+    client: params.client,
+    message,
+    messageChannelId,
+    author,
+    sender,
+    canonicalMessageId: pluralkitInfo?.original?.trim() || undefined,
+    memberRoleIds,
+    channelInfo,
+    channelName,
+    isGuildMessage,
+    isDirectMessage,
+    isGroupDm,
+    commandAuthorized,
+    channelIngress: channelIngress!,
+    resolveChannelIngress: resolveChannelIngress!,
+    baseText,
+    messageText,
+    ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
+    preparedMedia,
+    wasMentioned,
+    conversationAvatar,
+    route: effectiveRoute,
+    threadBinding,
+    boundSessionKey: boundSessionKey || undefined,
+    boundAgentId,
+    guildInfo,
+    guildSlug,
+    threadChannel,
+    threadParentId,
+    threadParentName,
+    threadParentType,
+    threadName,
+    configChannelName,
+    configChannelSlug,
+    displayChannelName,
+    displayChannelSlug,
+    baseSessionKey,
+    channelConfig,
+    channelAllowlistConfigured,
+    channelAllowed,
+    shouldRequireMention,
+    groupRequireMention: shouldRequireMentionByConfig,
+    hasAnyMention,
+    hasControlCommand: hasControlCommandInMessage,
+    allowTextCommands,
+    shouldBypassMention: mentionDecision.shouldBypassMention,
+    effectiveWasMentioned,
+    inboundEventKind,
+    canDetectMention,
+    historyEntry,
+  });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

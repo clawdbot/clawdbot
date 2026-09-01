@@ -1,0 +1,106 @@
+{
+  "name": "@openclaw/mattermost",
+  "version": "2026.8.1",
+  "description": "OpenClaw Mattermost channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "ws": "8.21.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "mattermost",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "MATTERMOST_BOT_TOKEN",
+            "MATTERMOST_URL"
+          ]
+        }
+      },
+      "label": "Mattermost",
+      "selectionLabel": "Mattermost (plugin)",
+      "docsPath": "/channels/mattermost",
+      "docsLabel": "mattermost",
+      "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
+      "order": 65,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--token <token>",
+              "description": "Mattermost bot token"
+            }
+          },
+          {
+            "key": "botToken",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--bot-token <token>",
+              "description": "Mattermost bot token"
+            }
+          },
+          {
+            "key": "httpUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-url <url>",
+              "description": "Mattermost server URL"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use Mattermost environment credentials"
+            },
+            "envVars": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
+          }
+        ]
+      }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/mattermost",
+      "npmSpec": "@openclaw/mattermost",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

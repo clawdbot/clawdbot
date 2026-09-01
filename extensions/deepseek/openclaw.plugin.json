@@ -1,0 +1,129 @@
+{
+  "id": "deepseek",
+  "icon": "https://cdn.simpleicons.org/deepseek",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providers": ["deepseek"],
+  "contracts": {
+    "usageProviders": ["deepseek"]
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "deepseek-native",
+      "hosts": ["api.deepseek.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "deepseek": {
+        "family": "deepseek"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com",
+        "api": "openai-completions",
+        "defaultModel": "deepseek-v4-pro",
+        "models": [
+          {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.0028,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.003625,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-vision-exp",
+            "name": "DeepSeek V4 Flash Vision (Experimental)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.44,
+              "output": 1.32,
+              "cacheRead": 0.014,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "deepseek": "refreshable"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "deepseek",
+        "envVars": ["DEEPSEEK_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "deepseek",
+      "method": "api-key",
+      "choiceId": "deepseek-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "DeepSeek API key",
+      "groupId": "deepseek",
+      "groupLabel": "DeepSeek",
+      "groupHint": "API key",
+      "optionKey": "deepseekApiKey",
+      "cliFlag": "--deepseek-api-key",
+      "cliOption": "--deepseek-api-key <key>",
+      "cliDescription": "DeepSeek API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

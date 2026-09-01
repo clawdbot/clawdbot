@@ -1,0 +1,170 @@
+/** CLI entrypoint for `openclaw gateway probe`. */
+import { isRich } from "../../packages/terminal-core/src/theme.js";
+import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
+import { withProgress } from "../cli/progress.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
+import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
+import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
+import {
+  buildGatewayStatusWarnings,
+  pickPrimaryProbedTarget,
+  writeGatewayStatusJson,
+  writeGatewayStatusText,
+} from "./gateway-status/output.js";
+import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
+
+const sshConfigModuleLoader = createLazyImportLoader(() => import("../infra/ssh-config.js"));
+const sshTunnelModuleLoader = createLazyImportLoader(() => import("../infra/ssh-tunnel.js"));
+const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../infra/tls/gateway.js"));
+
+function loadSshConfigModule() {
+  return sshConfigModuleLoader.load();
+}
+
+function loadSshTunnelModule() {
+  return sshTunnelModuleLoader.load();
+}
+
+function loadGatewayTlsModule() {
+  return gatewayTlsModuleLoader.load();
+}
+
+/** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
+export async function gatewayStatusCommand(
+  opts: {
+    url?: string;
+    token?: string;
+    password?: string;
+    port?: unknown;
+    timeout?: unknown;
+    json?: boolean;
+    ssh?: string;
+    sshIdentity?: string;
+    sshAuto?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  ensureExplicitGatewayAuth({
+    urlOverride: opts.url?.trim(),
+    urlOverrideSource: "cli",
+    explicitAuth: resolveExplicitGatewayAuth(opts),
+    errorHint: "Fix: pass --token or --password with --url.",
+  });
+  const startedAt = Date.now();
+  const cfg = await readBestEffortConfig();
+  const rich = isRich() && opts.json !== true;
+  const defaultTimeoutMs = 3000;
+  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
+    invalidType: "error",
+  });
+  const portOverride = parseGatewayPortOption(opts.port);
+  const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+    configDomain: cfg.discovery?.wideArea?.domain,
+  });
+  const baseTargets = resolveTargets(cfg, opts.url, portOverride);
+  const network = buildNetworkHints(cfg, portOverride);
+  const remotePort = portOverride ?? resolveGatewayPort(cfg);
+  const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
+  const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
+  const useConfiguredRemoteTargets = portOverride === undefined || hasExplicitUrl;
+
+  let sshTarget =
+    sanitizeSshTarget(opts.ssh) ??
+    (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget) : null);
+  let sshIdentity =
+    sanitizeSshTarget(opts.sshIdentity) ??
+    (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity) : null);
+
+  if (!sshTarget && useConfiguredRemoteTargets) {
+    // Remote URL inference gives users a useful SSH default without requiring
+    // gateway.remote.sshTarget when the host already appears in config.
+    sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);
+  }
+
+  if (sshTarget) {
+    const resolved = await resolveSshTarget({
+      rawTarget: sshTarget,
+      identity: sshIdentity,
+      overallTimeoutMs,
+      loadSshConfigModule,
+      loadSshTunnelModule,
+    });
+    if (resolved) {
+      sshTarget = resolved.target;
+      if (!sshIdentity && resolved.identity) {
+        sshIdentity = resolved.identity;
+      }
+    }
+  }
+
+  const localCertificate =
+    cfg.gateway?.tls?.enabled === true
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(cfg.gateway?.tls),
+        )
+      : undefined;
+
+  const probePass = await withProgress(
+    {
+      label: "Inspecting gateways…",
+      indeterminate: true,
+      enabled: opts.json !== true,
+    },
+    async () =>
+      await runGatewayStatusProbePass({
+        cfg,
+        opts,
+        overallTimeoutMs,
+        discoveryTimeoutMs,
+        wideAreaDomain,
+        baseTargets,
+        remotePort,
+        sshTarget,
+        sshIdentity,
+        loadSshTunnelModule,
+        localTlsFingerprint: localCertificate?.ok
+          ? localCertificate.value.fingerprintSha256
+          : undefined,
+      }),
+  );
+
+  const warnings = buildGatewayStatusWarnings({
+    probed: probePass.probed,
+    sshTarget: probePass.sshTarget,
+    sshTunnelStarted: probePass.sshTunnelStarted,
+    sshTunnelError: probePass.sshTunnelError,
+    discoveryCount: probePass.discovery.length,
+    localTlsLoadError: localCertificate && !localCertificate.ok ? localCertificate.error : null,
+  });
+  const primary = pickPrimaryProbedTarget(probePass.probed);
+
+  if (opts.json) {
+    writeGatewayStatusJson({
+      runtime,
+      startedAt,
+      overallTimeoutMs,
+      discoveryTimeoutMs,
+      network,
+      discovery: probePass.discovery,
+      probed: probePass.probed,
+      warnings,
+      primaryTargetId: primary?.target.id ?? null,
+    });
+    return;
+  }
+
+  writeGatewayStatusText({
+    runtime,
+    rich,
+    overallTimeoutMs,
+    wideAreaDomain,
+    discovery: probePass.discovery,
+    probed: probePass.probed,
+    warnings,
+  });
+}

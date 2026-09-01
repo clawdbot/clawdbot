@@ -1,0 +1,129 @@
+// Whatsapp plugin module implements agent tools login behavior.
+import {
+  optionalPositiveIntegerSchema,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
+import { hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Type } from "typebox";
+import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
+
+const QR_DATA_URL_MAX_LENGTH = 16_384;
+
+function readLoginStringPreservingWhitespace(value: unknown): string | undefined {
+  return hasNonEmptyString(value) ? value : undefined;
+}
+
+export function createWhatsAppLoginTool(
+  context: OpenClawPluginToolContext,
+): ChannelAgentTool | null {
+  if (context.senderIsOwner !== true) {
+    return null;
+  }
+  return {
+    label: "WhatsApp Login",
+    name: "whatsapp_login",
+    description: "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
+    parameters: Type.Object({
+      action: Type.Enum(["start", "wait"], { type: "string" }),
+      timeoutMs: optionalPositiveIntegerSchema(),
+      force: Type.Optional(Type.Boolean()),
+      accountId: Type.Optional(Type.String()),
+      currentQrDataUrl: Type.Optional(
+        Type.String({
+          maxLength: QR_DATA_URL_MAX_LENGTH,
+          // llama.cpp rejects a whole tool catalog when a model-facing pattern
+          // lacks either anchor; real QR images also require a nonempty payload.
+          pattern: "^data:image/png;base64,.+$",
+        }),
+      ),
+    }),
+    execute: async (_toolCallId, args, signal) => {
+      const beforeCredentialPersistence = async () => {
+        if (!signal || signal.aborted) {
+          throw new Error("WhatsApp login authority is no longer active.");
+        }
+      };
+      const renderQrReply = (params: {
+        message: string;
+        qrDataUrl: string;
+        connected?: boolean;
+      }) => {
+        const text = [
+          params.message,
+          "",
+          "Open WhatsApp → Linked Devices and scan:",
+          "",
+          `![whatsapp-qr](${params.qrDataUrl})`,
+        ].join("\n");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: {
+            connected: params.connected ?? false,
+            qr: true,
+          },
+        };
+      };
+
+      const action = (args as { action?: string })?.action ?? "start";
+      const accountId = readLoginStringPreservingWhitespace(
+        (args as { accountId?: unknown }).accountId,
+      );
+      const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
+      if (action === "wait") {
+        const result = await waitForWebLogin({
+          accountId,
+          timeoutMs,
+          currentQrDataUrl: readLoginStringPreservingWhitespace(
+            (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
+          ),
+        });
+        if (result.qrDataUrl) {
+          return renderQrReply({
+            message: result.message,
+            qrDataUrl: result.qrDataUrl,
+            connected: result.connected,
+          });
+        }
+        return {
+          content: [{ type: "text", text: result.message }],
+          details: { connected: result.connected },
+        };
+      }
+
+      await beforeCredentialPersistence();
+      const result = await startWebLoginWithQr({
+        accountId,
+        timeoutMs,
+        beforeCredentialPersistence,
+        force:
+          typeof (args as { force?: unknown }).force === "boolean"
+            ? (args as { force?: boolean }).force
+            : false,
+      });
+
+      if (!result.qrDataUrl) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: result.message,
+            },
+          ],
+          details: { qr: false },
+        };
+      }
+
+      return renderQrReply({
+        message: result.message,
+        qrDataUrl: result.qrDataUrl,
+        connected: result.connected,
+      });
+    },
+  };
+}
+
+export function registerWhatsAppLoginTool(api: OpenClawPluginApi): void {
+  api.registerTool((context) => createWhatsAppLoginTool(context), { name: "whatsapp_login" });
+}

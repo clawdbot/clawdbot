@@ -1,0 +1,37 @@
+// Feishu tests cover external keys plugin behavior.
+import { describe, expect, it } from "vitest";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
+
+describe("normalizeFeishuExternalKey", () => {
+  it("accepts a normal feishu key and trims surrounding spaces", () => {
+    expect(normalizeFeishuExternalKey("  img_v3_01abcDEF123  ")).toBe("img_v3_01abcDEF123");
+  });
+
+  it("rejects traversal and path separator patterns", () => {
+    expect(normalizeFeishuExternalKey("../etc/passwd")).toBeUndefined();
+    expect(normalizeFeishuExternalKey("a/../../b")).toBeUndefined();
+    expect(normalizeFeishuExternalKey("a\\..\\b")).toBeUndefined();
+  });
+
+  it("rejects empty, non-string, and control-char values", () => {
+    expect(normalizeFeishuExternalKey("   ")).toBeUndefined();
+    expect(normalizeFeishuExternalKey(123)).toBeUndefined();
+    expect(normalizeFeishuExternalKey("abc\u0000def")).toBeUndefined();
+  });
+
+  it.each(["x", "界", "👍", "e\u0301", "👩‍💻"])(
+    "bounds received keys by Unicode scalars for %s",
+    (unit) => {
+      const key = Array.from(unit.repeat(512)).slice(0, 512).join("");
+      expect(normalizeFeishuExternalKey(` \t${key}\n`)).toBe(key);
+      expect(normalizeFeishuExternalKey(key + "x")).toBeUndefined();
+    },
+  );
+
+  it.each(["file\ud800key", "file\udfffkey", "file\u007fkey", "file\u0085key", "file\u009fkey"])(
+    "rejects malformed Unicode and control characters in %j",
+    (key) => {
+      expect(normalizeFeishuExternalKey(key)).toBeUndefined();
+    },
+  );
+});

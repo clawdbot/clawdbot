@@ -1,0 +1,79 @@
+{
+  "name": "@openclaw/qa-channel",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "OpenClaw QA synthetic channel plugin",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts",
+    "./test-api.js": "./test-api.ts"
+  },
+  "dependencies": {
+    "typebox": "1.3.17",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "qa-channel",
+      "label": "QA Channel",
+      "selectionLabel": "QA Channel (Synthetic)",
+      "detailLabel": "QA Channel",
+      "docsPath": "/channels/qa-channel",
+      "docsLabel": "qa-channel",
+      "blurb": "Synthetic Slack-class transport for automated OpenClaw QA scenarios.",
+      "systemImage": "checklist",
+      "order": 999,
+      "exposure": {
+        "configured": false,
+        "setup": false,
+        "docs": false
+      },
+      "setup": {
+        "fields": [
+          {
+            "key": "baseUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--base-url <url>",
+              "description": "QA channel base URL"
+            }
+          },
+          {
+            "key": "botUserId",
+            "kind": "string",
+            "cli": {
+              "flags": "--bot-user-id <id>",
+              "description": "QA channel bot user id"
+            }
+          },
+          {
+            "key": "botDisplayName",
+            "kind": "string",
+            "cli": {
+              "flags": "--bot-display-name <name>",
+              "description": "QA channel bot display name"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

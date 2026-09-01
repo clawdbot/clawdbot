@@ -1,0 +1,139 @@
+/**
+ * Playwright page-scoped CDP helpers.
+ *
+ * Opens a CDP session through Playwright pages and marks backend DOM nodes with
+ * temporary browser refs for role-snapshot interactions.
+ */
+import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CDPSession, Page } from "playwright-core";
+import { readCdpMainFrameDocumentIdentity } from "./cdp-page-session.js";
+
+type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
+
+/** Attribute used to mark DOM nodes that correspond to generated browser refs. */
+export const BROWSER_REF_MARKER_ATTRIBUTE = "data-openclaw-browser-ref";
+
+async function withPlaywrightPageCdpSession<T>(
+  page: Page,
+  fn: (session: CDPSession) => Promise<T>,
+): Promise<T> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    return await fn(session);
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+/** Run a function with a CDP send helper scoped to one Playwright page. */
+export async function withPageScopedCdpClient<T>(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+  fn: (send: PageCdpSend) => Promise<T>;
+}): Promise<T> {
+  return await withPlaywrightPageCdpSession(opts.page, async (session) => {
+    return await opts.fn((method, params) =>
+      (
+        session.send as unknown as (
+          method: string,
+          params?: Record<string, unknown>,
+        ) => Promise<unknown>
+      )(method, params),
+    );
+  });
+}
+
+/** Read the browser-owned loader identity for a Playwright page's main frame. */
+export async function readMainFrameDocumentIdentityForPage(
+  page: Page,
+): Promise<string | undefined> {
+  return await withPlaywrightPageCdpSession(
+    page,
+    async (session) =>
+      await readCdpMainFrameDocumentIdentity((method, params) =>
+        (
+          session.send as unknown as (
+            method: string,
+            params?: Record<string, unknown>,
+          ) => Promise<unknown>
+        )(method, params),
+      ),
+  );
+}
+
+/** Mark backend DOM node ids on the page with browser ref attributes. */
+export async function markBackendDomRefsOnPage(opts: {
+  page: Page;
+  refs: MarkBackendDomRef[];
+}): Promise<Set<string>> {
+  await opts.page
+    .locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}]`)
+    .evaluateAll((elements, attr) => {
+      for (const element of elements) {
+        if (element instanceof Element) {
+          element.removeAttribute(attr);
+        }
+      }
+    }, BROWSER_REF_MARKER_ATTRIBUTE)
+    .catch(() => {});
+
+  const refs = opts.refs.filter(
+    (entry) =>
+      /^(?:e|ax)\d+$/.test(entry.ref) &&
+      Number.isFinite(entry.backendDOMNodeId) &&
+      Math.floor(entry.backendDOMNodeId) > 0,
+  );
+  const marked = new Set<string>();
+  if (!refs.length) {
+    return marked;
+  }
+
+  return await withPlaywrightPageCdpSession(opts.page, async (session) => {
+    const send = async (method: string, params?: Record<string, unknown>) =>
+      await (
+        session.send as unknown as (
+          method: string,
+          params?: Record<string, unknown>,
+        ) => Promise<unknown>
+      )(method, params);
+
+    // Backend-id pushes require a bound document in this fresh session.
+    // getDocument also enables DOM; depth zero avoids fetching the subtree.
+    await send("DOM.getDocument", { depth: 0 }).catch(() => {});
+
+    const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
+    const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {
+      backendNodeIds,
+    }).catch(() => ({}))) as { nodeIds?: number[] };
+    const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
+    const nodeIdByBackendId = new Map<number, number>();
+    for (let index = 0; index < backendNodeIds.length; index += 1) {
+      const backendNodeId = backendNodeIds[index];
+      const nodeId = nodeIds[index];
+      if (backendNodeId && typeof nodeId === "number" && nodeId > 0) {
+        nodeIdByBackendId.set(backendNodeId, nodeId);
+      }
+    }
+
+    for (const entry of refs) {
+      const nodeId = nodeIdByBackendId.get(Math.floor(entry.backendDOMNodeId));
+      if (!nodeId) {
+        continue;
+      }
+      try {
+        await send("DOM.setAttributeValue", {
+          nodeId,
+          name: BROWSER_REF_MARKER_ATTRIBUTE,
+          value: entry.ref,
+        });
+        marked.add(entry.ref);
+      } catch {
+        // Best-effort marker write. Unmarked refs fall back to role metadata.
+      }
+    }
+
+    return marked;
+  });
+}

@@ -1,0 +1,313 @@
+import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/io.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  listSessionEntriesReadOnly,
+  resolveTranscriptSessionKeyBySessionId,
+  resolveSessionTranscriptRuntimeTarget,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
+import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveExistingSessionKeyForRequest,
+  resolveStoredSessionKeyForSessionId,
+} from "./command/session.js";
+
+/** Identifies a run transcript target without naming the current storage artifact. */
+export type AgentRunSessionTarget = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+  threadId?: string | number;
+  /** Internal admission fence paired with sessionId for run-owned transcript writes. */
+  expectedLifecycleRevision?: string;
+  /** Internal durable writer claim installed after session-lane admission. */
+  expectedWriterRunId?: string;
+};
+
+/** Canonical SQLite target resolved from the storage-neutral run identity. */
+type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
+
+class AgentRunSessionTargetResolutionError extends Error {
+  readonly code = "session-key-missing";
+
+  constructor(sessionId: string) {
+    super(`Cannot resolve a session key for existing session: ${sessionId}`);
+    this.name = "AgentRunSessionTargetResolutionError";
+  }
+}
+
+/** Resolves the active runtime target used by current run/session internals. */
+export async function resolveAgentRunSessionTarget(params: {
+  agentId?: string;
+  config?: OpenClawConfig;
+  missingSessionKey: "create" | "resolve-existing";
+  sessionId: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: AgentRunSessionTarget;
+}): Promise<ResolvedAgentRunSessionTarget> {
+  const config = params.config ?? getRuntimeConfig();
+  const sessionTarget = params.sessionTarget;
+  const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
+  const targetStorePath = normalizeOptionalString(sessionTarget?.storePath);
+  const hasCompleteTypedTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
+  const legacySessionFile = normalizeOptionalString(params.sessionFile);
+  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
+  const legacyMarker = parseSqliteSessionFileMarker(legacySessionFile);
+  const recognizedCompatibilityKey = Boolean(
+    legacySessionFile?.startsWith("agent:") || legacySessionFile?.startsWith("in-memory:"),
+  );
+  const fileBackedCompatibilityValue = Boolean(
+    legacySessionFile &&
+    !recognizedCompatibilityKey &&
+    (path.isAbsolute(legacySessionFile) ||
+      legacySessionFile.includes("/") ||
+      legacySessionFile.includes("\\") ||
+      legacySessionFile.endsWith(".jsonl")),
+  );
+  const plainCompatibilitySessionKey =
+    !fileBackedCompatibilityValue && legacySessionFile === (targetSessionId ?? params.sessionId)
+      ? legacySessionFile
+      : undefined;
+  if (
+    !hasCompleteTypedTarget &&
+    legacySessionFile &&
+    !legacyMarker &&
+    (fileBackedCompatibilityValue ||
+      (!plainCompatibilitySessionKey &&
+        !recognizedCompatibilityKey &&
+        legacySessionFile !== suppliedSessionKey &&
+        legacySessionFile !== targetSessionKey))
+  ) {
+    throw new Error(
+      "File-backed transcript targets are unsupported; migrate the session to SQLite first",
+    );
+  }
+  const agentId = targetAgentId ?? legacyMarker?.agentId ?? params.agentId;
+  const sessionId = targetSessionId ?? legacyMarker?.sessionId ?? params.sessionId;
+  const recognizedCompatibilitySessionKey = recognizedCompatibilityKey
+    ? legacySessionFile
+    : undefined;
+  const compatibilitySessionKey =
+    recognizedCompatibilitySessionKey ??
+    (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
+  const markerEntries =
+    legacyMarker && !hasCompleteTypedTarget
+      ? listSessionEntriesReadOnly({
+          agentId: legacyMarker.agentId,
+          storePath: legacyMarker.storePath,
+        })
+      : [];
+  const markerMatches = legacyMarker
+    ? markerEntries.filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
+    : [];
+  const markerSessionKey =
+    legacyMarker && !hasCompleteTypedTarget
+      ? resolvePreferredSessionKeyForSessionIdMatches(
+          markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          legacyMarker.sessionId,
+        )
+      : undefined;
+  if (
+    legacyMarker &&
+    !hasCompleteTypedTarget &&
+    !targetSessionKey &&
+    !suppliedSessionKey &&
+    markerMatches.length > 0 &&
+    !markerSessionKey
+  ) {
+    throw new Error("Legacy SQLite transcript marker session key is ambiguous");
+  }
+  const preliminarySessionKey =
+    targetSessionKey ?? suppliedSessionKey ?? compatibilitySessionKey ?? markerSessionKey;
+  const preliminaryCompatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
+  if (
+    !targetSessionKey &&
+    !suppliedSessionKey &&
+    preliminarySessionKey === compatibilitySessionKey &&
+    preliminaryCompatibilityKeyAgentId &&
+    agentId &&
+    preliminaryCompatibilityKeyAgentId !== agentId
+  ) {
+    throw new Error("Compatibility session key conflicts with the supplied agent identity");
+  }
+  const targetStoreOwner = resolvePersistedSessionStoreOwnerForTarget({
+    config,
+    sessionKey: preliminarySessionKey,
+    storePath: targetStorePath,
+  });
+  const trustExplicitAlternateStoreAgent = Boolean(
+    targetAgentId &&
+    targetStorePath &&
+    !parseAgentSessionKey(preliminarySessionKey)?.agentId &&
+    targetStoreOwner.kind === "none",
+  );
+  const shouldResolveConfiguredStoreRow =
+    params.missingSessionKey === "resolve-existing" &&
+    !preliminarySessionKey &&
+    !targetStorePath &&
+    !legacyMarker;
+  const configuredStoreResolution = shouldResolveConfiguredStoreRow
+    ? agentId
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: config,
+          sessionId,
+          agentId,
+        })
+      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
+    : undefined;
+  const lookupAgentId =
+    (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
+    legacyMarker?.agentId ??
+    configuredStoreResolution?.agentId ??
+    resolveSessionAgentId({
+      agentId: targetAgentId ?? params.agentId,
+      config,
+      sessionKey:
+        preliminarySessionKey ?? (params.missingSessionKey === "create" ? sessionId : undefined),
+    });
+  const lookupStorePath =
+    targetStorePath ??
+    legacyMarker?.storePath ??
+    configuredStoreResolution?.storePath ??
+    resolveSessionStorePathCore(config.session?.store, { agentId: lookupAgentId });
+  const storedSessionKey =
+    configuredStoreResolution?.sessionKey ??
+    (params.missingSessionKey === "resolve-existing" &&
+    !preliminarySessionKey &&
+    !shouldResolveConfiguredStoreRow
+      ? resolveTranscriptSessionKeyBySessionId({
+          agentId: lookupAgentId,
+          sessionId,
+          storePath: lookupStorePath,
+        })
+      : undefined);
+  const createdSessionKey =
+    params.missingSessionKey === "create"
+      ? toAgentStoreSessionKey({ agentId: lookupAgentId, requestKey: sessionId })
+      : undefined;
+  const sessionKey =
+    targetSessionKey ??
+    suppliedSessionKey ??
+    compatibilitySessionKey ??
+    markerSessionKey ??
+    storedSessionKey ??
+    createdSessionKey;
+  const compatibilitySessionKeySelected =
+    !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
+  const suppliedKeyAgentId = parseAgentSessionKey(suppliedSessionKey)?.agentId;
+  const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
+  const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
+  const candidateMarkerKey = targetSessionKey ?? suppliedSessionKey;
+  const candidateMarkerEntry = candidateMarkerKey
+    ? markerEntries.find(({ sessionKey: candidateKey }) => candidateKey === candidateMarkerKey)
+        ?.entry
+    : undefined;
+  if (
+    legacyMarker &&
+    !hasCompleteTypedTarget &&
+    ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
+      (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
+      (params.agentId && params.agentId !== legacyMarker.agentId) ||
+      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
+      (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
+  ) {
+    throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
+  }
+  if (
+    legacyMarker &&
+    !hasCompleteTypedTarget &&
+    candidateMarkerKey &&
+    candidateMarkerEntry &&
+    candidateMarkerEntry.sessionId !== legacyMarker.sessionId
+  ) {
+    throw new Error("Legacy SQLite transcript marker conflicts with the supplied session key");
+  }
+  if (
+    compatibilitySessionKeySelected &&
+    compatibilityKeyAgentId &&
+    agentId &&
+    compatibilityKeyAgentId !== agentId
+  ) {
+    throw new Error("Compatibility session key conflicts with the supplied agent identity");
+  }
+  if (!sessionKey) {
+    throw new AgentRunSessionTargetResolutionError(sessionId);
+  }
+  const effectiveAgentId =
+    (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
+    legacyMarker?.agentId ??
+    configuredStoreResolution?.agentId ??
+    resolveSessionAgentId({
+      agentId: targetAgentId ?? params.agentId,
+      config,
+      fallbackAgentId: lookupAgentId,
+      sessionKey,
+    });
+  if (sessionTarget && sessionKey) {
+    const storePath =
+      targetStorePath ??
+      legacyMarker?.storePath ??
+      resolveSessionStorePathCore(config.session?.store, { agentId: effectiveAgentId });
+    return await resolveSessionTranscriptRuntimeTarget({
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+      sessionId,
+      sessionKey,
+      storePath,
+      ...(sessionTarget.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+    });
+  }
+
+  if (legacyMarker && sessionKey) {
+    return await resolveSessionTranscriptRuntimeTarget({
+      agentId: legacyMarker.agentId,
+      sessionId,
+      sessionKey,
+      storePath: legacyMarker.storePath,
+    });
+  }
+
+  const storePath = resolveSessionStorePathCore(config.session?.store, {
+    agentId: effectiveAgentId,
+  });
+  return await resolveSessionTranscriptRuntimeTarget({
+    ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+}
+
+/** Applies identity fields from the explicit target before legacy backfills run. */
+export function applyAgentRunSessionTargetIdentity<
+  T extends {
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    sessionTarget?: AgentRunSessionTarget;
+  },
+>(params: T): T {
+  const target = params.sessionTarget;
+  if (!target) {
+    return params;
+  }
+  return {
+    ...params,
+    agentId: normalizeOptionalString(target.agentId) ?? params.agentId,
+    sessionId: normalizeOptionalString(target.sessionId) ?? params.sessionId,
+    sessionKey: normalizeOptionalString(target.sessionKey) ?? params.sessionKey,
+  };
+}

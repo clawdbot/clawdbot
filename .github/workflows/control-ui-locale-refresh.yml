@@ -1,0 +1,358 @@
+name: Control UI Locale Refresh
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ui/src/i18n/locales/en.ts
+      - ui/src/i18n/locales/*.ts
+      - ui/src/i18n/.i18n/*
+      - ui/src/i18n/lib/types.ts
+      - ui/src/i18n/lib/registry.ts
+      - ui/config/control-ui-locales.ts
+      - scripts/control-ui-i18n.ts
+      - scripts/control-ui-i18n-verify.ts
+      - scripts/lib/control-ui-i18n-catalog.ts
+      - scripts/lib/control-ui-i18n-config.json
+      - scripts/lib/control-ui-i18n-config.ts
+      - scripts/lib/control-ui-i18n-raw-copy.ts
+      - scripts/lib/control-ui-i18n-sync-plan.ts
+      - .github/actions/create-generated-pr-tokens/action.yml
+      - .github/actions/publish-generated-pr/action.yml
+      - .github/workflows/control-ui-locale-refresh.yml
+  release:
+    types:
+      - published
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      token_preflight_only:
+        description: Verify generated PR App permissions without running locale generation.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only &&
+      format('control-ui-locale-token-preflight-{0}', github.ref) ||
+      'control-ui-locale-refresh' }}
+  # Full refreshes stay serialized; cheap App-permission probes get a ref-scoped group.
+  # Publisher overlap checks defer stale generated paths to the queued full reconciliation run.
+  cancel-in-progress: false
+
+jobs:
+  resolve-base:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    outputs:
+      locales: ${{ steps.base.outputs.locales }}
+      sha: ${{ steps.base.outputs.sha }}
+    steps:
+      - name: Resolve source commit
+        id: base
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TOKEN_PREFLIGHT_ONLY: ${{ inputs.token_preflight_only || false }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then
+            source_ref="${WORKFLOW_SHA}"
+          else
+            source_ref="${DEFAULT_BRANCH}"
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          source="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api graphql \
+                -f query='query($owner: String!, $name: String!, $ref: String!, $configRef: String!) { repository(owner: $owner, name: $name) { revision: object(expression: $ref) { ... on Commit { oid } } config: object(expression: $configRef) { ... on Blob { text } } } }' \
+                -F owner="${repository_owner}" \
+                -F name="${repository_name}" \
+                -F ref="${source_ref}" \
+                -F configRef="${source_ref}:scripts/lib/control-ui-i18n-config.json"
+          )"
+          sha="$(jq -er '.data.repository.revision.oid' <<< "${source}")"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve the locale refresh source to an exact commit." >&2
+            exit 1
+          fi
+          locales="$(jq -ce '.data.repository.config.text | fromjson | [.[].locale] | select(length > 0 and all(.[]; type == "string" and length > 0))' <<< "${source}")"
+          echo "locales=${locales}" >> "${GITHUB_OUTPUT}"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+  publisher-preflight:
+    name: Verify generated PR App permissions
+    needs: resolve-base
+    if: needs.resolve-base.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Create generated PR tokens
+        id: tokens
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          pull-request-contents-permission: write
+
+      - name: Verify repository auto-merge setting
+        env:
+          GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          auto_merge_allowed="$(
+            gh api graphql \
+              -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { autoMergeAllowed } }' \
+              -f owner="${REPOSITORY_OWNER}" \
+              -f name="${REPOSITORY_NAME}" \
+              --jq '.data.repository.autoMergeAllowed'
+          )"
+          if [[ "${auto_merge_allowed}" != "true" ]]; then
+            echo "Repository auto-merge must be enabled before generated locale publication." >&2
+            exit 1
+          fi
+
+  refresh:
+    needs: [resolve-base, publisher-preflight]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        locale: ${{ fromJSON(needs.resolve-base.outputs.locales) }}
+    runs-on: ubuntu-latest
+    name: Refresh ${{ matrix.locale }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Ensure translation provider secrets exist
+        env:
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
+            exit 1
+          fi
+
+      - name: Refresh control UI locale files
+        env:
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+          LOCALE: ${{ matrix.locale }}
+        run: |
+          set -euo pipefail
+
+          run_refresh() {
+            local provider="$1"
+            local model="$2"
+            local openai_api_key="${3-}"
+            if [ "$provider" = "openai" ]; then
+              OPENAI_API_KEY="$openai_api_key" \
+                OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+                OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+                node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+              return
+            fi
+            OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+              OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+              node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+          }
+
+          run_openai_refresh() {
+            local status=1
+            if [ -n "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ]; then
+              set +e
+              run_refresh openai "${OPENAI_MODEL}" "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}"
+              status="$?"
+              set -e
+              if [ "$status" -eq 0 ]; then
+                return 0
+              fi
+              if [ -z "${OPENAI_API_KEY:-}" ] || [ "${OPENAI_API_KEY}" = "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}" ]; then
+                return "$status"
+              fi
+              echo "::warning::Docs OpenAI control UI locale refresh key failed for ${LOCALE}; retrying with repository OpenAI key."
+            fi
+            if [ -z "${OPENAI_API_KEY:-}" ]; then
+              return "$status"
+            fi
+            run_refresh openai "${OPENAI_MODEL}" "${OPENAI_API_KEY}"
+          }
+
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            set +e
+            run_refresh anthropic "${ANTHROPIC_MODEL}"
+            status="$?"
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+              exit "$status"
+            fi
+            echo "::warning::Anthropic control UI locale refresh failed for ${LOCALE}; retrying with OpenAI."
+          fi
+
+          run_openai_refresh
+
+      - name: Prepare locale artifact
+        env:
+          LOCALE: ${{ matrix.locale }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
+          mkdir -p "${artifact_dir}"
+          locale_memory="ui/src/i18n/.i18n/${LOCALE}.tm.jsonl"
+          locale_metadata="ui/src/i18n/.i18n/${LOCALE}.meta.json"
+          git add -A -- "${locale_memory}" "${locale_metadata}"
+          git diff --cached --binary --full-index -- "${locale_memory}" "${locale_metadata}" ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
+
+      - name: Upload locale artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-locale-${{ matrix.locale }}
+          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    name: Commit control UI locale refresh
+    needs: [resolve-base, publisher-preflight, refresh]
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      needs.publisher-preflight.result == 'success' &&
+      needs.refresh.result == 'success' &&
+      !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-base.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Download locale artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: control-ui-locale-*
+          path: ${{ runner.temp }}/control-ui-locale-artifacts
+          merge-multiple: true
+
+      - name: Apply locale artifacts
+        run: |
+          set -euo pipefail
+          while IFS= read -r patch; do
+            if [ -s "${patch}" ]; then
+              git apply "${patch}"
+            fi
+          done < <(find "${RUNNER_TEMP}/control-ui-locale-artifacts" -type f -name '*.patch' | sort)
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Finalize control UI generated artifacts
+        run: node --import tsx scripts/control-ui-i18n.ts sync --write
+
+      - name: Validate control UI locale refresh
+        run: node --import tsx scripts/control-ui-i18n.ts check
+
+      - name: Open or update generated locale PR
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/control-ui-locale-refresh
+          commit-message: "chore(ui): refresh control ui locales"
+          pr-title: "chore(ui): refresh control ui locales"
+          auto-merge: "true"
+          generated-paths: |
+            ui/src/i18n/.i18n/*.tm.jsonl
+            ui/src/i18n/.i18n/*.meta.json
+            ui/src/i18n/.i18n/catalog-fallbacks.json
+          invalidation-paths: |
+            ui/src/i18n/locales/*.ts
+            ui/src/i18n/locales/en.ts
+            ui/src/i18n/locales/en-agents.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            ui/src/i18n/.i18n/raw-copy-baseline.json
+            ui/src/i18n/lib/types.ts
+            ui/src/i18n/lib/registry.ts
+            ui/config/control-ui-locales.ts
+            scripts/control-ui-i18n.ts
+            scripts/control-ui-i18n-verify.ts
+            scripts/lib/control-ui-i18n-catalog.ts
+            scripts/lib/control-ui-i18n-config.json
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-raw-copy.ts
+            scripts/lib/control-ui-i18n-sync-plan.ts
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/control-ui-locale-refresh.yml
+          pr-body: |
+            ## What Problem This Solves
+
+            Keeps generated Control UI locales synchronized without bypassing protected-branch checks.
+
+            ## Why This Change Was Made
+
+            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+
+            ## User Impact
+
+            No direct user-facing change beyond refreshed translations.
+
+            ## Evidence
+
+            - [Locale refresh run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - `node --import tsx scripts/control-ui-i18n.ts check`

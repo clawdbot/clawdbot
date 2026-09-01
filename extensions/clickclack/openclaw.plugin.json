@@ -1,0 +1,28 @@
+{
+  "id": "clickclack",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "clickclack"
+  ],
+  "channelConfigs": {
+    "clickclack": {
+      "label": "ClickClack",
+      "description": "ClickClack channel accounts and group activation policy."
+    }
+  },
+  "contracts": {
+    "tools": [
+      "discussion"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

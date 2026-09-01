@@ -1,0 +1,30 @@
+{
+  "ownership": "explicit",
+  "defaults": {
+    "model": {
+      "primary": "openai/gpt-5.5"
+    },
+    "heartbeat": {
+      "every": "0m"
+    }
+  },
+  "entries": {
+    "main": {
+      "name": "Main",
+      "workspace": "~/workspace",
+      "model": {
+        "primary": "openai/gpt-5.5"
+      },
+      "thinkingDefault": "low",
+      "skills": ["memory"]
+    },
+    "ops": {
+      "name": "Ops",
+      "workspace": "~/workspace/ops",
+      "model": {
+        "primary": "openai/gpt-5.5"
+      },
+      "fastModeDefault": true
+    }
+  }
+}

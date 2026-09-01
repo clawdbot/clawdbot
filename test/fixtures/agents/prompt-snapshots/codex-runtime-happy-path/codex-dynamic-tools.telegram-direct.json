@@ -1,0 +1,1374 @@
+[
+  {
+    "description": "List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:\"subagent\")` targets.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "name": "agents_list",
+    "type": "function"
+  },
+  {
+    "description": "Send/manage channel messages. Supports actions: send.",
+    "inputSchema": {
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "action": {
+          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
+          "enum": ["send"],
+          "type": "string"
+        },
+        "asDocument": {
+          "description": "Alias for forceDocument.",
+          "type": "boolean"
+        },
+        "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
+          "type": "boolean"
+        },
+        "attachments": {
+          "description": "Attachments; each uses media.",
+          "items": {
+            "properties": {
+              "media": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["image", "audio", "video", "file"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "buffer": {
+          "description": "Base64/data-URL attachment.",
+          "type": "string"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "effect": {
+          "description": "Alias for effectId.",
+          "type": "string"
+        },
+        "effectId": {
+          "description": "sendWithEffect id/name.",
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "forceDocument": {
+          "description": "Send media as document; no compression.",
+          "type": "boolean"
+        },
+        "gatewayToken": {
+          "type": "string"
+        },
+        "gatewayUrl": {
+          "type": "string"
+        },
+        "gifPlayback": {
+          "type": "boolean"
+        },
+        "media": {
+          "description": "Media URL/path. data: use buffer.",
+          "type": "string"
+        },
+        "message": {
+          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "quoteText": {
+          "description": "Telegram reply quote text.",
+          "type": "string"
+        },
+        "replyTo": {
+          "type": "string"
+        },
+        "silent": {
+          "type": "boolean"
+        },
+        "target": {
+          "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "description": "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
+        }
+      },
+      "required": ["action"],
+      "type": "object"
+    },
+    "name": "message",
+    "type": "function"
+  },
+  {
+    "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. `visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Session listing/addressing obeys `tools.sessions.visibility` (agent: all sessions of this agent). Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context is isolated. Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work while run result returns.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "attachAs": {
+          "description": "Attachment mount hint; visible=true accepts only an omitted or blank mountPath.",
+          "properties": {
+            "mountPath": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "attachments": {
+          "description": "Inline snapshots; visible=true accepts only an empty array.",
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": ["utf8", "base64"],
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "content"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "cleanup": {
+          "description": "Hidden session cleanup; visible=true always keeps the session.",
+          "enum": ["delete", "keep"],
+          "type": "string"
+        },
+        "context": {
+          "description": "Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context is isolated.",
+          "enum": ["isolated", "fork"],
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+          "type": "string"
+        },
+        "group": {
+          "description": "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Short task title shown in UI lists; name the work, not the agent.",
+          "type": "string"
+        },
+        "lightContext": {
+          "description": "Light bootstrap; subagent only; unavailable with visible=true.",
+          "type": "boolean"
+        },
+        "mode": {
+          "description": "\"run\" one-shot. Visible sessions accept omitted/default \"run\" and remain persistent.",
+          "enum": ["run"],
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime; visible=true requires \"subagent\".",
+          "enum": ["subagent"],
+          "type": "string"
+        },
+        "runTimeoutSeconds": {
+          "description": "Per-run timeout in seconds; overrides the configured subagent default. Zero disables the timeout.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sandbox": {
+          "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
+          "enum": ["inherit", "require"],
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "taskName": {
+          "description": "Stable later-target alias; starts lowercase letter; then lowercase/digit/_/-.",
+          "type": "string"
+        },
+        "thinking": {
+          "description": "Thinking override; unavailable with visible=true.",
+          "type": "string"
+        },
+        "visible": {
+          "description": "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
+          "type": "boolean"
+        },
+        "worktree": {
+          "description": "Visible session worktree",
+          "type": "boolean"
+        },
+        "worktreeBaseRef": {
+          "description": "Worktree base ref",
+          "type": "string"
+        },
+        "worktreeName": {
+          "description": "Worktree name",
+          "type": "string"
+        }
+      },
+      "required": ["task"],
+      "type": "object"
+    },
+    "name": "sessions_spawn",
+    "type": "function"
+  },
+  {
+    "description": "",
+    "name": "openclaw",
+    "tools": [
+      {
+        "deferLoading": true,
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; disabled only when cron.triggers.enabled=false.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message. Silent watcher=>mode:\"none\". webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in `to`. To keep announce delivery and also POST completion, use mode:\"announce\" with completionDestination:{mode:\"webhook\",to:\"https://...\"}.\n\nFAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
+        "inputSchema": {
+          "additionalProperties": true,
+          "properties": {
+            "action": {
+              "enum": [
+                "status",
+                "list",
+                "get",
+                "add",
+                "update",
+                "remove",
+                "run",
+                "runs",
+                "next_check",
+                "wake"
+              ],
+              "type": "string"
+            },
+            "agentId": {
+              "description": "List filter for `action: \"list\"`; wake target override for `action: \"wake\"` (defaults to the calling agent when omitted on wake)",
+              "type": "string"
+            },
+            "contextMessages": {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gatewayToken": {
+              "type": "string"
+            },
+            "gatewayUrl": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "in": {
+              "description": "Relative duration for action=\"next_check\" (for example, \"15m\")",
+              "type": "string"
+            },
+            "includeDisabled": {
+              "type": "boolean"
+            },
+            "job": {
+              "additionalProperties": true,
+              "description": "Job fields. action=\"add\": full job. action=\"update\": partial patch — only supplied fields change; null clears.",
+              "properties": {
+                "declarationKey": {
+                  "description": "Idempotent declaration key (add only).",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "deleteAfterRun": {
+                  "description": "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
+                  "type": "boolean"
+                },
+                "delivery": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "accountId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Delivery account, or null to clear"
+                    },
+                    "bestEffort": {
+                      "description": "Omitted/false requires requested delivery for successful completion; true lets successful execution complete and delete a one-shot despite failed/unknown delivery. Intentional silence succeeds in either mode.",
+                      "type": "boolean"
+                    },
+                    "channel": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Delivery channel, or null to clear"
+                    },
+                    "completionDestination": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "mode": {
+                              "const": "webhook",
+                              "type": "string"
+                            },
+                            "to": {
+                              "description": "Completion webhook target; only valid with delivery.mode=announce",
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": ["mode", "to"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Completion webhook; requires delivery.mode=announce; null clears."
+                    },
+                    "failureDestination": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "properties": {
+                            "accountId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Failure delivery account, or null to clear"
+                            },
+                            "channel": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Failure delivery channel, or null to clear"
+                            },
+                            "mode": {
+                              "anyOf": [
+                                {
+                                  "const": "announce",
+                                  "type": "string"
+                                },
+                                {
+                                  "const": "webhook",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "to": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Failure delivery target, or null to clear"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears."
+                    },
+                    "mode": {
+                      "description": "Delivery mode",
+                      "enum": ["none", "announce", "webhook"],
+                      "type": "string"
+                    },
+                    "threadId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Thread/topic id"
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Delivery target, or null to clear"
+                    }
+                  },
+                  "type": "object"
+                },
+                "description": {
+                  "description": "Human description",
+                  "type": "string"
+                },
+                "displayName": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Human-readable label; null clears it"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "failureAlert": {
+                  "additionalProperties": true,
+                  "description": "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
+                  "properties": {
+                    "accountId": {
+                      "type": "string"
+                    },
+                    "after": {
+                      "description": "Consecutive execution failures before alert; delivery failures bypass this threshold",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "channel": {
+                      "description": "Alert channel",
+                      "type": "string"
+                    },
+                    "cooldownMs": {
+                      "description": "Alert cooldown ms",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "includeSkipped": {
+                      "description": "Count skipped runs.",
+                      "type": "boolean"
+                    },
+                    "mode": {
+                      "enum": ["announce", "webhook"],
+                      "type": "string"
+                    },
+                    "to": {
+                      "description": "Alert target",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "name": {
+                  "description": "Job name",
+                  "type": "string"
+                },
+                "owner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "sessionKey": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "pacing": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Dynamic-cadence bounds; at least one of min or max is required",
+                      "properties": {
+                        "max": {
+                          "description": "Maximum dynamic delay",
+                          "type": "string"
+                        },
+                        "min": {
+                          "description": "Minimum dynamic delay",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "payload": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "allowUnsafeExternalContent": {
+                      "description": "Allow untrusted external content in prompt",
+                      "type": "boolean"
+                    },
+                    "fallbacks": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Fallback models, or null to clear"
+                    },
+                    "kind": {
+                      "description": "Payload kind",
+                      "enum": ["systemEvent", "agentTurn", "script"],
+                      "type": "string"
+                    },
+                    "lightContext": {
+                      "description": "Lightweight bootstrap context (skip full workspace context)",
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "description": "agentTurn prompt",
+                      "type": "string"
+                    },
+                    "model": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Model override, or null to clear"
+                    },
+                    "script": {
+                      "description": "Headless code-mode script",
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "systemEvent text",
+                      "type": "string"
+                    },
+                    "thinking": {
+                      "description": "Thinking override",
+                      "type": "string"
+                    },
+                    "timeoutSeconds": {
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "toolBudget": {
+                      "description": "Maximum script tool calls",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "toolsAllow": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Allowed tool ids, or null to clear"
+                    }
+                  },
+                  "type": "object"
+                },
+                "schedule": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "anchorMs": {
+                      "description": "Start anchor ms (kind=every)",
+                      "maximum": 8640000000000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "at": {
+                      "description": "ISO-8601 time (kind=at)",
+                      "type": "string"
+                    },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
+                    "everyMs": {
+                      "description": "Interval ms (kind=every)",
+                      "maximum": 8640000000000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "expr": {
+                      "description": "Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example \"0 18 * * *\", \"Asia/Shanghai\".",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "Schedule kind",
+                      "enum": ["at", "every", "cron", "stream"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
+                      "type": "string"
+                    },
+                    "staggerMs": {
+                      "description": "Jitter ms (kind=cron)",
+                      "maximum": 8640000000000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "tz": {
+                      "description": "IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example \"Asia/Shanghai\".",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "sessionKey": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Explicit session key, or null to clear it"
+                },
+                "sessionTarget": {
+                  "description": "main | isolated | current (agentTurn default) | session:<id>",
+                  "type": "string"
+                },
+                "trigger": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "once": {
+                          "type": "boolean"
+                        },
+                        "script": {
+                          "maxLength": 65536,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": ["script"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "wakeMode": {
+                  "description": "Wake timing",
+                  "enum": ["now", "next-heartbeat"],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum jobs returned by action=\"list\"",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "mode": {
+              "description": "Wake mode for action=\"wake\" (default next-heartbeat)",
+              "enum": ["now", "next-heartbeat"],
+              "type": "string"
+            },
+            "offset": {
+              "description": "Job offset for action=\"list\"; use nextOffset to load the next page",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runMode": {
+              "description": "Run mode for action=\"run\": omitted defaults to \"due\"; use \"force\" to trigger now.",
+              "enum": ["due", "force"],
+              "type": "string"
+            },
+            "sessionKey": {
+              "description": "Wake target override for `action: \"wake\"`: route the event to another session owned by the calling agent. Defaults to the resolved calling-session key when omitted.",
+              "type": "string"
+            },
+            "text": {
+              "description": "systemEvent text for action=\"wake\"",
+              "type": "string"
+            },
+            "timeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "name": "automations",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Read gateway config + schema. Writes/restart: use openclaw tool.",
+        "inputSchema": {
+          "properties": {
+            "action": {
+              "enum": ["config.get", "config.schema.lookup"],
+              "type": "string"
+            },
+            "gatewayToken": {
+              "type": "string"
+            },
+            "gatewayUrl": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Required for config.schema.lookup; optional for config.get.",
+              "type": "string"
+            },
+            "timeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "name": "gateway",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+        "inputSchema": {
+          "properties": {
+            "action": {
+              "enum": [
+                "status",
+                "describe",
+                "pending",
+                "approve",
+                "reject",
+                "notify",
+                "camera_snap",
+                "camera_list",
+                "camera_clip",
+                "camera_ptz",
+                "photos_latest",
+                "screen_record",
+                "screen_snapshot",
+                "location_get",
+                "notifications_list",
+                "notifications_action",
+                "device_status",
+                "device_info",
+                "device_permissions",
+                "device_health",
+                "which",
+                "invoke"
+              ],
+              "type": "string"
+            },
+            "bins": {
+              "description": "which: executable names to resolve on the selected node.",
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            "body": {
+              "type": "string"
+            },
+            "delayMs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "delivery": {
+              "enum": ["system", "overlay", "auto"],
+              "type": "string"
+            },
+            "desiredAccuracy": {
+              "enum": ["coarse", "balanced", "precise"],
+              "type": "string"
+            },
+            "deviceId": {
+              "description": "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
+              "type": "string"
+            },
+            "duration": {
+              "type": "string"
+            },
+            "durationMs": {
+              "maximum": 300000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "facing": {
+              "description": "camera_snap: front/back/both; camera_clip: front/back only.",
+              "enum": ["front", "back", "both"],
+              "type": "string"
+            },
+            "fps": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            "gatewayToken": {
+              "type": "string"
+            },
+            "gatewayUrl": {
+              "type": "string"
+            },
+            "includeAudio": {
+              "type": "boolean"
+            },
+            "invokeCommand": {
+              "type": "string"
+            },
+            "invokeParamsJson": {
+              "type": "string"
+            },
+            "invokeTimeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "limit": {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "locationTimeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxAgeMs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxWidth": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "node": {
+              "description": "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+              "type": "string"
+            },
+            "notificationAction": {
+              "enum": ["open", "dismiss", "reply"],
+              "type": "string"
+            },
+            "notificationKey": {
+              "type": "string"
+            },
+            "notificationReplyText": {
+              "type": "string"
+            },
+            "outPath": {
+              "type": "string"
+            },
+            "panDegrees": {
+              "description": "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+              "type": "number"
+            },
+            "priority": {
+              "enum": ["passive", "active", "timeSensitive"],
+              "type": "string"
+            },
+            "ptzOperation": {
+              "description": "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+              "enum": ["status", "set", "move", "home"],
+              "type": "string"
+            },
+            "quality": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "screenIndex": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sound": {
+              "type": "string"
+            },
+            "tiltDegrees": {
+              "description": "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+              "type": "number"
+            },
+            "timeoutMs": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "title": {
+              "type": "string"
+            },
+            "zoomPercent": {
+              "description": "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+              "type": "number"
+            }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "name": "nodes",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Show visible-session model/usage/time/cost/tasks. `sessionKey=\"current\"` for current; UI labels are not keys. `model` overrides; `model=default` resets. Use for active model/session questions.",
+        "inputSchema": {
+          "properties": {
+            "changesSince": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "model": {
+              "type": "string"
+            },
+            "sessionKey": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "session_status",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled/interrupted inputs never replay automatically. Lower limit for richer pending previews.",
+        "inputSchema": {
+          "properties": {
+            "includeTools": {
+              "type": "boolean"
+            },
+            "limit": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "messageId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "offset": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pendingBefore": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sessionId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionKey": {
+              "type": "string"
+            }
+          },
+          "required": ["sessionKey"],
+          "type": "object"
+        },
+        "name": "sessions_history",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "List visible sessions and sidebar groups; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+        "inputSchema": {
+          "properties": {
+            "activeMinutes": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "agentId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "archived": {
+              "type": "boolean"
+            },
+            "includeDerivedTitles": {
+              "type": "boolean"
+            },
+            "includeLastMessage": {
+              "type": "boolean"
+            },
+            "kinds": {
+              "items": {
+                "enum": ["main", "group", "cron", "hook", "node", "other"],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "label": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "limit": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "messageLimit": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "search": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "sessions_list",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "maximum": 25,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "query": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "sessionKey": {
+              "type": "string"
+            }
+          },
+          "required": ["query"],
+          "type": "object"
+        },
+        "name": "sessions_search",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later announcement state, and neither proves target completion. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status \"no_reply\" is terminal, so do not wait for an announcement. watch:true: notice arrives when others later change target session.",
+        "inputSchema": {
+          "properties": {
+            "agentId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "sessionKey": {
+              "type": "string"
+            },
+            "timeoutSeconds": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "watch": {
+              "type": "boolean"
+            }
+          },
+          "required": ["message"],
+          "type": "object"
+        },
+        "name": "sessions_send",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Background work: subagents, media gen, automation runs. list/cancel.",
+        "inputSchema": {
+          "properties": {
+            "action": {
+              "enum": ["list", "cancel"],
+              "type": "string"
+            },
+            "recentMinutes": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "taskId": {
+              "description": "Task id",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "subagents",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
+        "inputSchema": {
+          "properties": {
+            "channel": {
+              "description": "Channel id; output-format hint.",
+              "type": "string"
+            },
+            "text": {
+              "description": "Text to speak.",
+              "type": "string"
+            },
+            "timeoutMs": {
+              "description": "Provider timeout ms.",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": ["text"],
+          "type": "object"
+        },
+        "name": "tts",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
+        "inputSchema": {
+          "properties": {
+            "extractMode": {
+              "default": "markdown",
+              "description": "Extract as markdown/text.",
+              "enum": ["markdown", "text"],
+              "type": "string"
+            },
+            "maxChars": {
+              "description": "Max chars returned; truncates.",
+              "minimum": 100,
+              "type": "integer"
+            },
+            "url": {
+              "description": "HTTP(S) URL.",
+              "type": "string"
+            }
+          },
+          "required": ["url"],
+          "type": "object"
+        },
+        "name": "web_fetch",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+        "inputSchema": {
+          "properties": {
+            "count": {
+              "description": "Result count.",
+              "maximum": 10,
+              "minimum": 1,
+              "type": "number"
+            },
+            "country": {
+              "description": "2-letter country code.",
+              "type": "string"
+            },
+            "date_after": {
+              "description": "Published after YYYY-MM-DD.",
+              "type": "string"
+            },
+            "date_before": {
+              "description": "Published before YYYY-MM-DD.",
+              "type": "string"
+            },
+            "domain_filter": {
+              "description": "Perplexity domain filter.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "freshness": {
+              "description": "Time filter: day/week/month/year.",
+              "type": "string"
+            },
+            "language": {
+              "description": "ISO 639-1 language.",
+              "type": "string"
+            },
+            "max_tokens": {
+              "description": "Perplexity total token budget.",
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "number"
+            },
+            "max_tokens_per_page": {
+              "description": "Perplexity tokens per page.",
+              "minimum": 1,
+              "type": "number"
+            },
+            "query": {
+              "description": "Search query.",
+              "type": "string"
+            },
+            "search_lang": {
+              "description": "Brave result language.",
+              "type": "string"
+            },
+            "ui_lang": {
+              "description": "Brave UI locale.",
+              "type": "string"
+            }
+          },
+          "required": ["query"],
+          "type": "object"
+        },
+        "name": "web_search",
+        "type": "function"
+      }
+    ],
+    "type": "namespace"
+  },
+  {
+    "description": "",
+    "name": "openclaw_direct",
+    "tools": [
+      {
+        "description": "End turn after subagent spawn; results arrive next message. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+        "inputSchema": {
+          "properties": {
+            "acknowledgment": {
+              "description": "Optional waiting reply for an otherwise-silent interactive parent turn.",
+              "type": "string"
+            },
+            "message": {
+              "description": "Private context for the resumed turn; not sent to the user.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "sessions_yield",
+        "type": "function"
+      }
+    ],
+    "type": "namespace"
+  }
+]

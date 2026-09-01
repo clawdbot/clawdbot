@@ -1,0 +1,9 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"sendChatAction","data":{"payload":{"action":"typing"},"result":true,"target":"4242"}}
+{"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Working on the fix"}}
+{"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Working on the fix: patching now."}}
+{"seq":6,"at":300,"dir":"out","kind":"sendMessage","data":{"payload":{"parse_mode":"HTML","reply_parameters":{"allow_sending_without_reply":true,"message_id":1},"text":"Working on the fix: patching now."},"result":{"message_id":1001},"target":"4242"}}
+{"seq":7,"at":600,"dir":"in","kind":"cancel"}
+{"seq":8,"at":600,"dir":"in","kind":"idle"}
+{"seq":9,"at":4300,"dir":"out","kind":"deleteMessage","data":{"payload":{"message_id":1001},"result":true,"target":"4242"}}

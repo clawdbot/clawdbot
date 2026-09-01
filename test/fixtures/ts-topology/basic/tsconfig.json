@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "fixture-sdk": ["./src/public/index.ts"],
+      "fixture-sdk/*": ["./src/public/*"]
+    },
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "extensions/**/*.ts", "packages/**/*.ts", "tests/**/*.ts"]
+}

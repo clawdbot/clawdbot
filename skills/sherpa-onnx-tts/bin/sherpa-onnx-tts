@@ -1,0 +1,178 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+function usage(message) {
+  if (message) {
+    console.error(message);
+  }
+  console.error(
+    "\nUsage: sherpa-onnx-tts [--runtime-dir <dir>] [--model-dir <dir>] [--model-file <file>] [--tokens-file <file>] [--data-dir <dir>] [--output <file>] \"text\"",
+  );
+  console.error("\nRequired env (or flags):\n  SHERPA_ONNX_RUNTIME_DIR\n  SHERPA_ONNX_MODEL_DIR");
+  process.exit(1);
+}
+
+function resolveRuntimeDir(explicit) {
+  const value = explicit || process.env.SHERPA_ONNX_RUNTIME_DIR || "";
+  return value.trim();
+}
+
+function resolveModelDir(explicit) {
+  const value = explicit || process.env.SHERPA_ONNX_MODEL_DIR || "";
+  return value.trim();
+}
+
+function resolveModelFile(modelDir, explicitFlag) {
+  const explicit = (explicitFlag || process.env.SHERPA_ONNX_MODEL_FILE || "").trim();
+  if (explicit) return explicit;
+  try {
+    const candidates = fs
+      .readdirSync(modelDir)
+      .filter((entry) => entry.endsWith(".onnx"))
+      .map((entry) => path.join(modelDir, entry));
+    if (candidates.length === 1) return candidates[0];
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function resolveTokensFile(modelDir, explicitFlag) {
+  const explicit = (explicitFlag || process.env.SHERPA_ONNX_TOKENS_FILE || "").trim();
+  if (explicit) return explicit;
+  const candidate = path.join(modelDir, "tokens.txt");
+  return fs.existsSync(candidate) ? candidate : "";
+}
+
+function resolveDataDir(modelDir, explicitFlag) {
+  const explicit = (explicitFlag || process.env.SHERPA_ONNX_DATA_DIR || "").trim();
+  if (explicit) return explicit;
+  const candidate = path.join(modelDir, "espeak-ng-data");
+  return fs.existsSync(candidate) ? candidate : "";
+}
+
+function resolveBinary(runtimeDir) {
+  const binName = process.platform === "win32" ? "sherpa-onnx-offline-tts.exe" : "sherpa-onnx-offline-tts";
+  return path.join(runtimeDir, "bin", binName);
+}
+
+function prependEnvPath(current, next) {
+  if (!next) return current;
+  if (!current) return next;
+  return `${next}${path.delimiter}${current}`;
+}
+
+const args = process.argv.slice(2);
+let runtimeDir = "";
+let modelDir = "";
+let modelFile = "";
+let tokensFile = "";
+let dataDir = "";
+let output = "tts.wav";
+const textParts = [];
+
+for (let i = 0; i < args.length; i += 1) {
+  const arg = args[i];
+  if (arg === "--runtime-dir") {
+    runtimeDir = args[i + 1] || "";
+    i += 1;
+    continue;
+  }
+  if (arg === "--model-dir") {
+    modelDir = args[i + 1] || "";
+    i += 1;
+    continue;
+  }
+  if (arg === "--model-file") {
+    modelFile = args[i + 1] || "";
+    i += 1;
+    continue;
+  }
+  if (arg === "--tokens-file") {
+    tokensFile = args[i + 1] || "";
+    i += 1;
+    continue;
+  }
+  if (arg === "--data-dir") {
+    dataDir = args[i + 1] || "";
+    i += 1;
+    continue;
+  }
+  if (arg === "-o" || arg === "--output") {
+    output = args[i + 1] || output;
+    i += 1;
+    continue;
+  }
+  if (arg === "--text") {
+    textParts.push(args[i + 1] || "");
+    i += 1;
+    continue;
+  }
+  textParts.push(arg);
+}
+
+runtimeDir = resolveRuntimeDir(runtimeDir);
+modelDir = resolveModelDir(modelDir);
+
+if (!runtimeDir || !modelDir) {
+  usage("Missing runtime/model directory.");
+}
+
+modelFile = resolveModelFile(modelDir, modelFile);
+tokensFile = resolveTokensFile(modelDir, tokensFile);
+dataDir = resolveDataDir(modelDir, dataDir);
+
+if (!modelFile || !tokensFile || !dataDir) {
+  usage(
+    "Model directory is missing required files. Set SHERPA_ONNX_MODEL_FILE, SHERPA_ONNX_TOKENS_FILE, SHERPA_ONNX_DATA_DIR or pass --model-file/--tokens-file/--data-dir.",
+  );
+}
+
+const text = textParts.join(" ").trim();
+if (!text) {
+  usage("Missing text.");
+}
+
+const bin = resolveBinary(runtimeDir);
+if (!fs.existsSync(bin)) {
+  usage(`TTS binary not found: ${bin}`);
+}
+
+const env = { ...process.env };
+const libDir = path.join(runtimeDir, "lib");
+if (process.platform === "darwin") {
+  env.DYLD_LIBRARY_PATH = prependEnvPath(env.DYLD_LIBRARY_PATH || "", libDir);
+} else if (process.platform === "win32") {
+  env.PATH = prependEnvPath(env.PATH || "", [path.join(runtimeDir, "bin"), libDir].join(path.delimiter));
+} else {
+  env.LD_LIBRARY_PATH = prependEnvPath(env.LD_LIBRARY_PATH || "", libDir);
+}
+
+const outputPath = path.isAbsolute(output) ? output : path.join(process.cwd(), output);
+fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+
+const child = spawnSync(
+  bin,
+  [
+    `--vits-model=${modelFile}`,
+    `--vits-tokens=${tokensFile}`,
+    `--vits-data-dir=${dataDir}`,
+    `--output-filename=${outputPath}`,
+    text,
+  ],
+  {
+    stdio: "inherit",
+    env,
+  },
+);
+
+if (typeof child.status === "number") {
+  process.exit(child.status);
+}
+if (child.error) {
+  console.error(child.error.message || String(child.error));
+}
+process.exit(1);

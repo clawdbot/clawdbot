@@ -1,0 +1,6 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="accessibility_service_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحكم في واجهة OpenClaw"</string>
+    <string name="accessibility_service_summary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مراقبة واجهة المطوّر والتحكم بها"</string>
+    <string name="accessibility_service_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"يتيح لبنية OpenClaw من جهة خارجية فحص التطبيق النشط والتحكم به أثناء التطوير المحلي."</string>
+    <string name="accessibility_dev_activity_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مطوّر إمكانية الوصول في OpenClaw"</string>
+</resources>

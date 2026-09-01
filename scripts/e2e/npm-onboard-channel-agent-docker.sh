@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# Installs a prepared OpenClaw npm tarball in Docker, runs non-interactive
+# onboarding for a channel, and verifies one mocked model turn through Gateway.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-onboard-channel-agent-e2e" OPENCLAW_NPM_ONBOARD_E2E_IMAGE)"
+DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
+HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
+PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
+CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
+USE_SOURCE_PLUGIN_PACKAGE="${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}"
+JSON_ARTIFACT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES 1048576
+)"
+STATUS_TEXT_MAX_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES 1048576
+)"
+run_log=""
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
+
+case "$CHANNEL" in
+telegram | discord | slack) ;;
+*)
+  echo "OPENCLAW_NPM_ONBOARD_CHANNEL must be telegram, discord, or slack, got: $CHANNEL" >&2
+  exit 1
+  ;;
+esac
+
+docker_e2e_build_or_reuse "$IMAGE_NAME" npm-onboard-channel-agent "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
+
+prepare_package_tgz() {
+  if [ -n "$PACKAGE_TGZ" ]; then
+    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent "$PACKAGE_TGZ")"
+    return 0
+  fi
+  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+    echo "OPENCLAW_NPM_ONBOARD_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+    exit 1
+  fi
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz npm-onboard-channel-agent)"
+}
+
+prepare_package_tgz
+
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_configure_docker_args \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+fi
+
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
+run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
+
+echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
+if ! docker_e2e_run_with_harness \
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE="$USE_SOURCE_PLUGIN_PACKAGE" \
+  -e "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES=$JSON_ARTIFACT_MAX_BYTES" \
+  -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
+  -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
+set -Eeuo pipefail
+
+source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/prepublish-plugin-registry.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+export OPENAI_API_KEY="sk-openclaw-npm-onboard-e2e"
+export OPENCLAW_GATEWAY_TOKEN="npm-onboard-channel-agent-token"
+
+CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
+PORT="18789"
+MOCK_PORT="44080"
+SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
+export SUCCESS_MARKER MOCK_REQUEST_LOG
+mock_pid=""
+plugin_registry_pid=""
+
+case "$CHANNEL" in
+  telegram)
+    CHANNEL_TOKEN="123456:openclaw-npm-onboard-token"
+    DEP_SENTINEL="grammy"
+    CHANNEL_ADD_ARGS=(--token "$CHANNEL_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$CHANNEL_TOKEN")
+    ;;
+  discord)
+    CHANNEL_TOKEN="openclaw-npm-onboard-discord-token"
+    DEP_SENTINEL="discord-api-types"
+    CHANNEL_ADD_ARGS=(--token "$CHANNEL_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$CHANNEL_TOKEN")
+    ;;
+  slack)
+    SLACK_BOT_TOKEN="xoxb-openclaw-npm-onboard-slack-token"
+    SLACK_APP_TOKEN="xapp-openclaw-npm-onboard-slack-token"
+    DEP_SENTINEL="@slack/bolt"
+    CHANNEL_ADD_ARGS=(--bot-token "$SLACK_BOT_TOKEN" --app-token "$SLACK_APP_TOKEN")
+    CHANNEL_CONFIG_TOKENS=("$SLACK_BOT_TOKEN" "$SLACK_APP_TOKEN")
+    ;;
+  *)
+    echo "unsupported channel: $CHANNEL" >&2
+    exit 1
+    ;;
+esac
+
+cleanup() {
+  openclaw_e2e_stop_process "${mock_pid:-}"
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+  rm -rf "$scenario_tmp"
+}
+trap cleanup EXIT
+
+dump_debug_logs() {
+  local status="$1"
+  echo "npm onboard/channel/agent scenario failed with exit code $status" >&2
+  openclaw_e2e_dump_logs \
+    /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-install.log \
+    /tmp/openclaw-channel-plugin-install.log \
+    /tmp/openclaw-onboard.json \
+    /tmp/openclaw-channels-status.json \
+    /tmp/openclaw-channels-status.err \
+    /tmp/openclaw-status.txt \
+    /tmp/openclaw-status.err \
+    /tmp/openclaw-doctor.log \
+    /tmp/openclaw-agent.combined \
+    /tmp/openclaw-agent.err \
+    /tmp/openclaw-agent.json \
+    /tmp/openclaw-mock-openai.log \
+    "$MOCK_REQUEST_LOG" \
+    "$OPENCLAW_HOME/.openclaw/openclaw.json" \
+    "$OPENCLAW_HOME/.openclaw/agents/main/agent/auth-profiles.json"
+}
+trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+
+required_plugins='["@openclaw/codex"]'
+if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
+  if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    echo "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR with the matching candidate companion" >&2
+    exit 1
+  fi
+  required_plugins="[\"@openclaw/codex\",\"@openclaw/$CHANNEL\"]"
+fi
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  openclaw_prepublish_plugin_registry_start_mounted \
+    /tmp/openclaw-npm-onboard-plugin-registry plugin_registry_pid "$required_plugins"
+fi
+
+openclaw_e2e_install_package /tmp/openclaw-install.log
+
+command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
+package_root="$(openclaw_e2e_package_root)"
+if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
+  CHANNEL_PACKAGE_MODE="bundled"
+else
+  CHANNEL_PACKAGE_MODE="external"
+  echo "$CHANNEL is not packaged with core OpenClaw; its plugin must be installed before channel configuration."
+fi
+
+# Older packages own their automatic setup; consent support, not a version,
+# establishes whether this fixture must explicitly preinstall required plugins.
+plugin_install_help="$(openclaw plugins install --help)"
+fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
+if [ -n "$fixture_consent" ]; then
+  codex_install_args=(codex)
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    candidate_version="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
+    codex_install_args=("npm:@openclaw/codex@$candidate_version" --pin)
+  fi
+  # Published packages use the official catalog's source selection;
+  # mounted candidates use only the exact companion verified above.
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${codex_install_args[@]}" \
+    >/tmp/openclaw-codex-plugin-install.log 2>&1
+fi
+
+mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
+openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+
+echo "Running non-interactive onboarding..."
+openclaw onboard --non-interactive --accept-risk \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --gateway-port "$PORT" \
+  --gateway-bind loopback \
+  --skip-daemon \
+  --skip-ui \
+  --skip-skills \
+  --skip-health \
+  --json >/tmp/openclaw-onboard.json
+
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
+
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
+
+if [ "$CHANNEL_PACKAGE_MODE" = "external" ] && [ -n "$fixture_consent" ]; then
+  channel_install_args=("$CHANNEL")
+  if [ "${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}" = "1" ] && [ "$CHANNEL" != "telegram" ]; then
+    # The verified registry preserves candidate bytes through the official npm
+    # installer; a local archive would not establish official plugin provenance.
+    channel_install_args=("npm:@openclaw/$CHANNEL@$candidate_version" --pin)
+  fi
+  openclaw_e2e_fixture_plugin_command openclaw -- plugins install "${channel_install_args[@]}" \
+    >/tmp/openclaw-channel-plugin-install.log 2>&1
+fi
+
+echo "Configuring $CHANNEL..."
+openclaw_e2e_run_logged channel-add "$OPENCLAW_E2E_CLI_BIN" channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
+
+echo "Checking status surfaces for $CHANNEL..."
+openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err
+openclaw status >/tmp/openclaw-status.txt 2>/tmp/openclaw-status.err
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-status-surfaces "$CHANNEL" /tmp/openclaw-channels-status.json /tmp/openclaw-status.txt
+
+echo "Running doctor after channel activation..."
+openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
+if [ "$CHANNEL_PACKAGE_MODE" = "external" ]; then
+  openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$HOME/.openclaw"
+else
+  openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
+fi
+
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-mock-model-config "$MOCK_PORT"
+
+echo "Running local agent turn against mocked OpenAI..."
+if openclaw agent --local \
+  --agent main \
+  --session-id npm-onboard-channel-agent \
+  --message "Return the success marker from the test server." \
+  --thinking off \
+  --json >/tmp/openclaw-agent.combined 2>&1; then
+  agent_status=0
+else
+  agent_status=$?
+fi
+if [ "$agent_status" -ne 0 ]; then
+  dump_debug_logs "$agent_status"
+  exit "$agent_status"
+fi
+
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
+
+echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
+EOF
+  docker_e2e_print_log "$run_log"
+  exit 1
+fi
+
+echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"

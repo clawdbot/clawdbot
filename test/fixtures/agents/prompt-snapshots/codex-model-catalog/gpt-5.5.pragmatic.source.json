@@ -1,0 +1,9 @@
+{
+  "model": "gpt-5.5",
+  "personality": "pragmatic",
+  "source": {
+    "catalogPath": "<codex-home>/models_cache.json",
+    "catalogKind": "models_cache",
+    "field": "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic"
+  }
+}
