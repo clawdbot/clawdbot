@@ -4874,7 +4874,7 @@ button.chat-pr__diff {
     .chat-talk-input-picker:not([open]) {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
-    transition-delay: 500ms;
+    transition-delay: 750ms;
   }
 }
 
@@ -4950,7 +4950,7 @@ button.chat-pr__diff {
     width: var(--chat-microphone-picker-width);
     opacity: 1;
     transform: translateX(0);
-    transition-delay: 500ms, 500ms, 570ms, 0ms, 0ms;
+    transition-delay: 750ms, 750ms, 820ms, 0ms, 0ms;
     pointer-events: auto;
   }
 }

@@ -373,10 +373,10 @@ suite.define(() => {
         .poll(() =>
           microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
         )
-        .toBe("0.5s");
+        .toBe("0.75s");
       await expect
         .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).transitionDelay))
-        .toBe("0.5s, 0.5s, 0.57s, 0s, 0s");
+        .toBe("0.75s, 0.75s, 0.82s, 0s, 0s");
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
