@@ -1,4 +1,5 @@
 // Dependency Ownership Surface Report tests cover dependency ownership surface report script behavior.
+import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -142,6 +143,22 @@ snapshots:
         );
       }
       const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
+      const cliReport = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            path.resolve("scripts/dependency-ownership-surface-report.mts"),
+            "--root",
+            repoRoot,
+            "--json",
+          ],
+          { encoding: "utf8" },
+        ),
+      );
+      expect(cliReport.summary).toEqual(report.summary);
+      expect(cliReport.ownershipGaps).toEqual(report.ownershipGaps);
 
       expect(report.summary).toEqual({
         buildRiskPackageCount: withToolchain ? 2 : 1,
