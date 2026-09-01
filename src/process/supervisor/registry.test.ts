@@ -29,6 +29,22 @@ function addRecord(
 }
 
 describe("process supervisor run registry", () => {
+  it("keeps retrieved snapshots detached while output timestamps advance", () => {
+    const registry = createRunRegistry();
+    addRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });
+    const snapshot = registry.get("r1");
+
+    registry.touchOutput("r1");
+    const touched = registry.get("r1");
+
+    expect(snapshot).toMatchObject({ lastOutputAtMs: 1, updatedAtMs: 1 });
+    expect(touched?.lastOutputAtMs).toBeGreaterThan(1);
+    if (touched) {
+      touched.backendId = "caller-owned";
+    }
+    expect(registry.get("r1")?.backendId).toBe("b1");
+  });
+
   it("finalize is idempotent and preserves first terminal metadata", () => {
     const registry = createRunRegistry();
     addRecord(registry, { runId: "r1", sessionId: "s1", startedAtMs: 1 });

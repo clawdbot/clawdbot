@@ -215,11 +215,14 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     stdin?.end();
   }
 
-  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) =>
-    onDecodedOutput(child.stdout, listener, onRaw);
+  const outputUnsubscribers: Array<() => void> = [];
+  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
+  };
 
-  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) =>
-    onDecodedOutput(child.stderr, listener, onRaw);
+  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
+  };
 
   const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
   // Worker errors can precede wait(), including while secret delivery is still pending.
@@ -456,6 +459,12 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     if (params.ownedWorker !== undefined) {
       disconnectWorkerIpc();
     }
+    for (const unsubscribe of outputUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
+    // Error handling and Node's child-close bookkeeping must remain attached during destroy.
+    child.stdout.destroy();
+    child.stderr.destroy();
     child.removeAllListeners();
   };
 

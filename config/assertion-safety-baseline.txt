@@ -939,7 +939,7 @@ extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
-extensions/perplexity/src/perplexity-web-search-provider.runtime.ts	6
+extensions/perplexity/src/perplexity-web-search-provider.runtime.ts	5
 extensions/perplexity/src/perplexity-web-search-provider.shared.ts	1
 extensions/pixverse/video-generation-provider.ts	2
 extensions/policy/src/cli.ts	1
@@ -1838,7 +1838,7 @@ src/agents/embedded-agent-runner/thinking.ts	25
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	5
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	9
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
-src/agents/embedded-agent-runner/tool-result-truncation.ts	23
+src/agents/embedded-agent-runner/tool-result-truncation.ts	22
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
@@ -3542,7 +3542,7 @@ src/plugins/runtime/runtime-llm-isolated.ts	3
 src/plugins/runtime/runtime-llm.runtime.ts	4
 src/plugins/runtime/runtime-plugin-boundary.ts	2
 src/plugins/runtime/runtime-taskflow.ts	1
-src/plugins/runtime/runtime-web-channel-plugin.ts	3
+src/plugins/runtime/runtime-web-channel-plugin.ts	1
 src/plugins/schema-validator.ts	6
 src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
@@ -3639,7 +3639,7 @@ src/shared/frontmatter.ts	5
 src/shared/global-singleton.ts	4
 src/shared/google-turn-ordering.ts	2
 src/shared/ignore-rules.ts	10
-src/shared/json-schema-defaults.ts	38
+src/shared/json-schema-defaults.ts	28
 src/shared/lazy-runtime.ts	1
 src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3

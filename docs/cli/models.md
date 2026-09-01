@@ -155,6 +155,8 @@ Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list
 
 ## Auth profiles
 
+Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
 ```bash
 openclaw models auth add
 openclaw models auth list [--provider <id>] [--json]

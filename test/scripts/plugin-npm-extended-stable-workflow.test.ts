@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
@@ -118,21 +121,10 @@ describe("plugin npm extended-stable workflow", () => {
     expect(raw.match(/--npm-dist-tag "\$\{NPM_DIST_TAG\}"/gu)).toHaveLength(2);
     const expectedOverride =
       "${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}";
-    for (const name of [
-      "Preview publish command",
-      "Preview npm pack contents",
-      "Publish with trusted publisher",
-    ]) {
-      expect(
-        step(
-          parsed.jobs?.[
-            name === "Publish with trusted publisher"
-              ? "publish_plugins_npm"
-              : "preview_plugin_pack"
-          ],
-          name,
-        ).env,
-      ).toMatchObject({ OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: expectedOverride });
+    for (const name of ["Preview publish command", "Preview npm pack contents"]) {
+      expect(step(parsed.jobs?.preview_plugin_pack, name).env).toMatchObject({
+        OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: expectedOverride,
+      });
     }
   });
 
@@ -155,10 +147,112 @@ describe("plugin npm extended-stable workflow", () => {
     ).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
 
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
-    expect(publish.run).toContain("scripts/plugin-npm-publish.sh");
-    expect(publish.run).toContain("--repo-root .publication-target");
+    expect(publish.env).toMatchObject({
+      TARBALL_PATH: "${{ steps.publication_evidence.outputs.tarball_path }}",
+      PUBLISH_TAG: "${{ steps.publication_evidence.outputs.publish_tag }}",
+    });
+    expect(publish.run).not.toContain("plugin-npm-publish.sh");
     expect(publish["working-directory"]).toBeUndefined();
   });
+
+  it.each([
+    { publishTag: "latest", identityExit: 0 },
+    { publishTag: "beta", identityExit: 0 },
+    { publishTag: "extended-stable", identityExit: 0 },
+    { publishTag: "latest", identityExit: 17 },
+  ])(
+    "publishes the sealed artifact without a source install: $publishTag / identity $identityExit",
+    ({ publishTag, identityExit }) => {
+      const root = mkdtempSync(join(tmpdir(), "plugin-oidc-artifact-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        mkdirSync(join(root, "scripts"));
+        writeFileSync(
+          join(root, "scripts/plugin-npm-publish.sh"),
+          '#!/bin/bash\necho "source rebuild requires an uninstalled candidate dependency tree" >&2\nexit 93\n',
+        );
+        const events = join(root, "events.jsonl");
+        const tarball = join(root, "verified artifact.tgz");
+        writeFileSync(tarball, "sealed preflight bytes");
+        for (const command of ["node", "npm"]) {
+          writeFileSync(
+            join(bin, command),
+            `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: ${JSON.stringify(command)}, args, ...( ${JSON.stringify(command)} === "npm" ? { bytes: fs.readFileSync(args[1], "utf8"), token: Boolean(process.env.NPM_TOKEN || process.env.NODE_AUTH_TOKEN) } : {}) }) + "\\n");
+process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY_EXIT) : 0);
+`,
+            { mode: 0o755 },
+          );
+        }
+        writeFileSync(join(bin, "timeout"), '#!/bin/bash\nshift 3\nexec "$@"\n', {
+          mode: 0o755,
+        });
+        const publish = step(
+          workflow().jobs?.publish_plugins_npm,
+          "Publish with trusted publisher",
+        );
+        const result = spawnSync(
+          "/bin/bash",
+          [
+            "-e",
+            "-o",
+            "pipefail",
+            "-c",
+            publish.run!.replaceAll("${{ matrix.plugin.packageDir }}", "extensions/fixture"),
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              PATH: `${bin}:/usr/bin:/bin`,
+              ...publish.env,
+              EVENTS: events,
+              IDENTITY_EXIT: String(identityExit),
+              TARBALL_PATH: tarball,
+              PUBLISH_TAG: publishTag,
+              NPM_TOKEN: "fixture-token-must-not-reach-npm",
+              NODE_AUTH_TOKEN: "fixture-token-must-not-reach-npm",
+            },
+          },
+        );
+        expect(result.status, result.stderr).toBe(identityExit);
+        const calls = readFileSync(events, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(calls[0].command).toBe("node");
+        expect(calls[0].args.slice(0, 2)).toEqual([
+          "scripts/release-tooling-identity.mjs",
+          "verify",
+        ]);
+        if (identityExit) {
+          expect(calls).toHaveLength(1);
+        } else {
+          expect(calls).toHaveLength(2);
+          expect(calls[1]).toEqual({
+            command: "npm",
+            args: [
+              "publish",
+              tarball,
+              "--access",
+              "public",
+              "--ignore-scripts",
+              "--provenance",
+              "--tag",
+              publishTag,
+            ],
+            bytes: "sealed preflight bytes",
+            token: false,
+          });
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("trusts only the canonical monthly branch at the exact checked-out SHA", () => {
     const trusted = step(
@@ -182,7 +276,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(previewSteps.slice(0, 7).map((candidate) => candidate.name)).toEqual([
       "Prepare Git owner",
       "Checkout",
-      "Checkout trusted preflight tooling",
+      "Checkout trusted planning tooling",
       "Resolve checked-out ref",
       "Verify trusted preflight tooling identity",
       "Validate ref is on a trusted publish branch",
@@ -263,7 +357,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(prepare.run).toContain(
       "fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\\n`)",
     );
-    expect(prepare.run).toContain('path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
+    expect(prepare.run).toContain('join(process.env.ARTIFACT_DIR, "preflight-manifest.json")');
     expect(prepare.run).toContain('kind: "openclaw-plugin-npm-preflight"');
     expect(prepare.run).toContain('mode: "preflight-only"');
     expect(prepare.run).toContain("source_package_json_sha256=");
@@ -460,17 +554,17 @@ describe("plugin npm extended-stable workflow", () => {
       /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
     );
     expect(source.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmPublishLines).toEqual([
-      '            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \\',
-    ]);
+    expect(npmPublishLines).toHaveLength(2);
+    expect(
+      npmPublishLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 300s")),
+    ).toBe(true);
   });
 
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {
     const parsed = workflow();
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
-    expect(publish.env).toMatchObject({
-      OPENCLAW_NPM_PUBLISH_AUTH_MODE: "trusted-publisher",
-    });
+    expect(publish.run).toContain("unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS");
+    expect(publish.run).toContain("NPM_CONFIG_USERCONFIG=/dev/null");
     expect(publish.env?.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publish.env?.NPM_TOKEN).toBeUndefined();
     const bootstrapCheck = step(
@@ -537,20 +631,16 @@ describe("plugin npm extended-stable workflow", () => {
       path: ".release-tooling",
     });
     expect(
-      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
-    ).toContain("npm-token-bootstrap");
-    expect(
-      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
-    ).toContain("npm-readback");
-    expect(step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").if).toContain(
-      "npm-oidc",
-    );
-    expect(
-      step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").with?.path,
-    ).toBe(".publication-target");
-    expect(
-      step(parsed.jobs?.publish_plugins_npm, "Setup trusted OIDC packaging dependencies").uses,
+      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").uses,
     ).toBe("./.github/actions/setup-node-env");
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
+    ).toBeUndefined();
+    expect(
+      parsed.jobs?.publish_plugins_npm?.steps?.some(
+        (entry) => entry.with?.path === ".publication-target",
+      ),
+    ).toBe(false);
     expect(parsed.jobs?.reconcile_plugins_npm).toBeUndefined();
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       'npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable',

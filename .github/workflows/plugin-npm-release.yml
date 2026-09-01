@@ -123,18 +123,13 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - name: Checkout trusted preflight tooling
-        if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
+      - name: Checkout trusted planning tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: |
-            scripts/lib/record-shared.mjs
-            scripts/release-tooling-identity.mjs
-          sparse-checkout-cone-mode: false
 
       - name: Resolve checked-out ref
         id: ref
@@ -329,6 +324,7 @@ jobs:
 
       - name: Validate publishable plugin metadata
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -344,16 +340,17 @@ jobs:
             if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
               release_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
-            pnpm release:plugins:npm:check -- "${release_args[@]}"
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts "${release_args[@]}"
           elif [[ -n "${BASE_REF}" ]]; then
-            pnpm release:plugins:npm:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
           else
-            pnpm release:plugins:npm:check
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts
           fi
 
       - name: Resolve plugin release plan
         id: plan
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -371,11 +368,11 @@ jobs:
             if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
               plan_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
-            node --import tsx scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
           elif [[ -n "${BASE_REF}" ]]; then
-            node --import tsx scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
           else
-            node --import tsx scripts/plugin-npm-release-plan.ts > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts > .local/plugin-npm-release-plan.json
           fi
 
           cat .local/plugin-npm-release-plan.json
@@ -1516,24 +1513,6 @@ jobs:
           esac
 
       - name: Setup trusted publication dependencies
-        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-
-      - name: Checkout OIDC publication target
-        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
-          path: .publication-target
-          fetch-depth: 1
-
-      - name: Setup trusted OIDC packaging dependencies
-        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -1559,20 +1538,40 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
           OPENCLAW_RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           OPENCLAW_RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           OPENCLAW_RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
-          OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true"
           OPENCLAW_RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
-          OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true"
           OPENCLAW_RELEASE_TOOLING_REF: ${{ github.ref_name }}
           OPENCLAW_RELEASE_TOOLING_REPOSITORY: ${{ github.repository }}
           OPENCLAW_RELEASE_TOOLING_SHA: ${{ github.workflow_sha }}
-        run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # Publish the attested bytes; rebuilding here loses the candidate's patched install.
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
+            --workflow-ref "$OPENCLAW_RELEASE_TOOLING_REF" \
+            --workflow-full-ref "$OPENCLAW_RELEASE_TOOLING_FULL_REF" \
+            --workflow-sha "$OPENCLAW_RELEASE_TOOLING_SHA" \
+            --release-publish-run-id "$OPENCLAW_RELEASE_PUBLISH_RUN_ID" \
+            --release-publish-run-attempt "$OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT" \
+            --release-publish-ref "$OPENCLAW_RELEASE_PUBLISH_REF" \
+            --release-publish-full-ref "$OPENCLAW_RELEASE_PUBLISH_FULL_REF" \
+            --release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY" \
+            --allow-prevalidated-ref
+          NPM_CONFIG_USERCONFIG=/dev/null \
+            NPM_CONFIG_GLOBALCONFIG=/dev/null \
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --tag "$PUBLISH_TAG"
 
       - name: Verify OIDC published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'

@@ -164,7 +164,6 @@ export function registerTabAccessEvents({
       if (eventRevision !== groupEventRevision) {
         return;
       }
-      let newerTabEventOwnsAccess = false;
       for (const [tabId, generation, epoch] of generations) {
         if (!selected.has(tabId) || attachments.get(tabId) !== generation) {
           continue;
@@ -174,8 +173,8 @@ export function registerTabAccessEvents({
           return;
         }
         if (!policy.epochIsCurrent(tabId, epoch)) {
-          // A newer tab event owns this attachment's revision.
-          newerTabEventOwnsAccess = true;
+          // The newer tab event owns validation. Replaying this old group event
+          // would revoke commands admitted after that validation completed.
           continue;
         }
         if (state.accessible) {
@@ -186,12 +185,6 @@ export function registerTabAccessEvents({
             return;
           }
         }
-      }
-      if (eventRevision !== groupEventRevision) {
-        return;
-      }
-      if (newerTabEventOwnsAccess) {
-        onGroupChanged();
       }
     });
   };
