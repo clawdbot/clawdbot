@@ -1,8 +1,20 @@
 // Mattermost tests cover answering an ask_user question from its button.
+//
+// Every case drives the composed handleInteraction that registerMattermostInteractions
+// hands to the transport, so the behavior and the wiring are pinned together.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveOptionMock = vi.hoisted(() => vi.fn());
 const authorizeMock = vi.hoisted(() => vi.fn());
+type CapturedDispatch = (opts: never) => Promise<{
+  update?: { message: string; props?: Record<string, unknown> };
+  ephemeral_text?: string;
+} | null>;
+const createInteractionHandlerMock = vi.hoisted(() =>
+  vi.fn((_options: { handleInteraction?: CapturedDispatch }) => async () => {}),
+);
+const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
+
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   questionGatewayRuntime: { resolveOption: resolveOptionMock },
 }));
@@ -10,23 +22,46 @@ vi.mock("./monitor-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor-auth.js")>()),
   authorizeMattermostCommandInvocation: authorizeMock,
 }));
+vi.mock("./interactions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./interactions.js")>()),
+  createMattermostInteractionHandler: createInteractionHandlerMock,
+}));
+vi.mock("./runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-api.js")>()),
+  registerPluginHttpRoute: registerPluginHttpRouteMock,
+}));
 
-const { createMattermostQuestionInteractionHandler } = await import("./monitor-interactions.js");
+const { registerMattermostInteractions } = await import("./monitor-interactions.js");
 
 const QUESTION_ID = "01JD3ZK8Q0000000000000000A";
 
 const resolveChannelInfoMock = vi.fn(async () => ({ id: "chan-1", type: "O" }));
-const readAllowFromStoreMock = vi.fn(async () => []);
 
-function createHandler(overrides?: { error?: (message: string) => void }) {
-  return createMattermostQuestionInteractionHandler({
-    account: { accountId: "main" },
-    cfg: {},
-    core: { channel: { commands: { shouldHandleTextCommands: () => true } } },
-    pairing: { readAllowFromStore: readAllowFromStoreMock },
-    resources: { resolveChannelInfo: resolveChannelInfoMock },
-    runtime: { error: overrides?.error ?? vi.fn() },
+function captureDispatcher(overrides?: {
+  error?: (message: string) => void;
+  handleModelPickerInteraction?: ReturnType<typeof vi.fn>;
+}) {
+  registerMattermostInteractions({
+    monitor: {
+      account: { accountId: "main" },
+      cfg: {},
+      client: {},
+      core: { channel: { commands: { shouldHandleTextCommands: () => true } } },
+      pairing: { readAllowFromStore: async () => [] },
+      resources: { resolveChannelInfo: resolveChannelInfoMock },
+      runtime: { error: overrides?.error ?? vi.fn(), log: vi.fn() },
+      botUserId: "bot",
+    },
+    interactionPath: "/mattermost/interactions/main",
+    allowedSourceIps: ["127.0.0.1"],
+    handleModelPickerInteraction:
+      overrides?.handleModelPickerInteraction ?? vi.fn(async () => null),
   } as never);
+  const options = createInteractionHandlerMock.mock.calls[0]?.[0];
+  if (!options?.handleInteraction) {
+    throw new Error("registration did not supply a handleInteraction");
+  }
+  return options.handleInteraction;
 }
 
 function questionInteraction(context: Record<string, unknown>) {
@@ -52,16 +87,18 @@ const questionContext = {
   option_index: 1,
 };
 
-describe("createMattermostQuestionInteractionHandler", () => {
+describe("mattermost question interactions", () => {
   beforeEach(() => {
     resolveOptionMock.mockReset();
     resolveOptionMock.mockResolvedValue({ status: "answered" });
     authorizeMock.mockReset();
     authorizeMock.mockResolvedValue({ ok: true, roomLabel: "#town-square" });
+    resolveChannelInfoMock.mockClear();
+    createInteractionHandlerMock.mockClear();
   });
 
-  it("submits the clicked option to the question Gateway", async () => {
-    const response = await createHandler()(questionInteraction(questionContext));
+  it("submits the clicked option to the question Gateway and retires the prompt", async () => {
+    const response = await captureDispatcher()(questionInteraction(questionContext));
 
     expect(resolveOptionMock).toHaveBeenCalledTimes(1);
     expect(resolveOptionMock.mock.calls[0]?.[0]).toMatchObject({
@@ -76,7 +113,7 @@ describe("createMattermostQuestionInteractionHandler", () => {
   });
 
   it("takes a fresh authorization decision before the Gateway write", async () => {
-    await createHandler()(questionInteraction(questionContext));
+    await captureDispatcher()(questionInteraction(questionContext));
 
     expect(authorizeMock).toHaveBeenCalledTimes(1);
     expect(authorizeMock.mock.calls[0]?.[0]).toMatchObject({
@@ -94,27 +131,17 @@ describe("createMattermostQuestionInteractionHandler", () => {
       roomLabel: "#town-square",
     });
 
-    const response = await createHandler()(questionInteraction(questionContext));
+    const response = await captureDispatcher()(questionInteraction(questionContext));
 
     expect(resolveOptionMock).not.toHaveBeenCalled();
     expect(response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
     expect(response?.update).toBeUndefined();
   });
 
-  it("leaves every other button to the handler that owns it", async () => {
-    const response = await createHandler()(
-      questionInteraction({ callback_data: "deploy_approve" }),
-    );
-
-    expect(response).toBeNull();
-    expect(authorizeMock).not.toHaveBeenCalled();
-    expect(resolveOptionMock).not.toHaveBeenCalled();
-  });
-
   it("keeps the prompt when the question was already answered", async () => {
     resolveOptionMock.mockResolvedValue({ status: "already-answered" });
 
-    const response = await createHandler()(questionInteraction(questionContext));
+    const response = await captureDispatcher()(questionInteraction(questionContext));
 
     expect(response?.ephemeral_text).toBe("This question was already answered.");
     expect(response?.update).toBeUndefined();
@@ -124,10 +151,34 @@ describe("createMattermostQuestionInteractionHandler", () => {
     const error = vi.fn();
     resolveOptionMock.mockRejectedValue(new Error("gateway down"));
 
-    const response = await createHandler({ error })(questionInteraction(questionContext));
+    const response = await captureDispatcher({ error })(questionInteraction(questionContext));
 
     expect(response?.ephemeral_text).toBe("Could not submit this answer.");
     expect(response?.update).toBeUndefined();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("gateway down"));
+  });
+
+  it("answers a question click without consulting the model picker", async () => {
+    const picker = vi.fn(async () => null);
+
+    await captureDispatcher({ handleModelPickerInteraction: picker })(
+      questionInteraction(questionContext),
+    );
+
+    expect(resolveOptionMock).toHaveBeenCalledTimes(1);
+    expect(picker).not.toHaveBeenCalled();
+  });
+
+  it("still hands every other click to the model picker", async () => {
+    const picker = vi.fn(async () => ({ ephemeral_text: "picker" }));
+
+    const response = await captureDispatcher({ handleModelPickerInteraction: picker })(
+      questionInteraction({ callback_data: "deploy_approve" }),
+    );
+
+    expect(authorizeMock).not.toHaveBeenCalled();
+    expect(resolveOptionMock).not.toHaveBeenCalled();
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(response?.ephemeral_text).toBe("picker");
   });
 });

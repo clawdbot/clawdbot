@@ -31,7 +31,7 @@ type MattermostInteractionDispatch = NonNullable<
   Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
 >;
 
-export function createMattermostQuestionInteractionHandler(
+function createMattermostQuestionInteractionHandler(
   monitor: MattermostMonitorContext,
 ): MattermostInteractionDispatch {
   const { account, cfg, core, pairing, resources, runtime } = monitor;
