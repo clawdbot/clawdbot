@@ -213,6 +213,33 @@ async function capturePanel(page: Page, name: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("reserves page-header clearance only for collapsed navigation", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1600 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}agents`);
+
+        const shell = page.locator(".shell");
+        const header = page.locator(".content:not(.content--chat) .content-header").first();
+        await header.waitFor();
+        await expect
+          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
+          .toBe("0px");
+
+        await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
+        await expect
+          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
+          .toBe("48px");
+      },
+    );
+  });
+
   it.each([
     {
       beforeExpandProof: "right-docked",

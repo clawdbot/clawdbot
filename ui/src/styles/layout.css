@@ -4351,7 +4351,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    their titles away from the page content. Settings, mobile drawers, and
    native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--mobile-nav):not(.shell--settings)
+  .shell.shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
   .content-header {
   margin-top: 48px;
