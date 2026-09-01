@@ -212,6 +212,28 @@ describe("CLI executable implementation identity", () => {
     }
   });
 
+  it("spawns a wrapper shim by its resolved path instead of the real target", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-shim-"));
+    tempDirs.push(root);
+    const realBinary = path.join(root, "mise");
+    const shim = path.join(root, "claude");
+    fs.copyFileSync(process.execPath, realBinary);
+    fs.chmodSync(realBinary, 0o755);
+    fs.symlinkSync(realBinary, shim);
+
+    const identity = await resolveCliExecutableIdentity({
+      command: shim,
+      runtimeArtifact: {
+        ...commandPackagePolicy,
+        nativeExecutableNames: ["mise"],
+      },
+    });
+
+    expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
+    expect(identity?.resolvedPath).toBe(fs.realpathSync(realBinary));
+    expect(identity?.invocation.command).toBe(shim);
+  });
+
   it("rejects package script shebang flags that can load external code", async () => {
     const fixture = makePackage();
     fs.writeFileSync(

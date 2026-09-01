@@ -472,12 +472,18 @@ async function resolvePosixIdentity(params: {
     };
   }
   const resolvedPath = commandFile.identity.path;
+  // A wrapper shim (e.g. mise, asdf, direnv) presents a different basename
+  // than the real target. Spawn the original resolved path so the shim can
+  // route its own argv; the owner proof still hashes the real target file.
+  const invocationCommand =
+    path.basename(resolvedPath) !== path.basename(params.resolvedPath)
+      ? params.resolvedPath
+      : resolvedPath;
   return {
     command: params.command,
     resolvedPath,
     invocation: {
-      // Spawn the exact file opened and hashed, not a mutable symlink alias.
-      command: resolvedPath,
+      command: invocationCommand,
       leadingArgv: [],
       resolution: "direct",
     },
