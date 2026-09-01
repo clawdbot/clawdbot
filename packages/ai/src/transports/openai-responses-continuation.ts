@@ -20,7 +20,7 @@ const HTTP_CONTINUATION_IDLE_TTL_MS = 90 * 60 * 1000;
 // grow this process-wide map unbounded for the entire idle window. Claimed
 // entries (in-flight, no retained baseline) don't count against the cap --
 // they're already bounded by the request they represent.
-export const MAX_HTTP_CONTINUATION_READY_ENTRIES = 1000;
+const MAX_HTTP_CONTINUATION_READY_ENTRIES = 1000;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
 export type ResponsesContinuationRequest = Record<string, unknown> & {

@@ -2,11 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
-  MAX_HTTP_CONTINUATION_READY_ENTRIES,
   resolveResponsesContinuationRequest,
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
+
+// Must track MAX_HTTP_CONTINUATION_READY_ENTRIES in
+// openai-responses-continuation.ts (a private module constant, not exported
+// -- nothing outside this module or its own test needs it) -- keep this
+// number in sync with the real cap for the eviction tests below to actually
+// exercise the capacity boundary.
+const READY_ENTRY_CAPACITY = 1000;
 
 const firstUser = {
   type: "message",
@@ -378,7 +384,7 @@ describe("OpenAI Responses continuation", () => {
     // Fill the cache to capacity with distinct sessions, oldest first, so
     // the default 90-minute idle TTL alone can't be relied on to bound
     // memory during a burst of concurrent sessions.
-    for (let i = 0; i < MAX_HTTP_CONTINUATION_READY_ENTRIES; i++) {
+    for (let i = 0; i < READY_ENTRY_CAPACITY; i++) {
       const c = claim({ sessionId: `session-${i}` });
       c?.commit(continuationState().lastRequest, {
         id: `resp-${i}`,
@@ -398,11 +404,9 @@ describe("OpenAI Responses continuation", () => {
     expect(evicted?.request.previous_response_id).toBeUndefined();
     evicted?.release();
 
-    const survivorId = `session-${MAX_HTTP_CONTINUATION_READY_ENTRIES - 1}`;
+    const survivorId = `session-${READY_ENTRY_CAPACITY - 1}`;
     const survivor = claim({ sessionId: survivorId, request: nextRequest() });
-    expect(survivor?.request.previous_response_id).toBe(
-      `resp-${MAX_HTTP_CONTINUATION_READY_ENTRIES - 1}`,
-    );
+    expect(survivor?.request.previous_response_id).toBe(`resp-${READY_ENTRY_CAPACITY - 1}`);
     survivor?.release();
   });
 
@@ -417,7 +421,7 @@ describe("OpenAI Responses continuation", () => {
     // fix from real wall-clock progression.
     vi.useFakeTimers();
     try {
-      for (let i = 0; i < MAX_HTTP_CONTINUATION_READY_ENTRIES; i++) {
+      for (let i = 0; i < READY_ENTRY_CAPACITY; i++) {
         const c = claim({ sessionId: `reclaim-session-${i}` });
         c?.commit(continuationState().lastRequest, {
           id: `reclaim-resp-${i}`,
