@@ -179,17 +179,17 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The nine declared application entries run as plain Node JavaScript without a
+The ten declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
 route ownership, the service relay, its POSIX and Windows anchors, the memory
-plugin's KNN child, and the session transcript archive and reconciliation workers.
-The same generation also compiles the fake-backend TUI
+plugin's KNN child, session transcript archive and reconciliation workers, and
+managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
 module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
 launches them with `--import tsx` for their own syntax, while Bun handles that
 syntax natively without the Node loader. Only their runtime imports change.
-Package build entry paths and Vitest source parents stay unchanged. Other
+Existing package build entry paths and Vitest source parents stay unchanged. Other
 Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
 
 Preparation is lazy across both projects and shards. Config imports, listing
@@ -271,6 +271,15 @@ fails acquisition promptly without reclaiming anything. PID death does not prove
 detached descendants stopped. Before manually removing an abandoned lock directory,
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
+
+Lint reports its final failure on stderr after child joins and artifact ownership
+have settled, including retained ownership when cleanup is uncertain. Standalone
+Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the
+whole pipeline and ends with one `[lint] FAILED (exit N)` instead. Shard progress
+distinguishes `passed` from `failed (exit N)`, and stdout remains available for
+machine-readable tool output. Successful runs have no failure trailer. Signals
+forwarded during child execution and shard timeouts fail the command; whole-host
+loss or `SIGKILL` of the reporting process can prevent a final line.
 
 Local plugin lint and package-boundary compilation consume native declarations in
 `packages/plugin-sdk/dist` and seven separate plugin API trees in

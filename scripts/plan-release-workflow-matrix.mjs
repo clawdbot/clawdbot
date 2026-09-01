@@ -15,8 +15,20 @@ const DOCKER_E2E_CHUNKS = [
     profiles: "beta minimum stable full",
   },
   {
-    chunk_id: "package-update-core",
-    label: "package/update core",
+    chunk_id: "package-update-onboarding",
+    label: "package/update onboarding",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-migrations",
+    label: "package/update migrations",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-self-upgrade",
+    label: "package/update self-upgrade",
     timeout_minutes: 60,
     profiles: "beta minimum stable full",
   },

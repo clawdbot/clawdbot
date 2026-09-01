@@ -61,6 +61,7 @@ jobs:
         uses: ./.github/actions/prepare-testbox-shell
         with:
           base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}
+          go-version: "1.27.0"
 
       - name: Hydrate Testbox provider env helper
         shell: bash

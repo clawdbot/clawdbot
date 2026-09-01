@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
@@ -24,6 +24,8 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
     channels?: readonly string[];
   };
   config?: OpenClawConfig;
+  /** Batch callers carry the policy normalized from this same config. */
+  normalizedConfig?: NormalizedPluginsConfig;
   allowRestrictiveAllowlistBypass?: boolean;
   allowBundledProviderCompat?: boolean;
   /** Callers scoped to an explicit env read compat from that env's state root. */
@@ -33,7 +35,7 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
     return true;
   }
   const config = params.config;
-  const normalized = normalizePluginsConfig(config.plugins);
+  const normalized = params.normalizedConfig ?? normalizePluginsConfig(config.plugins);
   // Global disable is owned by each runtime surface; bundled speech remains intentionally usable.
   const normalizedConfig = normalized.enabled ? normalized : { ...normalized, enabled: true };
   const block = resolveManifestOwnerBasePolicyBlock({
@@ -70,6 +72,7 @@ export function isManifestPluginAvailableForControlPlane(params: {
     "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
   > & { channels?: readonly string[] };
   config?: OpenClawConfig;
+  normalizedConfig?: NormalizedPluginsConfig;
   allowRestrictiveAllowlistBypass?: boolean;
   allowBundledProviderCompat?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -104,6 +107,7 @@ export function listAvailableManifestContractPlugins(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): PluginManifestRecord[] {
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.snapshot.plugins.filter(
     (plugin) =>
       hasManifestContractValue({
@@ -115,6 +119,7 @@ export function listAvailableManifestContractPlugins(params: {
         snapshot: params.snapshot,
         plugin,
         config: params.config,
+        normalizedConfig,
         env: params.env,
         allowBundledProviderCompat: isBundledProviderCompatContract(params.contract),
       }),

@@ -68,7 +68,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
   "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
-  "src/agents/tools/image-generate-tool.ts": Symbol.for("openclaw.imageGenerateToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/tools/model-config.helpers.ts": Symbol.for("openclaw.modelConfigHelpersTestApi"),
   "src/agents/tools/structured-output-tool.ts": Symbol.for("openclaw.structuredOutputToolTestApi"),

@@ -3113,10 +3113,18 @@ function installControlUiStatefulMocks(
     resolveDeferred: (method: string, payload: unknown) => void;
   };
   type MockWindow = Window & {
+    __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string };
     openclawControlUiE2eGateway?: MockGatewayControls;
   };
 
-  const gateway = (window as MockWindow).openclawControlUiE2eGateway;
+  const mockWindow = window as MockWindow;
+  // The WebSocket mock does not intercept HTTP. Bind startup to this preview
+  // before Vite's default Gateway URL can send synthetic avatars to port 18789.
+  const gatewayUrl = new URL(window.location.origin);
+  gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
+  mockWindow["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: gatewayUrl.origin };
+
+  const gateway = mockWindow.openclawControlUiE2eGateway;
   const MockWebSocket = window.WebSocket;
   if (!gateway || !MockWebSocket) {
     return;

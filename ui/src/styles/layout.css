@@ -532,6 +532,29 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   line-height: 1.45;
 }
 
+.settings-sidebar__loading {
+  padding: 10px 12px;
+}
+
+.settings-sidebar__loading-rows {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-sidebar__loading-row {
+  display: block;
+  width: 82%;
+  height: 12px;
+}
+
+.settings-sidebar__loading-row:nth-child(3n + 2) {
+  width: 68%;
+}
+
+.settings-sidebar__loading-row:nth-child(3n) {
+  width: 74%;
+}
+
 .settings-sidebar__group {
   display: flex;
   flex-direction: column;
@@ -1511,18 +1534,18 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-recent-sessions__head:hover .sidebar-session-group-actions,
-.sidebar-recent-sessions__head:has(:focus-visible) .sidebar-session-group-actions,
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
-  opacity: 1;
+  opacity: 0.55;
   pointer-events: auto;
 }
 
-.sidebar-session-group-actions:hover,
+.sidebar-session-group-actions:is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
+  opacity: 1;
 }
 
 .sidebar-session-group-actions svg {
@@ -1547,7 +1570,7 @@ openclaw-settings-save-indicator:empty {
   }
 
   .sidebar-session-group-actions {
-    opacity: 1;
+    opacity: 0.55;
     pointer-events: auto;
   }
 }
@@ -4479,7 +4502,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .sidebar-recent-session--single-line .sidebar-recent-session__text {
   flex-direction: row;
   align-items: center;
-  gap: var(--sidebar-row-gap);
+  gap: calc(var(--sidebar-row-gap) + var(--sidebar-row-gap));
 }
 
 /* Basis 0 mirrors the two-line subtitle contract: the title absorbs all

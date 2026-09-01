@@ -3027,6 +3027,10 @@ NODE
     expect(job.strategy).toBeUndefined();
     expect(job.steps[0]).toEqual(jobs["pnpm-store-warmup"].steps[0]);
     expect(job.steps[1].uses).toBe("./.ci-harness/.github/actions/setup-node-env");
+    expect(job.steps[1].with).toMatchObject({
+      "build-all-cache-scope": "full",
+      "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
+    });
     const run = job.steps[2] as WorkflowStep;
     const parallelism = run.env?.OPENCLAW_DOCKER_ALL_PARALLELISM;
     expect(run).toMatchObject({
@@ -3742,7 +3746,6 @@ NODE
       "security-fast": "ubuntu-24.04",
       "qa-smoke-ci-profile": "ubuntu-24.04",
       "skills-python": "ubuntu-24.04",
-      "sqlite-session-lifecycle": "ubuntu-24.04",
       "check-test-types-hosted-core-shard": "ubuntu-24.04",
       "checks-windows": "windows-2025",
     } as const;
@@ -3760,7 +3763,6 @@ NODE
       "checks-ui-e2e-real-gateway": "blacksmith-16vcpu-ubuntu-2404",
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "sqlite-session-lifecycle": "blacksmith-8vcpu-ubuntu-2404",
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
       "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
@@ -4330,7 +4332,6 @@ NODE
       "docker-seed-e2e",
       "native-i18n",
       "qa-smoke-ci-profile",
-      "sqlite-session-lifecycle",
     ]);
     for (const { jobName, step: consumer } of consumers) {
       const needs = workflow.jobs[jobName].needs;
@@ -4846,19 +4847,31 @@ server.listen(0, "127.0.0.1", () => {
     const releaseChecks = parse(
       readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
     );
-    const repoE2e = releaseChecks.jobs.validate_repo_e2e;
-    expect(repoE2e.env).toMatchObject({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
-    });
-    expect(repoE2e["timeout-minutes"]).toBe(90);
-    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 6 });
-    const repoE2eRows = repoE2e.strategy.matrix.include as Array<{
+    const repoE2eWorkflow = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const pipelines = [
+      releaseChecks.jobs.validate_repo_e2e_gateway,
+      releaseChecks.jobs.validate_repo_e2e_runtime,
+    ];
+    const repoE2eRows = pipelines.flatMap((pipeline) => JSON.parse(pipeline.with.suites)) as Array<{
       name: string;
       command: string;
       target_script?: string;
     }>;
+    expect(pipelines.map((pipeline) => pipeline.with.build_profile)).toEqual([
+      "full",
+      "ciArtifacts",
+    ]);
+    for (const pipeline of pipelines) {
+      // Each profile starts independently; a slow/full declaration build cannot hold up UI readers.
+      expect(pipeline.needs).toBe("validate_selected_ref");
+      expect(pipeline.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+      expect(pipeline.uses).toBe("./.github/workflows/openclaw-repo-e2e-reusable.yml");
+      expect(pipeline.with.ref).toBe("${{ needs.validate_selected_ref.outputs.selected_sha }}");
+      expect(pipeline.with.advisory).toBe("${{ inputs.advisory }}");
+      expect(pipeline.with.allow_frozen_target_scenario_omissions).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+      );
+    }
     expect(repoE2eRows.map((row) => row.command)).toEqual([
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:e2e:gateway --shard=${index + 1}/4`),
       ...Array.from({ length: 4 }, (_, index) => `pnpm test:ui:e2e --shard=${index + 1}/4`),
@@ -4868,34 +4881,45 @@ server.listen(0, "127.0.0.1", () => {
     expect(repoE2eRows.find((row) => row.name === "Agent plugin Gateway")).toMatchObject({
       target_script: "test:e2e:agent-plugin-gateway",
     });
+    expect(repoE2eWorkflow.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const producer = repoE2eWorkflow.jobs.build;
+    const repoE2e = repoE2eWorkflow.jobs.test;
+    expect(repoE2e.needs).toBe("build");
     expect(repoE2e.name).toBe("Repo E2E (${{ matrix.name }})");
-    expect(repoE2e.if).toBe("inputs.include_repo_e2e && inputs.live_suite_filter == ''");
+    expect(repoE2e["timeout-minutes"]).toBe(90);
+    expect(repoE2e.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 4 });
     expect(repoE2e["continue-on-error"]).toBe("${{ inputs.advisory }}");
+    const producerSteps = producer.steps as WorkflowStep[];
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "full) pnpm build",
+    );
+    expect(producerSteps.find((step) => step.name === "Build dist for repo E2E")?.run).toContain(
+      "ciArtifacts) pnpm build:ci-artifacts",
+    );
+    expect(producerSteps.find((step) => step.uses === UPLOAD_ARTIFACT_V7)?.with?.name).toContain(
+      "${{ github.run_attempt }}",
+    );
     const repoE2eSteps = repoE2e.steps as WorkflowStep[];
     expect(repoE2eSteps.find((step) => step.name === "Checkout selected ref")?.with?.ref).toBe(
-      "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      "${{ inputs.ref }}",
     );
-    const build = repoE2eSteps.find((step) => step.name === "Build dist for repo E2E");
-    for (const row of repoE2eRows) {
-      const command = build?.run?.startsWith("${{")
-        ? evaluateWorkflowExpression(build.run, {
-            eventName: "workflow_dispatch",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: row,
-          })
-        : build?.run;
-      // Gateway shards include packed-package type consumers; UI and the
-      // standalone agent-plugin proof need runtime and canonical SDK artifacts.
-      expect(command, row.name).toBe(
-        row.command.startsWith("pnpm test:e2e:gateway ") ? "pnpm build" : "pnpm build:ci-artifacts",
-      );
-    }
+    expect(repoE2eSteps.find((step) => step.uses === DOWNLOAD_ARTIFACT_V8)?.with).toMatchObject({
+      "artifact-ids": "${{ needs.build.outputs.artifact_id }}",
+      "run-id": "${{ needs.build.outputs.artifact_run_id }}",
+      "github-token": "${{ github.token }}",
+    });
+    expect(repoE2eSteps.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    const restoreIndex = repoE2eSteps.findIndex((step) => step.name === "Restore repo E2E build");
     const sandboxSetupIndex = repoE2eSteps.findIndex(
-      (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
+      (step) => step.run === "scripts/sandbox-setup.sh",
     );
     const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
-    expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(sandboxSetupIndex).toBeGreaterThan(restoreIndex);
     expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     expect(repoE2eSteps[repoE2eIndex]).toMatchObject({
       env: {
@@ -5118,6 +5142,125 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("hashes transform inputs once per enabled setup and never for skipped caches", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const transformSteps = (action.runs.steps as WorkflowStep[]).filter((step) =>
+      step.name?.includes("Vitest transform cache"),
+    );
+    const output = path.join(tempDirs.make("openclaw-transform-generation-"), "output");
+    for (const os of ["Linux", "macOS", "Windows"]) {
+      for (const mode of ["off", "restore", "read-write"]) {
+        for (const flags of [
+          ["false", "false"],
+          ["true", "false"],
+          ["false", "true"],
+          ["true", "true"],
+        ]) {
+          for (const generation of ["a".repeat(64), "b".repeat(64)]) {
+            const hashes: string[][] = [];
+            const steps: Record<string, { outputs: Record<string, string> }> = {};
+            const context = {
+              github: { repository: "openclaw/openclaw", run_id: 10, run_attempt: 2 },
+              inputs: {
+                "cache-mode": mode,
+                "vitest-fs-cache": flags[0],
+                "restore-test-caches": flags[1],
+                "node-version": "24.x",
+              },
+              runner: { os, arch: "X64" },
+              steps,
+              hashFiles: (...patterns: string[]) => {
+                hashes.push(patterns);
+                return generation;
+              },
+            };
+            const evaluate = (expression: string): unknown =>
+              runInNewContext(
+                expression.replace(/(inputs|steps)\.([a-z-]+)/gu, '$1["$2"]'),
+                context,
+              );
+            const render = (value: unknown) =>
+              String(value).replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) => {
+                const result = evaluate(expression);
+                if (result == null) {
+                  return "";
+                }
+                if (
+                  typeof result === "string" ||
+                  typeof result === "number" ||
+                  typeof result === "boolean"
+                ) {
+                  return String(result);
+                }
+                throw new TypeError(`non-scalar workflow interpolation: ${expression}`);
+              });
+            let cacheInputs: Record<string, string> | undefined;
+            let configuredGeneration: string | undefined;
+            for (const step of transformSteps) {
+              // Runner v2.336.0 evaluates embedded env before if; run/with inputs
+              // are evaluated only after admission (CompositeActionHandler/ActionRunner).
+              const env = Object.fromEntries(
+                Object.entries(step.env ?? {}).map(([key, value]) => [key, render(value)]),
+              );
+              if (!evaluate(step.if ?? "true")) {
+                if (step.id) {
+                  steps[step.id] = { outputs: {} };
+                }
+                continue;
+              }
+              if (step.name === "Resolve Vitest transform cache generation") {
+                writeFileSync(output, "");
+                execFileSync("bash", ["-e", "-c", render(step.run)], {
+                  env: { ...process.env, GITHUB_OUTPUT: output },
+                });
+                steps[expectDefined(step.id, "transform generation step id")] = {
+                  outputs: Object.fromEntries(
+                    readFileSync(output, "utf8")
+                      .trim()
+                      .split("\n")
+                      .map((line) => line.split("=")),
+                  ),
+                };
+              } else if (step.uses) {
+                cacheInputs = Object.fromEntries(
+                  Object.entries(step.with ?? {}).map(([key, value]) => [key, render(value)]),
+                );
+              } else {
+                configuredGeneration = env.CACHE_GENERATION;
+              }
+            }
+            const enabled = os !== "Windows" && mode !== "off" && flags.includes("true");
+            expect(hashes, JSON.stringify({ os, mode, flags, generation })).toHaveLength(
+              enabled ? 1 : 0,
+            );
+            if (enabled) {
+              expect(hashes[0]).toEqual([
+                "pnpm-lock.yaml",
+                "pnpm-workspace.yaml",
+                "**/package.json",
+                "**/tsconfig*.json",
+                "vitest.config.*",
+                "test/vitest/**",
+                "src/state/*.sql",
+                "!**/node_modules/**",
+              ]);
+              const prefix = `openclaw/openclaw-vitest-fs-v3-protected-${os}-X64-node-24.x-${generation}-`;
+              expect(cacheInputs).toEqual({
+                path: "/var/tmp/openclaw-vitest-fs-cache",
+                key: `${prefix}10-2`,
+                "restore-keys": `${prefix}\n`,
+              });
+              expect(configuredGeneration).toBe(generation);
+            } else {
+              expect(cacheInputs).toBeUndefined();
+              expect(configuredGeneration).toBeUndefined();
+            }
+          }
+        }
+      }
+    }
+  });
+
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -5148,7 +5291,6 @@ server.listen(0, "127.0.0.1", () => {
     const hostedTestCacheJobs = [
       "checks-ui",
       "checks-ui-e2e",
-      "sqlite-session-lifecycle",
       "checks-fast-plugin-contracts-shard",
       "checks-fast-channel-contracts-shard",
     ];
@@ -5188,11 +5330,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(readerStep.with.key).toContain("vitest-fs-v3-protected-");
     expect(readerStep.with.key).toContain("github.run_id");
     expect(readerStep.with.key).toContain("github.run_attempt");
-    expect(readerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
-    expect(readerStep.with.key).toContain("!**/node_modules/**");
-    expect(readerStep.with.key).toContain("src/state/*.sql");
-    expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
-    expect(configureStep.env.CACHE_GENERATION).toContain("src/state/*.sql");
     expect(configureStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
@@ -6927,20 +7064,23 @@ server.listen(0, "127.0.0.1", () => {
         ".github/workflows/ci-check-testbox.yml",
         "1",
         "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-check-arm-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        "1.27.0",
       ],
       [
         ".github/workflows/ci-build-artifacts-testbox.yml",
         "0",
         "${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}",
+        undefined,
       ],
     ] as const;
 
-    for (const [workflowPath, dispatchFetchDepth, baseRef] of workflowPaths) {
+    for (const [workflowPath, dispatchFetchDepth, baseRef, goVersion] of workflowPaths) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
       const job = Object.values(workflow.jobs)[0] as { steps: WorkflowStep[] };
       const checkoutStep = job.steps.find((step) => step.name === "Checkout");
@@ -6963,6 +7103,7 @@ server.listen(0, "127.0.0.1", () => {
       }
       expect(prepareStep?.uses, workflowPath).toBe("./.github/actions/prepare-testbox-shell");
       expect(prepareStep?.with?.["base-ref"], workflowPath).toBe(baseRef);
+      expect(prepareStep?.with?.["go-version"], workflowPath).toBe(goVersion);
       const ensureBaseStep = job.steps.find(
         (step: WorkflowStep) => step.name === "Ensure Testbox base commit",
       );
@@ -6973,7 +7114,34 @@ server.listen(0, "127.0.0.1", () => {
     }
 
     const action = parse(readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
-    const run = action.runs.steps[0].run as string;
+    expect(action.inputs["go-version"]).toMatchObject({ required: false });
+    const setupGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.uses === SETUP_GO_V6),
+      "Testbox Go setup",
+    );
+    expect(setupGo).toMatchObject({
+      if: "inputs.go-version != ''",
+      with: {
+        cache: false,
+        "go-version": "${{ inputs.go-version }}",
+      },
+    });
+    const exposeGo = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Expose Go tools"),
+      "Testbox Go exposure",
+    );
+    expect(exposeGo.if).toBe("inputs.go-version != ''");
+    expect(exposeGo.run).toContain('test "$(go env GOVERSION)" = "go${TESTBOX_GO_VERSION}"');
+    expect(exposeGo.run).toContain('go_root="$(go env GOROOT)"');
+    expect(exposeGo.run).toContain("for tool in go gofmt; do");
+    expect(exposeGo.run).toContain('"/usr/local/bin/$tool"');
+    const prepare = expectDefined(
+      action.runs.steps.find(
+        (step: WorkflowStep) => step.name === "Pin Testbox base and Node tools",
+      ),
+      "Testbox base preparation",
+    );
+    const run = prepare.run as string;
     expect(run).toContain('base_ref="${TESTBOX_BASE_REF:-HEAD}"');
     expect(run).toContain('git rev-parse --verify "${base_ref}^{commit}"');
     expect(run).toContain('git update-ref refs/remotes/origin/main "$base_sha"');
@@ -9633,12 +9801,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(upload.with.path).toContain("${{ runner.temp }}/discord-component-attachments.log");
     // Every verifier reports through the shared results map so a failure can
     // never be swallowed by the wave.
-    for (const name of ["doctor-plugin-index", "plugin-singleton", "startup-memory"]) {
+    for (const name of [
+      "doctor-plugin-index",
+      "plugin-singleton",
+      "sqlite-session-lifecycle",
+      "startup-memory",
+    ]) {
       expect(verifierStep.run).toContain(`run_verifier "${name}"`);
       expect(verifierStep.run).toContain(`["${name}"]="skipped"`);
     }
     expect(verifierStep.run).toContain(
-      "for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
+      "for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do",
     );
   });
 
@@ -9806,41 +9979,93 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
-  it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
-    const workflow = readCiWorkflow();
-    const additionalJob = workflow.jobs["check-additional-shard"];
-    const additionalRunStep = additionalJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run additional check shard",
-    );
-    const lifecycleJob = workflow.jobs["sqlite-session-lifecycle"];
-    const downloadStep = lifecycleJob.steps.find(
-      (step: WorkflowStep) => step.name === "Download exact-run built runtime",
-    );
-    const extractStep = lifecycleJob.steps.find(
-      (step: WorkflowStep) => step.name === "Extract built runtime",
-    );
-    const proofStep = lifecycleJob.steps.find(
-      (step: WorkflowStep) => step.name === "Verify SQLite session lifecycle",
-    );
+  it.each([
+    { selected: false, exitCode: 0 },
+    { selected: true, exitCode: 0 },
+    { selected: true, exitCode: 1 },
+    { selected: true, exitCode: 143 },
+  ])(
+    "runs the built SQLite verifier (selected=$selected, exit=$exitCode)",
+    ({ selected, exitCode }) => {
+      const workflow = readCiWorkflow();
+      const additionalJob = workflow.jobs["check-additional-shard"];
+      const additionalRunStep = additionalJob.steps.find(
+        (step: WorkflowStep) => step.name === "Run additional check shard",
+      );
+      const verifier = workflow.jobs["build-artifacts"].steps.find(
+        (step: WorkflowStep) => step.name === "Run built artifact checks",
+      );
+      const selection = expectDefined(
+        verifier.run.match(
+          /if \[ "\$RUN_SQLITE_SESSION_LIFECYCLE" = "true" \]; then\n[\s\S]*?\nfi/u,
+        )?.[0],
+        "scoped SQLite verifier invocation",
+      );
 
-    expect(additionalJob.strategy.matrix.include).not.toContainEqual(
-      expect.objectContaining({ group: "sqlite-session-flip-proof" }),
-    );
-    expect(additionalRunStep.run).not.toContain("sqlite-session-flip-proof)");
-    expect(lifecycleJob.needs).toEqual(["preflight", "build-artifacts"]);
-    expect(lifecycleJob.if).toContain(
-      "needs.preflight.outputs.run_sqlite_session_lifecycle == 'true'",
-    );
-    expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
-    expect(downloadStep.with.name).toBe("dist-runtime-build");
-    expect(extractStep.run).toContain("dist-runtime-build.tar.zst");
-    expect(proofStep.env.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe("1");
-    expect(proofStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("660000");
-    expect(proofStep.run).toContain(
-      "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
-    );
-    expect(workflow.jobs["ci-gate"].needs).toContain("sqlite-session-lifecycle");
-  });
+      expect(additionalJob.strategy.matrix.include).not.toContainEqual(
+        expect.objectContaining({ group: "sqlite-session-flip-proof" }),
+      );
+      expect(additionalRunStep.run).not.toContain("sqlite-session-flip-proof)");
+      expect(workflow.jobs["sqlite-session-lifecycle"]).toBeUndefined();
+      expect(verifier.env.RUN_SQLITE_SESSION_LIFECYCLE).toBe(
+        "${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}",
+      );
+      expect(workflow.jobs["ci-gate"].needs).toContain("build-artifacts");
+      expect(workflow.jobs["ci-gate"].needs).not.toContain("sqlite-session-lifecycle");
+      const memoryBarrier = verifier.run.indexOf(
+        "\nwait_checks\n",
+        verifier.run.indexOf('run_verifier "startup-memory"'),
+      );
+      expect(verifier.run.indexOf(selection)).toBeGreaterThan(memoryBarrier);
+      expect(verifier.run.indexOf(selection)).toBeLessThan(
+        verifier.run.indexOf('start_check "channels"'),
+      );
+      const root = tempDirs.make("openclaw-sqlite-verifier-");
+      mkdirSync(path.join(root, "scripts"));
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `
+      import { writeFileSync } from "node:fs";
+      writeFileSync("invocation.json", JSON.stringify({
+        args: process.argv.slice(2),
+        prebuilt: process.env.OPENCLAW_E2E_USE_PREBUILT_DIST,
+        watchdog: process.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
+      }));
+      process.exit(${exitCode});
+    `,
+      );
+      // Exercise the selected command at the existing verifier boundary. The full
+      // wave's associative-array scheduler needs native CI's Bash for execution.
+      const result = runWorkflowShellScript(
+        `
+      run_verifier() {
+        printf '%s\\n' "$1" > verifier-name
+        shift
+        "$@"
+      }
+      ${selection}
+    `,
+        { cwd: root, env: { ...process.env, RUN_SQLITE_SESSION_LIFECYCLE: String(selected) } },
+      );
+      expect(result.status, result.stderr).toBe(selected ? exitCode : 0);
+      expect(existsSync(path.join(root, "invocation.json"))).toBe(selected);
+      if (selected) {
+        expect(readFileSync(path.join(root, "verifier-name"), "utf8").trim()).toBe(
+          "sqlite-session-lifecycle",
+        );
+        expect(JSON.parse(readFileSync(path.join(root, "invocation.json"), "utf8"))).toEqual({
+          args: [
+            "run",
+            "--config",
+            "test/vitest/vitest.e2e.config.ts",
+            "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          ],
+          prebuilt: "1",
+          watchdog: "660000",
+        });
+      }
+    },
+  );
 
   it("restores dist in PR CI and saves it only from the trusted warmer", () => {
     const workflow = readCiWorkflow();
@@ -10228,7 +10453,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const selectedJobs = [
       "pnpm-store-warmup",
       "build-artifacts",
-      "sqlite-session-lifecycle",
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",

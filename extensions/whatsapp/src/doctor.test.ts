@@ -17,30 +17,66 @@ describe("whatsapp doctor compatibility", () => {
     expect(result.changes).toStrictEqual([]);
   });
 
-  it("keeps existing whatsapp ack reaction", () => {
+  it("reports acknowledgement behavior that the global settings cannot preserve", () => {
     const result = normalizeCompatibilityConfig({
       cfg: {
-        messages: {
-          ackReaction: "👀",
-          ackReactionScope: "all",
-        },
+        agents: { entries: { main: { default: true, identity: { emoji: "🔥" } } } },
         channels: {
           whatsapp: {
             ackReaction: {
-              emoji: "✅",
               direct: true,
-              group: "always",
+              group: "mentions",
             },
           },
         },
       },
     });
 
-    expect(result.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "✅",
-      direct: true,
-      group: "always",
+    expect(result.config.channels?.whatsapp?.ackReaction).toBeUndefined();
+    expect(result.config.messages).toEqual({ ackReaction: "🔥" });
+    expect(result.changes.join("\n")).toContain(
+      "cannot preserve both direct-message and mentioned-group acknowledgements",
+    );
+  });
+
+  it("reports scope conflicts after root settings win", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { emoji: "👀", direct: false, group: "always" },
+            accounts: {
+              work: { ackReaction: { emoji: "✅", direct: true, group: "never" } },
+            },
+          },
+        },
+      },
     });
-    expect(result.changes).toStrictEqual([]);
+
+    expect(result.config.messages).toMatchObject({
+      ackReaction: "👀",
+      ackReactionScope: "group-all",
+    });
+    expect(result.changes.join("\n")).toContain(
+      'channels.whatsapp.accounts.work.ackReaction requested acknowledgement scope "direct", but the final messages.ackReactionScope is "group-all"',
+    );
+  });
+
+  it('treats legacy "off" and canonical "none" scopes as equivalent', () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        messages: { ackReaction: "👀", ackReactionScope: "none" },
+        channels: {
+          whatsapp: {
+            ackReaction: { emoji: "👀", direct: false, group: "never" },
+          },
+        },
+      },
+    });
+
+    expect(result.config.messages?.ackReactionScope).toBe("none");
+    expect(result.changes).toStrictEqual([
+      "Moved translatable channels.whatsapp.ackReaction settings to messages ack settings.",
+    ]);
   });
 });

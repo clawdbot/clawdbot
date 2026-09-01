@@ -1931,6 +1931,7 @@ jobs:
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
           RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
@@ -1947,6 +1948,7 @@ jobs:
             ["doctor-plugin-index"]="skipped"
             ["gateway-watch"]="skipped"
             ["plugin-singleton"]="skipped"
+            ["sqlite-session-lifecycle"]="skipped"
             ["startup-memory"]="skipped"
             ["tui-pty"]="skipped"
           )
@@ -2063,6 +2065,13 @@ jobs:
           run_verifier "doctor-plugin-index" run_doctor_plugin_index
           run_verifier "plugin-singleton" pnpm test:build:singleton
 
+          if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
+            run_verifier "sqlite-session-lifecycle" env \
+              OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
+              test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
+          fi
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -2122,7 +2131,7 @@ jobs:
             echo "::error title=startup assets failed::cli startup asset build failed"
             failures=1
           fi
-          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do
+          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -2157,39 +2166,6 @@ jobs:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
-
-  sqlite-session-lifecycle:
-    permissions:
-      contents: read
-    name: check-sqlite-session-lifecycle
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_sqlite_session_lifecycle == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 20
-    steps:
-      - *linux_node_checkout_step
-      - name: Setup Node environment
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          install-bun: "false"
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}
-
-      - name: Download exact-run built runtime
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: dist-runtime-build
-          path: .artifacts/dist-runtime-build
-
-      - name: Extract built runtime
-        run: tar --extract --file .artifacts/dist-runtime-build/dist-runtime-build.tar.zst --use-compress-program unzstd
-
-      - name: Verify SQLite session lifecycle
-        env:
-          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000"
-        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
 
   native-i18n:
     permissions:
@@ -5045,6 +5021,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          build-all-cache-scope: full
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
@@ -5068,7 +5045,6 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
-      - sqlite-session-lifecycle
       - native-i18n
       - checks-ui
       - checks-ui-e2e
@@ -5109,7 +5085,6 @@ jobs:
           SELECTED_RESULTS: |
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
             build-artifacts=${{ needs.build-artifacts.result }}
-            sqlite-session-lifecycle=${{ needs.sqlite-session-lifecycle.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}

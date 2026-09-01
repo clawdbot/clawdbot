@@ -1558,7 +1558,7 @@ In `progress` mode, Slack's native agent card is the default: the whole turn is 
 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. With the other progress controls below, commentary appears as italic text only, and an eligible final text answer replaces that same Slack message:
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
 
 ```json5
 {

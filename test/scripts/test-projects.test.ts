@@ -366,7 +366,10 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each(["scripts/lib/tsx-cli-shim.mjs", "scripts/tsx.mjs"])(
     "routes shared TypeScript tooling changes through wrapper tests for %s",
     (scriptPath) => {
-      expectChangedTargets([scriptPath], ["test/scripts/direct-run-entrypoints.test.ts"]);
+      expectChangedTargets(
+        [scriptPath],
+        ["test/scripts/direct-run-entrypoints.test.ts", "test/scripts/lint-status.test.ts"],
+      );
     },
   );
 
@@ -572,9 +575,24 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/verify.mts"], ["test/scripts/verify.test.ts"]);
   });
 
-  it("keeps sharded oxlint runner edits on oxlint runner tests", () => {
-    expectChangedTargets(["scripts/run-oxlint-shards.mts"], ["test/scripts/run-oxlint.test.ts"]);
-  });
+  it.each([
+    ["scripts/run-oxlint-shards.mts", ["run-oxlint"]],
+    ["scripts/run-oxlint.mts", ["run-oxlint"]],
+    ["scripts/run-oxlint.mjs", ["run-oxlint"]],
+    ["scripts/run-lint.mts", ["run-oxlint"]],
+    ["scripts/run-stylelint.mts", ["changed-lanes"]],
+    ["scripts/lib/failed-trailer.mts", ["run-oxlint", "run-tsgo", "run-vitest", "changed-lanes"]],
+    ["scripts/lib/managed-child-process.mts", ["managed-child-process"]],
+    ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership"]],
+  ] as const)(
+    "routes %s through the lint status boundary and existing owners",
+    (source, owners) => {
+      expectChangedTargets(
+        [source],
+        [...owners, "lint-status"].map((owner) => `test/scripts/${owner}.test.ts`),
+      );
+    },
+  );
 
   it("keeps env wrapper edits on env wrapper tests", () => {
     expectChangedTargets(["scripts/run-with-env.mts"], ["test/scripts/run-with-env.test.ts"]);
@@ -826,6 +844,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
       ],
     );
   });
@@ -1371,6 +1390,7 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: [
           "test/scripts/build-all.test.ts",
           "test/scripts/check-dynamic-import-warts.test.ts",
+          "test/scripts/lint-status.test.ts",
           "test/scripts/run-oxlint.test.ts",
           "test/scripts/tsdown-build.test.ts",
         ],

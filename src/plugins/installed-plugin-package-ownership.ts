@@ -38,11 +38,24 @@ function collectDuplicateInstallRecordOwners(
 export type InstalledPluginPackageOwnership = {
   installOwner: string;
   installRecord: InstalledPluginInstallRecordInfo;
-  pluginIds: string[];
+  pluginIds: [string, ...string[]];
 };
+
+export type InstalledPluginLifecycleOwnership =
+  | ({ kind: "package" } & InstalledPluginPackageOwnership)
+  | {
+      kind: "orphan";
+      installOwner: string;
+      installRecord: InstalledPluginInstallRecordInfo;
+      pluginIds: [];
+    };
 
 type InstalledPluginPackageOwnershipResult =
   | { ok: true; value: InstalledPluginPackageOwnership }
+  | { ok: false; error: string };
+
+type InstalledPluginLifecycleOwnershipResult =
+  | { ok: true; value: InstalledPluginLifecycleOwnership }
   | { ok: false; error: string };
 
 function ownershipError(pluginId: string, detail: string): InstalledPluginPackageOwnershipResult {
@@ -84,7 +97,7 @@ export function resolveInstalledPluginPackageOwnership(
     return ownershipError(pluginId, `shares package path ownership with "${installOwner}"`);
   }
 
-  const pluginIds = index.plugins
+  const [firstPluginId, ...remainingPluginIds] = index.plugins
     .filter(
       (entry) =>
         resolveInstalledPluginIndexInstallOwner(entry) === installOwner &&
@@ -92,12 +105,13 @@ export function resolveInstalledPluginPackageOwnership(
     )
     .map((entry) => entry.pluginId)
     .toSorted();
-  if (pluginIds.length === 0) {
+  if (!firstPluginId) {
     return ownershipError(
       pluginId,
       `package owner "${installOwner}" has no authoritative runtime child list`,
     );
   }
+  const pluginIds: [string, ...string[]] = [firstPluginId, ...remainingPluginIds];
   if (target && !pluginIds.includes(target.pluginId)) {
     return ownershipError(pluginId, `does not belong to package owner "${installOwner}"`);
   }
@@ -111,7 +125,43 @@ export function resolveInstalledPluginPackageOwnership(
   if (hasUnsafePackageEntry) {
     return ownershipError(pluginId, `package owner "${installOwner}" has conflicting child rows`);
   }
-  return { ok: true, value: { installOwner, installRecord, pluginIds } };
+  return {
+    ok: true,
+    value: { installOwner, installRecord, pluginIds },
+  };
+}
+
+export function resolveInstalledPluginLifecycleOwnership(
+  index: InstalledPluginIndex,
+  pluginId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): InstalledPluginLifecycleOwnershipResult {
+  const ownership = resolveInstalledPluginPackageOwnership(index, pluginId, env);
+  if (ownership.ok) {
+    return { ok: true, value: { kind: "package", ...ownership.value } };
+  }
+  const installRecord = index.installRecords[pluginId];
+  if (
+    !Object.hasOwn(index.installRecords, pluginId) ||
+    !installRecord ||
+    collectDuplicateInstallRecordOwners(index, env).has(pluginId)
+  ) {
+    return ownership;
+  }
+  const hasConflictingEntry = index.plugins.some(
+    (entry) =>
+      entry.pluginId === pluginId ||
+      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env),
+  );
+  if (hasConflictingEntry) {
+    return ownership;
+  }
+  // Cleanup and pre-update planning may act on an exact durable tombstone.
+  // Replacement reconciliation keeps using the strict package resolver.
+  return {
+    ok: true,
+    value: { kind: "orphan", installOwner: pluginId, installRecord, pluginIds: [] },
+  };
 }
 
 function installRecordPathMatchesPluginRoot(

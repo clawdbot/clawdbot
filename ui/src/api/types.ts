@@ -286,6 +286,7 @@ export type GatewaySessionsDefaults = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
+  modelSelectionTarget?: "session" | "agent" | "global";
 };
 
 export type GatewayThinkingLevelOption = {

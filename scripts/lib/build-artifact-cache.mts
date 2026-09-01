@@ -292,7 +292,6 @@ export type BuildCache = {
   inputs: BuildCacheEntry[];
   outputs: BuildCacheEntry[];
   requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
-  requiredCacheHitOutputs?: string[];
   restore?: "always";
   runOnHit?: { env?: NodeJS.ProcessEnv; finalize?: "refresh" };
 };
@@ -414,13 +413,11 @@ export function resolveBuildStepCacheState(
     );
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
-    const cacheHitContractMatches =
-      stampMatches && hasAllFiles(artifactRoot, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
     const alwaysRestore = step.cache.restore === "always";
     const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
     const restorable =
-      cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
-    const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+      stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
     return {
       cacheable: true,
       fresh,

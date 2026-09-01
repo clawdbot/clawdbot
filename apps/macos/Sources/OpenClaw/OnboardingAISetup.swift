@@ -913,10 +913,9 @@ extension OnboardingAISetupModel {
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
-            // Cancellation, decoding, and transport failures after dispatch are
-            // ambiguous. Keep the marker; model-label detection is not proof that
-            // this activation and its credential mutation completed safely.
-            let failure = Self.transportFailure(error.localizedDescription)
+            // Confirmed wizard cancellation is an operator outcome; only other
+            // errors need transport diagnostics and may require reconciliation.
+            let failure = Self.activationFailure(error)
             self.exposeActivationFailure(failure, for: request)
             if Self.activationFailureIsDefinitive(error) {
                 self.pendingActivationVerification = false

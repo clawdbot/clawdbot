@@ -459,6 +459,13 @@ extension OnboardingAISetupModel {
             : 150_000
     }
 
+    static func activationFailure(_ error: Error) -> Failure {
+        if case OnboardingAISetupError.activationCancelled = error {
+            return Failure(summary: error.localizedDescription, detail: nil)
+        }
+        return self.transportFailure(error.localizedDescription)
+    }
+
     static func activationFailureIsDefinitive(_ error: Error) -> Bool {
         if case OnboardingAISetupError.activationCancelled = error {
             return true

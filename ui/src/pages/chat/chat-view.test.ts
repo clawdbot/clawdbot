@@ -560,6 +560,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
     modelOverrides: state.sessions.state.modelOverrides,
+    modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
@@ -6955,6 +6956,36 @@ describe("chat model controls", () => {
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
   });
 
+  it.each([
+    { target: "session", label: "Selection target: This session only" },
+    { target: "agent", label: "Selection target: This agent's default" },
+    { target: "global", label: "Selection target: Global default" },
+  ] as const)(
+    "discloses the $target write target before pointer selection",
+    ({ target, label }) => {
+      const { state } = createOpenAiHeaderState();
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        label,
+      );
+      const modelOption = Array.from(
+        container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      ).find((button) => button.getAttribute("aria-selected") === "false");
+      modelOption?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+    },
+  );
+
   it("renders and applies selectable context windows inside the model picker", () => {
     const { state } = createChatHeaderState({
       model: "claude-fable-5",
@@ -7180,6 +7211,40 @@ describe("chat model controls", () => {
     container.remove();
   });
 
+  it.each([
+    { target: "agent", targetLabel: "Selection target: This agent's default" },
+    { target: "global", targetLabel: "Selection target: Global default" },
+  ] as const)(
+    "keeps a pinned reset session-only while model rows write to the $target target",
+    ({ target, targetLabel }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.4",
+        modelOverrideSource: "user",
+        modelProvider: "openai",
+        models: createOpenAiModelCatalog(),
+      });
+      state.sessionsResult = {
+        ...expectDefined(state.sessionsResult, "sessions result"),
+        defaults: {
+          ...expectDefined(state.sessionsResult, "sessions result").defaults,
+          modelSelectionTarget: target,
+        },
+      };
+      const onModelSelect = vi.fn(async () => true);
+      const container = renderModelControls(state, { onModelSelect });
+
+      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+        targetLabel,
+      );
+      expect(container.querySelector("[data-chat-model-pin-provenance]")?.textContent).toContain(
+        "Only for this session",
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-model-reset]")?.click();
+
+      expect(onModelSelect).toHaveBeenCalledWith("", "main");
+    },
+  );
+
   // Settings can move the agent default onto — and back off — a session's pinned
   // model. Provenance must survive both moves, and the default row must stay a live
   // way to clear the pin while the two values coincide.
@@ -7363,7 +7428,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "agent",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const providerHeadings = Array.from(
@@ -7381,6 +7449,9 @@ describe("chat model controls", () => {
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
+    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+      "Selection target: This agent's default",
+    );
     search!.value = "anth";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
@@ -7449,7 +7520,10 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
+    const container = renderModelControls(state, {
+      modelSelectionTarget: "global",
+      onModelSelect,
+    });
     document.body.append(container);
 
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");

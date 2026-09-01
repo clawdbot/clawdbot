@@ -38,11 +38,7 @@ import {
 import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import {
-  cloneSessionEntry,
-  getSessionKysely,
-  normalizeSqliteSessionKey,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, normalizeSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import {
   bindSessionNode,
   bindSessionRoot,
@@ -116,6 +112,7 @@ export function parseReadableSqliteSessionEntryRow(
   );
 }
 
+/** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(
   database: OpenClawAgentDatabase,
   sessionKeys: Iterable<string>,
@@ -124,16 +121,10 @@ export function readSessionIdentitySnapshot(
   for (const sessionKey of uniqueStrings([...sessionKeys].map((key) => key.trim()))) {
     const row = readExactSessionEntryRow(database, sessionKey);
     if (row) {
-      snapshot.set(sessionKey, cloneSessionEntry(row.entry));
+      snapshot.set(sessionKey, row.entry);
     }
   }
   return snapshot;
-}
-
-export function createSessionIdentitySnapshot(
-  rows: readonly { entry: SessionEntry; sessionKey: string }[],
-): Map<string, SessionEntry> {
-  return new Map(rows.map((row) => [row.sessionKey, cloneSessionEntry(row.entry)]));
 }
 
 export function readSessionEntryRow(

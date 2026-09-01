@@ -117,12 +117,12 @@ function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], workerRun?:
 
     completion.then(
       ({ code, signal }) => {
-        const forwardedSignal = getForwardedSignal();
-        if (forwardedSignal) {
-          resolve({ code: 143, noOutputTimedOut, signal: forwardedSignal });
-          return;
-        }
-        resolve({ code: code ?? (signal ? 143 : 1), noOutputTimedOut, signal });
+        const exitSignal = getForwardedSignal() ?? signal;
+        resolve({
+          code: exitSignal ? signalExitCode(exitSignal) : (code ?? 1),
+          noOutputTimedOut,
+          signal: exitSignal,
+        });
       },
       (error: unknown) => {
         reject(error instanceof Error ? error : new Error(String(error)));
