@@ -257,7 +257,9 @@ function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
 
 function mergeTierHint(hints: ConfigUiHints, path: string, advanced: boolean): void {
   const current = hints[path];
-  hints[path] = current ? { ...current, advanced } : { advanced };
+  if (current?.advanced !== advanced) {
+    hints[path] = current ? { ...current, advanced } : { advanced };
+  }
 }
 
 function visitSchemaNodes<T>(

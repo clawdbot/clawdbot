@@ -2,28 +2,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
-/** Stable config UI tag vocabulary used for filtering and grouping schema hints. */
-const CONFIG_TAGS = [
-  "security",
-  "auth",
-  "network",
-  "access",
-  "privacy",
-  "observability",
-  "performance",
-  "reliability",
-  "storage",
-  "models",
-  "media",
-  "automation",
-  "channels",
-  "tools",
-  "advanced",
-] as const;
-
-type ConfigTag = (typeof CONFIG_TAGS)[number];
-
-const TAG_PRIORITY: Record<ConfigTag, number> = {
+/** Stable config UI tag vocabulary and display order. */
+const TAG_PRIORITY = {
   security: 0,
   auth: 1,
   access: 2,
@@ -40,6 +20,8 @@ const TAG_PRIORITY: Record<ConfigTag, number> = {
   tools: 13,
   advanced: 14,
 };
+
+type ConfigTag = keyof typeof TAG_PRIORITY;
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   worktreeRoot: ["storage", "advanced"],
@@ -115,26 +97,17 @@ const MEDIA_PATH_PATTERN = /(tools\.media\.|^audio\.|^talk\.|image|video|stt|tts
 const AUTOMATION_PATH_PATTERN = /(cron|heartbeat|schedule|onstart|watchdebounce)/i;
 const AUTH_KEYWORD_PATTERN = /(token|password|secret|api[_.-]?key|credential|oauth)/i;
 
-function normalizeTag(tag: string): ConfigTag | null {
-  const normalized = normalizeLowercaseStringOrEmpty(tag) as ConfigTag;
-  return CONFIG_TAGS.includes(normalized) ? normalized : null;
-}
-
-function normalizeTags(tags: ReadonlyArray<string>): string[] {
-  const out = new Set<ConfigTag>();
+function normalizeTags(known: Set<ConfigTag>, tags: ReadonlyArray<string>): string[] {
   const custom = new Set<string>();
   for (const tag of tags) {
-    const known = normalizeTag(tag);
-    if (known) {
-      out.add(known);
-    } else {
-      const normalized = normalizeLowercaseStringOrEmpty(tag);
-      if (normalized) {
-        custom.add(normalized);
-      }
+    const normalized = normalizeLowercaseStringOrEmpty(tag);
+    if (Object.hasOwn(TAG_PRIORITY, normalized)) {
+      known.add(normalized as ConfigTag);
+    } else if (normalized) {
+      custom.add(normalized);
     }
   }
-  return [...[...out].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]), ...custom];
+  return [...[...known].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]), ...custom];
 }
 
 function patternToRegExp(pattern: string): RegExp {
@@ -153,14 +126,14 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 }
 
 /** Derive known config UI tags from a schema path and optional hint metadata. */
-function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
-  const lowerPath = normalizeLowercaseStringOrEmpty(path);
+function deriveTagsForPath(path: string, hint?: ConfigUiHint): Set<ConfigTag> {
   const override =
     TAG_OVERRIDES[path] ?? WILDCARD_TAG_OVERRIDES.find(({ pattern }) => pattern.test(path))?.tags;
   if (override) {
-    return override;
+    return new Set(override);
   }
 
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const tags = new Set<ConfigTag>();
   for (const rule of PREFIX_RULES) {
     if (lowerPath.startsWith(rule.prefix)) {
@@ -194,7 +167,7 @@ function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
     tags.add("advanced");
   }
 
-  return [...tags];
+  return tags;
 }
 
 /** Return hints with derived known tags merged ahead of any existing custom tags. */
@@ -204,7 +177,7 @@ export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
     const derivedTags = deriveTagsForPath(path, hint);
     // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
-    const tags = normalizeTags([...derivedTags, ...existingTags]);
+    const tags = normalizeTags(derivedTags, existingTags);
     next[path] = { ...hint, tags };
   }
   return next;

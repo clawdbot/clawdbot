@@ -8,7 +8,7 @@ import {
   readRegularFileSync,
   statRegularFile,
   statRegularFileSync,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/file-access-runtime";
 
 // The legacy OAuth root is shared; keep its exact WhatsApp namespaces aligned
 // with Baileys without importing the provider into setup discovery.
