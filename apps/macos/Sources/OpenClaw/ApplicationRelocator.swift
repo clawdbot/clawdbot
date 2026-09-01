@@ -302,7 +302,16 @@ enum ApplicationRelocator {
                         destination: destination,
                         replacing: replacing,
                         fileManager: fileManager)
-                    _ = relaunchAndTerminate(at: destination)
+                    let disposition = relaunchAndTerminate(at: destination)
+                    // relaunchAndTerminate returns .continueLaunch only when it
+                    // could not spawn the relaunch helper (it already showed the
+                    // "open it manually" alert). Since we returned .installing and
+                    // the caller skipped menu bar, dock, and gateway startup,
+                    // continuing would leave a headless LSUIElement process.
+                    // Terminate instead of resuming a full transient session.
+                    if case .continueLaunch = disposition {
+                        AppDelegate.requestTermination()
+                    }
                 } catch {
                     if let unsafeError = error as? UnsafeCopyDestinationError {
                         self.logger.error(
@@ -313,6 +322,12 @@ enum ApplicationRelocator {
                     }
                     showFailure(
                         "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                    // Install failed (disk full, permissions, etc.). The caller
+                    // returned .installing and never started the status item or
+                    // dock icon. Leaving the process alive would create an
+                    // invisible LSUIElement ghost the user cannot Cmd-Tab to.
+                    // Terminate after the alert is dismissed.
+                    AppDelegate.requestTermination()
                 }
             }
             return .installing
@@ -1048,11 +1063,15 @@ extension ApplicationRelocator {
         do {
             if replacing {
                 let backupName = ".\(destination.lastPathComponent).backup-\(UUID().uuidString)"
+                let backupURL = parent.appendingPathComponent(backupName)
                 _ = try fileManager.replaceItemAt(
                     destination,
                     withItemAt: staging,
                     backupItemName: backupName)
-                try? fileManager.removeItem(at: parent.appendingPathComponent(backupName))
+                // The backup is the previous installed bundle (potentially
+                // multi-GB). Remove it off the main thread to avoid a second
+                // main-thread stall right after the copy finishes.
+                Task.detached { try? FileManager().removeItem(at: backupURL) }
             } else {
                 try fileManager.moveItem(at: staging, to: destination)
             }
