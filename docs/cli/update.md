@@ -39,6 +39,21 @@ openclaw --update
 `openclaw --update` rewrites to `openclaw update` (useful for shells and
 launcher scripts).
 
+Failed update and repair attempts enter [triage](/cli/triage) after service
+recovery and cleanup finish. Interactive updates open the existing agent picker;
+`--yes`, `--json`, and non-interactive invocations only collect diagnostics and
+print handoff commands. With `--json`, triage output goes to stderr so stdout
+retains the original update result. A failed diagnostic collection never hides
+the update failure. Dry runs and commands rejected by the initial argument,
+external-supervisor, state-store ownership, handoff identity, or immutable-config
+checks do not collect diagnostics or start an agent.
+
+Once those checks pass, failed metadata, schema, runtime, and managed-service
+checks enter triage even when installation is blocked. This includes an update
+that cannot safely stop its parent Gateway process. Diagnosis preserves that
+refusal: it does not stop the Gateway, retry the update, or bypass safety checks. See
+[Update troubleshooting](/install/update-troubleshooting).
+
 ## Options
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |

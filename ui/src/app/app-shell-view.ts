@@ -61,7 +61,7 @@ import {
   normalizeChatSendShortcut,
 } from "./settings.ts";
 import { renderCollapsedAssistantToggles } from "./shell-assistant-toggles.ts";
-import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
+import { createUpdateProgressWatcher } from "./update-confirmation.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
 

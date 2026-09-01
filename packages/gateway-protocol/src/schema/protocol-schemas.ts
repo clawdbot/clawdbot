@@ -16,8 +16,9 @@ import { SessionCoreProtocolSchemas } from "./protocol-schema-fragment-sessions-
 import { SessionLifecycleProtocolSchemas } from "./protocol-schema-fragment-sessions-lifecycle.js";
 import { TransportProtocolSchemas } from "./protocol-schema-fragment-transport.js";
 
-// Preserve fragment type names instead of expanding every schema during declaration emit.
-type ProtocolSchemaRegistry = typeof BoardProtocolSchemas &
+/** Public schema registry keyed by stable protocol schema name. */
+// Named fragment types avoid expanding every schema during declaration emission.
+export const ProtocolSchemas: typeof BoardProtocolSchemas &
   typeof ProgressCardProtocolSchemas &
   typeof TransportProtocolSchemas &
   typeof AgentControlProtocolSchemas &
@@ -32,10 +33,7 @@ type ProtocolSchemaRegistry = typeof BoardProtocolSchemas &
   typeof SchedulerProtocolSchemas &
   typeof ApprovalProtocolSchemas &
   typeof PluginLifecycleProtocolSchemas &
-  typeof PortalProtocolSchemas;
-
-/** Public schema registry keyed by stable protocol schema name. */
-export const ProtocolSchemas: ProtocolSchemaRegistry = composeProtocolSchemaFragments([
+  typeof PortalProtocolSchemas = composeProtocolSchemaFragments([
   BoardProtocolSchemas,
   ProgressCardProtocolSchemas,
   TransportProtocolSchemas,

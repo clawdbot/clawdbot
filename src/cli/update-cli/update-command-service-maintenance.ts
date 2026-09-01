@@ -37,6 +37,7 @@ import {
   registerSignalExitGate,
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
+import { UpdatePreMutationError } from "./shared.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -227,6 +228,7 @@ type WindowsTaskAutoStartRecovery = {
 
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
+  triageTarget: import("./update-command-triage.js").UpdateTriageTarget;
 };
 
 export class UpdateCommandAbort extends Error {
@@ -551,7 +553,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     });
     const currentBlockMessage = gatewayAncestryBlockMessage(currentState.runtime?.pid);
     if (currentBlockMessage) {
-      throw new Error(currentBlockMessage);
+      throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
     }
     await service.stop({
       env: currentState.env,

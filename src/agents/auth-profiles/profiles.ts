@@ -125,7 +125,7 @@ export async function setAuthProfileOrder(params: {
   });
 }
 
-/** Promotes one auth profile to the front of a provider order. */
+/** Promotes across shared-credential/local-order owners; otherwise relogin leaves stale order. */
 export async function promoteAuthProfileInOrder(params: {
   agentDir?: string;
   provider: string;
@@ -134,13 +134,12 @@ export async function promoteAuthProfileInOrder(params: {
   createFromOrder?: string[];
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
+  const effectiveStore = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    ...(params.createFromOrder
-      ? { saveOptions: { preserveOrderProfileIds: params.createFromOrder } }
-      : {}),
+    saveOptions: { preserveOrderProfileIds: [params.profileId, ...(params.createFromOrder ?? [])] },
     updater: (store) => {
-      const profile = store.profiles[params.profileId];
+      const profile = store.profiles[params.profileId] ?? effectiveStore.profiles[params.profileId];
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }

@@ -8,6 +8,7 @@ import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugi
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
+import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
 import { en } from "../../ui/src/i18n/locales/en.ts";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
 
@@ -25,6 +26,7 @@ const sourceFiles = [
   "en-plugin-consent.ts",
   "en-settings.ts",
   "en-skill-library.ts",
+  "en-update-actions.ts",
 ];
 
 export function loadControlUiSourceCatalog(): TranslationMap {
@@ -37,6 +39,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSessionPlacementEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerSettingsEnglish.catalog,
+    registerUpdateActionsEnglish.catalog,
   );
 }
 
