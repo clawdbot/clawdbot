@@ -34,6 +34,7 @@ import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
+import { mergeCronListVisibility } from "../../cron/service/list-page-types.js";
 import {
   isInvalidCronSessionTargetIdError,
   resolveCronSessionTargetSessionKey,
@@ -421,6 +422,9 @@ function respondCronJobNotFound(
 
 type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
 
+const CRON_ROLE_RESTRICTION_WARNING =
+  "Automation list is restricted by the calling operator role's session visibility policy. Inaccessible automations are omitted; total, pagination, and snapshotRevision describe this restricted view, not the complete Gateway inventory.";
+
 function resolveCronSessionVisibility(
   client: GatewayClient | null,
   cfg: OpenClawConfig,
@@ -641,6 +645,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       const nextOffset = offset + jobs.length;
       page = {
         ...page,
+        visibility: mergeCronListVisibility(page.visibility, {
+          mode: "role",
+          warning: `${CRON_ROLE_RESTRICTION_WARNING} The calling operator role also restricts session visibility; the result is narrowed by both policies.`,
+        }),
         jobs,
         snapshotRevision: resolveCronListSnapshotRevision(visibleJobs),
         total,

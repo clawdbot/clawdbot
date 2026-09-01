@@ -14,6 +14,7 @@ import { CronService, type CronEvent } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -972,6 +973,87 @@ describe("cron method validation", () => {
       undefined,
     );
     expect(respond.mock.calls.at(-1)?.[1]).not.toHaveProperty("visibility");
+  });
+
+  it("marks role-filtered cron.list pages as restricted and re-pages the visible inventory", async () => {
+    const profileId = ensureProfileForEmail("cron-role-owner@example.test").id;
+    const ownSessionKey = "agent:ops:role-owned";
+    const foreignSessionKey = "agent:worker:role-hidden";
+    loadGatewaySessionEntry.mockImplementation((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: {
+        sessionId: `session-${sessionKey}`,
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: sessionKey === ownSessionKey ? profileId : "cron-role-foreign",
+        },
+      },
+    }));
+    setRuntimeConfig({
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "none" },
+              agents: "*",
+              scopes: ["operator.read"],
+            },
+          },
+        },
+      },
+    });
+    const client: GatewayClient = {
+      connect: { scopes: ["operator.read"] } as GatewayClient["connect"],
+      authenticatedUserProfile: {
+        profileId,
+        displayName: "Role owner",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const context = createCronContext([
+      createCronJob({
+        id: "role-visible",
+        agentId: "ops",
+        sessionKey: ownSessionKey,
+        owner: { agentId: "ops", sessionKey: ownSessionKey },
+      }),
+      createCronJob({
+        id: "role-hidden",
+        agentId: "worker",
+        sessionKey: foreignSessionKey,
+        owner: { agentId: "worker", sessionKey: foreignSessionKey },
+      }),
+    ]);
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true, limit: 1 },
+      { context, client },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        total: 1,
+        offset: 0,
+        limit: 1,
+        hasMore: false,
+        nextOffset: null,
+        jobs: [expect.objectContaining({ id: "role-visible" })],
+        visibility: {
+          mode: "role",
+          restricted: true,
+          warning: expect.stringContaining(
+            "total, pagination, and snapshotRevision describe this restricted view",
+          ),
+        },
+      }),
+      undefined,
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("role-hidden");
   });
 
   it("filters caller-scoped cron.list jobs with foreign session targets before pagination", async () => {
