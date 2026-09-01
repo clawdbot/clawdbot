@@ -483,7 +483,7 @@ describe("plugin node capability helpers", () => {
     ).toBe(false);
   });
 
-  test("requires an approved node surface for capability authorization", () => {
+  test("requires approved node surfaces while preserving operator capabilities", () => {
     const capability = "canvas-token";
     const surface = { surface: "canvas" };
     const pendingNode = makeClient(
@@ -516,6 +516,6 @@ describe("plugin node capability helpers", () => {
         capability,
         nowMs: 1_000,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

@@ -387,11 +387,10 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   for (const client of params.clients) {
-    // Gateway connect reconciliation and NodeRegistry.updateSurface keep
-    // connect.caps as the live effective node surface, not the declaration.
-    // A minted token is not enough: only an active node with the approved
-    // surface may exercise a plugin-node route.
-    if (client.connect?.role !== "node" || !client.connect.caps?.includes(surface)) {
+    // Operators retain the existing capability-token path. Node connections
+    // additionally require the live effective surface after pairing approval.
+    const role = client.connect?.role;
+    if (role !== "operator" && (role !== "node" || !client.connect?.caps?.includes(surface))) {
       continue;
     }
     if (client.invalidated) {

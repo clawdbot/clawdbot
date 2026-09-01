@@ -579,13 +579,13 @@ describe("gateway plugin node capability auth", () => {
             }),
           );
 
-          const operatorBlocked = await fetchCanvas(
+          const operatorAllowed = await fetchCanvas(
             `http://${host}:${listener.port}${scopedCanvasPath(operatorCapability, `${CANVAS_HOST_PATH}/`)}`,
           );
-          expect(operatorBlocked.status).toBe(401);
-          await expectWsRejected(
+          expect(operatorAllowed.status).toBe(200);
+          expect(await operatorAllowed.text()).toBe("ok");
+          await expectWsConnected(
             `ws://${host}:${listener.port}${scopedCanvasPath(operatorCapability, CANVAS_WS_PATH)}`,
-            {},
           );
 
           clients.add(
