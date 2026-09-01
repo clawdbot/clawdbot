@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { InstalledPluginIndexRecord } from "./installed-plugin-index-types.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexRecord,
+} from "./installed-plugin-index-types.js";
 import { resolvePluginRegistryContent } from "./plugin-registry-comparison.js";
 import { createInstalledPluginIndexSnapshot } from "./status.test-fixtures.js";
 
