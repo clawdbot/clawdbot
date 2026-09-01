@@ -31,6 +31,13 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **Hosted Mac exact dependencies (2026-09-01):** The same-head publisher and
+  consumer in [run 33458856298](https://github.com/openclaw/openclaw/actions/runs/33458856298)
+  successfully saved and restored a 1.66-GB dependency archive, but setup took
+  142s versus 86s with the ordinary store cache. Extraction took 82s versus 27s;
+  install improved only from 43s to 35s. Keep hosted Mac jobs on the ordinary
+  store cache. Reconsider only with measured total setup savings, including
+  transfer, extraction and frozen reconciliation, not a successful cache hit.
 - **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
   shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
   artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
@@ -177,8 +184,8 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   or standalone admission job. The protected `vitest-cache-warm` workflow
   publishes the immutable semantic dependency archive after setup succeeds,
   before build and transform warming. Preflight and downstream Node jobs are
-  restore-only consumers on eligible self-hosted runners; exact misses and
-  hosted/fork/manual paths use the ordinary pnpm-store cache.
+  restore-only consumers on eligible self-hosted runners. Exact misses and
+  hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
 - Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
   the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
   Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
@@ -199,6 +206,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   full-suite plan. Targeted plans retain the full built-artifact
   boundary gate. `main` uses compact integration; manual and release runs use
   full named shards.
+- The combined Node matrix admits compact and plugin descriptors by estimated
+  duration within the same cap. Catch-all, QA and provider configs use the
+  existing 90-file job budget with native Vitest sharding; retain complete
+  config discovery, exclusions and process isolation. Count every appended
+  plugin row, including the five added QA/provider rows, in the burst envelope.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.

@@ -5,6 +5,7 @@ import { basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { readUiE2eFileTimings } from "../../scripts/lib/ci-test-timings.mts";
+import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
 
 // Cold-start fallback when committed measurements are missing. Refresh
 // config/ci-test-timings.json with `pnpm ci:timings:refit`, not these literals.
@@ -107,11 +108,6 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
 const UI_E2E_FALLBACK_SECONDS_PER_KB = 0.38;
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-type ShardBucket = {
-  seconds: number;
-  files: TestSpecification[];
-};
-
 function estimateFileSeconds(moduleId: string): number {
   const { fileSeconds, perFileOverheadSeconds } = readUiE2eFileTimings();
   const repoPath = relative(repoRoot, moduleId).replaceAll("\\", "/");
@@ -125,28 +121,8 @@ function estimateFileSeconds(moduleId: string): number {
 export class UiE2eSequencer extends BaseSequencer {
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
-    const { count, index } = this.ctx.config.shard!;
-    const buckets: ShardBucket[] = Array.from({ length: count }, () => ({
-      seconds: 0,
-      files: [],
-    }));
-    // Membership comes only from Vitest discovery. Stale timing keys can
-    // change balance but must never add, omit, or duplicate a test file.
-    const weightedFiles = files
-      .map((file) => ({ seconds: estimateFileSeconds(file.moduleId), file }))
-      .sort(
-        (left, right) =>
-          right.seconds - left.seconds || left.file.moduleId.localeCompare(right.file.moduleId),
-      );
-
-    for (const weightedFile of weightedFiles) {
-      const bucket = buckets.reduce((lightest, candidate) =>
-        candidate.seconds < lightest.seconds ? candidate : lightest,
-      );
-      bucket.seconds += weightedFile.seconds;
-      bucket.files.push(weightedFile.file);
-    }
-
-    return buckets[index - 1]!.files;
+    return selectWeightedShard(files, this.ctx.config.shard!, (file) =>
+      estimateFileSeconds(file.moduleId),
+    );
   }
 }

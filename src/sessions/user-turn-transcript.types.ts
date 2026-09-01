@@ -120,6 +120,14 @@ export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptAdmissionReceipt = TranscriptTurnAdmission;
 
+/** Native producer facts for the current host-admitted prompt; never a message replacement. */
+export type UserTurnTranscriptAnnotation = Readonly<{
+  mirrorIdentity: string;
+  upstreamUserText: string;
+  mirrorOrigin: string;
+  mirrorSourceFingerprint: string;
+}>;
+
 export type UserTurnTranscriptPersistResult = {
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   /** True only when this call inserted the transcript message. */

@@ -1,9 +1,11 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 /** Records attempt replay safety and terminal side-effect evidence. */
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
-  hasCommittedMessagingToolDeliveryEvidence,
-  hasMessagingToolDeliveryEvidence,
-} from "../delivery-evidence.js";
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "../../accepted-session-spawn.js";
+import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
@@ -65,6 +67,7 @@ type TerminalAttemptState = Pick<
     Pick<
       EmbeddedRunAttemptResult,
       | "acceptedSessionSpawns"
+      | "didSendViaMessagingTool"
       | "messagingToolSentTexts"
       | "messagingToolSentMediaUrls"
       | "messagingToolSentTargets"
@@ -90,7 +93,8 @@ export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean 
     attempt.hasToolMediaBlockReply ||
     attempt.didDeliverSourceReplyViaMessageTool ||
     attempt.messagingToolSourceReplyPayloads?.length ||
-    hasCommittedMessagingToolDeliveryEvidence({
+    hasMessagingToolDeliveryEvidence({
+      didSendViaMessagingTool: attempt.didSendViaMessagingTool,
       messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
       messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
       messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
@@ -103,4 +107,65 @@ export function hasNonToolTerminalState(attempt: TerminalAttemptState): boolean 
 
 export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+}
+
+type AcceptedSessionSpawnContinuationAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "acceptedSessionSpawns"
+  | "assistantTexts"
+  | "clientToolCalls"
+  | "didDeliverSourceReplyViaMessageTool"
+  | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "heartbeatToolResponse"
+  | "lastToolError"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
+  | "messagingToolSentTexts"
+  | "messagingToolSourceReplyPayloads"
+  | "successfulCronAdds"
+  | "terminal"
+  | "toolAudioAsVoice"
+  | "toolMediaUrls"
+  | "toolTrustedLocalMedia"
+  | "yieldDetected"
+>;
+
+type AcceptedSessionSpawnContinuationRun = Pick<
+  RunEmbeddedAgentParams,
+  "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
+>;
+
+/**
+ * A visible parent that delegates its entire response must remain alive for
+ * completion delivery. Existing output, explicit silence, and non-user turns
+ * keep their established terminal ownership instead.
+ */
+export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
+  attempt: AcceptedSessionSpawnContinuationAttempt;
+  run: AcceptedSessionSpawnContinuationRun;
+}): boolean {
+  const { attempt, run } = params;
+  if (
+    !hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) ||
+    attempt.terminal.kind !== "ok" ||
+    attempt.yieldDetected === true ||
+    run.replyOperation?.turnKind !== "visible" ||
+    run.currentInboundEventKind === "room_event" ||
+    run.silentExpected === true ||
+    (run.inputProvenance?.kind !== undefined && run.inputProvenance.kind !== "external_user")
+  ) {
+    return false;
+  }
+  if (
+    attempt.assistantTexts.some(
+      (text) => text.trim().length > 0 && !isSilentReplyText(text, SILENT_REPLY_TOKEN),
+    )
+  ) {
+    return false;
+  }
+  return !hasAttemptTerminalState({
+    ...attempt,
+    acceptedSessionSpawns: [],
+  });
 }

@@ -25,12 +25,6 @@ const baseTest = sharedVitestConfig.test ?? {};
 
 export const pluginContractPatterns = ["src/plugins/contracts/**/*.test.ts"];
 
-function loadContractsIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
-
 export function createContractsVitestConfig(
   includePatterns: string[],
   env: Record<string, string | undefined> = process.env,
@@ -40,7 +34,7 @@ export function createContractsVitestConfig(
   const cliIncludePatterns = narrowIncludePatternsForCli(includePatterns, argv);
   const envIncludePatterns = intersectIncludePatterns(
     includePatterns,
-    loadContractsIncludePatternsFromEnv(env),
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
   );
   return defineConfig({
     ...base,

@@ -2822,11 +2822,6 @@ export const en: TranslationMap = {
       body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
       action: "Connect an AI provider",
     },
-    connectionFailure: {
-      title: "Configured AI needs attention",
-      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
-      action: "Review connection",
-    },
     loading: "Checking this Gateway for available AI access…",
     testing: "Testing — asking the selected model for a quick reply…",
     retry: "Retry",

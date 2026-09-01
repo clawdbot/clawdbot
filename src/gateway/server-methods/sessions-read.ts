@@ -327,7 +327,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,
-                  projection: "list",
                   sessionKey: session.key,
                   storeCache: sharingStoreCache,
                   targetDiscoveryCache,

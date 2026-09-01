@@ -155,14 +155,10 @@ function getMergeableLegacyOpenAIModels(params: {
 
 function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string[]> {
   const pathsByProvider = new Map<string, string[]>();
-  const scopes: Array<{ value: unknown; path: string }> = [];
   visitAgentConfigScopes(getRecord(raw) ?? {}, (agent, path) => {
-    scopes.push({ value: agent.modelPolicy, path: `${path}.modelPolicy` });
-  });
-  for (const scope of scopes) {
-    const allow = getRecord(scope.value)?.allow;
+    const allow = getRecord(agent.modelPolicy)?.allow;
     if (!Array.isArray(allow)) {
-      continue;
+      return;
     }
     for (const [index, entry] of allow.entries()) {
       if (typeof entry !== "string" || !entry.trim().endsWith("/*")) {
@@ -173,10 +169,10 @@ function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string
         continue;
       }
       const paths = pathsByProvider.get(provider) ?? [];
-      paths.push(`${scope.path}.allow.${index}`);
+      paths.push(`${path}.modelPolicy.allow.${index}`);
       pathsByProvider.set(provider, paths);
     }
-  }
+  });
   return pathsByProvider;
 }
 

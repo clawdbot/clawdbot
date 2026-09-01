@@ -847,8 +847,9 @@ delegate to the Gateway-owned voice-call runtime so the CLI does not bind a
 second webhook server. If no Gateway is reachable, the commands fall back to
 a standalone CLI runtime.
 
-`latency` reads `calls.jsonl` from the default voice-call storage path. Use
-`--file <path>` to point at a different log and `--last <n>` to limit
+`latency` reads persisted call records from SQLite by default. Use
+`--file <path>` to read an existing custom JSONL log (with a basename other than
+`calls.jsonl`) and `--last <n>` to limit
 analysis to the last N records (default 200). Output includes min/max/avg,
 p50, and p95 for turn latency and listen-wait times.
 

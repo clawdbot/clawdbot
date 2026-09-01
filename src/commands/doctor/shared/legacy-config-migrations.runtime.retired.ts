@@ -101,23 +101,22 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const migrateAgentScope = (scope: Record<string, unknown> | null, path: string) => {
+  visitAgentConfigScopes(raw, (scope, path) => {
     moveKey(
-      getRecord(getRecord(scope?.tools)?.exec),
+      getRecord(getRecord(scope.tools)?.exec),
       "timeoutSec",
       "timeoutSeconds",
       `${path}.tools.exec`,
       changes,
     );
     moveKey(
-      getRecord(getRecord(getRecord(scope?.sandbox)?.browser)),
+      getRecord(getRecord(scope.sandbox)?.browser),
       "enableNoVnc",
       "noVncEnabled",
       `${path}.sandbox.browser`,
       changes,
     );
-  };
-  visitAgentConfigScopes(raw, migrateAgentScope);
+  });
   moveKey(
     getRecord(getRecord(raw.tools)?.exec),
     "timeoutSec",

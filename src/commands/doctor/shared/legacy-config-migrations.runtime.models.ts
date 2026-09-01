@@ -211,13 +211,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         }
       }
 
+      // Default selections and model-map keys stay fixed while params and provider rows migrate.
+      let cachedDefaultModelIds: string[] | undefined;
+      const getDefaultModelIds = () =>
+        (cachedDefaultModelIds ??= [
+          ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
+          ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
+        ]);
       const providerParams = getRecord(vllmProvider?.params);
       if (providerParams) {
         const providerLegacyFormat = vllm.getLegacyVllmQwenThinkingFormat(providerParams);
         if (providerLegacyFormat) {
           const providerModelIds = [
-            ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
-            ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
+            ...getDefaultModelIds(),
             ...vllm.collectVllmModelIdsFromAgentRoster(raw),
           ];
           const targets = vllm.combineVllmModelTargets(
@@ -252,10 +258,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
       if (defaultParams) {
         const defaultLegacyFormat = vllm.getLegacyVllmQwenThinkingFormat(defaultParams);
         if (defaultLegacyFormat) {
-          const defaultModelIds = [
-            ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
-            ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
-          ];
+          const defaultModelIds = getDefaultModelIds();
           const targets =
             defaultModelIds.length > 0
               ? vllm.createVllmModelTargets(raw, defaultModelIds)
@@ -296,12 +299,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
           ...vllm.collectVllmModelIdsFromSelection(agentRecord.model),
           ...vllm.collectVllmModelIdsFromAgentModelMap(agentRecord.models),
         ];
-        const inheritedDefaultModelIds = [
-          ...vllm.collectVllmModelIdsFromSelection(agentsDefaults?.model),
-          ...vllm.collectVllmModelIdsFromAgentModelMap(defaultModels),
-        ];
         const agentModelIds =
-          explicitAgentModelIds.length > 0 ? explicitAgentModelIds : inheritedDefaultModelIds;
+          explicitAgentModelIds.length > 0 ? explicitAgentModelIds : getDefaultModelIds();
         const targets =
           agentModelIds.length > 0
             ? vllm.createVllmModelTargets(raw, agentModelIds)

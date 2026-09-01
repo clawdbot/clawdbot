@@ -584,6 +584,7 @@ jobs:
             scripts/lib/managed-child-process.mts
             scripts/lib/windows-taskkill.mjs
             scripts/lib/release-version.mjs
+            .github/actions/setup-pnpm-store-cache/ensure-node.sh
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -601,6 +602,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Find reusable validation evidence
         id: find
