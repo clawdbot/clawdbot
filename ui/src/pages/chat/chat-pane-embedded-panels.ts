@@ -58,6 +58,7 @@ type SidebarPanelDefinitionParams = {
   pendingQuestion: string | null;
   onClearCompanion: () => void;
   onRefreshTasks: () => void;
+  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -242,7 +243,7 @@ export function sidebarPanelDefinitions(
               class="rail-header__action chat-tasks-rail__refresh"
               type="button"
               aria-label=${t("chat.backgroundTasks.refresh")}
-              ?disabled=${!params.connected}
+              ?disabled=${!params.connected || params.tasksLoading}
               @click=${params.onRefreshTasks}
             >
               ${icons.refresh}

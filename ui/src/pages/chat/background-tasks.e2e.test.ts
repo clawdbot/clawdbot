@@ -223,7 +223,6 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "task registry changed during tasks.list; retry",
         retryable: true,
-        retryAfterMs: 0,
       });
       await expect
         .poll(async () => gateway.getRequests("tasks.list"))
@@ -247,7 +246,6 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
           retryable: true,
-          retryAfterMs: 0,
         });
       }
       const alert = panel.getByRole("alert");

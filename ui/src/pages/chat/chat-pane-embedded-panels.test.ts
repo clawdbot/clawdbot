@@ -66,6 +66,7 @@ describe("chat pane embedded panels", () => {
     const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;
     params.connected = true;
     params.onRefreshTasks = onRefreshTasks;
+    params.tasksLoading = false;
     const tasks = sidebarPanelDefinitions(params).find((definition) => definition.slot === "tasks");
     const mount = document.body.appendChild(document.createElement("div"));
     render(tasks?.headerAction, mount);
@@ -76,5 +77,21 @@ describe("chat pane embedded panels", () => {
     expect(refresh).not.toBeNull();
     refresh?.click();
     expect(onRefreshTasks).toHaveBeenCalledOnce();
+
+    for (const [connected, tasksLoading] of [
+      [false, false],
+      [true, true],
+    ] as const) {
+      params.connected = connected;
+      params.tasksLoading = tasksLoading;
+      const definition = sidebarPanelDefinitions(params).find(
+        (candidate) => candidate.slot === "tasks",
+      );
+      render(definition?.headerAction, mount);
+      expect(
+        mount.querySelector<HTMLButtonElement>('button[aria-label="Refresh background tasks"]')
+          ?.disabled,
+      ).toBe(true);
+    }
   });
 });
