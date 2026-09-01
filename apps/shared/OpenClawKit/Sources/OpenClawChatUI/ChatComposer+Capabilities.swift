@@ -7,8 +7,10 @@ extension OpenClawChatComposer {
            self.viewModel.composerCapabilityControlsAvailable
         {
             Divider()
-            Text("Tool changes apply to the next run.")
-                .font(OpenClawChatTypography.caption)
+            if self.viewModel.hasActiveRunForFollowUp {
+                Text("Tool changes apply to the next run.")
+                    .font(OpenClawChatTypography.caption)
+            }
             self.composerWebSearchButton
             self.composerSkillsMenu
             self.composerConnectorsMenu

@@ -1,5 +1,46 @@
 import Foundation
 
+extension OpenClawChatSQLiteTranscriptCache {
+    public static let maxCachedMessagesPerSession = 200
+    public static let maxQueuedCommands = 50
+    public static let maxAttachmentBytesPerCommand = 40_000_000
+    public static let maxQueuedAttachmentBytes = 50_000_000
+    public static let outboxCommandMaxAge: TimeInterval = 48 * 60 * 60
+    public static let outboxExpiredError = "expired"
+    public static let outboxUnconfirmedError = "delivery_unconfirmed"
+    public static let outboxUnknownTargetError = "delivery_target_unknown"
+    public static let outboxChangedTargetError = "delivery_target_changed"
+    public static let outboxChangedSessionError = "delivery_session_changed"
+    public static let outboxClientUpgradeRequiredError = "client_upgrade_required"
+    public static let outboxSettingsUpgradeRequiredError = "settings_client_upgrade_required"
+    public static let outboxSettingsGatewayUpgradeRequiredError = "settings_gateway_upgrade_required"
+    public static let outboxStructuredGatewayUpgradeRequiredError = "structured_gateway_upgrade_required"
+    public static let outboxSettingsReviewRequiredError = "settings_review_required"
+    public static let outboxSettingsChangedError = "settings_changed"
+
+    static func outboxDisplayError(_ lastError: String?) -> String? {
+        guard let lastError else { return nil }
+        switch lastError {
+        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError:
+            return String(localized: "A previous app version could not safely send this message. Review and retry it.")
+        case self.outboxSettingsGatewayUpgradeRequiredError:
+            return String(localized: "Update the gateway before sending queued messages with session settings.")
+        case self.outboxStructuredGatewayUpgradeRequiredError:
+            return String(localized: "Update the gateway before sending queued messages with structured context.")
+        case self.outboxSettingsReviewRequiredError:
+            return String(localized: "Session settings were not captured. Review and retry this message.")
+        case self.outboxSettingsChangedError:
+            return String(localized: "Session settings changed. Review and retry this message.")
+        default:
+            break
+        }
+        guard
+            let marker = lastError.range(of: "\n# branch-park:")
+        else { return lastError }
+        return String(lastError[..<marker.lowerBound])
+    }
+}
+
 /// Read-only offline cache seam for chat sessions and transcripts.
 ///
 /// The cache only pre-paints cold opens and covers offline browsing; connected
@@ -162,6 +203,10 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     public let branchEpoch: Int
     /// Scope epoch observed alongside this row snapshot.
     public let scopeBranchEpoch: Int?
+    /// Raw model input used when the gateway supports structured chat.send context.
+    /// `text` remains the portable fallback and optimistic presentation text.
+    public let structuredMessageText: String?
+    public let sendContext: OpenClawChatSendContext?
     public let text: String
     /// Attachment bytes remain owned by SQLite until canonical history proves
     /// delivery or the user explicitly deletes the command.
@@ -169,9 +214,6 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Thinking level captured when the command was queued, so a later flush
     /// never borrows the setting of whichever session is visible then.
     public let thinking: String
-    /// Permission and tool state captured with this command. Durable replay
-    /// must use this command-owned fence, never the currently visible session.
-    public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
     /// Seconds since 1970; flush order is strictly ascending `createdAt`.
     public let createdAt: Double
     public var status: Status
@@ -189,10 +231,11 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         agentID: String? = nil,
         branchEpoch: Int = 0,
         scopeBranchEpoch: Int? = nil,
+        structuredMessageText: String? = nil,
+        sendContext: OpenClawChatSendContext? = nil,
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         createdAt: Double,
         status: Status,
         attemptVersion: Int = 1,
@@ -212,10 +255,11 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
         self.branchEpoch = branchEpoch
         self.scopeBranchEpoch = scopeBranchEpoch ?? branchEpoch
+        self.structuredMessageText = structuredMessageText
+        self.sendContext = sendContext
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
-        self.expectedSessionSettings = expectedSessionSettings
         self.createdAt = createdAt
         self.status = status
         self.attemptVersion = attemptVersion
@@ -229,17 +273,22 @@ public enum OpenClawChatOutboxUpdateResult: Equatable, Sendable {
     case confirmed
     case missing
     case superseded
+    case nonRetryable(reason: String?)
     case unavailable
 }
 
 public enum OpenClawChatOutboxChange: Equatable, Sendable {
     case canceled(gatewayID: String, id: String)
     case confirmed(gatewayID: String, id: String)
+    case failed(gatewayID: String, id: String, attemptVersion: Int, retryCount: Int, reason: String?)
     case invalidated(gatewayID: String, scope: OpenClawChatOutboxScope)
 
     var gatewayID: String {
         switch self {
-        case let .canceled(gatewayID, _), let .confirmed(gatewayID, _), let .invalidated(gatewayID, _):
+        case let .canceled(gatewayID, _),
+             let .confirmed(gatewayID, _),
+             let .failed(gatewayID, _, _, _, _),
+             let .invalidated(gatewayID, _):
             gatewayID
         }
     }
@@ -325,7 +374,7 @@ public protocol OpenClawChatCommandOutbox: Sendable {
         agentID: String?,
         deliverySessionKey: String,
         routingContract: String,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
         replacementID: String?) async -> OpenClawChatOutboxUpdateResult
     /// Persistently parks automatic replay after a failed settings mutation.
     func parkQueuedCommands(
@@ -431,7 +480,7 @@ extension OpenClawChatCommandOutbox {
         agentID _: String?,
         deliverySessionKey _: String,
         routingContract _: String,
-        expectedSessionSettings _: OpenClawChatSessionSettingsExpectation,
+        expectedSessionSettings _: OpenClawChatSessionSettingsExpectation?,
         replacementID _: String? = nil) async -> OpenClawChatOutboxUpdateResult
     {
         .unavailable

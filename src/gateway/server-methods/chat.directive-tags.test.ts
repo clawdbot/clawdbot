@@ -1813,6 +1813,58 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
+  it("rejects steer captured for a replaced session before injecting the successor", async () => {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-stale-session-steer-",
+    );
+    const queueMessage = vi.fn(async () => {});
+    const operation = beginMessageInjectionOperation({ queueMessage });
+
+    try {
+      await send({
+        idempotencyKey: "idem-stale-session-steer",
+        requestParams: {
+          queueMode: "steer",
+          sessionId: "replaced-session",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("preserves a supplied reconnect session id while its row is absent", async () => {
+    const { context, respond, send } = await createSqliteChatRequest(
+      "openclaw-chat-send-reconnect-missing-row-",
+    );
+    mockState.sessionMissing = true;
+
+    await send({
+      idempotencyKey: "idem-reconnect-missing-row",
+      requestParams: { sessionId: mockState.sessionId },
+      waitFor: "none",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+    expect(mockState.lastDispatchCtx).toBeDefined();
+  });
+
   it.each([
     ["active descendant", "agent:main:main:subagent:child", "descendant"],
     ["different session", "agent:main:telegram:direct:other", "other"],

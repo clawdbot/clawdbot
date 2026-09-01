@@ -123,6 +123,10 @@ struct LocalChatFixture {
 }
 
 struct LocalFixtureChatTransport: OpenClawChatTransport {
+    var supportsStructuredSendContext: Bool {
+        true
+    }
+
     var supportsComposerCapabilities: Bool {
         true
     }
@@ -132,6 +136,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
     {
         OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
             effortMutationAvailable: true,
@@ -251,6 +256,21 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessionKey: sessionKey,
             message: message,
             runId: idempotencyKey)
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        context: OpenClawChatSendContext,
+        message: String,
+        thinking _: String,
+        idempotencyKey: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        try await self.store.sendMessage(
+            sessionKey: sessionKey,
+            message: message,
+            runId: idempotencyKey,
+            context: context)
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -430,14 +450,17 @@ private actor LocalFixtureChatStore {
                 thinkingLevel: self.thinkingLevel,
                 sessionInfo: OpenClawChatSessionInfo(
                     hasActiveRun: self.activeRunID != nil,
-                    activeRunIds: self.activeRunID.map { [$0] })),
+                    activeRunIds: self.activeRunID.map { [$0] },
+                    queueMode: .steer,
+                    effectiveQueueMode: .steer)),
             as: OpenClawChatHistoryPayload.self)
     }
 
     func sendMessage(
         sessionKey _: String,
         message: String,
-        runId: String) throws -> OpenClawChatSendResponse
+        runId: String,
+        context: OpenClawChatSendContext? = nil) throws -> OpenClawChatSendResponse
     {
         let now = Date().timeIntervalSince1970 * 1000
         self.messages.append(
@@ -445,7 +468,8 @@ private actor LocalFixtureChatStore {
                 role: "user",
                 text: message,
                 timestamp: now,
-                idempotencyKey: "\(runId):user"))
+                idempotencyKey: "\(runId):user",
+                details: context.map(Self.sendContextDetails)))
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""
         if ScreenshotFixtureMode.holdsInitialChatRun,
@@ -632,6 +656,30 @@ private actor LocalFixtureChatStore {
             idempotencyKey: idempotencyKey,
             stopReason: role == "assistant" ? "stop" : nil,
             details: details)
+    }
+
+    private static func sendContextDetails(_ context: OpenClawChatSendContext) -> AnyCodable {
+        let expectedLeaf: [String: AnyCodable] = switch context.expectedLeaf {
+        case .unavailable: ["state": AnyCodable("unavailable")]
+        case .empty: ["state": AnyCodable("empty")]
+        case let .entry(entryID):
+            [
+                "state": AnyCodable("entry"),
+                "entryId": AnyCodable(entryID),
+            ]
+        }
+        return AnyCodable([
+            "fixtureSendContext": AnyCodable([
+                "agentId": context.agentID.map(AnyCodable.init) ?? AnyCodable(NSNull()),
+                "routingContract": context.expectedSessionRoutingContract.map(AnyCodable.init) ??
+                    AnyCodable(NSNull()),
+                "sessionId": context.sessionID.map(AnyCodable.init) ?? AnyCodable(NSNull()),
+                "queueMode": context.queueMode.map { AnyCodable($0.rawValue) } ?? AnyCodable(NSNull()),
+                "replyToId": context.replyToID.map(AnyCodable.init) ?? AnyCodable(NSNull()),
+                "expectedLeaf": AnyCodable(expectedLeaf),
+                "requiresStructuredDelivery": AnyCodable(context.requiresStructuredDelivery),
+            ]),
+        ])
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {

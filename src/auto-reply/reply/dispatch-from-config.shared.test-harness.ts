@@ -8,6 +8,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../../plugins/hook-types.js";
@@ -108,7 +109,7 @@ const hookMocks = vi.hoisted(() => ({
     runReplyDispatch: vi.fn<
       (
         eventValue: PluginHookReplyDispatchEvent,
-        _ctx: unknown,
+        _ctx: PluginHookReplyDispatchContext,
       ) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
     runReplyPayloadSending: vi.fn(async () => undefined),

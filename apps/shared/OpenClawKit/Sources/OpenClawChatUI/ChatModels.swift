@@ -660,11 +660,51 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
 public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    public let activeLeafEntryId: String?
+    public let queueMode: OpenClawChatQueueMode?
+    public let effectiveQueueMode: OpenClawChatQueueMode?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil) {
+    public init(
+        hasActiveRun: Bool?,
+        activeRunIds: [String]? = nil,
+        activeLeafEntryId: String? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
+        effectiveQueueMode: OpenClawChatQueueMode? = nil)
+    {
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.activeLeafEntryId = activeLeafEntryId
+        self.queueMode = queueMode
+        self.effectiveQueueMode = effectiveQueueMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hasActiveRun
+        case activeRunIds
+        case activeLeafEntryId
+        case queueMode
+        case effectiveQueueMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hasActiveRun = try container.decodeIfPresent(Bool.self, forKey: .hasActiveRun)
+        self.activeRunIds = try container.decodeIfPresent([String].self, forKey: .activeRunIds)
+        self.activeLeafEntryId = try container.decodeIfPresent(String.self, forKey: .activeLeafEntryId)
+        self.queueMode = try container.decodeIfPresent(String.self, forKey: .queueMode)
+            .flatMap(OpenClawChatQueueMode.init(rawValue:))
+        self.effectiveQueueMode = try container.decodeIfPresent(String.self, forKey: .effectiveQueueMode)
+            .flatMap(OpenClawChatQueueMode.init(rawValue:))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.hasActiveRun, forKey: .hasActiveRun)
+        try container.encodeIfPresent(self.activeRunIds, forKey: .activeRunIds)
+        try container.encodeIfPresent(self.activeLeafEntryId, forKey: .activeLeafEntryId)
+        try container.encodeIfPresent(self.queueMode?.rawValue, forKey: .queueMode)
+        try container.encodeIfPresent(self.effectiveQueueMode?.rawValue, forKey: .effectiveQueueMode)
     }
 }
 

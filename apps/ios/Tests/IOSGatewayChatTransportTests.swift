@@ -181,6 +181,7 @@ struct IOSGatewayChatTransportTests {
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
         #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
+        #expect(!hello.supportsServerCapability(.chatSendContextContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsContract))
         #expect(!hello.supportsServerCapability(.sessionSettingsCAS))
 
@@ -188,9 +189,10 @@ struct IOSGatewayChatTransportTests {
             String(decoding: data, as: UTF8.self)
                 .replacingOccurrences(
                     of: "session-unread-ack-contract\"]",
-                    with: "session-unread-ack-contract\",\"session-settings-contract\",\"session-settings-cas-v1\"]")
+                    with: "session-unread-ack-contract\",\"chat-send-context-contract\",\"session-settings-contract\",\"session-settings-cas-v1\"]")
                 .utf8)
         let current = try JSONDecoder().decode(HelloOk.self, from: currentData)
+        #expect(current.supportsServerCapability(.chatSendContextContract))
         #expect(current.supportsServerCapability(.sessionSettingsContract))
         #expect(current.supportsServerCapability(.sessionSettingsCAS))
     }
@@ -676,6 +678,7 @@ struct LocalFixtureChatTransportTests {
         let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
         #expect(transport.supportsComposerCapabilities)
         let catalog = await transport.loadComposerCapabilityCatalog(sessionKey: "main", agentID: "main")
+        #expect(catalog.structuredSendAvailable)
         #expect(catalog.permissionMutationAvailable)
         #expect(catalog.toolOverrideMutationAvailable)
         let overrides = OpenClawChatSessionToolOverrides(
@@ -695,5 +698,43 @@ struct LocalFixtureChatTransportTests {
             try await transport.listSessions(limit: nil, search: nil, archived: false).sessions.first)
         #expect(session.permissionMode == .workspace)
         #expect(session.toolOverrides == overrides)
+    }
+
+    @Test func `Apple Review fixture preserves structured send context in history`() async throws {
+        typealias ContextDictionary = [String: AnyCodable]
+        let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+        let context = OpenClawChatSendContext(
+            agentID: "main",
+            expectedSessionRoutingContract: "per-sender|main|main",
+            sessionID: "apple-review-demo-main",
+            queueMode: .steer,
+            replyToID: "message-42",
+            expectedLeaf: .entry("leaf-main"),
+            requiresStructuredDelivery: true)
+
+        _ = try await transport.sendMessage(
+            sessionKey: "main",
+            context: context,
+            message: "structured follow-up",
+            thinking: "auto",
+            idempotencyKey: "structured-run",
+            attachments: [])
+
+        let history = try await transport.requestHistory(sessionKey: "main")
+        let messages = try #require(history.messages).compactMap { payload -> OpenClawChatMessage? in
+            guard let data = try? JSONEncoder().encode(payload) else { return nil }
+            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        }
+        let user = try #require(messages.last(where: { $0.role == "user" }))
+        #expect(user.content.first?.text == "structured follow-up")
+        let details = try #require(user.details?.value as? ContextDictionary)
+        let storedContext = try #require(details["fixtureSendContext"]?.value as? ContextDictionary)
+        #expect(storedContext["sessionId"]?.value as? String == "apple-review-demo-main")
+        #expect(storedContext["queueMode"]?.value as? String == "steer")
+        #expect(storedContext["replyToId"]?.value as? String == "message-42")
+        #expect(storedContext["requiresStructuredDelivery"]?.value as? Bool == true)
+        let expectedLeaf = try #require(storedContext["expectedLeaf"]?.value as? ContextDictionary)
+        #expect(expectedLeaf["state"]?.value as? String == "entry")
+        #expect(expectedLeaf["entryId"]?.value as? String == "leaf-main")
     }
 }

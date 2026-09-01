@@ -194,22 +194,6 @@ public struct OpenClawChatSessionSettingsExpectation: Codable, Hashable, Sendabl
     }
 }
 
-public struct OpenClawChatSendTarget: Hashable, Sendable {
-    public let agentID: String?
-    public let expectedSessionRoutingContract: String?
-    public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
-
-    public init(
-        agentID: String?,
-        expectedSessionRoutingContract: String?,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?)
-    {
-        self.agentID = agentID
-        self.expectedSessionRoutingContract = expectedSessionRoutingContract
-        self.expectedSessionSettings = expectedSessionSettings
-    }
-}
-
 /// Authoritative model identity and thinking state returned by `sessions.patch`.
 public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
     public let key: String?

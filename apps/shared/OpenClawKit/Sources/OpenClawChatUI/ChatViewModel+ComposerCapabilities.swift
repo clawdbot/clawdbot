@@ -1,11 +1,6 @@
 import Foundation
 
 extension OpenClawChatViewModel {
-    var hasActiveRunForComposerSettings: Bool {
-        self.pendingRunCount > 0 || self.hasAdvertisedLiveRun ||
-            self.hasActiveSessionRunWithoutChatSnapshot
-    }
-
     public func selectThinkingLevel(_ level: String) {
         guard self.composerEffortMutationAvailable else { return }
         self.performSelectThinkingLevel(level)
@@ -53,6 +48,12 @@ extension OpenClawChatViewModel {
             : OpenClawChatComposerCapabilityCatalog()
     }
 
+    var structuredSendContextAvailable: Bool {
+        self.transport.supportsComposerCapabilities
+            ? self.composerCapabilityCatalog.structuredSendAvailable
+            : self.transport.supportsStructuredSendContext
+    }
+
     var composerCapabilityControlsAvailable: Bool {
         self.composerCapabilityCatalog.sessionSettingsAvailable
     }
@@ -93,11 +94,37 @@ extension OpenClawChatViewModel {
             toolOverrides: entry.toolOverrides)
     }
 
-    func durableSessionSettingsExpectation() -> OpenClawChatSessionSettingsExpectation {
+    func durableSessionSettingsExpectation() -> OpenClawChatSessionSettingsExpectation? {
+        guard self.transport.outboxRequiresSessionRoutingContract else { return nil }
         let entry = self.currentSessionEntry()
         return OpenClawChatSessionSettingsExpectation(
             permissionMode: entry?.permissionMode,
             toolOverrides: entry?.toolOverrides)
+    }
+
+    func sessionSettingsPatchTarget(
+        in sessionKey: String,
+        canonicalSessionKey: String?,
+        agentID: String?,
+        sessionRoutingContract: String?) -> ModelPatchTarget
+    {
+        if canonicalSessionKey == nil,
+           agentID == nil,
+           sessionRoutingContract == nil,
+           sessionKey == self.sessionKey
+        {
+            let session = self.currentSessionSnapshot()
+            return modelPatchTarget(
+                sessionKey: session.key,
+                canonicalSessionKey: currentSessionEntry()?.key,
+                agentID: session.deliveryAgentID,
+                sessionRoutingContract: session.sessionRoutingContract)
+        }
+        return self.modelPatchTarget(
+            sessionKey: sessionKey,
+            canonicalSessionKey: canonicalSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: sessionRoutingContract)
     }
 
     func waitForCapabilitySettingsBarrier(
@@ -159,7 +186,9 @@ extension OpenClawChatViewModel {
     }
 
     var composerToolOverrideMutationHint: String? {
-        self.composerToolOverrideMutationDisabledReason
+        self.composerToolOverrideMutationDisabledReason ?? (self.hasActiveRunForFollowUp
+            ? String(localized: "Changes apply to the next run.")
+            : nil)
     }
 
     var composerWebSearchMutationDisabledReason: String? {
@@ -177,7 +206,9 @@ extension OpenClawChatViewModel {
     }
 
     var composerWebSearchMutationHint: String? {
-        self.composerWebSearchMutationDisabledReason
+        self.composerWebSearchMutationDisabledReason ?? (self.hasActiveRunForFollowUp
+            ? String(localized: "Changes apply to the next run.")
+            : nil)
     }
 
     func composerPermissionDisabledReason(_ mode: OpenClawChatPermissionMode?) -> String? {
@@ -271,15 +302,31 @@ extension OpenClawChatViewModel {
         self.composerCapabilityState.notice = nil
         self.composerCapabilityState.errorMessage = nil
         let target = self.currentModelPatchTarget()
-        let catalog = await self.transport.loadComposerCapabilityCatalog(
+        async let structuredSendAvailability = self.transport.loadStructuredSendContextAvailability(
             sessionKey: target.canonicalSessionKey,
             agentID: target.agentID)
+        async let catalogLoad = self.transport.loadComposerCapabilityCatalog(
+            sessionKey: target.canonicalSessionKey,
+            agentID: target.agentID)
+        if let structuredSendAvailable = await structuredSendAvailability {
+            guard self.composerCapabilityState.loadGeneration == loadGeneration,
+                  self.composerCapabilityOwnerID == ownerID,
+                  self.currentModelPatchTarget() == target
+            else { return }
+            self.composerCapabilityState.catalog = OpenClawChatComposerCapabilityCatalog(
+                structuredSendAvailable: structuredSendAvailable)
+            if structuredSendAvailable {
+                self.composerCapabilityState.phase = .loaded
+            }
+        }
+        let catalog = await catalogLoad
         guard self.composerCapabilityState.loadGeneration == loadGeneration,
               self.composerCapabilityOwnerID == ownerID,
               self.currentModelPatchTarget() == target
         else { return }
         self.composerCapabilityState.catalog = catalog
-        self.composerCapabilityState.phase = catalog.permissionMutationAvailable ||
+        self.composerCapabilityState.phase = catalog.structuredSendAvailable ||
+            catalog.permissionMutationAvailable ||
             catalog.skillsAvailable || catalog.connectorsAvailable || catalog.toolAccessAvailable
             ? .loaded
             : .failed
@@ -314,7 +361,9 @@ extension OpenClawChatViewModel {
             OpenClawChatSessionSettingsPatch(permissionMode: .some(mode)),
             permissionMode: .some(mode),
             toolOverrides: nil,
-            notice: String(localized: "New permissions apply to the next run."))
+            notice: self.hasActiveRunForFollowUp
+                ? String(localized: "New permissions apply to the next run.")
+                : nil)
     }
 
     func toggleComposerWebSearch() {
@@ -393,7 +442,9 @@ extension OpenClawChatViewModel {
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(nil)),
             permissionMode: nil,
             toolOverrides: .some(nil),
-            notice: String(localized: "Tool overrides will be cleared for the next run."))
+            notice: self.hasActiveRunForFollowUp
+                ? String(localized: "Tool overrides will be cleared for the next run.")
+                : String(localized: "Session tool overrides cleared."))
     }
 
     private func patchComposerToolOverrides(_ overrides: OpenClawChatSessionToolOverrides) {
@@ -402,7 +453,9 @@ extension OpenClawChatViewModel {
             OpenClawChatSessionSettingsPatch(toolOverrides: .some(normalized)),
             permissionMode: nil,
             toolOverrides: .some(normalized),
-            notice: String(localized: "Tool changes apply to the next run."))
+            notice: self.hasActiveRunForFollowUp
+                ? String(localized: "Tool changes apply to the next run.")
+                : nil)
     }
 
     private func performComposerCapabilityPatch(

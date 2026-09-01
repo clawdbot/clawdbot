@@ -1,6 +1,7 @@
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
+  CHAT_SEND_CONTEXT_CONTRACT: "chat-send-context-contract",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",

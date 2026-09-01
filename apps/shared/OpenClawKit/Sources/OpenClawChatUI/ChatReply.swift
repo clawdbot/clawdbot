@@ -3,12 +3,21 @@ import Foundation
 public struct OpenClawChatReplyTarget: Equatable, Sendable {
     public let selectionID: UUID
     public let messageID: UUID
+    public let transcriptMessageID: String?
     public let text: String
     public let senderLabel: String
 
-    public init(selectionID: UUID = UUID(), messageID: UUID, text: String, senderLabel: String) {
+    public init(
+        selectionID: UUID = UUID(),
+        messageID: UUID,
+        transcriptMessageID: String? = nil,
+        text: String,
+        senderLabel: String)
+    {
         self.selectionID = selectionID
         self.messageID = messageID
+        let transcriptID = transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.transcriptMessageID = transcriptID?.isEmpty == false ? transcriptID : nil
         self.text = text
         self.senderLabel = senderLabel
     }
@@ -72,11 +81,17 @@ extension OpenClawChatViewModel {
         self.replyTarget = nil
     }
 
-    func setReplyTarget(messageID: UUID, text: String, senderLabel: String) {
+    func setReplyTarget(
+        messageID: UUID,
+        transcriptMessageID: String? = nil,
+        text: String,
+        senderLabel: String)
+    {
         let text = ChatReplyQuote.targetText(text)
         guard !text.isEmpty else { return }
         self.replyTarget = OpenClawChatReplyTarget(
             messageID: messageID,
+            transcriptMessageID: transcriptMessageID,
             text: text,
             senderLabel: senderLabel.trimmingCharacters(in: .whitespacesAndNewlines))
     }

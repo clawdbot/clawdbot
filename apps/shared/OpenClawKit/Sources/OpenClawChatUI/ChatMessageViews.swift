@@ -928,26 +928,9 @@ struct ChatSpeechStatusChip: View {
 }
 
 /// Status footer for a user bubble backed by the durable offline outbox.
-@MainActor
-struct ChatOutboxStatusLabel: View {
-    let state: OpenClawChatOutboxMessageState
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: self.iconName)
-                .font(.system(size: 10, weight: .semibold))
-            Text(self.title)
-                .font(OpenClawChatTypography.caption)
-        }
-        .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            Text(self.accessibilityText)
-                .font(OpenClawChatTypography.caption))
-    }
-
-    private var title: LocalizedStringResource {
-        switch self.state {
+extension OpenClawChatOutboxMessageState {
+    var statusTitle: LocalizedStringResource {
+        switch self {
         case .queued:
             "Queued"
         case .sending:
@@ -956,9 +939,60 @@ struct ChatOutboxStatusLabel: View {
             "Confirming…"
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
             "Delivery unknown"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxChangedSessionError:
+            "Copy and resend"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxClientUpgradeRequiredError:
+            "Update required"
+        case let .failed(reason)
+            where reason == OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError ||
+            reason == OpenClawChatSQLiteTranscriptCache.outboxStructuredGatewayUpgradeRequiredError:
+            LocalizedStringResource("Update Gateway")
         case .failed:
             "Not sent"
         }
+    }
+
+    var statusAccessibilityText: LocalizedStringResource {
+        switch self {
+        case .queued:
+            "Queued, sends when reconnected"
+        case .sending:
+            "Sending"
+        case .confirming:
+            "Sent, waiting for chat history confirmation"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "Delivery unconfirmed, touch and hold to retry or delete"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxChangedSessionError:
+            "Session changed, touch and hold to copy this message and send it again"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxClientUpgradeRequiredError:
+            "Update OpenClaw, then touch and hold to copy this message and send it again"
+        case let .failed(reason)
+            where reason == OpenClawChatSQLiteTranscriptCache.outboxSettingsGatewayUpgradeRequiredError ||
+            reason == OpenClawChatSQLiteTranscriptCache.outboxStructuredGatewayUpgradeRequiredError:
+            LocalizedStringResource(
+                "Update OpenClaw on the Gateway host, then touch and hold to copy this message and send it again")
+        case .failed:
+            "Not sent, touch and hold to retry or delete"
+        }
+    }
+}
+
+@MainActor
+struct ChatOutboxStatusLabel: View {
+    let state: OpenClawChatOutboxMessageState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: self.iconName)
+                .font(.system(size: 10, weight: .semibold))
+            Text(self.state.statusTitle)
+                .font(OpenClawChatTypography.caption)
+        }
+        .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            Text(self.state.statusAccessibilityText)
+                .font(OpenClawChatTypography.caption))
     }
 
     private var iconName: String {
@@ -973,21 +1007,6 @@ struct ChatOutboxStatusLabel: View {
             "questionmark.circle"
         case .failed:
             "exclamationmark.circle"
-        }
-    }
-
-    private var accessibilityText: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued, sends when reconnected"
-        case .sending:
-            "Sending"
-        case .confirming:
-            "Sent, waiting for chat history confirmation"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unconfirmed, touch and hold to retry or delete"
-        case .failed:
-            "Not sent, touch and hold to retry or delete"
         }
     }
 }

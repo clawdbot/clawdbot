@@ -668,7 +668,7 @@ public struct OpenClawChatView: View {
         self.forkMessageButton(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
-            if outboxState.isFailed {
+            if outboxState.allowsRetry {
                 Button {
                     self.viewModel.retryOutboxMessage(message.id)
                 } label: {
@@ -1306,6 +1306,7 @@ extension OpenClawChatView {
             Button {
                 self.viewModel.setReplyTarget(
                     messageID: message.id,
+                    transcriptMessageID: message.transcriptMessageID,
                     text: text,
                     senderLabel: self.replySenderLabel(forRole: role))
             } label: {

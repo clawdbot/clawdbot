@@ -6,6 +6,10 @@ import OSLog
 
 struct IOSGatewayChatTransport: OpenClawChatTransport {
     static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ios.chat.transport")
+    var supportsStructuredSendContext: Bool {
+        true
+    }
+
     let gateway: GatewayNodeSession
     private let widgetGateway: GatewayNodeSession?
     let globalAgentId: String?
@@ -39,32 +43,49 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         guard let outboxGatewayID,
               let route = await gateway.currentRoute(ifGatewayID: outboxGatewayID)
         else { return .unavailable(reason: nil) }
-        guard let supportsRoutingContract = await gateway.supportsServerCapability(
+        async let routingContractCapability = self.gateway.supportsServerCapability(
             .chatSendRoutingContract,
             ifCurrentRoute: route)
+        async let sendContextCapability = self.gateway.supportsServerCapability(
+            .chatSendContextContract,
+            ifCurrentRoute: route)
+        async let settingsCASCapability = self.gateway.supportsServerCapability(
+            .sessionSettingsCAS,
+            ifCurrentRoute: route)
+        guard let supportsRoutingContract = await routingContractCapability,
+              let supportsSendContextContract = await sendContextCapability
         else { return .unavailable(reason: nil) }
+        let supportsSettingsCAS = await settingsCASCapability == true
         guard supportsRoutingContract else {
             return .unavailable(
                 reason: OpenClawChatTransportUpgradeMessage.routingContract,
                 allowsLiveSend: true)
         }
-        let supportsSettingsCAS = await gateway.supportsServerCapability(
-            .sessionSettingsCAS,
-            ifCurrentRoute: route) == true
         let transport = self
         guard let routingContract = try? await transport.sessionRoutingContract(ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: { key, agent, settings, text, thinking, id, attachments in
-                try await transport.sendMessage(
-                    sessionKey: key,
-                    agentID: agent,
+            sendTargetedContextMessage: { sessionKey, context, message, thinking, idempotencyKey, attachments in
+                guard !context.requiresStructuredDelivery || supportsSendContextContract else {
+                    throw OpenClawChatTransportSendError.notDispatched
+                }
+                return try await transport.sendMessage(
+                    sessionKey: sessionKey,
+                    agentID: context.agentID,
                     expectedSessionRoutingContract: routingContract,
-                    expectedSessionSettings: settings,
-                    message: text,
+                    expectedSessionSettings: context.expectedSessionSettings,
+                    message: supportsSendContextContract
+                        ? message
+                        : (context.unstructuredMessageFallback ?? message),
                     thinking: thinking,
-                    idempotencyKey: id,
+                    idempotencyKey: idempotencyKey,
                     attachments: attachments,
+                    sessionID: context.sessionID,
+                    queueMode: context.queueMode,
+                    replyToID: context.replyToID,
+                    expectedLeaf: context.expectedLeaf,
+                    supportsSendContextContract: supportsSendContextContract,
+                    supportsSessionSettingsCAS: supportsSettingsCAS,
                     ifCurrentRoute: route,
                     distinguishPreDispatchRouteChange: true)
             },
@@ -75,7 +96,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                     ifCurrentRoute: route)
             },
             sessionRoutingContract: routingContract,
-            supportsSessionSettingsCAS: supportsSettingsCAS))
+            supportsSessionSettingsCAS: supportsSettingsCAS,
+            supportsStructuredSendContext: supportsSendContextContract))
     }
 
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
@@ -395,7 +417,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         }
         let settingsRoute = expectedRoute ?? fallbackRoute
         let settingsSupport = if let settingsRoute {
-            await sessionSettingsSupport(ifCurrentRoute: settingsRoute)
+            await self.sessionSettingsSupport(ifCurrentRoute: settingsRoute)
         } else {
             (settingsContract: false, settingsCAS: false)
         }

@@ -35,7 +35,9 @@ func cacheMessage(
 func cacheSessionEntry(
     key: String,
     updatedAt: Double,
-    agentID: String? = nil) -> OpenClawChatSessionEntry
+    agentID: String? = nil,
+    permissionMode: OpenClawChatPermissionMode? = nil,
+    toolOverrides: OpenClawChatSessionToolOverrides? = nil) -> OpenClawChatSessionEntry
 {
     OpenClawChatSessionEntry(
         key: key,
@@ -57,7 +59,9 @@ func cacheSessionEntry(
         totalTokens: nil,
         modelProvider: nil,
         model: nil,
-        contextTokens: nil)
+        contextTokens: nil,
+        permissionMode: permissionMode,
+        toolOverrides: toolOverrides)
 }
 
 private func messageTexts(_ messages: [OpenClawChatMessage]) -> [String] {
@@ -260,10 +264,22 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         ]
 
         await store.storeTestTranscript(sessionKey: "main", messages: messages)
-        await store.storeSessions([cacheSessionEntry(key: "main", updatedAt: 2000)])
+        let overrides = OpenClawChatSessionToolOverrides(
+            webSearch: false,
+            skills: ["release": false],
+            mcpServers: ["github": true],
+            mcpToolsDeny: ["github": ["delete_issue"]])
+        await store.storeSessions([cacheSessionEntry(
+            key: "main",
+            updatedAt: 2000,
+            permissionMode: .workspace,
+            toolOverrides: overrides)])
 
         #expect(await messageTexts(store.loadTranscript(sessionKey: "main")) == ["hello", "hi"])
-        #expect(await store.loadSessions().map(\.key) == ["main"])
+        let sessions = await store.loadSessions()
+        #expect(sessions.map(\.key) == ["main"])
+        #expect(sessions.first?.permissionMode == .workspace)
+        #expect(sessions.first?.toolOverrides == overrides)
         let messageRows = try await databases.cacheQueue.read { db in
             try Row.fetchAll(db, sql: """
             SELECT position, timestamp_ms, idempotency_key, payload_json
@@ -847,6 +863,9 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
             "client-state-outbox-attachment-rekey-v6",
             "client-state-outbox-settings-expectation-v7",
             "client-state-outbox-settings-claim-v8",
+            "client-state-outbox-send-context-v9",
+            "client-state-outbox-structured-claim-v10",
+            "client-state-outbox-terminal-claim-v11",
         ])
     }
 }
@@ -1123,9 +1142,12 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             deliverySessionKey: "agent:main:main",
             routingContract: "per-sender|main|main",
             agentID: "main",
+            sendContext: OpenClawChatSendContext(
+                agentID: "main",
+                expectedSessionRoutingContract: "per-sender|main|main",
+                expectedSessionSettings: expectation),
             text: "safe replay",
             thinking: "off",
-            expectedSessionSettings: expectation,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
@@ -1133,7 +1155,8 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         try databases.close()
 
         let reopened = try OpenClawClientDatabases(directoryURL: directory)
-        #expect(await reopened.store(gatewayID: "gw-a").loadCommands().first?.expectedSessionSettings == expectation)
+        #expect(await reopened.store(gatewayID: "gw-a").loadCommands().first?.sendContext?.expectedSessionSettings ==
+            expectation)
     }
 
     @Test func `legacy null settings row cannot claim or retry without current client authorization`() async throws {
@@ -1158,7 +1181,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         let claimedCommand = try #require(await claimed.store(gatewayID: "gw-a").loadCommands().first)
         #expect(claimedCommand.status == .failed)
         #expect(claimedCommand.lastError == OpenClawChatSQLiteTranscriptCache.outboxSettingsUpgradeRequiredError)
-        #expect(claimedCommand.expectedSessionSettings == nil)
+        #expect(claimedCommand.sendContext?.expectedSessionSettings == nil)
         try claimed.close()
 
         try withRawDatabase(at: stateURL) { raw in
@@ -1178,7 +1201,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         let retried = try OpenClawClientDatabases(directoryURL: directory)
         let retriedCommand = try #require(await retried.store(gatewayID: "gw-a").loadCommands().first)
         #expect(retriedCommand.status == .failed)
-        #expect(retriedCommand.expectedSessionSettings == nil)
+        #expect(retriedCommand.sendContext?.expectedSessionSettings == nil)
     }
 
     @Test func `pre v7 upgrade reopens and fences a settings bound retry`() async throws {
@@ -1210,7 +1233,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             $0.id == "pre-v7-preserved"
         }))
         #expect(preserved.text == "preserve across upgrade")
-        #expect(preserved.expectedSessionSettings == nil)
+        #expect(preserved.sendContext?.expectedSessionSettings == nil)
         let expectation = OpenClawChatSessionSettingsExpectation(
             permissionMode: .readOnly,
             toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false))
@@ -1220,9 +1243,12 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             deliverySessionKey: "agent:main:main",
             routingContract: "per-sender|main|main",
             agentID: "main",
+            sendContext: OpenClawChatSendContext(
+                agentID: "main",
+                expectedSessionRoutingContract: "per-sender|main|main",
+                expectedSessionSettings: expectation),
             text: "preserve authority",
             thinking: "off",
-            expectedSessionSettings: expectation,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
@@ -1244,7 +1270,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         }))
         #expect(failed.status == .failed)
         #expect(failed.lastError == OpenClawChatSQLiteTranscriptCache.outboxSettingsUpgradeRequiredError)
-        #expect(failed.expectedSessionSettings == expectation)
+        #expect(failed.sendContext?.expectedSessionSettings == expectation)
         #expect(await reopenedStore.markCommandRetriedIfPresent(
             id: failed.id,
             expectation: retryExpectation(failed),
@@ -1260,7 +1286,7 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
             $0.id == "legacy-writer-settings"
         }))
         #expect(retriedCommand.status == .queued)
-        #expect(retriedCommand.expectedSessionSettings == expectation)
+        #expect(retriedCommand.sendContext?.expectedSessionSettings == expectation)
     }
 
     @Test func `nil agent rows use the canonical empty scope owner`() async throws {
@@ -1477,6 +1503,193 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         #expect(try await databases.stateQueue.read { db in
             try Data.fetchOne(db, sql: "SELECT payload FROM outbox_attachments WHERE command_id = 'later'")
         } == attachment.data)
+    }
+
+    @Test func `structured send context survives a cold database reopen`() async throws {
+        let context = OpenClawChatSendContext(
+            agentID: "main",
+            expectedSessionRoutingContract: "per-sender|main|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: OpenClawChatSessionToolOverrides(
+                    webSearch: false,
+                    mcpToolsDeny: ["github": ["delete_issue"]])),
+            sessionID: "session-main",
+            queueMode: .followup,
+            replyToID: "message-42",
+            expectedLeaf: .entry("leaf-7"),
+            unstructuredMessageFallback: "> quoted\n\ncontinue",
+            requiresStructuredDelivery: true)
+        let command = OpenClawChatOutboxCommand(
+            id: "structured",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            structuredMessageText: "continue",
+            sendContext: context,
+            text: "> quoted\n\ncontinue",
+            thinking: "medium",
+            createdAt: 1,
+            status: .failed,
+            retryCount: 0,
+            lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
+        #expect(await store.enqueueCommand(command))
+        try databases.close()
+
+        let stateURL = directory.appendingPathComponent(OpenClawClientDatabases.clientStateFilename)
+        let priorQueue = try DatabaseQueue(path: stateURL.path)
+        var priorMigrator = DatabaseMigrator()
+        for identifier in [
+            "client-state-v1",
+            "client-state-branch-ownership-v2",
+            "client-state-branch-revision-v3",
+            "client-state-agent-id-v4",
+            "client-state-outbox-attempt-scope-v5",
+            "client-state-outbox-attachment-rekey-v6",
+        ] {
+            priorMigrator.registerMigration(identifier) { _ in }
+        }
+        let priorReaderMigrator = priorMigrator
+        try priorReaderMigrator.migrate(priorQueue)
+        #expect(try await priorQueue.read { db in
+            try priorReaderMigrator.hasBeenSuperseded(db)
+        })
+        #expect(try await priorQueue.read { db in
+            try String.fetchOne(db, sql: "SELECT text FROM outbox_commands WHERE client_uuid = 'structured'")
+        } == "> quoted\n\ncontinue")
+        try priorQueue.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        let loaded = try #require(await reopened.store(gatewayID: "gw-a").loadCommands().first)
+
+        #expect(loaded.structuredMessageText == "continue")
+        #expect(loaded.sendContext == context)
+        #expect(loaded.text == "> quoted\n\ncontinue")
+        #expect(loaded.status == .failed)
+    }
+
+    @Test func `structured retry preserves its owner and rejects an old unstructured update`() async throws {
+        let context = OpenClawChatSendContext(
+            agentID: "main",
+            expectedSessionRoutingContract: "per-sender|main|main",
+            sessionID: "session-main",
+            queueMode: .steer,
+            expectedLeaf: .entry("leaf-main"),
+            requiresStructuredDelivery: true)
+        let command = OpenClawChatOutboxCommand(
+            id: "guarded",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            structuredMessageText: "continue",
+            sendContext: context,
+            text: "continue",
+            thinking: "off",
+            createdAt: 1,
+            status: .failed,
+            retryCount: 0,
+            lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)
+        #expect(await store.enqueueCommand(command))
+        let expectation = retryExpectation(command)
+
+        do {
+            try await databases.stateQueue.write { db in
+                try db.execute(
+                    sql: "UPDATE outbox_commands SET status = 'queued' WHERE client_uuid = ?",
+                    arguments: [command.id])
+            }
+            Issue.record("legacy retry unexpectedly bypassed the structured context fence")
+        } catch {
+            #expect(error.localizedDescription.contains("structured outbox retry"))
+        }
+
+        let reviewedSettings = OpenClawChatSessionSettingsExpectation(permissionMode: nil, toolOverrides: nil)
+        #expect(await store.markCommandRetriedIfPresent(
+            id: command.id,
+            expectation: expectation,
+            agentID: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            expectedSessionSettings: reviewedSettings,
+            replacementID: nil) == .updated)
+        let retried = try #require(await store.loadCommands().first)
+        #expect(retried.status == .queued)
+        #expect(retried.sendContext == context.withExpectedSessionSettings(reviewedSettings))
+    }
+
+    @Test func `older client claim parks structured row for a current-client reopen`() async throws {
+        let context = OpenClawChatSendContext(
+            agentID: "main",
+            expectedSessionRoutingContract: "per-sender|main|main",
+            sessionID: "session-main",
+            queueMode: .steer,
+            expectedLeaf: .entry("leaf-main"),
+            requiresStructuredDelivery: true)
+        #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+            id: "future-claim",
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            structuredMessageText: "continue",
+            sendContext: context,
+            text: "continue",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)))
+        try databases.close()
+
+        let stateURL = directory.appendingPathComponent(OpenClawClientDatabases.clientStateFilename)
+        let priorQueue = try DatabaseQueue(path: stateURL.path)
+        var priorMigrator = DatabaseMigrator()
+        for identifier in [
+            "client-state-v1",
+            "client-state-branch-ownership-v2",
+            "client-state-branch-revision-v3",
+            "client-state-agent-id-v4",
+            "client-state-outbox-attempt-scope-v5",
+            "client-state-outbox-attachment-rekey-v6",
+            "client-state-outbox-send-context-v7",
+        ] {
+            priorMigrator.registerMigration(identifier) { _ in }
+        }
+        let priorReaderMigrator = priorMigrator
+        try priorReaderMigrator.migrate(priorQueue)
+        #expect(try await priorQueue.read { db in
+            try priorReaderMigrator.hasBeenSuperseded(db)
+        })
+        #expect(try await priorQueue.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT text FROM outbox_commands WHERE client_uuid = 'future-claim'")
+        } == "continue")
+        try await priorQueue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox_commands SET status = 'sending' WHERE client_uuid = 'future-claim'")
+        }
+        let priorState = try await priorQueue.read { db -> (String?, String?, String?) in
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT status, last_error, text FROM outbox_commands WHERE client_uuid = 'future-claim'")
+            return (row?["status"], row?["last_error"], row?["text"])
+        }
+        #expect(priorState.0 == "failed")
+        #expect(priorState.1 == "client_upgrade_required")
+        #expect(priorState.2 == "continue")
+        try priorQueue.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        let reopenedStore = reopened.store(gatewayID: "gw-a")
+        let parked = try #require(await reopenedStore.loadCommands().first)
+        #expect(parked.id == "future-claim")
+        #expect(parked.sendContext == context)
+        #expect(parked.status == .failed)
+        #expect(parked.lastError == "client_upgrade_required")
+        #expect(await reopenedStore.claimNextCommand() == nil)
     }
 
     @Test func `claims are insertion FIFO when timestamps tie and exclusive`() async throws {

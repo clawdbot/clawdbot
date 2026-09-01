@@ -438,6 +438,9 @@ extension OpenClawClientDatabases {
         var migrator = DatabaseMigrator()
         self.registerClientStateMigrationsV1ThroughV5(&migrator)
         self.registerClientStateMigrationsV6ThroughV8(&migrator)
+        self.registerOutboxSendContextMigration(&migrator)
+        self.registerOutboxStructuredClaimMigration(&migrator)
+        self.registerOutboxTerminalClaimMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }

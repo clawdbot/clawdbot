@@ -16,6 +16,36 @@ private actor SettingsPatchCounter {
 }
 
 struct ChatViewModelOutboxSettingsTests {
+    @Test func `route lease rejects settings-bound send when CAS is unavailable`() async throws {
+        let sendCalls = SettingsPatchCounter()
+        let lease = OpenClawChatTransportRouteLease(
+            sendTargetedContextMessage: { _, _, _, _, idempotencyKey, _ in
+                await sendCalls.increment()
+                return OpenClawChatSendResponse(runId: idempotencyKey, status: "started")
+            },
+            requestTargetedHistory: { _, _ in
+                throw OpenClawChatTransportSendError.notDispatched
+            },
+            supportsSessionSettingsCAS: false)
+
+        do {
+            _ = try await lease.sendMessage(
+                sessionKey: "main",
+                context: OpenClawChatSendContext(expectedSessionSettings:
+                    OpenClawChatSessionSettingsExpectation(
+                        permissionMode: .guarded,
+                        toolOverrides: nil)),
+                message: "use captured authority",
+                thinking: "off",
+                idempotencyKey: "settings-bound",
+                attachments: [])
+            Issue.record("Expected the settings-bound send to stop before dispatch")
+        } catch is OpenClawChatTransportSendError {
+            // Expected: this lease cannot preserve the captured authority.
+        }
+        #expect(await sendCalls.current() == 0)
+    }
+
     @Test func `background replay uses its command owned session settings`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -139,6 +169,7 @@ struct ChatViewModelOutboxSettingsTests {
             case .confirmed, .missing: commands.isEmpty
             case .superseded: commands.first?.status == .sending && commands.first?.attemptVersion == command
                 .attemptVersion + 1
+            case .nonRetryable: commands.first?.status == .sending
             }
             return await MainActor.run {
                 storedResult && !vm.isFlushingOutbox && (terminalResult != .unavailable || !vm.healthOK)

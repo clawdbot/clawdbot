@@ -2,8 +2,28 @@ import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessi
 import type { loadSessionEntry } from "../session-utils.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 
+type LoadedSession = Pick<
+  ReturnType<typeof loadSessionEntry>,
+  "canonicalKey" | "entry" | "storePath"
+>;
+
+export function assertRequestedSessionActive(
+  commit: boolean,
+  session: LoadedSession,
+  requestedSessionId: string | undefined,
+) {
+  if (
+    commit &&
+    requestedSessionId !== undefined &&
+    session.entry?.sessionId !== undefined &&
+    requestedSessionId !== session.entry.sessionId
+  ) {
+    throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
+  }
+}
+
 export function assertExpectedLeafActive(
-  session: Pick<ReturnType<typeof loadSessionEntry>, "canonicalKey" | "entry" | "storePath">,
+  session: LoadedSession,
   agentId: string,
   expectedLeafEntryId: string | null,
   requestedSessionId: string | undefined,

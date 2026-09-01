@@ -169,4 +169,68 @@ extension OpenClawClientDatabases {
             """)
         }
     }
+
+    static func registerOutboxSendContextMigration(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("client-state-outbox-send-context-v9") { db in
+            try db.execute(sql: """
+            ALTER TABLE outbox_commands ADD COLUMN structured_message_text TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_session_id TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_queue_mode TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_reply_to_id TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_expected_leaf_state TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_expected_leaf_entry_id TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_unstructured_message_fallback TEXT;
+            ALTER TABLE outbox_commands ADD COLUMN send_requires_structured_delivery INTEGER;
+            ALTER TABLE outbox_commands ADD COLUMN send_retry_authorization INTEGER;
+            CREATE TRIGGER outbox_structured_retry_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.send_requires_structured_delivery = 1
+                AND OLD.status = 'failed' AND NEW.status = 'queued'
+                AND COALESCE(NEW.send_retry_authorization, 0) =
+                    COALESCE(OLD.send_retry_authorization, 0)
+            BEGIN
+                SELECT RAISE(ABORT, 'structured outbox retry requires context-aware client');
+            END;
+            """)
+        }
+    }
+
+    static func registerOutboxStructuredClaimMigration(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("client-state-outbox-structured-claim-v10") { db in
+            try db.execute(sql: """
+            CREATE TRIGGER outbox_structured_claim_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.send_requires_structured_delivery = 1
+                AND OLD.status = 'queued' AND NEW.status = 'sending'
+                AND COALESCE(NEW.send_retry_authorization, 0) =
+                    COALESCE(OLD.send_retry_authorization, 0)
+            BEGIN
+                SELECT RAISE(ABORT, 'structured outbox claim requires context-aware client');
+            END;
+            """)
+        }
+    }
+
+    static func registerOutboxTerminalClaimMigration(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("client-state-outbox-terminal-claim-v11") { db in
+            // A v7 claimant treats an aborted UPDATE as an invisible empty queue.
+            // Park first, then IGNORE the outer claim so its changesCount stays zero.
+            try db.execute(sql: """
+            DROP TRIGGER outbox_structured_claim_guard;
+            CREATE TRIGGER outbox_structured_claim_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.send_requires_structured_delivery = 1
+                AND OLD.status = 'queued' AND NEW.status = 'sending'
+                AND COALESCE(NEW.send_retry_authorization, 0) =
+                    COALESCE(OLD.send_retry_authorization, 0)
+            BEGIN
+                UPDATE outbox_commands
+                SET status = 'failed', last_error = 'client_upgrade_required'
+                WHERE gateway_id = OLD.gateway_id AND client_uuid = OLD.client_uuid
+                    AND status = 'queued';
+                SELECT RAISE(IGNORE);
+            END;
+            """)
+        }
+    }
 }

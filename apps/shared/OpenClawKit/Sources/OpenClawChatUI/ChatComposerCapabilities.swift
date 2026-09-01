@@ -144,6 +144,7 @@ public struct OpenClawChatComposerConnector: Identifiable, Equatable, Sendable {
 }
 
 public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
+    public let structuredSendAvailable: Bool
     public let sessionSettingsAvailable: Bool
     public let modelMutationAvailable: Bool
     public let effortMutationAvailable: Bool
@@ -162,6 +163,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
     public let loadFailureMessage: String?
 
     public init(
+        structuredSendAvailable: Bool = false,
         sessionSettingsAvailable: Bool = false,
         modelMutationAvailable: Bool = false,
         effortMutationAvailable: Bool = false,
@@ -179,6 +181,7 @@ public struct OpenClawChatComposerCapabilityCatalog: Equatable, Sendable {
         canSelectFullPermission: Bool = false,
         loadFailureMessage: String? = nil)
     {
+        self.structuredSendAvailable = structuredSendAvailable
         self.sessionSettingsAvailable = sessionSettingsAvailable
         self.modelMutationAvailable = modelMutationAvailable
         self.effortMutationAvailable = effortMutationAvailable

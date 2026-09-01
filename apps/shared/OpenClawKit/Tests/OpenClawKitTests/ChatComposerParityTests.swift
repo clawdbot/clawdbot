@@ -6,9 +6,14 @@ import UniformTypeIdentifiers
 private final class ComposerParityTransport: @unchecked Sendable, OpenClawChatTransport {
     private let lock = NSLock()
     private var sentMessagesStorage: [String] = []
+    private var sentContextsStorage: [OpenClawChatSendContext] = []
 
     var sentMessages: [String] {
         self.lock.withLock { self.sentMessagesStorage }
+    }
+
+    var sentContexts: [OpenClawChatSendContext] {
+        self.lock.withLock { self.sentContextsStorage }
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -28,6 +33,23 @@ private final class ComposerParityTransport: @unchecked Sendable, OpenClawChatTr
     {
         self.lock.withLock { self.sentMessagesStorage.append(message) }
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "started")
+    }
+
+    func sendMessage(
+        sessionKey: String,
+        context: OpenClawChatSendContext,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        self.lock.withLock { self.sentContextsStorage.append(context) }
+        return try await self.sendMessage(
+            sessionKey: sessionKey,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -98,6 +120,28 @@ struct ChatComposerStateTests {
             selectionID: OpenClawChatViewModel.defaultModelSelectionID,
             currentSelectionID: "claude-opus-4-1",
             choices: choices))
+    }
+
+    @Test func `capability notice dismiss keeps a 44 point touch target`() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OpenClawChatUI/ChatComposer+Capabilities.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let dismissStart = try #require(source.range(
+            of: "self.viewModel.dismissComposerCapabilityNotice()")?.lowerBound)
+        let dismissEnd = try #require(source.range(
+            of: ".accessibilityIdentifier(\"chat-composer-dismiss-capability-notice\")",
+            range: dismissStart..<source.endIndex)?.upperBound)
+        let dismissSource = source[dismissStart..<dismissEnd].filter { !$0.isWhitespace }
+
+        #expect(CleanChatComposerMetrics.controlTouchSize == 44)
+        #expect(dismissSource.contains(
+            ".frame(width:CleanChatComposerMetrics.controlTouchSize," +
+                "height:CleanChatComposerMetrics.controlTouchSize)"))
+        #expect(dismissSource.hasSuffix(
+            ".accessibilityIdentifier(\"chat-composer-dismiss-capability-notice\")"))
     }
 
     @Test func `file picker allows images and movie containers only`() {
@@ -228,6 +272,26 @@ struct ChatComposerStateTests {
         #expect(vm.input.isEmpty)
     }
 
+    @Test func `stable reply sends transcript identity without embedding quote`() async throws {
+        let transport = ComposerParityTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        vm.healthOK = true
+        vm.input = "continue"
+        vm.setReplyTarget(
+            messageID: UUID(),
+            transcriptMessageID: "message-42",
+            text: "quoted body",
+            senderLabel: "Assistant")
+
+        vm.send()
+        try await waitUntil("structured reply accepted") { transport.sentMessages.count == 1 }
+
+        #expect(transport.sentMessages == ["continue"])
+        #expect(transport.sentContexts.first?.replyToID == "message-42")
+        #expect(transport.sentContexts.first?.unstructuredMessageFallback ==
+            "> **Assistant:** quoted body\n\ncontinue")
+    }
+
     @Test func `attachment staging blocks UI and programmatic sends`() async throws {
         let transport = ComposerParityTransport()
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
@@ -244,6 +308,21 @@ struct ChatComposerStateTests {
         #expect(vm.canSend)
         vm.send()
         try await waitUntil("post-staging send accepted") { transport.sentMessages.count == 1 }
+    }
+
+    @Test func `transport without structured context keeps active follow ups blocked`() async {
+        let transport = ComposerParityTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        vm.healthOK = true
+        vm.pendingRuns.insert("active-run")
+        vm.input = "follow up"
+
+        #expect(!vm.canSend)
+        vm.send()
+        await Task.yield()
+
+        #expect(transport.sentMessages.isEmpty)
+        #expect(vm.input == "follow up")
     }
 
     @Test func `slash send ignores and preserves reply target`() async throws {

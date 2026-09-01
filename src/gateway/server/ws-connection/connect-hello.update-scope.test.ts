@@ -197,6 +197,9 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
     expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.CHAT_SEND_CONTEXT_CONTRACT,
+    );
+    expect(helloPayload(context)?.features.capabilities).toContain(
       GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
     );
     expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");

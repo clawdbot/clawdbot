@@ -4,6 +4,22 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
+extension OpenClawChatViewModel {
+    fileprivate func waitForPendingSessionSettings(
+        in sessionKey: String,
+        canonicalSessionKey: String? = nil,
+        agentID: String? = nil,
+        sessionRoutingContract: String? = nil) async
+    {
+        let target = self.sessionSettingsPatchTarget(
+            in: sessionKey,
+            canonicalSessionKey: canonicalSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: sessionRoutingContract)
+        await self.waitForPendingSessionSettings(for: target)
+    }
+}
+
 private func chatTextMessage(
     role: String,
     text: String,
@@ -65,22 +81,6 @@ extension [OpenClawChatMessage] {
     }
 }
 
-extension OpenClawChatViewModel {
-    fileprivate func waitForPendingSessionSettings(
-        in sessionKey: String,
-        canonicalSessionKey: String? = nil,
-        agentID: String? = nil,
-        sessionRoutingContract: String? = nil) async
-    {
-        let target = self.sessionSettingsPatchTarget(
-            in: sessionKey,
-            canonicalSessionKey: canonicalSessionKey,
-            agentID: agentID,
-            sessionRoutingContract: sessionRoutingContract)
-        await self.waitForPendingSessionSettings(for: target)
-    }
-}
-
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
@@ -88,6 +88,8 @@ private func historyPayload(
     supportsActiveRunState: Bool = true,
     hasActiveRun: Bool? = nil,
     activeRunIds: [String]? = nil,
+    activeLeafEntryId: String? = nil,
+    effectiveQueueMode: OpenClawChatQueueMode? = nil,
     inFlightRun: OpenClawChatInFlightRun? = nil) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
@@ -98,7 +100,9 @@ private func historyPayload(
         sessionInfo: supportsActiveRunState
             ? OpenClawChatSessionInfo(
                 hasActiveRun: hasActiveRun ?? (inFlightRun != nil),
-                activeRunIds: activeRunIds ?? inFlightRun.map { [$0.runId] })
+                activeRunIds: activeRunIds ?? inFlightRun.map { [$0.runId] },
+                activeLeafEntryId: activeLeafEntryId,
+                effectiveQueueMode: effectiveQueueMode)
             : nil,
         inFlightRun: inFlightRun)
 }
@@ -387,6 +391,7 @@ private func makeViewModel(
     sessionSettingsPatchHook: (
         @Sendable (OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?)? = nil,
     composerCapabilityCatalog: OpenClawChatComposerCapabilityCatalog? = nil,
+    structuredSendAvailability: Bool? = nil,
     composerCapabilityCatalogHook: (
         @Sendable (String, String?) async -> OpenClawChatComposerCapabilityCatalog)? = nil,
     renameSessionHook: (@Sendable (String, String) async throws -> Void)? = nil,
@@ -443,6 +448,7 @@ private func makeViewModel(
         setSessionThinkingHook: setSessionThinkingHook,
         sessionSettingsPatchHook: sessionSettingsPatchHook,
         composerCapabilityCatalog: composerCapabilityCatalog,
+        structuredSendAvailability: structuredSendAvailability,
         composerCapabilityCatalogHook: composerCapabilityCatalogHook,
         renameSessionHook: renameSessionHook,
         setSessionPinnedHook: setSessionPinnedHook,
@@ -743,7 +749,7 @@ private actor TestChatTransportState {
     var sentSessionKeys: [String] = []
     var sentAgentIDs: [String?] = []
     var sentRoutingContracts: [String?] = []
-    var sentSettingsExpectations: [OpenClawChatSessionSettingsExpectation?] = []
+    var sentContexts: [OpenClawChatSendContext] = []
     var sentMessages: [String] = []
     var sentRunIds: [String] = []
     var commandSessionKeys: [String] = []
@@ -764,6 +770,10 @@ private actor TestChatTransportState {
 }
 
 private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
+    var supportsStructuredSendContext: Bool {
+        true
+    }
+
     private let state = TestChatTransportState()
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
@@ -785,6 +795,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let sessionSettingsPatchHook:
         (@Sendable (OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?)?
     private let composerCapabilityCatalog: OpenClawChatComposerCapabilityCatalog?
+    private let structuredSendAvailability: Bool?
     private let composerCapabilityCatalogHook:
         (@Sendable (String, String?) async -> OpenClawChatComposerCapabilityCatalog)?
     private let renameSessionHook: (@Sendable (String, String) async throws -> Void)?
@@ -830,6 +841,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sessionSettingsPatchHook: (
             @Sendable (OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?)? = nil,
         composerCapabilityCatalog: OpenClawChatComposerCapabilityCatalog? = nil,
+        structuredSendAvailability: Bool? = nil,
         composerCapabilityCatalogHook: (
             @Sendable (String, String?) async -> OpenClawChatComposerCapabilityCatalog)? = nil,
         renameSessionHook: (@Sendable (String, String) async throws -> Void)? = nil,
@@ -868,6 +880,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.setSessionThinkingHook = setSessionThinkingHook
         self.sessionSettingsPatchHook = sessionSettingsPatchHook
         self.composerCapabilityCatalog = composerCapabilityCatalog
+        self.structuredSendAvailability = structuredSendAvailability
         self.composerCapabilityCatalogHook = composerCapabilityCatalogHook
         self.renameSessionHook = renameSessionHook
         self.setSessionPinnedHook = setSessionPinnedHook
@@ -950,6 +963,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.composerCapabilityCatalog != nil || self.composerCapabilityCatalogHook != nil
     }
 
+    func loadStructuredSendContextAvailability(
+        sessionKey _: String,
+        agentID _: String?) async -> Bool?
+    {
+        self.structuredSendAvailability
+    }
+
     func loadComposerCapabilityCatalog(
         sessionKey: String,
         agentID: String?) async -> OpenClawChatComposerCapabilityCatalog
@@ -962,19 +982,17 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func sendMessage(
         sessionKey: String,
-        agentID: String?,
-        expectedSessionRoutingContract: String?,
+        context: OpenClawChatSendContext,
         message: String,
         thinking: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await self.sendMessage(
+        await self.state.sentContextsAppend(context)
+        return try await self.sendMessage(
             sessionKey: sessionKey,
-            target: OpenClawChatSendTarget(
-                agentID: agentID,
-                expectedSessionRoutingContract: expectedSessionRoutingContract,
-                expectedSessionSettings: nil),
+            agentID: context.agentID,
+            expectedSessionRoutingContract: context.expectedSessionRoutingContract,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -983,15 +1001,15 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func sendMessage(
         sessionKey: String,
-        target: OpenClawChatSendTarget,
+        agentID: String?,
+        expectedSessionRoutingContract: String?,
         message: String,
         thinking: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        await self.state.sentAgentIDsAppend(target.agentID)
-        await self.state.sentRoutingContractsAppend(target.expectedSessionRoutingContract)
-        await self.state.sentSettingsExpectationsAppend(target.expectedSessionSettings)
+        await self.state.sentAgentIDsAppend(agentID)
+        await self.state.sentRoutingContractsAppend(expectedSessionRoutingContract)
         return try await self.sendMessage(
             sessionKey: sessionKey,
             message: message,
@@ -1295,8 +1313,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.sentRoutingContracts
     }
 
-    func sentSettingsExpectations() async -> [OpenClawChatSessionSettingsExpectation?] {
-        await self.state.sentSettingsExpectations
+    func sentContexts() async -> [OpenClawChatSendContext] {
+        await self.state.sentContexts
     }
 
     func commandSessionKeys() async -> [String] {
@@ -1512,8 +1530,8 @@ extension TestChatTransportState {
         self.sentRoutingContracts.append(v)
     }
 
-    fileprivate func sentSettingsExpectationsAppend(_ value: OpenClawChatSessionSettingsExpectation?) {
-        self.sentSettingsExpectations.append(value)
+    fileprivate func sentContextsAppend(_ v: OpenClawChatSendContext) {
+        self.sentContexts.append(v)
     }
 
     fileprivate func sentMessagesAppend(_ v: String) {
@@ -3939,6 +3957,23 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test func `history snapshot preserves every advertised pending run`() async {
+        let payload = historyPayload(
+            hasActiveRun: true,
+            activeRunIds: ["run-primary", "run-secondary"],
+            inFlightRun: OpenClawChatInFlightRun(runId: "run-primary", text: "working"))
+        let (_, vm) = await makeViewModel(historyResponses: [])
+
+        let pending = await MainActor.run { () -> Set<String> in
+            vm.pendingRuns = ["run-secondary"]
+            let request = vm.beginHistoryRequest()
+            vm.applyInFlightRunSnapshot(payload, for: request)
+            return vm.pendingRuns
+        }
+
+        #expect(pending == ["run-primary", "run-secondary"])
+    }
+
     @Test func `older history cannot replace newer run snapshot`() async throws {
         let olderGate = AsyncGate()
         let historyCalls = AsyncCounter()
@@ -5135,6 +5170,136 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
         #expect(await MainActor.run { vm.pendingToolCalls.count } == 1)
         #expect(await MainActor.run { vm.errorText } == nil)
+    }
+
+    @Test func `pending run accepts a steer follow up with session and leaf guards`() async throws {
+        let sessionId = "sess-main"
+        let sendCount = AsyncCounter()
+        let secondSendGate = AsyncGate()
+        let history = historyPayload(
+            sessionId: sessionId,
+            messages: [],
+            activeLeafEntryId: "leaf-main",
+            effectiveQueueMode: .steer)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            historyResponseHook: { _, _, sentRunIDs in
+                let activeRunID = sentRunIDs.first
+                let messages: [AnyCodable] = sentRunIDs.count >= 2
+                    ? [chatTextMessage(role: "assistant", text: "follow-up accepted", timestamp: 9000)]
+                    : []
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: messages,
+                    hasActiveRun: activeRunID != nil,
+                    activeRunIds: activeRunID.map { [$0] },
+                    activeLeafEntryId: "leaf-main",
+                    effectiveQueueMode: .steer)
+            },
+            sendMessageHook: { runID in
+                if await sendCount.increment() == 2 {
+                    await secondSendGate.wait()
+                    return OpenClawChatSendResponse(runId: runID, status: "ok")
+                }
+                return OpenClawChatSendResponse(runId: runID, status: "pending")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "first")
+        try await waitUntil("first send becomes pending") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        let firstRunIds = await transport.sentRunIds()
+        #expect(firstRunIds.count == 1)
+        let firstRunID = try #require(firstRunIds.first)
+        emitAssistantText(transport: transport, runId: firstRunID, text: "Still working")
+        emitToolStart(transport: transport, runId: firstRunID)
+        try await waitUntil("first run stream is visible") {
+            await MainActor.run {
+                vm.streamingAssistantText == "Still working" && vm.pendingToolCalls.count == 1
+            }
+        }
+
+        await MainActor.run {
+            vm.input = "second"
+            #expect(vm.canSend)
+            vm.send()
+        }
+        try await waitUntil("second send reaches transport") {
+            await transport.sentRunIds().count == 2
+        }
+        #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
+        #expect(await MainActor.run { vm.pendingToolCalls.count } == 1)
+        await secondSendGate.open()
+        try await waitUntil("second send settles") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+
+        #expect(await transport.sentRunIds().count == 2)
+        let context = try #require(await transport.sentContexts().last)
+        #expect(context.sessionID == sessionId)
+        #expect(context.queueMode == .steer)
+        #expect(context.expectedLeaf == .entry("leaf-main"))
+        #expect(context.requiresStructuredDelivery)
+        #expect(await MainActor.run { vm.input.isEmpty })
+
+        _ = await vm.refreshHistoryAfterRun()
+        #expect(await MainActor.run { vm.pendingRunCount } == 1)
+        #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
+        #expect(await MainActor.run { vm.pendingToolCalls.count } == 1)
+
+        let secondRunID = try #require(await transport.sentRunIds().last)
+        transport.emit(.chat(OpenClawChatEventPayload(
+            runId: secondRunID,
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
+        try await waitUntil("follow-up operation settles") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+        #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
+        #expect(await MainActor.run { vm.pendingToolCalls.count } == 1)
+    }
+
+    @Test func `active response does not advertise an attachment draft as sendable`() async throws {
+        let activeHistory = historyPayload(
+            sessionId: "sess-main",
+            hasActiveRun: true,
+            activeRunIds: ["run-active"],
+            effectiveQueueMode: .steer)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [activeHistory],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    hasActiveRun: true,
+                    activeRunIds: ["run-active"]),
+            ])])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        let attachmentID = await MainActor.run { () -> UUID in
+            let attachment = OpenClawPendingAttachment(
+                url: nil,
+                data: Data("attachment".utf8),
+                fileName: "attachment.txt",
+                mimeType: "text/plain",
+                preview: nil)
+            vm.input = "follow up with file"
+            vm.attachments = [attachment]
+            return attachment.id
+        }
+
+        #expect(await MainActor.run { !vm.canSend })
+        await MainActor.run { vm.send() }
+        try await waitUntil("active attachment rejection is visible") {
+            await MainActor.run {
+                vm.errorText == "Send attachments after the active response finishes."
+            }
+        }
+        #expect(await transport.sentContexts().isEmpty)
+        #expect(await MainActor.run { vm.attachments.map(\.id) == [attachmentID] })
     }
 
     @Test func `terminal ok send ack clears pending run without waiting for completion`() async throws {
@@ -7411,8 +7576,6 @@ struct ChatViewModelTests {
         #expect(patches.allSatisfy { $0.expectedSessionID == "sess-main" })
         #expect((patches[0].permissionMode ?? nil) == .full)
         #expect((patches[0].expectedPermissionMode ?? nil) == .guarded)
-        #expect(patches[0].expectedToolOverrides == nil)
-        #expect(patches[1].expectedPermissionMode == nil)
         #expect(patches[1].expectedToolOverrides.map { $0 == nil } == true)
         #expect((patches[1].toolOverrides ?? nil)?.webSearch == false)
         #expect((patches[2].expectedToolOverrides ?? nil)?.webSearch == false)
@@ -7425,6 +7588,7 @@ struct ChatViewModelTests {
         let patchCalls = AsyncCounter()
         let releasePatch = AsyncGate()
         let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             permissionMutationAvailable: true,
             sessionSettingsCASAvailable: true)
@@ -7467,20 +7631,16 @@ struct ChatViewModelTests {
             await transport.sentRunIds().count == 1
         }
         #expect(await MainActor.run { vm.composerPermissionMode } == .guarded)
-        #expect(await transport.sentRunIds().count == 1)
-        #expect(await transport.sentSettingsExpectations() == [
-            OpenClawChatSessionSettingsExpectation(
-                permissionMode: .guarded,
-                toolOverrides: nil),
-        ])
-        let sentAgentIDs = await transport.sentAgentIDs()
-        #expect(sentAgentIDs.count == 1)
-        #expect(sentAgentIDs[0] == nil)
+        #expect(await transport.sentContexts().first?.sessionID == "sess-main")
+        #expect(await transport.sentContexts().first?.agentID == nil)
+        #expect(await transport.sentContexts().first?.expectedSessionSettings ==
+            OpenClawChatSessionSettingsExpectation(permissionMode: .guarded, toolOverrides: nil))
     }
 
     @Test func `failed restrictive composer patch blocks only its dependent send`() async throws {
         let patchStarted = AsyncGate()
         let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             permissionMutationAvailable: true,
             sessionSettingsCASAvailable: true)
@@ -7519,21 +7679,17 @@ struct ChatViewModelTests {
         }
 
         #expect(await transport.sentRunIds().isEmpty)
-        #expect(await MainActor.run { vm.composerPermissionMode } == .full)
-
         await MainActor.run { vm.send() }
         try await waitUntil("later send uses the visible unchanged permission") {
             await transport.sentRunIds().count == 1
         }
-        #expect(await transport.sentSettingsExpectations() == [
-            OpenClawChatSessionSettingsExpectation(
-                permissionMode: .full,
-                toolOverrides: nil),
-        ])
+        #expect(await transport.sentContexts().first?.expectedSessionSettings ==
+            OpenClawChatSessionSettingsExpectation(permissionMode: .full, toolOverrides: nil))
     }
 
     @Test func `session settings conflict preserves the draft before run admission`() async throws {
         let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             permissionMutationAvailable: true,
             sessionSettingsCASAvailable: true)
@@ -7553,7 +7709,7 @@ struct ChatViewModelTests {
                     code: "INVALID_REQUEST",
                     message: "Session settings changed before send. Retry.",
                     details: [
-                        "reason": AnyCodable(OpenClawChatSessionSettingsContract.changedErrorReason),
+                        "reason": AnyCodable("session-settings-changed"),
                     ])
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
@@ -7569,12 +7725,8 @@ struct ChatViewModelTests {
                     vm.errorText?.contains("Session settings changed before send. Retry.") == true
             }
         }
-
-        #expect(await transport.sentSettingsExpectations() == [
-            OpenClawChatSessionSettingsExpectation(
-                permissionMode: .guarded,
-                toolOverrides: nil),
-        ])
+        #expect(await transport.sentContexts().first?.expectedSessionSettings ==
+            OpenClawChatSessionSettingsExpectation(permissionMode: .guarded, toolOverrides: nil))
     }
 
     @Test func `agent filtered skill can be enabled for the current session`() async throws {
@@ -7586,6 +7738,7 @@ struct ChatViewModelTests {
             blocked: false,
             agentFiltered: true)
         let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             skills: [skill],
             skillsAvailable: true,
@@ -7624,6 +7777,7 @@ struct ChatViewModelTests {
             missingDependencies: false,
             blocked: false)
         let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: false,
             webSearchAvailable: true,
             skills: [skill],
@@ -7653,6 +7807,7 @@ struct ChatViewModelTests {
 
     @Test func `write scope permits model but keeps effort settings admin only`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
             effortMutationAvailable: false)
@@ -7674,6 +7829,73 @@ struct ChatViewModelTests {
         }
         try await Task.sleep(for: .milliseconds(20))
         #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `active follow up requires the connected gateway routing contract`() async throws {
+        let unavailableCatalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: false,
+            permissionMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(
+                sessionId: "sess-main",
+                hasActiveRun: true,
+                activeRunIds: ["run-active"],
+                effectiveQueueMode: .steer)],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    hasActiveRun: true,
+                    activeRunIds: ["run-active"]),
+            ])],
+            composerCapabilityCatalog: unavailableCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+        await MainActor.run { vm.input = "follow up" }
+
+        #expect(await MainActor.run { !vm.canSend })
+        #expect(await MainActor.run { vm.activeFollowUpMode == nil })
+        await MainActor.run { vm.send() }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.sentRunIds().isEmpty)
+    }
+
+    @Test func `structured send capability publishes before optional catalog surfaces finish`() async throws {
+        let gate = AsyncGate()
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
+            skillsAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(
+                sessionId: "sess-main",
+                hasActiveRun: true,
+                activeRunIds: ["run-active"],
+                effectiveQueueMode: .steer)],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    hasActiveRun: true,
+                    activeRunIds: ["run-active"]),
+            ])],
+            structuredSendAvailability: true,
+            composerCapabilityCatalogHook: { _, _ in
+                await gate.wait()
+                return catalog
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.input = "follow up" }
+
+        let load = Task { await vm.loadComposerCapabilities() }
+        try await waitUntil("structured send capability published") {
+            await MainActor.run { vm.structuredSendContextAvailable && vm.canSend }
+        }
+        await gate.open()
+        await load.value
+
+        #expect(await MainActor.run { vm.composerCapabilityState.phase == .loaded })
     }
 
     @Test func `composer connector and tool access mutations preserve effective state`() async throws {
@@ -7740,8 +7962,7 @@ struct ChatViewModelTests {
             return count == 3 && settled
         }
         #expect(await (transport.sessionSettingsPatches())[2].toolOverrides == .some(nil))
-        #expect(await MainActor.run { vm.composerCapabilityNotice } ==
-            "Tool overrides will be cleared for the next run.")
+        #expect(await MainActor.run { vm.composerCapabilityNotice } == "Session tool overrides cleared.")
     }
 
     @Test func `composer tool toggles use authoritative session denial instead of catalog baseline`() async throws {
@@ -7812,14 +8033,13 @@ struct ChatViewModelTests {
             sessionDenied: true)
         let catalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
-            webSearchBaseEnabled: true,
-            webSearchAvailable: true,
             connectors: [OpenClawChatComposerConnector(
                 name: "github",
                 baseEnabled: true,
                 tools: [tool])],
             connectorsAvailable: true,
             toolAccessAvailable: true,
+            sessionSettingsCASAvailable: true,
             toolOverrideMutationAvailable: true)
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionId: "sess-main")],
@@ -7858,6 +8078,7 @@ struct ChatViewModelTests {
             label: "Create issue")
         let catalog: @Sendable (OpenClawChatComposerTool) -> OpenClawChatComposerCapabilityCatalog = { tool in
             OpenClawChatComposerCapabilityCatalog(
+                structuredSendAvailable: true,
                 sessionSettingsAvailable: true,
                 connectors: [OpenClawChatComposerConnector(
                     name: "github",
@@ -7996,7 +8217,7 @@ struct ChatViewModelTests {
     @Test func `clear tool overrides is disabled and cannot dispatch without mutation access`() async throws {
         let overrides = OpenClawChatSessionToolOverrides(webSearch: false)
         let catalog = OpenClawChatComposerCapabilityCatalog(
-            sessionSettingsAvailable: true,
+            structuredSendAvailable: true,
             toolOverrideMutationAvailable: false)
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload(sessionId: "sess-main")],
@@ -8174,6 +8395,46 @@ struct ChatViewModelTests {
             vm.toggleComposerWebSearch()
         }
         #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `route replacement revokes structured follow up capability`() async throws {
+        let calls = AsyncCounter()
+        let available = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: true,
+            permissionMutationAvailable: true)
+        let unavailable = OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: false,
+            permissionMutationAvailable: true)
+        let activeHistory = historyPayload(
+            sessionId: "sess-main",
+            hasActiveRun: true,
+            activeRunIds: ["run-active"],
+            effectiveQueueMode: .steer)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [activeHistory],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(
+                    key: "main",
+                    updatedAt: 1,
+                    sessionId: "sess-main",
+                    hasActiveRun: true,
+                    activeRunIds: ["run-active"]),
+            ])],
+            composerCapabilityCatalogHook: { _, _ in
+                await calls.increment() == 1 ? available : unavailable
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+        await MainActor.run { vm.input = "follow up" }
+        #expect(await MainActor.run { vm.canSend })
+
+        transport.emit(.routeChanged)
+        try await waitUntil("route replacement reloads structured send capability") {
+            guard await calls.current() == 2 else { return false }
+            return await MainActor.run { !vm.canSend }
+        }
+
+        #expect(await MainActor.run { vm.activeFollowUpMode == nil })
     }
 
     @Test func `composer capabilities fail closed and discard a stale catalog`() async throws {

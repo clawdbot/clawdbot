@@ -87,41 +87,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
     public static let maxCachedSessions = 50
     public static let maxCachedSessionOwners = 50
     public static let maxCachedTranscripts = 50
-    public static let maxCachedMessagesPerSession = 200
-    public static let maxQueuedCommands = 50
-    public static let maxAttachmentBytesPerCommand = 40_000_000
-    public static let maxQueuedAttachmentBytes = 50_000_000
-    public static let outboxCommandMaxAge: TimeInterval = 48 * 60 * 60
-    public static let outboxExpiredError = "expired"
-    public static let outboxUnconfirmedError = "delivery_unconfirmed"
-    public static let outboxUnknownTargetError = "delivery_target_unknown"
-    public static let outboxChangedTargetError = "delivery_target_changed"
-    public static let outboxClientUpgradeRequiredError = "client_upgrade_required"
-    public static let outboxSettingsUpgradeRequiredError = "settings_client_upgrade_required"
-    public static let outboxSettingsGatewayUpgradeRequiredError = "settings_gateway_upgrade_required"
-    public static let outboxSettingsReviewRequiredError = "settings_review_required"
-    public static let outboxSettingsChangedError = "settings_changed"
-
-    static func outboxDisplayError(_ lastError: String?) -> String? {
-        guard let lastError else { return nil }
-        switch lastError {
-        case self.outboxClientUpgradeRequiredError, self.outboxSettingsUpgradeRequiredError:
-            return String(localized: "A previous app version could not safely send this message. Review and retry it.")
-        case self.outboxSettingsGatewayUpgradeRequiredError:
-            return String(localized: "Update the gateway before sending queued messages with session settings.")
-        case self.outboxSettingsReviewRequiredError:
-            return String(localized: "Session settings were not captured. Review and retry this message.")
-        case self.outboxSettingsChangedError:
-            return String(localized: "Session settings changed. Review and retry this message.")
-        default:
-            break
-        }
-        guard
-            let marker = lastError.range(of: "\n# branch-park:")
-        else { return lastError }
-        return String(lastError[..<marker.lowerBound])
-    }
-
     private let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
     private var isRetired = false
@@ -564,13 +529,18 @@ extension OpenClawChatSQLiteTranscriptCache {
                     agentID: command.agentID)
                 try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: scope)
                 let branchState = try Self.readBranchState(db, gatewayID: gatewayID, scope: scope)
+                let storedContext = Self.storedSendContext(command.sendContext)
                 try db.execute(
                     sql: """
                     INSERT INTO outbox_commands(
                         gateway_id, client_uuid, session_key, delivery_session_key,
-                        routing_contract, agent_id, text, thinking, expected_settings_json, created_at,
+                        routing_contract, agent_id, structured_message_text,
+                        send_session_id, send_queue_mode, send_reply_to_id,
+                        send_expected_leaf_state, send_expected_leaf_entry_id,
+                        send_unstructured_message_fallback, send_requires_structured_delivery,
+                        expected_settings_json, text, thinking, created_at,
                         status, attempt_version, branch_epoch, retry_count, last_error, attachment_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         gatewayID,
@@ -579,9 +549,17 @@ extension OpenClawChatSQLiteTranscriptCache {
                         command.deliverySessionKey,
                         command.routingContract ?? "",
                         Self.normalizedAgentID(command.agentID),
+                        command.structuredMessageText,
+                        command.sendContext?.sessionID,
+                        command.sendContext?.queueMode?.rawValue,
+                        command.sendContext?.replyToID,
+                        storedContext.expectedLeaf?.state,
+                        storedContext.expectedLeaf?.entryID,
+                        command.sendContext?.unstructuredMessageFallback,
+                        command.sendContext.map { $0.requiresStructuredDelivery ? 1 : 0 },
+                        storedContext.expectedSettingsJSON,
                         command.text,
                         command.thinking,
-                        Self.encodeSessionSettingsExpectation(command.expectedSessionSettings),
                         command.createdAt,
                         command.status.rawValue,
                         command.attemptVersion,
@@ -698,7 +676,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                     sql: """
                     UPDATE outbox_commands
                     SET status = 'sending',
-                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1
+                        settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        send_retry_authorization = COALESCE(send_retry_authorization, 0) + 1
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'queued'
                     """,
                     arguments: [gatewayID, id])
@@ -749,12 +728,21 @@ extension OpenClawChatSQLiteTranscriptCache {
         retryCount: Int,
         lastError: String?) async -> OpenClawChatOutboxUpdateResult
     {
-        await transitionClaimedCommand(
+        let result = await transitionClaimedCommand(
             id: id,
             attemptVersion: attemptVersion,
             status: .failed,
             retryCount: retryCount,
             lastError: lastError)
+        if result == .updated {
+            self.outboxChangeHub.yield(.failed(
+                gatewayID: self.gatewayID,
+                id: id,
+                attemptVersion: attemptVersion,
+                retryCount: retryCount,
+                reason: lastError))
+        }
+        return result
     }
 
     public func markCommandRetriedIfPresent(
@@ -763,7 +751,7 @@ extension OpenClawChatSQLiteTranscriptCache {
         agentID: String?,
         deliverySessionKey: String,
         routingContract: String,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
         replacementID: String?) async -> OpenClawChatOutboxUpdateResult
     {
         guard !self.isRetired else { return .unavailable }
@@ -778,11 +766,13 @@ extension OpenClawChatSQLiteTranscriptCache {
         else { return .unavailable }
         let gatewayID = self.gatewayID
         do {
-            return try await self.databases.stateQueue.write { db in
+            let result: OpenClawChatOutboxUpdateResult = try await self.databases.stateQueue.write { db in
                 guard let row = try Row.fetchOne(
                     db,
                     sql: """
-                    SELECT session_key, parked_was_accepted, had_unacknowledged_send, last_error
+                    SELECT session_key, delivery_session_key, routing_contract, agent_id,
+                           send_requires_structured_delivery,
+                           parked_was_accepted, had_unacknowledged_send, last_error
                     FROM outbox_commands
                     WHERE gateway_id = ? AND client_uuid = ? AND status = 'failed'
                       AND attempt_version = ? AND retry_count = ? AND last_error = ?
@@ -796,12 +786,43 @@ extension OpenClawChatSQLiteTranscriptCache {
                     ])
                 else { return .superseded }
                 let previousSessionKey: String = row["session_key"]
+                let lastError: String = row["last_error"]
+                guard lastError != Self.outboxChangedSessionError,
+                      lastError != Self.outboxClientUpgradeRequiredError
+                else { return .nonRetryable(reason: lastError) }
+                let requiresStructuredDelivery: Int? = row["send_requires_structured_delivery"]
+                if requiresStructuredDelivery == 1 {
+                    let storedDeliverySessionKey: String = row["delivery_session_key"]
+                    let storedRoutingContract: String = row["routing_contract"]
+                    let storedAgentID: String = row["agent_id"]
+                    let targetMatches = storedDeliverySessionKey == normalizedDeliverySessionKey &&
+                        storedRoutingContract == normalizedRoutingContract &&
+                        storedAgentID == normalizedAgentID
+                    if !targetMatches {
+                        try db.execute(
+                            sql: """
+                            UPDATE outbox_commands SET last_error = ?
+                            WHERE gateway_id = ? AND client_uuid = ? AND status = 'failed'
+                              AND attempt_version = ? AND retry_count = ? AND last_error = ?
+                            """,
+                            arguments: [
+                                Self.outboxChangedSessionError,
+                                gatewayID,
+                                id,
+                                expectation.attemptVersion,
+                                expectation.retryCount,
+                                expectation.lastError ?? "",
+                            ])
+                        return db.changesCount > 0
+                            ? .nonRetryable(reason: Self.outboxChangedSessionError)
+                            : .superseded
+                    }
+                }
                 let retryScope = OpenClawChatOutboxScope(
                     sessionKey: previousSessionKey,
                     agentID: normalizedAgentID)
                 try Self.ensureBranchScope(db, gatewayID: gatewayID, scope: retryScope)
                 let branchState = try Self.readBranchState(db, gatewayID: gatewayID, scope: retryScope)
-                let lastError: String = row["last_error"]
                 let wasBranchParked = lastError.contains("\n# branch-park:")
                 let parkedWasAccepted: Int = row["parked_was_accepted"]
                 let hadUnacknowledgedSend: Int = row["had_unacknowledged_send"]
@@ -817,6 +838,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         attempt_version = ?,
                         branch_epoch = ?, parked_was_accepted = 0, had_unacknowledged_send = 0,
                         settings_retry_authorization = COALESCE(settings_retry_authorization, 0) + 1,
+                        send_retry_authorization = COALESCE(send_retry_authorization, 0) + 1,
                         retry_count = 0, last_error = '', created_at = ?,
                         agent_id = ?, delivery_session_key = ?, routing_contract = ?,
                         expected_settings_json = ?
@@ -840,6 +862,15 @@ extension OpenClawChatSQLiteTranscriptCache {
                     ])
                 return db.changesCount > 0 ? .updated : .superseded
             }
+            if case let .nonRetryable(reason) = result {
+                self.outboxChangeHub.yield(.failed(
+                    gatewayID: gatewayID,
+                    id: id,
+                    attemptVersion: expectation.attemptVersion,
+                    retryCount: expectation.retryCount,
+                    reason: reason))
+            }
+            return result
         } catch {
             return .unavailable
         }
@@ -1266,62 +1297,6 @@ extension OpenClawChatSQLiteTranscriptCache {
             """,
             arguments: [gatewayID])
         return try rows.map { try self.command(from: $0, in: db, gatewayID: gatewayID) }
-    }
-
-    private nonisolated static func command(
-        from row: Row,
-        in db: Database,
-        gatewayID: String) throws -> OpenClawChatOutboxCommand
-    {
-        let id: String = row["client_uuid"]
-        let attachmentRows = try Row.fetchAll(
-            db,
-            sql: """
-            SELECT type, mime_type, file_name, payload, duration_seconds
-            FROM outbox_attachments
-            WHERE gateway_id = ? AND command_id = ? ORDER BY position
-            """,
-            arguments: [gatewayID, id])
-        let attachments = attachmentRows.map { attachmentRow in
-            OpenClawChatOutboxAttachment(
-                type: attachmentRow["type"],
-                mimeType: attachmentRow["mime_type"],
-                fileName: attachmentRow["file_name"],
-                data: attachmentRow["payload"],
-                durationSeconds: attachmentRow["duration_seconds"])
-        }
-        let statusRaw: String = row["status"]
-        guard let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) else {
-            throw DatabaseError(message: "unknown outbox status")
-        }
-        let lastError: String = row["last_error"]
-        let expectedSettingsJSON: String? = row["expected_settings_json"]
-        return try OpenClawChatOutboxCommand(
-            id: id,
-            sessionKey: row["session_key"],
-            deliverySessionKey: row["delivery_session_key"],
-            routingContract: row["routing_contract"],
-            agentID: Self.optionalAgentID(row["agent_id"]),
-            branchEpoch: row["branch_epoch"],
-            scopeBranchEpoch: row["scope_branch_epoch"],
-            text: row["text"],
-            attachments: attachments,
-            thinking: row["thinking"],
-            expectedSessionSettings: Self.decodeSessionSettingsExpectation(expectedSettingsJSON),
-            createdAt: row["created_at"],
-            status: status,
-            attemptVersion: row["attempt_version"],
-            retryCount: row["retry_count"],
-            lastError: lastError.isEmpty ? nil : lastError)
-    }
-
-    private nonisolated static func normalizedAgentID(_ agentID: String?) -> String {
-        agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    private nonisolated static func optionalAgentID(_ agentID: String) -> String? {
-        let normalized = self.normalizedAgentID(agentID)
-        return normalized.isEmpty ? nil : normalized
     }
 
     private nonisolated static func ensureBranchScope(

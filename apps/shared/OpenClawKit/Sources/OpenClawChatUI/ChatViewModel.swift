@@ -119,6 +119,9 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var sessionId: String?
+    public internal(set) var displayedLeafExpectation: OpenClawChatLeafExpectation = .unavailable
+    public internal(set) var effectiveQueueMode: OpenClawChatQueueMode?
+    var activityPreservingFollowUpRunIDs: Set<String> = []
     public private(set) var streamingAssistantText: String?
 
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
@@ -892,6 +895,8 @@ extension OpenClawChatViewModel {
         self.updateStreamingAssistantText(nil)
         self.updateActiveSessionRunWithoutChatSnapshot(false)
         self.sessionId = nil
+        self.displayedLeafExpectation = .unavailable
+        self.effectiveQueueMode = nil
         let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
         let context = BootstrapContext(
             id: bootstrapGeneration,
@@ -1255,6 +1260,8 @@ extension OpenClawChatViewModel {
         self.provisionalFinalMessagesByID.removeAll()
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
+        self.displayedLeafExpectation = .unavailable
+        self.effectiveQueueMode = nil
         self.pendingToolCallsById = [:]
         self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
@@ -1477,31 +1484,6 @@ extension OpenClawChatViewModel {
             return
         }
         self.inFlightSettingsPatchCountsByTarget[target] = remaining
-    }
-
-    func sessionSettingsPatchTarget(
-        in sessionKey: String,
-        canonicalSessionKey: String?,
-        agentID: String?,
-        sessionRoutingContract: String?) -> ModelPatchTarget
-    {
-        if canonicalSessionKey == nil,
-           agentID == nil,
-           sessionRoutingContract == nil,
-           sessionKey == self.sessionKey
-        {
-            let session = self.currentSessionSnapshot()
-            return modelPatchTarget(
-                sessionKey: session.key,
-                canonicalSessionKey: currentSessionEntry()?.key,
-                agentID: session.deliveryAgentID,
-                sessionRoutingContract: session.sessionRoutingContract)
-        }
-        return modelPatchTarget(
-            sessionKey: sessionKey,
-            canonicalSessionKey: canonicalSessionKey,
-            agentID: agentID,
-            sessionRoutingContract: sessionRoutingContract)
     }
 
     func waitForPendingSessionSettings(for target: ModelPatchTarget) async {

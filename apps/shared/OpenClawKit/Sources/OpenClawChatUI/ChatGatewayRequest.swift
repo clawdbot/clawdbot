@@ -677,6 +677,11 @@ public enum OpenClawChatGatewayRequests {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
+        sessionID: String? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
+        replyToID: String? = nil,
+        expectedLeaf: OpenClawChatLeafExpectation = .unavailable,
+        supportsSendContextContract: Bool = false,
         runTimeoutMs: Int? = nil,
         requestTimeoutMs: Int = 30000) -> OpenClawChatGatewayRequest
     {
@@ -690,6 +695,21 @@ public enum OpenClawChatGatewayRequests {
             expectedSessionRoutingContract,
             to: &params,
             key: "expectedSessionRoutingContract")
+        if supportsSendContextContract {
+            self.add(sessionID, to: &params, key: "sessionId")
+            if let queueMode {
+                params["queueMode"] = AnyCodable(queueMode.rawValue)
+            }
+            self.add(replyToID, to: &params, key: "replyToId")
+            switch expectedLeaf {
+            case .unavailable:
+                break
+            case .empty:
+                params["expectedLeafEntryId"] = AnyCodable(NSNull())
+            case let .entry(entryID):
+                self.add(entryID, to: &params, key: "expectedLeafEntryId")
+            }
+        }
         self.add(thinking, to: &params, key: "thinking")
         if supportsSessionSettingsCAS, let expectedSessionSettings {
             params["expectedPermissionMode"] = expectedSessionSettings.permissionMode

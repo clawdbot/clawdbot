@@ -750,6 +750,60 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
+    func testActiveResponseComposerMorphsFromStopToFollowUp() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone follow-up composer proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-active-follow-up"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep working on the release plan.")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
+        let inlineModel = app.buttons["chat-composer-inline-model"]
+        let inlineEffort = app.buttons["chat-composer-inline-effort"]
+        XCTAssertTrue(inlinePermissions.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlineModel.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlineEffort.waitForExistence(timeout: 5))
+        XCTAssertTrue(inlinePermissions.isEnabled)
+        XCTAssertFalse(inlineModel.isEnabled)
+        XCTAssertFalse(inlineEffort.isEnabled)
+        let contextUsage = app.buttons["chat-context-usage"]
+        XCTAssertTrue(contextUsage.waitForExistence(timeout: 5))
+        contextUsage.tap()
+        let compactThread = app.buttons["Compact Thread"]
+        XCTAssertTrue(compactThread.waitForExistence(timeout: 3))
+        XCTAssertFalse(compactThread.isEnabled)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        input.tap()
+        input.typeText("Also include the rollout checklist.")
+
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        XCTAssertTrue(send.isEnabled)
+        XCTAssertTrue(app.buttons["Steer response"].exists)
+        XCTAssertFalse(stop.exists)
+        self.attachScreenshot(named: "chat-active-follow-up-ready")
+        send.tap()
+
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "rollout checklist"))
+                .firstMatch.waitForExistence(timeout: 8))
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "chat-active-follow-up-sent")
+    }
+
     func testKeyboardOpenSendFollowsLiveEdge() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
         self.launchApp(for: ScreenshotTarget(

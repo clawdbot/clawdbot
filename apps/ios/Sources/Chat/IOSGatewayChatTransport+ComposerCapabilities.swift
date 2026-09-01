@@ -5,8 +5,30 @@ import OpenClawProtocol
 import OSLog
 
 extension IOSGatewayChatTransport {
+    func sessionSettingsSupport(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> (settingsContract: Bool, settingsCAS: Bool)
+    {
+        async let contract = self.gateway.supportsServerCapability(
+            .sessionSettingsContract,
+            ifCurrentRoute: route)
+        async let cas = self.gateway.supportsServerCapability(
+            .sessionSettingsCAS,
+            ifCurrentRoute: route)
+        return await (contract == true, cas == true)
+    }
+
     var supportsComposerCapabilities: Bool {
         true
+    }
+
+    func loadStructuredSendContextAvailability(
+        sessionKey _: String,
+        agentID _: String?) async -> Bool?
+    {
+        guard let route = await self.currentSessionMutationRoute() else { return false }
+        return await self.gateway.supportsServerCapability(
+            .chatSendContextContract,
+            ifCurrentRoute: route) == true
     }
 
     func loadComposerCapabilityCatalog(
@@ -20,7 +42,15 @@ extension IOSGatewayChatTransport {
         async let patchMethodAdvertised = self.gateway.supportsServerMethod(
             "sessions.patch",
             ifCurrentRoute: route)
-        async let settingsSupportRequest = self.sessionSettingsSupport(ifCurrentRoute: route)
+        async let sendContextCapability = self.gateway.supportsServerCapability(
+            .chatSendContextContract,
+            ifCurrentRoute: route)
+        async let settingsCapability = self.gateway.supportsServerCapability(
+            .sessionSettingsContract,
+            ifCurrentRoute: route)
+        async let settingsCASCapability = self.gateway.supportsServerCapability(
+            .sessionSettingsCAS,
+            ifCurrentRoute: route)
         let scopes = await operatorScopes ?? []
         let canAdmin = scopes.contains("operator.admin")
         let canWrite = canAdmin || scopes.contains("operator.write")
@@ -50,14 +80,20 @@ extension IOSGatewayChatTransport {
             skillsResponse,
             toolsResponse,
             patchCapability,
-            settingsSupport) = await (
+            sendContextAvailable,
+            settingsAvailable,
+            settingsCASAvailable) = await (
             configRequest,
             skillsRequest,
             toolsRequest,
             patchMethodAdvertised,
-            settingsSupportRequest)
+            sendContextCapability,
+            settingsCapability,
+            settingsCASCapability)
         let patchAdvertised = patchCapability == true
-        let sessionSettingsAvailable = settingsSupport.settingsContract && patchAdvertised
+        let structuredSendAvailable = sendContextAvailable == true
+        let sessionSettingsAvailable = settingsAvailable == true && patchAdvertised
+        let sessionSettingsCASAvailable = settingsCASAvailable == true
 
         guard await self.gateway.currentRoute() == route else {
             return OpenClawChatComposerCapabilityCatalog()
@@ -84,6 +120,7 @@ extension IOSGatewayChatTransport {
                 failedSurfaces.joined(separator: ", "))
 
         return OpenClawChatComposerCapabilityCatalog(
+            structuredSendAvailable: structuredSendAvailable,
             sessionSettingsAvailable: sessionSettingsAvailable,
             modelMutationAvailable: Self.composerMutationAvailable(
                 methodSupport: patchCapability,
@@ -104,30 +141,16 @@ extension IOSGatewayChatTransport {
             skillsAvailable: skillsSurface.loaded,
             connectorsAvailable: configSurface.loaded,
             toolAccessAvailable: toolsSurface.loaded,
-            permissionMutationAvailable: sessionSettingsAvailable && settingsSupport.settingsCAS &&
+            permissionMutationAvailable: sessionSettingsAvailable && sessionSettingsCASAvailable &&
                 patchAdvertised && canWrite,
-            sessionSettingsCASAvailable: settingsSupport.settingsCAS,
-            toolOverrideMutationAvailable: sessionSettingsAvailable && patchAdvertised &&
-                settingsSupport.settingsCAS && canAdmin,
+            sessionSettingsCASAvailable: sessionSettingsCASAvailable,
+            toolOverrideMutationAvailable: sessionSettingsAvailable && sessionSettingsCASAvailable &&
+                patchAdvertised && canAdmin,
             toolOverrideMutationRequiresGatewayUpgrade: sessionSettingsAvailable &&
-                !settingsSupport.settingsCAS,
-            canSelectFullPermission: sessionSettingsAvailable && settingsSupport.settingsCAS &&
+                !sessionSettingsCASAvailable,
+            canSelectFullPermission: sessionSettingsAvailable && sessionSettingsCASAvailable &&
                 patchAdvertised && canAdmin,
             loadFailureMessage: failureMessage)
-    }
-
-    func sessionSettingsSupport(
-        ifCurrentRoute route: GatewayNodeSessionRoute) async -> (
-        settingsContract: Bool,
-        settingsCAS: Bool)
-    {
-        async let settingsContract = self.gateway.supportsServerCapability(
-            .sessionSettingsContract,
-            ifCurrentRoute: route)
-        async let settingsCAS = self.gateway.supportsServerCapability(
-            .sessionSettingsCAS,
-            ifCurrentRoute: route)
-        return await (settingsContract == true, settingsCAS == true)
     }
 
     static func composerMutationAvailable(methodSupport: Bool?, allowedByScope: Bool) -> Bool {
@@ -252,10 +275,9 @@ extension IOSGatewayChatTransport {
     {
         try await self.sendMessage(
             sessionKey: sessionKey,
-            target: OpenClawChatSendTarget(
+            context: OpenClawChatSendContext(
                 agentID: agentID,
-                expectedSessionRoutingContract: expectedSessionRoutingContract,
-                expectedSessionSettings: nil),
+                expectedSessionRoutingContract: expectedSessionRoutingContract),
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -264,7 +286,7 @@ extension IOSGatewayChatTransport {
 
     func sendMessage(
         sessionKey: String,
-        target: OpenClawChatSendTarget,
+        context: OpenClawChatSendContext,
         message: String,
         thinking: String,
         idempotencyKey: String,
@@ -275,23 +297,46 @@ extension IOSGatewayChatTransport {
         } else {
             await self.gateway.currentRoute()
         }
-        guard let route,
-              let supportsRoutingContract = await gateway.supportsServerCapability(
-                  .chatSendRoutingContract,
-                  ifCurrentRoute: route)
+        guard let route else { throw OpenClawChatTransportSendError.notDispatched }
+        async let routingContractCapability = self.gateway.supportsServerCapability(
+            .chatSendRoutingContract,
+            ifCurrentRoute: route)
+        async let sendContextCapability = self.gateway.supportsServerCapability(
+            .chatSendContextContract,
+            ifCurrentRoute: route)
+        async let settingsCASCapability = self.gateway.supportsServerCapability(
+            .sessionSettingsCAS,
+            ifCurrentRoute: route)
+        guard let supportsRoutingContract = await routingContractCapability,
+              let supportsSendContextContract = await sendContextCapability
         else { throw OpenClawChatTransportSendError.notDispatched }
+        let supportsSettingsCAS = await settingsCASCapability == true
         let guardedContract = OpenClawChatSessionRoutingContract.expectedValue(
-            target.expectedSessionRoutingContract,
+            context.expectedSessionRoutingContract,
             serverSupportsGuard: supportsRoutingContract)
+        if context.requiresStructuredDelivery, !supportsSendContextContract {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        if context.expectedSessionSettings != nil, !supportsSettingsCAS {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         return try await self.sendMessage(
             sessionKey: sessionKey,
-            agentID: target.agentID,
+            agentID: context.agentID,
             expectedSessionRoutingContract: guardedContract,
-            expectedSessionSettings: target.expectedSessionSettings,
-            message: message,
+            expectedSessionSettings: context.expectedSessionSettings,
+            message: supportsSendContextContract
+                ? message
+                : (context.unstructuredMessageFallback ?? message),
             thinking: thinking,
             idempotencyKey: idempotencyKey,
             attachments: attachments,
+            sessionID: context.sessionID,
+            queueMode: context.queueMode,
+            replyToID: context.replyToID,
+            expectedLeaf: context.expectedLeaf,
+            supportsSendContextContract: supportsSendContextContract,
+            supportsSessionSettingsCAS: supportsSettingsCAS,
             ifCurrentRoute: route,
             distinguishPreDispatchRouteChange: true)
     }
@@ -305,19 +350,15 @@ extension IOSGatewayChatTransport {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
+        sessionID: String? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
+        replyToID: String? = nil,
+        expectedLeaf: OpenClawChatLeafExpectation = .unavailable,
+        supportsSendContextContract: Bool = false,
+        supportsSessionSettingsCAS: Bool = false,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
-        let supportsSettingsCAS = if let expectedRoute {
-            await self.gateway.supportsServerCapability(
-                .sessionSettingsCAS,
-                ifCurrentRoute: expectedRoute) == true
-        } else {
-            false
-        }
-        guard expectedSessionSettings == nil || supportsSettingsCAS else {
-            throw OpenClawChatTransportSendError.notDispatched
-        }
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let startLogMessage =
             "chat.send start sessionKey=\(target.sessionKey) "
@@ -329,11 +370,16 @@ extension IOSGatewayChatTransport {
             agentID: target.agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
-            supportsSessionSettingsCAS: supportsSettingsCAS,
+            supportsSessionSettingsCAS: supportsSessionSettingsCAS,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
-            attachments: attachments)
+            attachments: attachments,
+            sessionID: sessionID,
+            queueMode: queueMode,
+            replyToID: replyToID,
+            expectedLeaf: expectedLeaf,
+            supportsSendContextContract: supportsSendContextContract)
         do {
             let res = try await gateway.request(
                 request,

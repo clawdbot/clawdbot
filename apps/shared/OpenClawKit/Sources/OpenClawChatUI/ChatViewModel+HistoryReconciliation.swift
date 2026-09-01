@@ -811,6 +811,18 @@ extension OpenClawChatViewModel {
         self.pruneRunMessageScopes()
         self.rescopeRunsAdoptedAfterHistoryRequest(request)
         self.sessionId = payload.sessionId
+        if let sessionInfo = payload.sessionInfo {
+            let activeLeaf = sessionInfo.activeLeafEntryId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let activeLeaf, !activeLeaf.isEmpty {
+                self.displayedLeafExpectation = .entry(activeLeaf)
+            } else {
+                self.displayedLeafExpectation = .empty
+            }
+            self.effectiveQueueMode = sessionInfo.effectiveQueueMode
+        } else {
+            self.displayedLeafExpectation = .unavailable
+            self.effectiveQueueMode = nil
+        }
         self.applyInFlightRunSnapshot(payload, for: request)
         // Incomplete refreshes can arrive before durable assistant history.
         // The latest visible user turn must survive answered before it can reject older replies.
