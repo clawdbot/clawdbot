@@ -268,10 +268,18 @@ export async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const { getAcpSessionManager } = await loadAcpManagerRuntime();
+  const acpManager = getAcpSessionManager();
+  const acpResolution = sessionKey
+    ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+    : null;
+  // Configured run cwd is a Gateway-local path; paired/ACP sessions execute on
+  // their own node with a node-owned execCwd, so the config fallback stays
+  // local-only and never bridges into node placements.
   const cwd =
     normalizeOptionalString(opts.cwd) ??
     normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
-    resolveAgentRunCwd(cfg, sessionAgentId);
+    (acpResolution ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
@@ -363,11 +371,6 @@ export async function prepareAgentCommandExecution(
       provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
-    const { getAcpSessionManager } = await loadAcpManagerRuntime();
-    const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey
-      ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
-      : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {
