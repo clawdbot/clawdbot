@@ -29,7 +29,7 @@ export function validateGatewayRequestFrame(
   if (frameBytes > limit) {
     throw new RangeError(
       `gateway request ${method} exceeds ${usesPreAuthLimit ? "pre-auth" : "negotiated"} max payload ` +
-        `(${frameBytes} > ${limit} bytes). Remove one or more attachments and retry.`,
+        `(${frameBytes} > ${limit} bytes). Shorten the message or remove one or more attachments and retry.`,
     );
   }
 }

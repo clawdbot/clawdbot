@@ -928,7 +928,9 @@ describe("GatewayBrowserClient", () => {
     await expect(oversized).rejects.toThrow(
       "gateway request chat.send exceeds negotiated max payload",
     );
-    await expect(oversized).rejects.toThrow("Remove one or more attachments and retry.");
+    await expect(oversized).rejects.toThrow(
+      "Shorten the message or remove one or more attachments and retry.",
+    );
     expect(ws.sent).toHaveLength(0);
 
     const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode");
