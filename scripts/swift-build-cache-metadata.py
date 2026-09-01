@@ -11,15 +11,18 @@ import sys
 import uuid
 
 
-# These are the input trees/manifests previously handled by the workflow's
-# timestamp step. Never follow source links or replay paths supplied by a cache.
+# Local Swift inputs consumed by macOS builds, including real shared-source paths.
+# Never follow source links or replay paths supplied by a cache.
 INPUT_TREES = (
     "apps/macos/Sources", "apps/macos/Tests", "apps/shared/OpenClawKit/Sources",
+    "apps/shared/OpenClawMLXTTSProtocol/Sources",
     "apps/swabble/Sources", "apps/macos/.build/checkouts",
 )
 INPUT_FILES = (
     "apps/macos/Package.swift", "apps/macos/Package.resolved",
     "apps/shared/OpenClawKit/Package.swift", "apps/swabble/Package.swift",
+    "apps/shared/OpenClawMLXTTSProtocol/Package.swift",
+    "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayTLSStoreFixture.swift",
 )
 CACHE_DIRECTORY = "apps/macos/.build"
 METADATA_NAME = "ci-input-metadata.json"
