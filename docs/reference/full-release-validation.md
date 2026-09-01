@@ -271,6 +271,16 @@ run. Evidence reuse runs only from `main` or a canonical SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
 
+The reuse search checks each bound parent manifest for eligibility before
+loading its child runs, job logs, and execution plan. Incompatible profiles,
+inputs, targets, and non-root runs are rejected early. Eligible candidates
+still undergo complete provenance and attempt verification before reuse.
+The verifier reads independent children concurrently (at most seven), retains
+each attempt's job data for its policy checks, and waits for all reads before
+reporting success or failure. Attempts and pagination within each child remain
+sequential. Target resolution and reuse checkouts include only their tooling
+and release metadata; neither needs the complete source tree.
+
 Fresh package-facing validation calls the `Full Release Candidate` reusable
 workflow once. Plugin Prerelease and OpenClaw Release Checks each dispatch an
 independent phase immediately, while their candidate phases wait for acquisition.

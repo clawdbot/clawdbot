@@ -232,7 +232,7 @@ ${shimBody}
         "--eval",
         `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
          try {
-           process.stdout.write(createReleaseEvidenceClient("owner/repo").getJobLog("123"));
+           process.stdout.write(await createReleaseEvidenceClient("owner/repo").getJobLog("123"));
          } catch (error) {
            process.stdout.write(JSON.stringify({
              message: error instanceof Error ? error.message : String(error),
@@ -762,6 +762,68 @@ type ReleaseCiWatchState = {
   url?: string;
 };
 
+function trustedMainFullFixture() {
+  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
+  const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
+    (child) => child.manifestKey !== "npmTelegram",
+  );
+  const runs = children.map((child, index) => ({
+    ...fixture.childRun,
+    display_title: child.displayTitle,
+    id: 101 + index,
+    path: `.github/workflows/${child.workflow}`,
+  }));
+  const jobs = children.map((child, index) => ({
+    ...fixture.parentJob,
+    id: 201 + index,
+    name: child.parentJobName,
+  }));
+  const manifest = {
+    ...fixture.manifest,
+    childRuns: {
+      ...fixture.manifest.childRuns,
+      ...Object.fromEntries(
+        children.map((child, index) => {
+          const runId = String(expectDefined(runs[index], "child run").id);
+          return [
+            child.manifestKey,
+            child.manifestKey === "productPerformance"
+              ? { blocking: true, conclusion: "success", runId }
+              : runId,
+          ];
+        }),
+      ),
+    },
+    rerunGroup: "all",
+    version: 4,
+  };
+  const client = {
+    ...fixture.client,
+    getJobLog: vi.fn((jobId: number) => {
+      const index = jobs.findIndex((job) => job.id === jobId);
+      const child = expectDefined(children[index], "dispatch child");
+      const run = expectDefined(runs[index], "child run");
+      return `TARGET_SHA: ${fixture.targetSha}\n-f publish_reports=false\nDispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${run.id} (attempt 1)`;
+    }),
+    getParentJobs: vi.fn((runId: string) =>
+      runId === fixture.runId
+        ? jobs
+        : [{ ...fixture.parentJob, name: "Verify artifact-only report mode" }],
+    ),
+    getRun: vi.fn((runId: string) =>
+      runId === fixture.runId
+        ? fixture.parentRun
+        : expectDefined(
+            runs.find((run) => String(run.id) === runId),
+            "child run",
+          ),
+    ),
+    loadExecutionPlan: vi.fn(() => undefined),
+    loadManifest: () => ({ artifact: fixture.artifact, manifest }),
+  };
+  return { ...fixture, client, manifest, runs };
+}
+
 function createReleaseCiWatchFixture(states: ReleaseCiWatchState[]) {
   const root = mkdtempSync(join(tmpdir(), "release-ci-watch-"));
   const callsPath = join(root, "calls.jsonl");
@@ -856,6 +918,15 @@ describe("release CI summary child correlation", () => {
     { args: ["29071366025", "--interval", "0"], message: "positive number of seconds" },
     { args: ["--validate-run", "29071366025", "--watch"], message: "cannot be combined" },
     { args: ["--manifest", "/tmp/manifest.json"], message: "requires --validate-run" },
+    { args: ["123", "--reuse-request-json", "{}"], message: "requires --validate-run" },
+    {
+      args: ["--validate-run", "123", "--reuse-request-json", "null"],
+      message: "reuse request is invalid",
+    },
+    {
+      args: ["--validate-run", "123", "--reuse-request-json", "[]"],
+      message: "reuse request is invalid",
+    },
     {
       args: ["--validate-run", "29071366025", "--verifier-source-file", "/tmp/verifier.mjs"],
       message: "requires --verifier-source-sha",
@@ -1111,18 +1182,20 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it("bridges only attempt-one manifest v2 artifacts with the legacy stable name", () => {
+  it("bridges only attempt-one manifest v2 artifacts with the legacy stable name", async () => {
     const legacyV2 = trustedMainPackageFixture();
     legacyV2.artifact.name = `full-release-validation-${legacyV2.runId}`;
     expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: legacyV2.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        legacyV2.client,
+      (
+        await validateReleaseRunEvidence(
+          {
+            repository: "openclaw/openclaw",
+            runId: legacyV2.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          legacyV2.client,
+        )
       ).root.artifact.name,
     ).toBe(legacyV2.artifact.name);
 
@@ -1131,7 +1204,7 @@ describe("release CI summary child correlation", () => {
       workflowSha: "a".repeat(40),
     });
     legacyV3.artifact.name = `full-release-validation-${legacyV3.runId}`;
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1141,16 +1214,16 @@ describe("release CI summary child correlation", () => {
         },
         legacyV3.client,
       ),
-    ).toThrow("legacy release validation manifest artifact is not compatible");
+    ).rejects.toThrow("legacy release validation manifest artifact is not compatible");
   });
 
-  it("normalizes a pre-tooling trusted-main producer separately from the current verifier", () => {
+  it("normalizes a pre-tooling trusted-main producer separately from the current verifier", async () => {
     const fixture = trustedMainPackageFixture({
       targetSha: "8".repeat(40),
       workflowSha: "0".repeat(40),
     });
     const verifierSourceSha = "c".repeat(40);
-    const evidence = validateReleaseRunEvidence(
+    const evidence = await validateReleaseRunEvidence(
       {
         repository: "openclaw/openclaw",
         runId: fixture.runId,
@@ -1214,9 +1287,147 @@ describe("release CI summary child correlation", () => {
     });
   });
 
+  it.each(["version", "reused", "group", "profile", "soak", "inputs", "target"])(
+    "rejects an ineligible reuse %s before fetching child evidence",
+    async (mismatch) => {
+      const fixture = trustedMainFullFixture();
+      const reuseRequest = {
+        releaseProfile: "full",
+        runReleaseSoak: "true",
+        targetSha: fixture.targetSha,
+        validationInputs: { ...fixture.manifest.validationInputs },
+      };
+      switch (mismatch) {
+        case "version":
+          fixture.manifest.version = 3;
+          break;
+        case "reused":
+          fixture.manifest.evidenceReuse = {
+            changedPaths: [],
+            evidenceSha: fixture.targetSha,
+            policy: "exact-target-full-validation-v1",
+            runId: "29090000000",
+            selectedRunId: "29090000000",
+          };
+          break;
+        case "group":
+          fixture.manifest.rerunGroup = "package";
+          break;
+        case "profile":
+          reuseRequest.releaseProfile = "beta";
+          break;
+        case "soak":
+          reuseRequest.runReleaseSoak = "false";
+          break;
+        case "inputs":
+          reuseRequest.validationInputs.provider = "anthropic";
+          break;
+        case "target":
+          reuseRequest.targetSha = "7".repeat(40);
+          fixture.client.compareCommits = () => ({
+            files: [{ filename: "src/index.ts", status: "modified" }],
+            merge_base_commit: { sha: fixture.targetSha },
+            status: "ahead",
+          });
+      }
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            reuseRequest,
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          fixture.client,
+        ),
+      ).rejects.toThrow(
+        mismatch === "target" ? "failed commit comparison" : "ineligible reuse candidate",
+      );
+      expect(fixture.client.getRun).toHaveBeenCalledExactlyOnceWith(fixture.runId);
+      expect(fixture.client.loadExecutionPlan).not.toHaveBeenCalled();
+      expect(fixture.client.getParentJobs).not.toHaveBeenCalled();
+      expect(fixture.client.getJobLog).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "collects independent child evidence concurrently and drains reads (failure=%s)",
+    async (failure) => {
+      const fixture = trustedMainFullFixture();
+      let active = 0;
+      let peak = 0;
+      let completed = 0;
+      const client = {
+        ...fixture.client,
+        async getJobLog(jobId: number) {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise<void>((complete) => setImmediate(complete));
+          active -= 1;
+          completed += 1;
+          if (failure && jobId === 201) {
+            throw new Error("dispatch log unavailable");
+          }
+          return fixture.client.getJobLog(jobId);
+        },
+      };
+      const validation = Promise.resolve().then(() =>
+        validateReleaseRunEvidence(
+          {
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          client,
+        ),
+      );
+      if (failure) {
+        await expect(validation).rejects.toThrow("dispatch log unavailable");
+      } else {
+        await expect(validation).resolves.toMatchObject({ valid: true });
+      }
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(7);
+      expect(completed).toBe(6);
+      expect(active).toBe(0);
+    },
+  );
+
+  it.each([false, true])(
+    "retains full child proof for eligible reuse (changelog=%s)",
+    async (changelog) => {
+      const fixture = trustedMainFullFixture();
+      fixture.client.compareCommits = () => ({
+        files: [{ filename: "CHANGELOG.md", status: "modified" }],
+        merge_base_commit: { sha: fixture.targetSha },
+        status: "ahead",
+      });
+      const options = {
+        reuseRequest: {
+          releaseProfile: fixture.manifest.releaseProfile,
+          runReleaseSoak: fixture.manifest.runReleaseSoak,
+          targetSha: changelog ? "7".repeat(40) : fixture.targetSha,
+          validationInputs: { ...fixture.manifest.validationInputs },
+        },
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      };
+      const evidence = await validateReleaseRunEvidence(options, fixture.client);
+      expect(evidence.valid).toBe(true);
+      expect(evidence.children).toHaveLength(6);
+      expect(fixture.client.getJobLog).toHaveBeenCalledTimes(6);
+
+      expectDefined(fixture.runs[0], "CI run").head_sha = "f".repeat(40);
+      await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow(
+        "manifest child dispatch tuple mismatch",
+      );
+    },
+  );
+
   it.each(["", "2026.8.1-owner-approved"])(
     "recomputes mixed-attempt evidence with Telegram waiver %j",
-    (telegramWaiver) => {
+    async (telegramWaiver) => {
       const fixture = trustedMainPackageFixture({
         manifestVersion: 3,
         workflowSha: "a".repeat(40),
@@ -1389,7 +1600,7 @@ describe("release CI summary child correlation", () => {
           },
           fixture.client,
         );
-      const evidence = validate();
+      const evidence = await validate();
       expect(evidence.children).toEqual([
         expect.objectContaining({
           compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
@@ -1399,10 +1610,10 @@ describe("release CI summary child correlation", () => {
       ]);
       if (telegramWaiver) {
         delete manifest.validationInputs.telegramWaiver;
-        expect(() => validate()).toThrow(/Telegram waiver/u);
+        await expect(validate()).rejects.toThrow(/Telegram waiver/u);
         Object.assign(manifest.validationInputs, waiver);
         client.loadExecutionPlan = () => undefined as never;
-        expect(() => validate()).toThrow(/Telegram waiver/u);
+        await expect(validate()).rejects.toThrow(/Telegram waiver/u);
         client.loadExecutionPlan = () => executionPlan;
       }
 
@@ -1412,7 +1623,7 @@ describe("release CI summary child correlation", () => {
         [{ [fixture.runId]: 2 }, "expected run attempts omitted"],
         [{ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2, "999": 1 }, "unvalidated run IDs"],
       ] as const) {
-        expect(() => validate(expectedRunAttempts)).toThrow(message);
+        await expect(validate(expectedRunAttempts)).rejects.toThrow(message);
       }
 
       const staleJobs = [
@@ -1442,7 +1653,9 @@ describe("release CI summary child correlation", () => {
         triggeringActor: "github-actions[bot]",
       };
       manifest.childEvidence.releaseChecks = staleEvidence;
-      expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      await expect(
+        validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
+      ).rejects.toThrowError(
         expect.objectContaining({
           message: "successful parent manifest predates OpenClaw Release Checks attempt 2",
           refreshable: true,
@@ -1452,7 +1665,9 @@ describe("release CI summary child correlation", () => {
       manifest.childEvidence.releaseChecks = releaseChecksEvidence;
       const loadManifest = client.loadManifest.bind(client);
       client.loadManifest = () => undefined as never;
-      expect(() => validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 })).toThrowError(
+      await expect(
+        validate({ [fixture.runId]: 2, [String(fixture.childRun.id)]: 2 }),
+      ).rejects.toThrowError(
         expect.objectContaining({
           message: `successful parent run is missing its release validation manifest: ${fixture.runId}`,
           refreshable: true,
@@ -1463,7 +1678,7 @@ describe("release CI summary child correlation", () => {
       releaseChecksEvidence.jobs[0]!.conclusion = "failure";
       let malformedError: unknown;
       try {
-        validate();
+        await validate();
       } catch (error) {
         malformedError = error;
       }
@@ -1474,7 +1689,7 @@ describe("release CI summary child correlation", () => {
 
       releaseChecksEvidence.jobs[0]!.conclusion = "success";
       fixture.childRun.actor = { login: "release-operator" };
-      expect(() => validate()).toThrow("execution plan child dispatch tuple mismatch");
+      await expect(validate()).rejects.toThrow("execution plan child dispatch tuple mismatch");
     },
   );
 
@@ -1522,60 +1737,40 @@ describe("release CI summary child correlation", () => {
       [profile, "Run QA Lab live Telegram lane"],
       [profile, "Run package acceptance / Telegram package acceptance / Run Telegram package E2E"],
     ]),
-  ])("accepts %s advisory %s failures through canonical policy", (releaseProfile, jobName) => {
-    const fixture = trustedMainPackageFixture();
-    fixture.manifest.releaseProfile = releaseProfile;
-    fixture.childRun.conclusion = "failure";
-    const originalClient = { ...fixture.client };
-    fixture.client.getParentJobs = (requestedRunId: string) =>
-      requestedRunId === String(fixture.childRun.id)
-        ? [
-            {
-              completed_at: "2026-07-10T01:10:00Z",
-              conclusion: "failure",
-              id: 86293408711,
-              name: jobName,
-              run_attempt: 1,
-              started_at: "2026-07-10T01:00:00Z",
-              status: "completed",
-              steps: [],
-            },
-            {
-              completed_at: "2026-07-10T01:10:00Z",
-              conclusion: "success",
-              id: 86293408712,
-              name: "Verify release checks",
-              run_attempt: 1,
-              started_at: "2026-07-10T01:00:00Z",
-              status: "completed",
-              steps: [],
-            },
-          ]
-        : originalClient.getParentJobs(requestedRunId);
+  ])(
+    "accepts %s advisory %s failures through canonical policy",
+    async (releaseProfile, jobName) => {
+      const fixture = trustedMainPackageFixture();
+      fixture.manifest.releaseProfile = releaseProfile;
+      fixture.childRun.conclusion = "failure";
+      const originalClient = { ...fixture.client };
+      fixture.client.getParentJobs = (requestedRunId: string) =>
+        requestedRunId === String(fixture.childRun.id)
+          ? [
+              {
+                completed_at: "2026-07-10T01:10:00Z",
+                conclusion: "failure",
+                id: 86293408711,
+                name: jobName,
+                run_attempt: 1,
+                started_at: "2026-07-10T01:00:00Z",
+                status: "completed",
+                steps: [],
+              },
+              {
+                completed_at: "2026-07-10T01:10:00Z",
+                conclusion: "success",
+                id: 86293408712,
+                name: "Verify release checks",
+                run_attempt: 1,
+                started_at: "2026-07-10T01:00:00Z",
+                status: "completed",
+                steps: [],
+              },
+            ]
+          : originalClient.getParentJobs(requestedRunId);
 
-    const evidence = validateReleaseRunEvidence(
-      {
-        repository: "openclaw/openclaw",
-        runId: fixture.runId,
-        verifierSourceContent: readFileSync(SCRIPT),
-        verifierSourceSha: "c".repeat(40),
-      },
-      fixture.client,
-    );
-    expect(evidence.conclusions).toMatchObject({
-      allRequiredSucceeded: true,
-      children: { releaseChecks: "failure" },
-    });
-  });
-
-  it("accepts a trusted-main producer when the candidate is the same main commit", () => {
-    const sharedSha = "a".repeat(40);
-    const fixture = trustedMainPackageFixture({
-      targetSha: sharedSha,
-      workflowSha: sharedSha,
-    });
-    expect(
-      validateReleaseRunEvidence(
+      const evidence = await validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
           runId: fixture.runId,
@@ -1583,6 +1778,31 @@ describe("release CI summary child correlation", () => {
           verifierSourceSha: "c".repeat(40),
         },
         fixture.client,
+      );
+      expect(evidence.conclusions).toMatchObject({
+        allRequiredSucceeded: true,
+        children: { releaseChecks: "failure" },
+      });
+    },
+  );
+
+  it("accepts a trusted-main producer when the candidate is the same main commit", async () => {
+    const sharedSha = "a".repeat(40);
+    const fixture = trustedMainPackageFixture({
+      targetSha: sharedSha,
+      workflowSha: sharedSha,
+    });
+    expect(
+      (
+        await validateReleaseRunEvidence(
+          {
+            repository: "openclaw/openclaw",
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          fixture.client,
+        )
       ).root,
     ).toMatchObject({
       targetSha: sharedSha,
@@ -1591,12 +1811,12 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("binds v3 producer evidence to the exact trusted branch ref", () => {
+  it("binds v3 producer evidence to the exact trusted branch ref", async () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowSha: "a".repeat(40),
     });
-    const evidence = validateReleaseRunEvidence(
+    const evidence = await validateReleaseRunEvidence(
       {
         repository: "openclaw/openclaw",
         runId: fixture.runId,
@@ -1614,7 +1834,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("accepts a Unicode trusted workflow ref", () => {
+  it("accepts a Unicode trusted workflow ref", async () => {
     const workflowRef = "release/unicode-\u{1f4a5}";
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
@@ -1622,7 +1842,7 @@ describe("release CI summary child correlation", () => {
       workflowRef,
       workflowSha: "a".repeat(40),
     });
-    const evidence = validateReleaseRunEvidence(
+    const evidence = await validateReleaseRunEvidence(
       {
         repository: "openclaw/openclaw",
         runId: fixture.runId,
@@ -1639,14 +1859,14 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("rejects a v3 producer dispatched from a tag named main", () => {
+  it("rejects a v3 producer dispatched from a tag named main", async () => {
     const fixture = trustedMainPackageFixture({
       manifestVersion: 3,
       workflowFullRef: "refs/tags/main",
       workflowRefType: "tag",
       workflowSha: "a".repeat(40),
     });
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1656,16 +1876,16 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("producer workflow full ref is not trusted");
+    ).rejects.toThrow("producer workflow full ref is not trusted");
   });
 
-  it("rejects a legacy producer outside the trusted main verifier lineage", () => {
+  it("rejects a legacy producer outside the trusted main verifier lineage", async () => {
     const fixture = trustedMainPackageFixture({ workflowSha: "a".repeat(40) });
     fixture.client.compareCommitLineage = () => ({
       merge_base_commit: { sha: "d".repeat(40) },
       status: "diverged",
     });
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1675,16 +1895,16 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("producer is not on the trusted main verifier lineage");
+    ).rejects.toThrow("producer is not on the trusted main verifier lineage");
   });
 
-  it("rejects a candidate branch producer even when its SHA differs from the target", () => {
+  it("rejects a candidate branch producer even when its SHA differs from the target", async () => {
     const fixture = trustedMainPackageFixture({
       targetSha: "8".repeat(40),
       workflowRef: "release/2026.7.1",
       workflowSha: "7".repeat(40),
     });
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1695,10 +1915,10 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("producer must run from trusted workflow ref: main");
+    ).rejects.toThrow("producer must run from trusted workflow ref: main");
   });
 
-  it("accepts canonical SHA-pinned v3 evidence on the trusted main lineage", () => {
+  it("accepts canonical SHA-pinned v3 evidence on the trusted main lineage", async () => {
     const workflowSha = "7".repeat(40);
     const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
     const fixture = trustedMainPackageFixture({
@@ -1711,14 +1931,16 @@ describe("release CI summary child correlation", () => {
     fixture.manifest.targetRef = fixture.targetSha;
 
     expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.runId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
+      (
+        await validateReleaseRunEvidence(
+          {
+            repository: "openclaw/openclaw",
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          fixture.client,
+        )
       ).root,
     ).toMatchObject({
       workflowFullRef: `refs/heads/${workflowRef}`,
@@ -1728,7 +1950,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("accepts canonical SHA-pinned v3 evidence exactly bound to a protected tooling tag", () => {
+  it("accepts canonical SHA-pinned v3 evidence exactly bound to a protected tooling tag", async () => {
     const workflowSha = "7".repeat(40);
     const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
     const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
@@ -1742,7 +1964,7 @@ describe("release CI summary child correlation", () => {
     fixture.manifest.targetRef = fixture.targetSha;
 
     expect(
-      validateReleaseRunEvidence(
+      await validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
           runId: fixture.runId,
@@ -1766,7 +1988,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("accepts protected-tag evidence from an older trusted tooling ancestor", () => {
+  it("accepts protected-tag evidence from an older trusted tooling ancestor", async () => {
     const trustedWorkflowSha = "7".repeat(40);
     const trustedWorkflowRef = `release-publish/${trustedWorkflowSha.slice(0, 12)}-123`;
     const olderWorkflowSha = "6".repeat(40);
@@ -1793,7 +2015,7 @@ describe("release CI summary child correlation", () => {
     };
 
     expect(
-      validateReleaseRunEvidence(
+      await validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
           runId: olderFixture.runId,
@@ -1814,7 +2036,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("rejects protected-tag evidence from a same-name branch or unrelated producer", () => {
+  it("rejects protected-tag evidence from a same-name branch or unrelated producer", async () => {
     const trustedWorkflowSha = "7".repeat(40);
     const trustedWorkflowRef = `release-publish/${trustedWorkflowSha.slice(0, 12)}-123`;
     const validFixture = trustedMainPackageFixture({
@@ -1822,7 +2044,7 @@ describe("release CI summary child correlation", () => {
       workflowSha: trustedWorkflowSha,
     });
 
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1835,7 +2057,7 @@ describe("release CI summary child correlation", () => {
         },
         validFixture.client,
       ),
-    ).toThrow("must be a protected tag");
+    ).rejects.toThrow("must be a protected tag");
 
     const unrelatedWorkflowSha = "6".repeat(40);
     const unrelatedWorkflowRef = `release-ci/${unrelatedWorkflowSha.slice(0, 12)}-1783705000000`;
@@ -1855,7 +2077,7 @@ describe("release CI summary child correlation", () => {
       merge_base_commit: { sha: "5".repeat(40) },
       status: "diverged",
     });
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1868,7 +2090,7 @@ describe("release CI summary child correlation", () => {
         },
         unrelatedFixture.client,
       ),
-    ).toThrow("not on the trusted tooling lineage");
+    ).rejects.toThrow("not on the trusted tooling lineage");
 
     const sameNameFixture = trustedMainPackageFixture({
       manifestVersion: 3,
@@ -1876,7 +2098,7 @@ describe("release CI summary child correlation", () => {
       workflowRef: trustedWorkflowRef,
       workflowSha: trustedWorkflowSha,
     });
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -1889,10 +2111,10 @@ describe("release CI summary child correlation", () => {
         },
         sameNameFixture.client,
       ),
-    ).toThrow("canonical release-ci branch");
+    ).rejects.toThrow("canonical release-ci branch");
   });
 
-  it("rejects a protected tooling tag that moved or disappeared after sealing", () => {
+  it("rejects a protected tooling tag that moved or disappeared after sealing", async () => {
     const workflowSha = "7".repeat(40);
     const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
     const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
@@ -1918,21 +2140,21 @@ describe("release CI summary child correlation", () => {
       object: { sha: "6".repeat(40) },
       ref: fullRef,
     });
-    expect(() => validateReleaseRunEvidence(options, fixture.client)).toThrow(
+    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow(
       "protected tooling tag moved",
     );
 
     fixture.client.getRef = () => {
       throw new Error("HTTP 404");
     };
-    expect(() => validateReleaseRunEvidence(options, fixture.client)).toThrow(
+    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow(
       "protected tooling tag is unavailable",
     );
   });
 
   it.each(["main", "refs/heads/main"])(
     "accepts a REST workflow path qualified with %s",
-    (qualifiedRef) => {
+    async (qualifiedRef) => {
       const fixture = trustedMainPackageFixture({
         manifestVersion: 3,
         parentPath: `.github/workflows/full-release-validation.yml@${qualifiedRef}`,
@@ -1940,14 +2162,16 @@ describe("release CI summary child correlation", () => {
       });
 
       expect(
-        validateReleaseRunEvidence(
-          {
-            repository: "openclaw/openclaw",
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
+        (
+          await validateReleaseRunEvidence(
+            {
+              repository: "openclaw/openclaw",
+              runId: fixture.runId,
+              verifierSourceContent: readFileSync(SCRIPT),
+              verifierSourceSha: "c".repeat(40),
+            },
+            fixture.client,
+          )
         ).root,
       ).toMatchObject({ workflowFullRef: "refs/heads/main" });
     },
@@ -1987,7 +2211,7 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("rejects a SHA-pinned evidenceReuse field even when false", () => {
+  it("rejects a SHA-pinned evidenceReuse field even when false", async () => {
     const workflowSha = "7".repeat(40);
     const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
     const fixture = trustedMainPackageFixture({
@@ -1999,7 +2223,7 @@ describe("release CI summary child correlation", () => {
     fixture.manifest.targetRef = fixture.targetSha;
     fixture.manifest.evidenceReuse = false;
 
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -2009,12 +2233,12 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("evidence reuse is invalid");
+    ).rejects.toThrow("evidence reuse is invalid");
   });
 
-  it("rejects dirty verifier bytes and a forged verifier source SHA", () => {
+  it("rejects dirty verifier bytes and a forged verifier source SHA", async () => {
     const fixture = trustedMainPackageFixture();
-    expect(() =>
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -2024,8 +2248,8 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("verifier script differs from its source SHA");
-    expect(() =>
+    ).rejects.toThrow("verifier script differs from its source SHA");
+    await expect(
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
@@ -2034,7 +2258,7 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("verifier source blob is unavailable");
+    ).rejects.toThrow("verifier source blob is unavailable");
   });
 
   it("binds verifier bytes from the repository root even outside the caller cwd", () => {
