@@ -156,7 +156,7 @@ async function navigateToClaudeCatalog(page: Page) {
 }
 
 async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
-  const row = page.locator('[data-session-key^="catalog:"]').filter({
+  const row = page.locator('[data-catalog-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
   await row.click({ button: "right", force: options.force });
