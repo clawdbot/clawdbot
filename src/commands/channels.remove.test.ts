@@ -724,6 +724,48 @@ describe("channelsRemoveCommand", () => {
     );
   });
 
+  it("counts a discarded dead letter as work, not as routine cleanup", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
+        channels: { "external-chat": { enabled: true, token: "token-1" } },
+      }),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createExternalChatCatalogEntry(),
+    ]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: createExternalChatDeletePlugin(),
+          source: "test",
+        },
+      ]),
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "external-chat",
+      accountId: "default",
+    });
+    await queue.enqueue("inbound-1", { text: "failed once" });
+    const claim = await queue.claim("inbound-1", { ownerId: "worker" });
+    if (!claim) {
+      throw new Error("Expected a claimed ingress event");
+    }
+    await queue.fail(claim, { reason: "handler-error" });
+
+    await channelsRemoveCommand(
+      { channel: "external-chat", account: "default", delete: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    // `channels dead-letters resubmit` could have replayed this row until now, so the
+    // deletion has to name it rather than fold it into the total.
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Deleted external-chat account "default". Discarded 1 stored ingress event, including 1 awaiting resubmission.',
+    );
+  });
+
   it("discards the rows under the plugin id when that is not the channel id", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({

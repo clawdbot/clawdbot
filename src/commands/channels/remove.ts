@@ -151,10 +151,11 @@ async function stopGatewayRuntimeBeforeRemove(params: {
 }
 
 /**
- * Always says what happened to the stored events, including when nothing was discarded:
- * "no rows existed" and "a plugin stores its rows under a name this command cannot
- * reproduce" are different situations, and reporting neither made them look identical to
- * a deletion that had never touched the queue at all.
+ * Always says what happened to the stored events, including when nothing was discarded.
+ * That case is not always "the account had nothing stored": a plugin that keys its rows
+ * under a name this command cannot reproduce also discards none. The line does not claim
+ * to tell those apart - it reports what the deletion did - but saying it at all is what
+ * keeps either from looking like a deletion that never touched the queue.
  */
 function formatDiscardedIngressEvents(purge: ChannelIngressQueueAccountPurge): string {
   if (purge.discarded === 0) {
