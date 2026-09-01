@@ -476,7 +476,8 @@ function Expand-PortableNodeArchive {
     $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
     if ($tarCommand -and $tarCommand.Source) {
         New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
-        & $tarCommand.Source -xf $ZipPath -C $DestinationPath --strip-components 1
+        $tarArguments = @("-xf", $ZipPath, "-C", $DestinationPath, "--strip-components", "1")
+        Invoke-CommandFromWindowsSafeDirectory -CommandPath $tarCommand.Source -Arguments $tarArguments
         if ($LASTEXITCODE -eq 0) {
             return
         }
