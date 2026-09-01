@@ -1042,6 +1042,89 @@ describe("Codex app-server binding store", () => {
     }
   });
 
+  it("sweeps the oldest disposable row on a full namespace and keeps fences and live rows", async () => {
+    // Capacity recovery for #125910: a full insert evicts the oldest cleared,
+    // non-retired row and retries; retirement fences and active rows are never
+    // evicted, and when nothing disposable exists the limit error surfaces.
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-capacity-"));
+    try {
+      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        namespace: "app-server-thread-bindings-capacity-sweep-test",
+        maxEntries: 3,
+        overflowPolicy: "reject-new",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const store = createCodexAppServerBindingStore(state);
+
+      // Two disposable rows (cleared, no fence) and one retirement fence fill
+      // the namespace to its cap of 3.
+      state.register("session:main:disposable-1", {
+        version: 1,
+        state: "cleared",
+        sessionId: "disposable-1",
+      });
+      state.register("session:main:fence", {
+        version: 1,
+        state: "cleared",
+        sessionId: "fence",
+        retired: true,
+      });
+      state.register("session:main:disposable-2", {
+        version: 1,
+        state: "cleared",
+        sessionId: "disposable-2",
+      });
+
+      // A new binding insert must sweep the oldest disposable row and land.
+      const identity = { kind: "session" as const, agentId: "main", sessionId: "session-new" };
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      });
+
+      expect(state.lookup("session:main:disposable-1")).toBeUndefined();
+      expect(state.lookup("session:main:disposable-2")).toMatchObject({ state: "cleared" });
+      expect(state.lookup("session:main:fence")).toMatchObject({
+        state: "cleared",
+        retired: true,
+      });
+      await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+
+      // Fill the namespace with only non-disposable rows (one fence, two
+      // active bindings): nothing may be swept, so the limit error surfaces.
+      state.clear();
+      state.register("session:main:fence", {
+        version: 1,
+        state: "cleared",
+        sessionId: "fence",
+        retired: true,
+      });
+      const activeA = { kind: "session" as const, agentId: "main", sessionId: "active-a" };
+      const activeB = { kind: "session" as const, agentId: "main", sessionId: "active-b" };
+      for (const active of [activeA, activeB]) {
+        await store.mutate(active, {
+          kind: "set",
+          binding: { threadId: `thread-${active.sessionId}`, cwd: "/repo" },
+        });
+      }
+      await expect(
+        store.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-new", cwd: "/repo" },
+        }),
+      ).rejects.toThrow(/PLUGIN_STATE_LIMIT_EXCEEDED|reached its 3-row limit/);
+      expect(state.lookup("session:main:fence")).toMatchObject({
+        state: "cleared",
+        retired: true,
+      });
+      await expect(store.read(activeA)).resolves.toMatchObject({ threadId: "thread-active-a" });
+      await expect(store.read(activeB)).resolves.toMatchObject({ threadId: "thread-active-b" });
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("claims a cleared binding once without allowing the retired generation back in", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

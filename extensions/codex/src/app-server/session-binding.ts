@@ -701,10 +701,54 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
 export function createCodexAppServerBindingStore(
   state: BindingStateStore,
 ): CodexAppServerBindingStore {
-  const update = state.update?.bind(state);
-  if (!update) {
+  const rawUpdate = state.update?.bind(state);
+  if (!rawUpdate) {
     throw new Error("Codex app-server bindings require atomic plugin-state updates");
   }
+
+  // Capacity recovery (issue #125910): the namespace keeps reject-new at the
+  // store level, and a full insert sweeps the oldest disposable row and
+  // retries once. Only cleared, non-retired rows are disposable: a cleared +
+  // retired row is a retirement fence that stops an old session generation
+  // from reclaiming its durable key, and an active row is a live session.
+  const isDisposableBindingRow = (stored: StoredCodexAppServerBinding | undefined): boolean =>
+    stored?.state === "cleared" && stored.retired !== true;
+
+  const sweepOldestDisposableBinding = (): boolean => {
+    let oldest: { key: string; createdAt: number } | undefined;
+    for (const entry of state.entries()) {
+      if (isDisposableBindingRow(readStoredCodexAppServerBinding(entry.value))) {
+        if (!oldest || entry.createdAt < oldest.createdAt) {
+          oldest = entry;
+        }
+      }
+    }
+    if (!oldest) {
+      return false;
+    }
+    // deleteIf so a row that became a fence between the scan and the delete
+    // is never removed by mistake.
+    return state.deleteIf?.(oldest.key, isDisposableBindingRow) ?? false;
+  };
+
+  const isNamespaceLimitError = (error: unknown): boolean =>
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "PLUGIN_STATE_LIMIT_EXCEEDED";
+
+  const update: NonNullable<BindingStateStore["update"]> = (key, updateValue, opts) => {
+    try {
+      return rawUpdate(key, updateValue, opts);
+    } catch (error) {
+      // Existing keys cannot hit the namespace limit, so a failure here is a
+      // full insert; sweep one disposable row and give it exactly one retry.
+      if (!isNamespaceLimitError(error) || !sweepOldestDisposableBinding()) {
+        throw error;
+      }
+      return rawUpdate(key, updateValue, opts);
+    }
+  };
+
   const leaseContext = new AsyncLocalStorage<Map<string, BindingLeaseOwner>>();
   const archiveContext = new AsyncLocalStorage<boolean>();
   let activeBindingMutations = 0;
