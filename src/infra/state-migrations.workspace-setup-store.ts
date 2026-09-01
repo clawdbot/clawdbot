@@ -174,6 +174,15 @@ function canonicalFingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function workspaceSetupConflictError(params: {
+  source: LegacyWorkspaceStateSource;
+  differences: string[];
+}): Error {
+  return new Error(
+    `legacy workspace setup at ${params.source.sourcePath} conflicts with canonical SQLite state (${params.differences.join("; ")}). Canonical state was preserved and the legacy source remains in place, so workspace use stays blocked. Verify the canonical row, then move ${params.source.sourcePath} aside if it is stale and rerun Doctor.`,
+  );
+}
+
 function setupFingerprint(params: {
   workspacePath: string;
   bootstrapSeededAt: string | null;
@@ -382,7 +391,19 @@ export function importAndRecordReceipt(params: {
             existing.workspace_path !== params.source.workspaceDir ||
             existing.version !== WORKSPACE_SETUP_STATE_VERSION
           ) {
-            throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+            const differences = [
+              ...(existing.workspace_path !== params.source.workspaceDir
+                ? [
+                    `workspace path canonical=${JSON.stringify(existing.workspace_path)} legacy=${JSON.stringify(params.source.workspaceDir)}`,
+                  ]
+                : []),
+              ...(existing.version !== WORKSPACE_SETUP_STATE_VERSION
+                ? [
+                    `version canonical=${String(existing.version)} legacy=${String(WORKSPACE_SETUP_STATE_VERSION)}`,
+                  ]
+                : []),
+            ];
+            throw workspaceSetupConflictError({ source: params.source, differences });
           }
           const existingFingerprint = setupFingerprint({
             workspacePath: existing.workspace_path,
@@ -431,7 +452,23 @@ export function importAndRecordReceipt(params: {
                 existing.setup_completed_at !== null &&
                 sourceSetupCompletedAt !== existing.setup_completed_at);
             if (hasConflictingMilestone) {
-              throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+              const differences = [
+                ...(sourceBootstrapSeededAt !== null &&
+                existing.bootstrap_seeded_at !== null &&
+                sourceBootstrapSeededAt !== existing.bootstrap_seeded_at
+                  ? [
+                      `bootstrapSeededAt canonical=${JSON.stringify(existing.bootstrap_seeded_at)} legacy=${JSON.stringify(sourceBootstrapSeededAt)}`,
+                    ]
+                  : []),
+                ...(sourceSetupCompletedAt !== null &&
+                existing.setup_completed_at !== null &&
+                sourceSetupCompletedAt !== existing.setup_completed_at
+                  ? [
+                      `setupCompletedAt canonical=${JSON.stringify(existing.setup_completed_at)} legacy=${JSON.stringify(sourceSetupCompletedAt)}`,
+                    ]
+                  : []),
+              ];
+              throw workspaceSetupConflictError({ source: params.source, differences });
             }
             executeSqliteQuerySync(
               db,
@@ -462,7 +499,12 @@ export function importAndRecordReceipt(params: {
             existing?.workspace_path != null &&
             existing.workspace_path !== params.source.workspaceDir
           ) {
-            throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+            throw workspaceSetupConflictError({
+              source: params.source,
+              differences: [
+                `workspace path canonical=${JSON.stringify(existing.workspace_path)} legacy=${JSON.stringify(params.source.workspaceDir)}`,
+              ],
+            });
           }
           const setupColumns = {
             workspace_path: params.source.workspaceDir,

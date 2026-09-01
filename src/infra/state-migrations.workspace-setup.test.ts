@@ -843,6 +843,11 @@ describe("legacy workspace Doctor migration", () => {
     const result = await migrate(context);
 
     expect(result.warnings[0]).toContain("conflicts with canonical SQLite state");
+    expect(result.warnings[0]).toContain(setupPath);
+    expect(result.warnings[0]).toContain(
+      'bootstrapSeededAt canonical="2026-07-15T00:00:00.000Z" legacy="2026-07-16T00:00:00.000Z"',
+    );
+    expect(result.warnings[0]).toContain("move");
     expect(fs.existsSync(setupPath)).toBe(true);
     expect(fs.existsSync(`${setupPath}.doctor-importing`)).toBe(false);
     expect(
