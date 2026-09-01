@@ -11,7 +11,7 @@ type LazyElementState =
 export function renderLazyElementState(
   state: LazyElementState,
   onRetry: () => void,
-  onClose: () => void,
+  onClose?: () => void,
 ) {
   return state.status === "loading"
     ? renderLoadingState()

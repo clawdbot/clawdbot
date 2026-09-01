@@ -7,7 +7,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
-import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
 import { renderLazyElementState } from "../components/lazy-view-error.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
@@ -26,6 +25,7 @@ import {
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
   LazyCustomElementRequestController,
+  LOGIN_GATE_ELEMENT,
   type OptionalCustomElement,
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
@@ -554,47 +554,47 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const shellOwnsRecovery =
       gatewaySnapshot.phase === "reconnecting" || gatewaySnapshot.phase === "reload-required";
     const showLoginGate = !gatewayConnected && !shellOwnsRecovery;
+    this.lazyCustomElements.requestWhileActive(LOGIN_GATE_ELEMENT, showLoginGate);
     if (showLoginGate) {
+      const lazyState = this.lazyCustomElements.visibleState;
       return html`
         <openclaw-tooltip-provider>
-          <openclaw-login-gate
-            .props=${{
-              resourceBasePath: context.resourceBasePath,
-              connected: gatewayConnected,
-              lastError: gatewaySnapshot.lastError,
-              lastErrorCode: gatewaySnapshot.lastErrorCode,
-              hasToken: Boolean(this.loginToken.trim()),
-              hasPassword: Boolean(this.loginPassword.trim()),
-              gatewayUrl: this.loginGatewayUrl,
-              token: this.loginToken,
-              password: this.loginPassword,
-              showGatewayToken: this.loginShowGatewayToken,
-              showGatewayPassword: this.loginShowGatewayPassword,
-              onGatewayUrlChange: (value: string) => {
-                this.updateLoginGatewayUrl(value);
-              },
-              onTokenChange: (value: string) => {
-                this.loginToken = value;
-              },
-              onPasswordChange: (value: string) => {
-                this.loginPassword = value;
-              },
-              onToggleGatewayToken: () => {
-                this.loginShowGatewayToken = !this.loginShowGatewayToken;
-              },
-              onToggleGatewayPassword: () => {
-                this.loginShowGatewayPassword = !this.loginShowGatewayPassword;
-              },
-              onConnect: () => {
-                this.loginGatePinned = true;
-                context.gateway.connect({
+          ${isOptionalElementDefined(LOGIN_GATE_ELEMENT)
+            ? html`<openclaw-login-gate
+                .props=${{
+                  resourceBasePath: context.resourceBasePath,
+                  connected: gatewayConnected,
+                  lastError: gatewaySnapshot.lastError,
+                  lastErrorCode: gatewaySnapshot.lastErrorCode,
+                  hasToken: Boolean(this.loginToken.trim()),
+                  hasPassword: Boolean(this.loginPassword.trim()),
                   gatewayUrl: this.loginGatewayUrl,
                   token: this.loginToken,
                   password: this.loginPassword,
-                });
-              },
-            }}
-          ></openclaw-login-gate>
+                  showGatewayToken: this.loginShowGatewayToken,
+                  showGatewayPassword: this.loginShowGatewayPassword,
+                  onGatewayUrlChange: (value: string) => this.updateLoginGatewayUrl(value),
+                  onTokenChange: (value: string) => (this.loginToken = value),
+                  onPasswordChange: (value: string) => (this.loginPassword = value),
+                  onToggleGatewayToken: () =>
+                    (this.loginShowGatewayToken = !this.loginShowGatewayToken),
+                  onToggleGatewayPassword: () =>
+                    (this.loginShowGatewayPassword = !this.loginShowGatewayPassword),
+                  onConnect: () => {
+                    this.loginGatePinned = true;
+                    context.gateway.connect({
+                      gatewayUrl: this.loginGatewayUrl,
+                      token: this.loginToken,
+                      password: this.loginPassword,
+                    });
+                  },
+                }}
+              ></openclaw-login-gate>`
+            : lazyState?.element === LOGIN_GATE_ELEMENT && lazyState.status === "error"
+              ? html`<main class="connect-splash">
+                  ${renderLazyElementState(lazyState, () => this.lazyCustomElements.retry())}
+                </main>`
+              : renderConnectingSplash(gatewayStartupStatus)}
           ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;

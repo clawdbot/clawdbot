@@ -37,6 +37,7 @@ import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { LOGIN_GATE_ELEMENT } from "./lazy-custom-element.ts";
 import { loadSettings } from "./settings.ts";
 
 const HELLO: GatewayHelloOk = {
@@ -119,6 +120,33 @@ function renderGatewaySurface(
   } finally {
     history.replaceState({}, "", originalUrl);
   }
+}
+
+function createGatewaySurface(gateway: ApplicationGateway) {
+  const app = document.createElement("openclaw-app") as unknown as {
+    runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
+    render: () => { strings: readonly string[] };
+    synchronizeGateway: (gateway: ApplicationGateway) => void;
+  };
+  app.runtime = {
+    documentMode: null,
+    context: {
+      gateway,
+      basePath: "",
+      agentSelection: { state: { selectedId: null } },
+      config: { current: { terminalEnabled: false } },
+      theme: { resolvedMode: "dark" },
+    } as unknown as ApplicationContext,
+  };
+  app.synchronizeGateway(gateway);
+  const container = document.createElement("div");
+  return {
+    container,
+    render() {
+      render(app.render(), container);
+      return container.innerHTML;
+    },
+  };
 }
 
 afterEach(() => {
@@ -285,17 +313,31 @@ describe("Control UI Gateway target lineage", () => {
     },
   );
 
-  it("returns to the login gate when a newly selected Gateway's first attempt fails", () => {
+  it("keeps the failure-only login gate out of successful startup", async () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    clients[0]?.opts.onHello?.(HELLO);
+
+    const surface = createGatewaySurface(gateway);
+
+    expect(surface.render()).toContain("<openclaw-app-shell");
+    await Promise.resolve();
+    expect(customElements.get(LOGIN_GATE_ELEMENT.tagName)).toBeUndefined();
+  });
+
+  it("loads the login gate when a newly selected Gateway's first attempt fails", async () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.start();
     clients[0]?.opts.onHello?.(HELLO);
     gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
     clients[1]?.opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
 
-    const surface = renderGatewaySurface(gateway);
+    const surface = createGatewaySurface(gateway);
 
-    expect(surface).toContain("<openclaw-login-gate");
-    expect(surface).not.toContain("<openclaw-app-shell");
+    expect(surface.render()).toContain('class="connect-splash"');
+    expect(surface.container.querySelector("openclaw-app-shell")).toBeNull();
+    await customElements.whenDefined(LOGIN_GATE_ELEMENT.tagName);
+    expect(surface.render()).toContain("<openclaw-login-gate");
   });
 
   it("re-scopes credentials when the login draft changes Gateway", () => {

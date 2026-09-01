@@ -5,7 +5,10 @@ import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI responsive login gate E2E",
@@ -17,10 +20,48 @@ let RECOVERY_ARTIFACT_DIR: string;
 beforeEach(() => {
   RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
 });
+const loginGateModule = /\/assets\/login-gate-[^/?]+\.js(?:\?.*)?$/u;
+
+async function installLoginGateChunkFailure(page: Page) {
+  let headRequests = 0;
+  let moduleRequests = 0;
+  await page.route("**/*", async (route) => {
+    if (route.request().method() !== "HEAD") {
+      await route.fallback();
+      return;
+    }
+    headRequests += 1;
+    if (headRequests === 1) {
+      await route.fulfill({ status: 503 });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.route(loginGateModule, async (route) => {
+    moduleRequests += 1;
+    if (moduleRequests === 1) {
+      await route.abort("internetdisconnected");
+      return;
+    }
+    await route.fallback();
+  });
+  return {
+    headRequests: () => headRequests,
+    moduleRequests: () => moduleRequests,
+  };
+}
 
 async function renderLoginGate(page: Page): Promise<void> {
+  const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
+  await gateway.waitForRequest("connect");
+  await gateway.rejectDeferred("connect", {
+    code: "INVALID_REQUEST",
+    message: "token missing",
+    details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  });
+  await page.locator("openclaw-login-gate").waitFor();
 
   await mountLoginGate(page);
 }
@@ -65,6 +106,137 @@ async function closeContext(context: BrowserContext): Promise<void> {
 }
 
 suite.define(() => {
+  it("keeps the login gate module out of successful startup and reconnect recovery", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    let moduleRequests = 0;
+    await page.route(loginGateModule, async (route) => {
+      moduleRequests += 1;
+      await route.fallback();
+    });
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(moduleRequests).toBe(0);
+      expect(
+        await page.evaluate(() => customElements.get("openclaw-login-gate") === undefined),
+      ).toBe(true);
+
+      await gateway.deferNext("connect");
+      await gateway.closeLatest(1012, "test reconnect");
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("reconnecting");
+      expect(await page.locator("openclaw-app-shell").count()).toBe(1);
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      expect(moduleRequests).toBe(0);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("shows startup progress while the login gate module loads", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const heldModule = await holdModuleResponse(page, loginGateModule);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      const rejection = gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+
+      await heldModule.request;
+      await page.locator(".connect-splash").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      expect(await page.locator(".lazy-view-error").count()).toBe(0);
+      heldModule.release();
+      await rejection;
+      await page.locator("openclaw-login-gate").waitFor();
+    } finally {
+      heldModule.release();
+      await closeContext(context);
+    }
+  });
+
+  it.each(["button", "enter"] as const)(
+    "recovers a failed login gate chunk and preserves $trigger connection submission",
+    async (trigger) => {
+      const context = await suite.browser.newContext({
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const failure = await installLoginGateChunkFailure(page);
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+      try {
+        await page.goto(suite.server.baseUrl);
+        await gateway.waitForRequest("connect");
+        const rejection = gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "token missing",
+          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+        });
+
+        await expect.poll(failure.moduleRequests).toBe(1);
+        await rejection;
+        const error = page.locator(".lazy-view-error");
+        await error.waitFor();
+        expect(await error.getByRole("button", { name: "Retry", exact: true }).isVisible()).toBe(
+          true,
+        );
+        expect(await error.getByRole("button", { name: "Close", exact: true }).count()).toBe(0);
+        expect(failure.headRequests()).toBe(1);
+        const reloaded = page.waitForEvent("domcontentloaded");
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await reloaded;
+        await gateway.waitForRequest("connect");
+        await gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "token missing",
+          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+        });
+        await page.locator("openclaw-login-gate").waitFor();
+        expect(failure.moduleRequests()).toBe(2);
+
+        const token = `lazy-${trigger}-token`;
+        const tokenInput = page.getByLabel(/Gateway token/i);
+        await tokenInput.fill(token);
+        const previousConnects = (await gateway.getRequests("connect")).length;
+        await gateway.deferNext("connect");
+        if (trigger === "button") {
+          await page.getByRole("button", { name: "Connect", exact: true }).click();
+        } else {
+          await tokenInput.press("Enter");
+        }
+        await expect
+          .poll(async () => (await gateway.getRequests("connect")).length)
+          .toBe(previousConnects + 1);
+        expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+          auth: { token },
+        });
+        await gateway.resolveDeferred("connect");
+        await page.locator("openclaw-app-shell").waitFor();
+      } finally {
+        await closeContext(context);
+      }
+    },
+  );
+
   it("cache-busts stale-build recovery on a first dashboard navigation", async () => {
     const context = await suite.browser.newContext({
       serviceWorkers: "block",

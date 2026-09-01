@@ -20,6 +20,7 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { redactLoginFailureError } from "../lib/login-failure-error.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   isPresenceViewerIdle,
@@ -43,7 +44,6 @@ import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
-import { redactLoginFailureError } from "./login-gate.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {

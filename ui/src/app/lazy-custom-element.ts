@@ -231,6 +231,13 @@ export const COMMAND_PALETTE_ELEMENT = {
   loadModule: () => import("../components/command-palette.ts"),
 } satisfies OptionalCustomElement;
 
+// First-connect recovery is failure-only, so keep its full guidance out of successful startup.
+export const LOGIN_GATE_ELEMENT = {
+  tagName: "openclaw-login-gate",
+  label: t("login.subtitle"),
+  loadModule: () => import("../components/login-gate.ts"),
+} satisfies OptionalCustomElement;
+
 const DEBUG_OVERLAY_TAG = "openclaw-debug-overlay";
 
 export const DEBUG_OVERLAY_ELEMENT = {
