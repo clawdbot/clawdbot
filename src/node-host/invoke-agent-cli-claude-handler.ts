@@ -94,7 +94,12 @@ function prepareClaudeNodeSecretInput(params: {
   ]) {
     delete params.childEnv[key];
   }
-  const source = Buffer.from(params.requestEnv?.[selected.requestEnv] ?? "", "utf8");
+  const value = params.requestEnv?.[selected.requestEnv]?.trim();
+  // An empty descriptor suppresses Claude's healthy native login.
+  if (!value) {
+    return { cleanup: () => {} };
+  }
+  const source = Buffer.from(value, "utf8");
   params.childEnv[selected.descriptorEnv] = "3";
   return {
     secretInput: {

@@ -56,10 +56,7 @@ const sectionAlignmentRoutes = [
   "updates",
 ] as const;
 
-const actionSectionCases = [
-  { route: "mcp", heading: "Configured servers" },
-  { route: "model-providers", heading: "Default models" },
-] as const;
+const actionSectionCases = [{ route: "mcp", heading: "Configured servers" }] as const;
 
 const settingsRowRoutes = [
   "profile",
@@ -673,6 +670,9 @@ suite.define(() => {
           pathname,
           routeId: route,
         });
+        if (route === "model-providers") {
+          await page.getByRole("heading", { name: "Defaults", exact: true }).waitFor();
+        }
 
         const titleDescriptionPairs = page.locator(
           ".settings-row__text > .settings-row__title + .settings-row__desc",

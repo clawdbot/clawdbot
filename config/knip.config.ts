@@ -100,6 +100,8 @@ const repositoryScriptEntries = [
   "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
+  // merge.sh invokes this native review-authority parser by path.
+  "scripts/pr-lib/clawsweeper-review-gate.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
@@ -476,10 +478,8 @@ const config = {
         "highlight.js",
         "playwright-core",
         "partial-json",
-        // Optional runtime imports: the native Canvas bundle falls back without Markdown,
-        // and the meme-maker skill emits SVG when sharp is not installed.
+        // The native Canvas bundle falls back without optional Markdown support.
         "@a2ui/markdown-it",
-        "sharp",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootToolingAndWorkspaceDependencies,

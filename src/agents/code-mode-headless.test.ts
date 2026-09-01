@@ -1,15 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
-  vi.fn<() => Promise<typeof import("typescript")>>(),
-);
-
-vi.mock("./code-mode-typescript-runtime.js", () => ({
-  loadCodeModeTypeScriptRuntime,
-}));
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
-import { prepareSource } from "./code-mode-runtime.js";
+import { prepareSource } from "./code-mode-source.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import { createHeadlessCodeModeHarness, testing } from "./code-mode.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -41,13 +33,8 @@ function expectFailed(result: CodeModeHeadlessResult) {
 }
 
 describe("headless Code Mode", () => {
-  beforeEach(async () => {
-    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
-  });
-
   afterEach(() => {
     vi.useRealTimers();
-    loadCodeModeTypeScriptRuntime.mockReset();
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -905,46 +892,6 @@ describe("headless Code Mode", () => {
       resumed: true,
     });
     expect(result.toolCallCount).toBe(0);
-  });
-
-  it("times out an unfinished headless TypeScript runtime load", async () => {
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
-
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness(),
-        language: "typescript",
-        code: "return 42;",
-        wallClockMs: 25,
-      }),
-    );
-
-    expect(result).toMatchObject({
-      code: "timeout",
-      error: "code mode headless wall-clock timeout exceeded",
-      output: [],
-      toolCallCount: 0,
-    });
-  });
-
-  it("aborts an unfinished headless TypeScript runtime load", async () => {
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
-    const controller = new AbortController();
-    const resultPromise = runCodeModeScriptHeadless({
-      ctx: createHeadlessCodeModeHarness(),
-      language: "typescript",
-      code: "return 42;",
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    expect(expectFailed(await resultPromise)).toMatchObject({
-      code: "aborted",
-      error: "code mode execution aborted",
-      output: [],
-      toolCallCount: 0,
-    });
   });
 
   it("keeps worker-leg wall-clock expiry classified as timeout", async () => {

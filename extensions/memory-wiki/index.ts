@@ -10,8 +10,8 @@ import {
   reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
+import { memoryWikiConfigSchema } from "./src/config-schema.js";
 import {
-  memoryWikiConfigSchema,
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
   resolveMemoryWikiConfiguredAgentIds,

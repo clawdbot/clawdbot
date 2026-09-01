@@ -123,6 +123,12 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
 
+The native Windows Testbox idle monitor uses the running `sshd` service's local
+listener ports, not Blacksmith's externally forwarded SSH port. Established SSH
+connections keep the job alive; the `~/.testbox-last-activity` modification time
+covers short commands between the 30-second polls. Once neither indicates recent
+activity, the configured idle timeout still ends the job.
+
 The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
 untrusted path above invokes the installed trusted CLI, never the PR's wrapper.

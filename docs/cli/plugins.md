@@ -157,6 +157,13 @@ already tracked install do not require it. `--force` does not bypass
 install safety checks.
 </Warning>
 
+Bundled plugins and verified first-party catalog plugins do not require
+`--accept-capabilities` for install, enable, update, or Doctor repair. Local
+copies and unverified sources still require capability consent even when their
+package name matches an official plugin. This exemption does not grant OAuth,
+operating-system, or runtime tool permissions. See
+[capability consent](/plugins/manage-plugins#capability-consent).
+
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no

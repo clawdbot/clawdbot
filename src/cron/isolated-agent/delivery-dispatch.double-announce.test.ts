@@ -2136,11 +2136,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it("retains a stale one-shot transcript without delivery or a fallback summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
 
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.job.deleteAfterRun = true;
+    params.beforeSessionDelete = vi.fn();
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
       nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
     };
@@ -2158,6 +2161,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryState.status).toBe("not-delivered");
+    expect(state.deliveryState.delivered).toBe(false);
+    expect(state.deliveryState.error).toEqual(deliveryError);
+    expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
+    expect(params.beforeSessionDelete).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {

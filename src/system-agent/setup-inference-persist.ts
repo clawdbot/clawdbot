@@ -559,6 +559,8 @@ export async function runSetupInferenceTest(params: {
         sessionId,
         sessionKey,
         sessionManager,
+        // The probe owns its transcript; session admission must not create durable agent state.
+        sessionPersistence: "detached",
         agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,

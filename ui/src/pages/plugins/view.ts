@@ -10,6 +10,7 @@ import { icons } from "../../components/icons.ts";
 import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/openclaw-mascot.ts";
+import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import {
   renderSettingsEmpty,
   renderSettingsGroup,
@@ -482,12 +483,11 @@ function renderRowMessage(
           >
             ${t("pluginsPage.cancel")}
           </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            title=${props.mutationBlockedReason ?? ""}
-            ?disabled=${busy || !props.canMutate}
-            @click=${() =>
+          ${renderMutationButton(props, {
+            busy,
+            className: "btn btn--sm danger",
+            label: busy ? t("pluginsPage.installing") : t("pluginsPage.installAnyway"),
+            onClick: () =>
               requestInstall(
                 props,
                 {
@@ -495,10 +495,8 @@ function renderRowMessage(
                   acknowledgeInstallPolicyWarning: true,
                 },
                 installIdentity,
-              )}
-          >
-            ${busy ? t("pluginsPage.installing") : t("pluginsPage.installAnyway")}
-          </button>
+              ),
+          })}
         </div>
       </div>
     `;
@@ -520,30 +518,64 @@ function fromInteractiveChild(event: Event): boolean {
   );
 }
 
+function renderMutationButton(
+  props: PluginsViewProps,
+  options: {
+    busy: boolean;
+    className: string;
+    label: TemplateResult | string;
+    onClick: () => void;
+    ariaLabel?: string;
+    title?: string;
+    stopPropagation?: boolean;
+  },
+) {
+  const reason = props.mutationBlockedReason;
+  const button = html`
+    <button
+      type="button"
+      class=${options.className}
+      aria-label=${options.ariaLabel ?? nothing}
+      title=${reason ? nothing : (options.title ?? nothing)}
+      ?disabled=${!reason && (!props.canMutate || options.busy)}
+      aria-disabled=${!props.canMutate ? "true" : nothing}
+      @click=${(event: Event) => {
+        if (options.stopPropagation) {
+          event.stopPropagation();
+        }
+        if (!props.canMutate || options.busy) {
+          return;
+        }
+        options.onClick();
+      }}
+    >
+      ${options.label}
+    </button>
+  `;
+  return renderReasonedDisabledControl(reason, button);
+}
+
 function renderToggleButton(
   props: PluginsViewProps,
   busy: boolean,
-  options: { enabled: boolean; onToggle: (enabled: boolean) => void },
+  options: {
+    enabled: boolean;
+    onToggle: (enabled: boolean) => void;
+    className?: string;
+  },
 ) {
   const enable = !options.enabled;
-  return html`
-    <button
-      type="button"
-      class="btn btn--sm"
-      title=${props.mutationBlockedReason ?? ""}
-      ?disabled=${!props.canMutate || busy}
-      @click=${(event: Event) => {
-        event.stopPropagation();
-        options.onToggle(enable);
-      }}
-    >
-      ${busy
-        ? t("pluginsPage.working")
-        : enable
-          ? t("pluginsPage.enableAction")
-          : t("pluginsPage.disableAction")}
-    </button>
-  `;
+  return renderMutationButton(props, {
+    busy,
+    className: options.className ?? "btn btn--sm",
+    label: busy
+      ? t("pluginsPage.working")
+      : enable
+        ? t("pluginsPage.enableAction")
+        : t("pluginsPage.disableAction"),
+    onClick: () => options.onToggle(enable),
+    stopPropagation: true,
+  });
 }
 
 function renderRemoveButton(
@@ -552,21 +584,16 @@ function renderRemoveButton(
   name: string,
   onRemove: () => void,
 ) {
-  return html`
-    <button
-      type="button"
-      class="btn btn--sm btn--icon plugins-remove"
-      aria-label=${t("pluginsPage.removeNamed", { name })}
-      title=${props.mutationBlockedReason ?? t("pluginsPage.removeNamed", { name })}
-      ?disabled=${!props.canMutate || busy}
-      @click=${(event: Event) => {
-        event.stopPropagation();
-        onRemove();
-      }}
-    >
-      ${icons.trash}
-    </button>
-  `;
+  const label = t("pluginsPage.removeNamed", { name });
+  return renderMutationButton(props, {
+    busy,
+    className: "btn btn--sm btn--icon plugins-remove",
+    label: icons.trash,
+    onClick: onRemove,
+    ariaLabel: label,
+    title: label,
+    stopPropagation: true,
+  });
 }
 
 function renderInstallButton(
@@ -580,21 +607,14 @@ function renderInstallButton(
   if (installMessage?.installPolicyWarning) {
     return nothing;
   }
-  return html`
-    <button
-      type="button"
-      class="btn btn--sm plugins-install"
-      title=${props.mutationBlockedReason ?? ""}
-      aria-label=${t("pluginsPage.installNamed", { name })}
-      ?disabled=${!props.canMutate || busy}
-      @click=${(event: Event) => {
-        event.stopPropagation();
-        props.onInstall(request, installIdentity);
-      }}
-    >
-      ${busy ? t("pluginsPage.installing") : t("pluginsPage.install")}
-    </button>
-  `;
+  return renderMutationButton(props, {
+    busy,
+    className: "btn btn--sm plugins-install",
+    label: busy ? t("pluginsPage.installing") : t("pluginsPage.install"),
+    onClick: () => props.onInstall(request, installIdentity),
+    ariaLabel: t("pluginsPage.installNamed", { name }),
+    stopPropagation: true,
+  });
 }
 
 function renderCatalogActions(
@@ -768,16 +788,12 @@ function renderMcpSection(props: PluginsViewProps) {
         <a class="plugins-group__link" href=${props.mcpSettingsHref}
           >${t("pluginsPage.mcpSettingsLink")}</a
         >
-        <button
-          type="button"
-          class="btn btn--sm"
-          title=${props.mutationBlockedReason ?? ""}
-          ?disabled=${!props.canMutate || props.mcpBusy}
-          @click=${() => props.onMcpFormToggle(!props.mcpFormOpen)}
-        >
-          <span aria-hidden="true">${icons.plus}</span>
-          ${t("mcpServers.add")}
-        </button>
+        ${renderMutationButton(props, {
+          busy: props.mcpBusy,
+          className: "btn btn--sm",
+          label: html`<span aria-hidden="true">${icons.plus}</span> ${t("mcpServers.add")}`,
+          onClick: () => props.onMcpFormToggle(!props.mcpFormOpen),
+        })}
       `,
     },
     html`
@@ -894,17 +910,12 @@ function renderConnectorRow(
         ${isMcp
           ? installed
             ? renderSettingsStatus({ kind: "ok", label: t("pluginsPage.connectorAdded") })
-            : html`
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  title=${props.mutationBlockedReason ?? ""}
-                  ?disabled=${!props.canMutate || busy}
-                  @click=${() => props.onAddConnector(connector)}
-                >
-                  ${busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd")}
-                </button>
-              `
+            : renderMutationButton(props, {
+                busy,
+                className: "btn btn--sm",
+                label: busy ? t("mcpServers.adding") : t("pluginsPage.connectorAdd"),
+                onClick: () => props.onAddConnector(connector),
+              })
           : html`
               <button
                 type="button"
@@ -1149,21 +1160,11 @@ function renderDetailOverlay(props: PluginsViewProps) {
           </p>
           <div class="plugins-detail__actions">
             ${plugin.installed
-              ? html`
-                  <button
-                    type="button"
-                    class="btn ${plugin.enabled ? "" : "primary"}"
-                    title=${props.mutationBlockedReason ?? ""}
-                    ?disabled=${!props.canMutate || busy}
-                    @click=${() => props.onSetEnabled(plugin.id, !plugin.enabled, key)}
-                  >
-                    ${busy
-                      ? t("pluginsPage.working")
-                      : plugin.enabled
-                        ? t("pluginsPage.disableAction")
-                        : t("pluginsPage.enableAction")}
-                  </button>
-                `
+              ? renderToggleButton(props, busy, {
+                  enabled: plugin.enabled,
+                  onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, key),
+                  className: `btn ${plugin.enabled ? "" : "primary"}`,
+                })
               : plugin.install
                 ? renderInstallButton(
                     props,
@@ -1174,18 +1175,14 @@ function renderDetailOverlay(props: PluginsViewProps) {
                   )
                 : nothing}
             ${plugin.removable
-              ? html`
-                  <button
-                    type="button"
-                    class="btn plugins-detail__remove"
-                    title=${props.mutationBlockedReason ?? ""}
-                    ?disabled=${!props.canMutate || busy}
-                    @click=${() => props.onUninstall(plugin.id, key)}
-                  >
-                    <span aria-hidden="true">${icons.trash}</span>
-                    ${t("pluginsPage.remove")}
-                  </button>
-                `
+              ? renderMutationButton(props, {
+                  busy,
+                  className: "btn plugins-detail__remove",
+                  label: html`<span aria-hidden="true">${icons.trash}</span> ${t(
+                      "pluginsPage.remove",
+                    )}`,
+                  onClick: () => props.onUninstall(plugin.id, key),
+                })
               : nothing}
           </div>
           ${plugin.error
@@ -1313,12 +1310,6 @@ export function renderPlugins(props: PluginsViewProps) {
         </button>
       </div>
 
-      ${props.mutationBlockedReason
-        ? html`<div class="plugins-readonly" role="note">
-            <span aria-hidden="true">${icons.alertTriangle}</span>
-            <span>${props.mutationBlockedReason}</span>
-          </div>`
-        : nothing}
       ${props.error
         ? html`<div class="plugins-page-error" role="alert">
             <span>${props.error}</span>

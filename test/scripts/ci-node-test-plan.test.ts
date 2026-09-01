@@ -389,8 +389,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runnerBackend: "hybrid",
     };
     const fallback = createNodeTestShardBundles(options);
-    // The whole CLI group pays 77s of tests plus its 100s runtime build.
-    // It must stay alone; all other non-dist fallback jobs remain within 150s.
+    // CLI and Doctor config/state each need a runtime build before their workers.
+    // Keep them separate; other non-dist fallback jobs remain within 150s.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
@@ -400,7 +400,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           pretestBuildMode: shard.pretestBuildMode,
           predictedSeconds: shard.predictedSeconds,
         })),
-    ).toEqual([{ groups: ["agentic-cli"], pretestBuildMode: "runtime", predictedSeconds: 177 }]);
+    ).toEqual([
+      { groups: ["agentic-cli"], pretestBuildMode: "runtime", predictedSeconds: 177 },
+      {
+        groups: ["agentic-commands-doctor-config-state"],
+        pretestBuildMode: "runtime",
+        predictedSeconds: 158,
+      },
+    ]);
     const agentChatStripes = fallback
       .flatMap((shard) => shard.groups)
       .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
@@ -1588,6 +1595,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.commands.config.ts"],
         includePatterns: shard.includePatterns,
+        ...(shard.shardName === "agentic-commands-doctor-config-state"
+          ? { pretestBuildMode: "runtime" }
+          : {}),
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: shard.shardName,
