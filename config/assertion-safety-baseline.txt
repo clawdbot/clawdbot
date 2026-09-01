@@ -3260,7 +3260,6 @@ src/infra/windows-port-pids.ts	2
 src/infra/windows-powershell-spawn.ts	1
 src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	2
-src/llm/model-runtime-binding.ts	2
 src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.ts	3
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/minimax.ts	3
