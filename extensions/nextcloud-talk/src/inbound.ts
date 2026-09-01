@@ -9,8 +9,8 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import {
+  isRecord,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
