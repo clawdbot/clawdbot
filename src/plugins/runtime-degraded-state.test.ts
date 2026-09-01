@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   pluginInstallPathMatchesRoot,
@@ -38,14 +39,15 @@ describe("pluginInstallPathMatchesRoot", () => {
 
 describe("toPublicPluginVerificationDiagnostic", () => {
   it("redacts credentials before bounding public detail", () => {
-    const secret = "sk-proj-public-diagnostic-secret";
+    const fixtureCredential = "fixture-only-public-diagnostic-value";
+    registerSecretValueForRedaction(fixtureCredential);
     const diagnostic = toPublicPluginVerificationDiagnostic({
       kind: "plugin-verification",
       reason: "invalid-package-json",
-      detail: `api_key=${secret} ${"x".repeat(1_200)}`,
+      detail: `${fixtureCredential} ${"x".repeat(1_200)}`,
     });
 
-    expect(diagnostic.detail).not.toContain(secret);
+    expect(diagnostic.detail).not.toContain(fixtureCredential);
     expect(diagnostic.detail.length).toBeLessThanOrEqual(1_000);
   });
 
