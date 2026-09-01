@@ -189,8 +189,11 @@ export function formatMs(ms?: number | null): string {
     return t("common.na");
   }
   return new Date(timestampMs).toLocaleString(i18n.getLocale(), {
-    dateStyle: "short",
-    timeStyle: "short",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
 

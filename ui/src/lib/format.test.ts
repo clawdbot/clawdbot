@@ -134,7 +134,9 @@ describe("formatMs", () => {
   });
 
   it("defaults to minute precision", () => {
-    expect(formatMs(new Date(2026, 0, 2, 15, 4, 55).getTime())).not.toMatch(/:55(?:\s|$)/u);
+    const formatted = formatMs(new Date(2026, 0, 2, 15, 4, 55).getTime());
+    expect(formatted).toContain("2026");
+    expect(formatted).not.toMatch(/:55(?:\s|$)/u);
   });
 });
 
