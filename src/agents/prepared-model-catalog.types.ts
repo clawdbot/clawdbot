@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -14,6 +15,8 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   authModes: PreparedAgentCredentialModes;
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
+  /** Registry owned by this prepared generation; omitted from read-only builds. */
+  pluginRegistry?: PluginRegistry;
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
@@ -26,5 +29,6 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   authModes: PreparedAgentCredentialModes;
   authStore: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
   modelCatalog: ModelCatalogSnapshot;
 }>;

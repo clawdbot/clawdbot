@@ -5,7 +5,10 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
-  Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
+  Pick<
+    ResolvedPublishedModelCatalogOwner,
+    "authModes" | "authStore" | "metadataSnapshot" | "pluginRegistry"
+  > & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };
 
@@ -33,7 +36,7 @@ const privateAccessByLoader = new WeakMap<
   GatewayModelCatalogPrivateAccess
 >();
 
-/** Keeps prepared auth and metadata behind the Gateway-owned loader boundary. */
+/** Keeps prepared auth, metadata, and registry ownership behind the Gateway loader boundary. */
 export function registerGatewayModelCatalogPrivateAccess(
   loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"],
   access: GatewayModelCatalogPrivateAccess,

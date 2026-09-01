@@ -149,6 +149,7 @@ export async function loadPreparedGatewayModelCatalogSnapshot(
       authStore: refreshedAuth?.authStore ?? owner.authStore,
       metadataSnapshot: owner.metadataSnapshot,
       authMaterializations: owner.authMaterializations,
+      pluginRegistry: owner.pluginRegistry,
     };
   }
 }
@@ -161,6 +162,7 @@ export async function loadGatewayModelCatalogSnapshot(
     authStore: _authStore,
     metadataSnapshot: _metadataSnapshot,
     authMaterializations: _authMaterializations,
+    pluginRegistry: _pluginRegistry,
     ...snapshot
   } = await loadPreparedGatewayModelCatalogSnapshot(params);
   return snapshot;
@@ -218,5 +220,6 @@ export async function readPreparedGatewayModelCatalogOwnerSnapshot(
     authStore: owner.authStore,
     metadataSnapshot: owner.metadataSnapshot,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
+    pluginRegistry: owner.pluginRegistry,
   };
 }

@@ -520,6 +520,7 @@ export async function prepareModelsListResult(
   const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
   const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
+  const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -546,7 +547,7 @@ export async function prepareModelsListResult(
       agentId,
       agentDir: ownerSnapshot?.agentDir ?? resolveAgentDir(cfg, agentId),
       workspaceDir,
-      pluginRegistry: params.catalogProjector?.pluginRegistry,
+      pluginRegistry: preparedPluginRegistry,
       isCurrent: () => params.context.getRuntimeConfig() === initialConfig,
     });
   const evaluateNative: typeof nativeEvaluator = (entry, host) => {
@@ -605,7 +606,7 @@ export async function prepareModelsListResult(
       preparedAuthStore,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
-      pluginRegistry: params.catalogProjector?.pluginRegistry,
+      pluginRegistry: preparedPluginRegistry,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();
