@@ -1,4 +1,5 @@
 // Document Extract tests cover document extractor plugin behavior.
+import JSZip from "jszip";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createEngineMock, openPdfMock, pdfDocument } = vi.hoisted(() => ({
@@ -15,7 +16,12 @@ vi.mock("clawpdf", () => ({
   createEngine: createEngineMock,
 }));
 
-import { createPdfDocumentExtractor } from "./document-extractor.js";
+import {
+  createDocxDocumentExtractor,
+  createPdfDocumentExtractor,
+  createPptxDocumentExtractor,
+  createXlsxDocumentExtractor,
+} from "./document-extractor.js";
 
 function request(overrides = {}) {
   return {
@@ -228,5 +234,132 @@ describe("PDF document extractor", () => {
       expect(onImageExtractionError).toHaveBeenCalledWith(failure);
     }
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Office document extractors", () => {
+  async function createDocx(parts: Record<string, string>): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", "<Types/>");
+    for (const [name, content] of Object.entries(parts)) {
+      zip.file(name, content);
+    }
+    return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+  }
+
+  it("declares DOCX support", () => {
+    const extractor = createDocxDocumentExtractor();
+    const { extract, ...descriptor } = extractor;
+    expect(extract).toBeInstanceOf(Function);
+    expect(descriptor).toEqual({
+      id: "docx",
+      label: "DOCX",
+      mimeTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+      autoDetectOrder: 20,
+    });
+  });
+
+  it("extracts paragraph and table text from a DOCX package", async () => {
+    const buffer = await createDocx({
+      "word/document.xml": [
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>',
+        "<w:p><w:r><w:t>Hello &amp; welcome</w:t></w:r><w:r><w:tab/><w:t>Debra</w:t></w:r></w:p>",
+        "<w:p><w:r><w:t>Katherine homework</w:t></w:r><w:r><w:br/><w:t>page two</w:t></w:r></w:p>",
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Score</w:t></w:r></w:p></w:tc></w:tr>",
+        "<w:tr><w:tc><w:p><w:r><w:t>Katherine</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>100</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+        "</w:body></w:document>",
+      ].join(""),
+    });
+
+    await expect(
+      createDocxDocumentExtractor().extract(
+        request({
+          buffer,
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }),
+      ),
+    ).resolves.toEqual({
+      text: "Hello & welcome\tDebra\nKatherine homework\npage two\nTable\nName\tScore\nKatherine\t100",
+      images: [],
+    });
+  });
+
+  it("extracts worksheet rows from an XLSX package", async () => {
+    const buffer = await createDocx({
+      "xl/workbook.xml": [
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>',
+        '<sheet name="Meal Plan" r:id="rId1"/>',
+        "</sheets></workbook>",
+      ].join(""),
+      "xl/_rels/workbook.xml.rels":
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      "xl/sharedStrings.xml": [
+        "<sst><si><t>Item</t></si><si><t>Count</t></si><si><t>Muffins</t></si></sst>",
+      ].join(""),
+      "xl/worksheets/sheet1.xml": [
+        "<worksheet><sheetData>",
+        '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>',
+        '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="C2"><v>12</v></c></row>',
+        "</sheetData></worksheet>",
+      ].join(""),
+    });
+
+    await expect(
+      createXlsxDocumentExtractor().extract(
+        request({
+          buffer,
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }),
+      ),
+    ).resolves.toEqual({
+      text: "Meal Plan\nrow\tvalues\n1\tItem\t\tCount\n2\tMuffins\t\t12",
+      images: [],
+    });
+  });
+
+  it("extracts slide and speaker-note text from a PPTX package", async () => {
+    const drawing = (text: string) =>
+      `<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:sld>`;
+    const buffer = await createDocx({
+      "ppt/slides/slide1.xml": drawing("Lesson &amp; practice"),
+      "ppt/notesSlides/notesSlide1.xml": drawing("Teacher note"),
+    });
+
+    await expect(
+      createPptxDocumentExtractor().extract(
+        request({
+          buffer,
+          mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }),
+      ),
+    ).resolves.toEqual({
+      text: "Slide 1 (ppt/slides/slide1.xml)\nLesson & practice\n\nNotes 1 (ppt/notesSlides/notesSlide1.xml)\nTeacher note",
+      images: [],
+    });
+  });
+
+  it("includes comments, footnotes, endnotes, headers, and footers", async () => {
+    const xml = (text: string) =>
+      `<w:root xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:root>`;
+    const buffer = await createDocx({
+      "word/document.xml": xml("body"),
+      "word/footnotes.xml": xml("footnote"),
+      "word/endnotes.xml": xml("endnote"),
+      "word/comments.xml": xml("comment"),
+      "word/header2.xml": xml("header"),
+      "word/footer1.xml": xml("footer"),
+    });
+
+    await expect(
+      createDocxDocumentExtractor().extract(
+        request({
+          buffer,
+          mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }),
+      ),
+    ).resolves.toEqual({
+      text: "body\nfootnote\nendnote\ncomment\nfooter\nheader",
+      images: [],
+    });
   });
 });

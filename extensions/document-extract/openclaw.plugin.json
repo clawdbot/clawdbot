@@ -5,9 +5,9 @@
   },
   "enabledByDefault": true,
   "name": "Document Extraction",
-  "description": "Extract text and fallback page images from local document attachments.",
+  "description": "Extract text from local PDF and Office document attachments, with fallback page images for PDFs.",
   "contracts": {
-    "documentExtractors": ["pdf"]
+    "documentExtractors": ["pdf", "docx", "xlsx", "pptx"]
   },
   "configSchema": {
     "type": "object",

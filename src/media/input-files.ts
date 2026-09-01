@@ -15,6 +15,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import { extractDocumentContent } from "./document-extractors.runtime.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -115,7 +116,13 @@ export const DEFAULT_INPUT_IMAGE_MIMES = [
   "image/heic",
   "image/heif",
 ];
-/** Default MIME allowlist for input_file text/PDF extraction. */
+/** Word OOXML (.docx) MIME handled by the document-extract plugin. */
+export const DOCX_MIME_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const PPTX_MIME_TYPE =
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+/** Default MIME allowlist for input_file text/PDF/OOXML extraction. */
 const DEFAULT_INPUT_FILE_MIMES = [
   "text/plain",
   "text/markdown",
@@ -123,6 +130,9 @@ const DEFAULT_INPUT_FILE_MIMES = [
   "text/csv",
   "application/json",
   "application/pdf",
+  DOCX_MIME_TYPE,
+  XLSX_MIME_TYPE,
+  PPTX_MIME_TYPE,
 ];
 /** Default decoded-byte cap for input_image payloads. */
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -481,6 +491,34 @@ export async function extractFileContentFromBuffer(params: {
         },
       }),
     });
+    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    return {
+      filename,
+      text,
+      images: extracted.images.length > 0 ? extracted.images : undefined,
+    };
+  }
+
+  if (mimeType === DOCX_MIME_TYPE || mimeType === XLSX_MIME_TYPE || mimeType === PPTX_MIME_TYPE) {
+    const label =
+      mimeType === DOCX_MIME_TYPE ? "DOCX" : mimeType === XLSX_MIME_TYPE ? "XLSX" : "PPTX";
+    const extracted = await withInputFileTimeout({
+      label: `${label} extraction`,
+      timeoutMs: limits.timeoutMs,
+      task: extractDocumentContent({
+        buffer,
+        mimeType,
+        maxPages: limits.pdf.maxPages,
+        maxPixels: limits.pdf.maxPixels,
+        minTextChars: limits.pdf.minTextChars,
+        ...(params.config ? { config: params.config } : {}),
+      }),
+    });
+    if (!extracted) {
+      throw new Error(
+        `${label} extraction disabled or unavailable: enable the document-extract plugin to process Office files.`,
+      );
+    }
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {
       filename,

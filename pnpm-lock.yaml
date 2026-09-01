@@ -995,6 +995,9 @@ importers:
       clawpdf:
         specifier: 0.3.1
         version: 0.3.1
+      jszip:
+        specifier: 3.10.1
+        version: 3.10.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
