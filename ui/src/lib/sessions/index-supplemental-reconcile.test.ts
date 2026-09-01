@@ -35,7 +35,7 @@ function capabilityWithList(result: ReturnType<typeof sessionsResult>) {
 }
 
 describe("supplemental session reconciliation", () => {
-  it("does not notify subscribers when lineage republishes the current row and defaults", async () => {
+  it("publishes an owner change but not unchanged lineage rows and defaults", async () => {
     const canonical = {
       key,
       kind: "direct" as const,
@@ -47,6 +47,12 @@ describe("supplemental session reconciliation", () => {
       await sessions.refresh({ force: true });
       const published = vi.fn();
       sessions.subscribe(published);
+      const result = sessions.state.result;
+      sessions.reconcile(canonical, result?.defaults, { resultAgentId: "main" });
+      expect(sessions.state.result).toBe(result);
+      expect(sessions.state.agentId).toBe("main");
+      expect(published).toHaveBeenCalledOnce();
+      published.mockClear();
       const owner = {
         activeSessionLineageRoot: null,
         activeSessionLineageSelectedRow: null,

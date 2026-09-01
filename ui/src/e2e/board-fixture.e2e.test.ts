@@ -223,38 +223,48 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it("serves background-task transcripts through both chat entry points", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
-      const sessionKey = "agent:openclaw-mock:subagent:mock-task-1";
-      const [description] = (await requestPreviewGateway(page, [
-        { method: "sessions.describe", params: { key: sessionKey } },
-      ])) as Array<{ session: { sessionId: string } }>;
-      const replies = await requestPreviewGateway(
-        page,
-        ["chat.history", "chat.startup"].map((method) => ({
-          method,
-          params: { sessionKey },
-        })),
-      );
-      for (const reply of replies) {
-        expect(reply).toMatchObject({
-          sessionId: description!.session.sessionId,
-          messages: [
-            { role: "user", content: [{ text: expect.stringContaining("Map the run-status") }] },
-            {
-              role: "assistant",
-              content: [{ text: expect.stringContaining("Tracing task events") }],
-            },
-          ],
+  it.each([
+    { task: 1, user: "Map the run-status", assistant: "Tracing task events" },
+    { task: 2, user: "Audit the gateway", assistant: "Comparing requester" },
+  ])(
+    "serves background task $task through both chat entry points",
+    async ({ task, user, assistant }) => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(new URL("/chat", fixtureServer.url).toString());
+        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const [description] = (await requestPreviewGateway(page, [
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ])) as Array<{ session: { sessionId: string } }>;
+        expect(description).toMatchObject({
+          session: { key: sessionKey, sessionId: expect.any(String) },
         });
+        const replies = await requestPreviewGateway(
+          page,
+          ["chat.history", "chat.startup"].map((method) => ({
+            method,
+            params: { sessionKey },
+          })),
+        );
+        for (const reply of replies) {
+          expect(reply).toMatchObject({
+            sessionId: description!.session.sessionId,
+            sessionInfo: description!.session,
+            messages: [
+              { role: "user", content: [{ text: expect.stringContaining(user) }] },
+              {
+                role: "assistant",
+                content: [{ text: expect.stringContaining(assistant) }],
+              },
+            ],
+          });
+        }
+      } finally {
+        await page.close();
       }
-    } finally {
-      await page.close();
-    }
-  });
+    },
+  );
 
   it("keeps the main preview run active when hydrating canonical session metadata", async () => {
     const page = await browser.newPage();
