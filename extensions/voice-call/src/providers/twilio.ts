@@ -204,12 +204,16 @@ export class TwilioProvider implements VoiceCallProvider {
     return Boolean(this.mediaStreamHandler && this.getStreamUrl());
   }
 
-  isValidStreamToken(callSid: string, token?: string): boolean {
+  validateStreamToken(callSid: string, token?: string): boolean {
     const expected = this.streamAuthTokens.get(callSid);
-    if (!expected || !token) {
+    if (!expected || !token || !safeEqualSecret(expected, token)) {
       return false;
     }
-    return safeEqualSecret(expected, token);
+    return !this.hasRegisteredStream(callSid);
+  }
+
+  revokeStreamToken(callSid: string): void {
+    this.streamAuthTokens.delete(callSid);
   }
 
   /**

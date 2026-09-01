@@ -335,6 +335,7 @@ export class MediaStreamHandler {
         }
       } catch (error) {
         console.error("[MediaStream] Error processing message:", error);
+        ws.close(1011, "Stream setup failed");
       }
     });
 
@@ -363,7 +364,7 @@ export class MediaStreamHandler {
     message: TwilioMediaMessage,
     streamToken?: string,
   ): StreamSession | null {
-    const streamSid = message.streamSid || "";
+    const streamSid = message.streamSid;
     const callSid = message.start?.callSid || "";
 
     // Prefer token from start message customParameters (set via TwiML <Parameter>),
@@ -371,6 +372,11 @@ export class MediaStreamHandler {
     // URLs but reliably delivers <Parameter> values in customParameters.
     const effectiveToken = message.start?.customParameters?.token ?? streamToken;
 
+    if (typeof streamSid !== "string" || !streamSid.trim()) {
+      console.warn("[MediaStream] Missing streamSid; closing stream");
+      ws.close(1008, "Missing streamSid");
+      return null;
+    }
     console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
     if (!callSid) {
       console.warn("[MediaStream] Missing callSid; closing stream");

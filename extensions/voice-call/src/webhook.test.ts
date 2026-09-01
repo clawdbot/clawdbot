@@ -11,10 +11,11 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TwilioProvider } from "./providers/twilio.js";
-import type { CallRecord, NormalizedEvent } from "./types.js";
+import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import { createWebhookReplayCache, reserveWebhookReplay } from "./webhook-replay.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { connectWs, waitForClose } from "./websocket-test-support.js";
 
 const mocks = vi.hoisted(() => {
   const realtimeTranscriptionProvider: RealtimeTranscriptionProviderPlugin = {
@@ -32,6 +33,7 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
+    realtimeTranscriptionProvider,
     generateVoiceResponse: vi.fn(
       async (_params?: {
         onEarlyText?: (text: string) => Promise<boolean>;
@@ -71,7 +73,8 @@ const provider: VoiceCallProvider = {
 type TwilioProviderTestDouble = VoiceCallProvider &
   Pick<
     TwilioProvider,
-    | "isValidStreamToken"
+    | "validateStreamToken"
+    | "revokeStreamToken"
     | "registerCallStream"
     | "unregisterCallStream"
     | "hasRegisteredStream"
@@ -313,7 +316,8 @@ function createTwilioStreamingProvider(
       stopListening: async () => {},
       getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
     }),
-    isValidStreamToken: () => true,
+    validateStreamToken: () => true,
+    revokeStreamToken: () => {},
     registerCallStream: () => {},
     unregisterCallStream: () => {},
     hasRegisteredStream: () => true,
@@ -432,6 +436,122 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
 });
 
 describe("VoiceCallWebhookServer media stream authorization", () => {
+  it("rejects a parallel Twilio token replay and admits a replacement after disconnect", async () => {
+    const providerCallId = "CA-stream-auth";
+    const call = {
+      ...createCall(Date.now()),
+      provider: "twilio" as const,
+      providerCallId,
+    };
+    const { manager, endCall } = createManager([call]);
+    Object.assign(manager, {
+      getCallByProviderCallId: (callId: string) => (callId === providerCallId ? call : undefined),
+      speakInitialMessage: vi.fn(async () => {}),
+    });
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: { openai: { apiKey: "test-key" } }, // pragma: allowlist secret
+      },
+    });
+    const twilio = new TwilioProvider(
+      { accountSid: "AC123", authToken: "test-auth" },
+      {
+        publicUrl: "https://example.test",
+        streamPath: config.streaming.streamPath,
+        skipVerification: true,
+      },
+    );
+    const twimlContext: WebhookContext = {
+      headers: {},
+      rawBody: `CallStatus=ringing&Direction=inbound&CallSid=${providerCallId}`,
+      url: "https://example.test/voice/webhook",
+      method: "POST",
+    };
+    const twiml = twilio.parseWebhookEvent(twimlContext).providerResponseBody ?? "";
+    const token = twiml.match(/<Parameter name="token" value="([^"]+)"/u)?.[1];
+    if (!token) {
+      throw new Error("expected Twilio stream token");
+    }
+
+    const server = new VoiceCallWebhookServer(config, manager, twilio);
+    const sockets = [] as Awaited<ReturnType<typeof connectWs>>[];
+    const createSession = vi
+      .spyOn(mocks.realtimeTranscriptionProvider, "createSession")
+      .mockImplementationOnce(() => {
+        throw new Error("synthetic transcription setup failure");
+      });
+    try {
+      const baseUrl = await server.start();
+      const streamUrl = new URL(config.streaming.streamPath, baseUrl);
+      streamUrl.protocol = "ws:";
+      const start = async (streamSid?: string) => {
+        const ws = await connectWs(streamUrl.toString());
+        sockets.push(ws);
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            streamSid,
+            start: { callSid: providerCallId, customParameters: { token } },
+          }),
+        );
+        return ws;
+      };
+
+      const malformed = await start();
+      await expect(waitForClose(malformed)).resolves.toEqual({
+        code: 1008,
+        reason: "Missing streamSid",
+      });
+      expect(twilio.hasRegisteredStream(providerCallId)).toBe(false);
+
+      const failed = await start("MZ-setup-failure");
+      await expect(waitForClose(failed)).resolves.toEqual({
+        code: 1011,
+        reason: "Stream setup failed",
+      });
+      expect(twilio.hasRegisteredStream(providerCallId)).toBe(false);
+
+      const first = await start("MZ-first");
+      await vi.waitFor(() =>
+        expect(twilio.hasRegisteredStream(providerCallId, "MZ-first")).toBe(true),
+      );
+
+      const replay = await connectWs(streamUrl.toString());
+      sockets.push(replay);
+      const replayClosed = waitForClose(replay);
+      replay.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-replay",
+          start: { callSid: providerCallId, customParameters: { token } },
+        }),
+      );
+      await expect(replayClosed).resolves.toEqual({ code: 1008, reason: "Unknown call" });
+
+      const firstClosed = waitForClose(first);
+      first.close(1000);
+      await firstClosed;
+      await vi.waitFor(() => expect(twilio.hasRegisteredStream(providerCallId)).toBe(false));
+
+      await start("MZ-replacement");
+      await vi.waitFor(() =>
+        expect(twilio.hasRegisteredStream(providerCallId, "MZ-replacement")).toBe(true),
+      );
+      expect(endCall).not.toHaveBeenCalled();
+    } finally {
+      for (const ws of sockets) {
+        if (ws.readyState !== ws.CLOSED) {
+          ws.terminate();
+        }
+      }
+      createSession.mockRestore();
+      await server.stop();
+    }
+  });
+
   it.each(["telnyx", "plivo", "mock"] as const)(
     "rejects active provider=%s calls before consulting their call id",
     async (providerName) => {
@@ -2450,7 +2570,8 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       processEvent: vi.fn(),
     } as unknown as CallManager;
 
-    let currentStreamSid: string | null = "MZ-old";
+    let currentStreamSid: string | null = null;
+    const revokeStreamToken = vi.fn();
     const twilioProvider = createTwilioStreamingProvider({
       registerCallStream: (_callSid: string, streamSid: string) => {
         currentStreamSid = streamSid;
@@ -2465,6 +2586,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         currentStreamSid = null;
       },
       hasRegisteredStream: () => currentStreamSid !== null,
+      revokeStreamToken,
     });
 
     const config = createConfig({
@@ -2509,6 +2631,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
+    expect(revokeStreamToken).not.toHaveBeenCalled();
     expect(speakInitialMessage).not.toHaveBeenCalled();
 
     mediaHandler.config.onTranscriptionReady?.("CA-stream-1", "MZ-new");
@@ -2518,6 +2641,8 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
+    expect(revokeStreamToken).toHaveBeenCalledOnce();
+    expect(revokeStreamToken).toHaveBeenCalledWith("CA-stream-1");
     expect(endCall).toHaveBeenCalledTimes(1);
     expect(endCall).toHaveBeenCalledWith(call.callId);
     expect(messages).toContain(

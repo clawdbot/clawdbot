@@ -90,6 +90,7 @@ describe("MediaStreamHandler security hardening", () => {
 
     try {
       const ws = await connectWs(server.url);
+      const closed = waitForClose(ws);
       ws.send("{not json");
 
       await vi.waitFor(() => {
@@ -107,8 +108,7 @@ describe("MediaStreamHandler security hardening", () => {
       expect(error).not.toBeInstanceOf(SyntaxError);
       expect((error as Error).cause).toBeInstanceOf(SyntaxError);
 
-      ws.close();
-      await waitForClose(ws);
+      await expect(closed).resolves.toEqual({ code: 1011, reason: "Stream setup failed" });
     } finally {
       errorSpy.mockRestore();
       await server.close();

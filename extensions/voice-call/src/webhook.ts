@@ -234,6 +234,9 @@ export class VoiceCallWebhookServer {
       debug: rawDebug ? (msg: string) => rawDebug(`[voice-call] ${msg}`) : undefined,
     };
     this.streamDisconnectGrace = new StreamDisconnectGrace(({ providerCallId }) => {
+      if (this.provider.name === "twilio") {
+        (this.provider as TwilioProvider).revokeStreamToken(providerCallId);
+      }
       const call = this.manager.getCallByProviderCallId(providerCallId);
       if (!call) {
         return;
@@ -413,7 +416,7 @@ export class VoiceCallWebhookServer {
           return false;
         }
         const twilio = this.provider as TwilioProvider;
-        if (!twilio.isValidStreamToken(callId, token)) {
+        if (!twilio.validateStreamToken(callId, token)) {
           this.logger.warn(`Rejecting media stream: invalid token for ${callId}`);
           return false;
         }
@@ -470,9 +473,10 @@ export class VoiceCallWebhookServer {
         if (call) {
           this.manager.invalidateAutoResponse(call);
         }
-
-        // Register stream with provider for TTS routing
+        // Admission and this callback run synchronously around session
+        // construction, so no second start can interleave before this bind.
         if (this.provider.name === "twilio") {
+          // SAFETY: the provider-name guard narrows the configured classic provider.
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
       },
