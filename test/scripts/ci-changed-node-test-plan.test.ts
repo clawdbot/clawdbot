@@ -219,6 +219,7 @@ describe("CI changed Node test plan", () => {
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
     expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["scripts/tsdown-build.mts"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
