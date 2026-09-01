@@ -1545,6 +1545,37 @@ describe("resolved route cache keys", () => {
       { agentId: "hyphen-guild", matchedBy: "binding.guild" },
     );
   });
+
+  test("does not reuse a peerless cached route for the unknown direct-message route", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "channel-wide" }, { id: "any-direct" }] },
+      bindings: [
+        {
+          agentId: "any-direct",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "channel-wide",
+          match: { channel: "telegram", accountId: "*" },
+        },
+      ],
+    };
+
+    // Channel route targets resolve a peerless route for every configured
+    // channel/account before anything asks for the unknown-sender DM route.
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" }), {
+      agentId: "channel-wide",
+      matchedBy: "binding.channel",
+    });
+    expectResolvedRoute(
+      resolveUnknownDirectMessageRoute({ cfg, channel: "telegram", accountId: "default" }),
+      { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
+    );
+  });
 });
 
 describe("binding evaluation cache scalability", () => {

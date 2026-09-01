@@ -560,7 +560,10 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
 }
 
 function formatRouteCachePeer(peer: RoutePeer | null): string {
-  if (!peer || !peer.id) {
+  // An empty peer id is not the same route as having no peer: it still enables
+  // the peer and peer-wildcard tiers and produces a different session key, so
+  // keep the kind rather than collapsing onto the peerless sentinel.
+  if (!peer) {
     return "-";
   }
   return `${peer.kind}:${peer.id}`;
