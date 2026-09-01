@@ -9,6 +9,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import type { TaskLaneGatewayService } from "../task-lanes/gateway/service.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -62,6 +63,17 @@ const unavailableCron: GatewayCronServiceContract = {
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
+function taskLanesUnavailable(): never {
+  throw new Error("Task lanes are unavailable in local embedded agent gateway context.");
+}
+
+const unavailableTaskLanes: TaskLaneGatewayService = {
+  addProvider: () => taskLanesUnavailable(),
+  rebuildFromPlugins: () => taskLanesUnavailable(),
+  snapshot: async () => taskLanesUnavailable(),
+  registry: () => taskLanesUnavailable(),
+};
+
 /** Creates the minimal gateway context used by embedded local agent execution. */
 function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
@@ -96,6 +108,7 @@ function createLocalGatewayRequestContext(
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
+    taskLanes: unavailableTaskLanes,
     getRuntimeConfig: params.getRuntimeConfig,
     // Embedded calls have no running Gateway application owner.
     isConfigReloadSettled: () => false,
