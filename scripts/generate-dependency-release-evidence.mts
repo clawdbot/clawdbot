@@ -353,8 +353,8 @@ function runEvidenceReports(
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
 async function generateDependencyReleaseEvidence({
-  rootDir = process.cwd(),
-  outputDir,
+  rootDir: sourceRoot = process.cwd(),
+  outputDir: requestedOutputDir,
   releaseRef,
   npmDistTag,
   baseRef = null,
@@ -365,7 +365,7 @@ async function generateDependencyReleaseEvidence({
   execFileSyncImpl = execFileSync,
   now = new Date(),
 }: GenerateEvidenceParams = {}) {
-  if (!outputDir) {
+  if (!requestedOutputDir) {
     throw new Error("Expected --output-dir <path>.");
   }
   if (!releaseRef) {
@@ -375,8 +375,8 @@ async function generateDependencyReleaseEvidence({
     throw new Error("Expected --npm-dist-tag <tag>.");
   }
 
-  rootDir = path.resolve(rootDir);
-  outputDir = path.resolve(outputDir);
+  const rootDir = path.resolve(sourceRoot);
+  const outputDir = path.resolve(requestedOutputDir);
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
   // Publish the artifact location before a blocking report exits so CI can retain its evidence.
