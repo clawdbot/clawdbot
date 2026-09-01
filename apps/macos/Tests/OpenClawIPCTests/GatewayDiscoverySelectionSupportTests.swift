@@ -36,7 +36,7 @@ struct GatewayDiscoverySelectionSupportTests {
     {
         var isolatedEnv = env
         isolatedEnv["OPENCLAW_CONFIG_PATH"] = configPath
-        try await TestIsolation.withIsolatedState(
+        return try await TestIsolation.withIsolatedState(
             env: isolatedEnv,
             defaults: [
                 "gateway.preferredStableID": nil,
