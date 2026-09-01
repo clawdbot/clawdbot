@@ -57,9 +57,18 @@ export class IMessageRpcRequestError extends Error {
 //
 // Deliberately narrow. An ordinary rejection (bad target, unknown chat) says
 // nothing about bridge health and must not discard the capability cache.
-export function isIMessageBridgeStall(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return message.includes("Timed out waiting for response") || message.includes("imsg rpc timeout");
+// Module-private: request() is the only production caller, and the behavior is
+// covered through that boundary rather than by calling this directly.
+function isIMessageBridgeStall(error: unknown): boolean {
+  // Only an Error can carry a stall. Stringifying an arbitrary value here would
+  // render most objects as "[object Object]" and match nothing anyway.
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.includes("Timed out waiting for response") ||
+    error.message.includes("imsg rpc timeout")
+  );
 }
 
 const BRIDGE_STALL_GUIDANCE =

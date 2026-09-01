@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -399,12 +400,14 @@ describe("IMessageRpcClient child stream error handling", () => {
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   let child: MockChild;
 
-  const seeded = {
+  // Not `as const`: rpcMethods would widen to `readonly []`, which is not
+  // assignable to the mutable string[] on IMessagePrivateApiStatus.
+  const seeded: IMessagePrivateApiStatus = {
     available: true,
     v2Ready: true,
     selectors: {},
     rpcMethods: [],
-  } as const;
+  };
 
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "development");

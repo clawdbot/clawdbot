@@ -1,7 +1,9 @@
 // Imessage plugin tests cover discarding a cached bridge verdict when the
 // injected helper stops answering.
+//
+// The stall matcher itself is module-private to client.ts; its behavior is
+// covered through request() in client.test.ts rather than by calling it here.
 import { describe, expect, it } from "vitest";
-import { isIMessageBridgeStall } from "./client.js";
 import {
   getCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
@@ -15,33 +17,6 @@ const available: IMessagePrivateApiStatus = {
   selectors: {},
   rpcMethods: [],
 };
-
-describe("isIMessageBridgeStall", () => {
-  it("matches imsg's own wait timeout, the shape a wedged bridge produces", () => {
-    // Verbatim from a 2026-08-31 incident where a flight-arrival notification
-    // was dropped: Messages.app was alive and the dylib was still mapped, but
-    // the injected helper had stopped answering.
-    expect(
-      isIMessageBridgeStall(
-        new Error("Internal error: code=-32603 Timed out waiting for response to 'send-message'"),
-      ),
-    ).toBe(true);
-  });
-
-  it("matches a client-side request timeout", () => {
-    expect(isIMessageBridgeStall(new Error("imsg rpc timeout (send)"))).toBe(true);
-  });
-
-  it("ignores ordinary rejections, which say nothing about bridge health", () => {
-    // Discarding the capability cache on these would force a needless re-probe
-    // on every bad argument the model supplies.
-    expect(isIMessageBridgeStall(new Error('Unknown target "***" for iMessage.'))).toBe(false);
-    expect(
-      isIMessageBridgeStall(new Error("bridge transport requires an existing chat target")),
-    ).toBe(false);
-    expect(isIMessageBridgeStall(undefined)).toBe(false);
-  });
-});
 
 describe("invalidateCachedIMessagePrivateApiStatus", () => {
   it("drops a positive verdict that would otherwise never expire", () => {
