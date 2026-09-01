@@ -110,10 +110,11 @@ describe("queueDelegatedApproval", () => {
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
+    const publishResolved = vi.fn();
     const context = {
       systemAgentApprovalManager: manager,
       broadcast: vi.fn(),
-      approvalEvents: { publishRequested: vi.fn(), publishResolved: vi.fn() },
+      approvalEvents: { publishRequested: vi.fn(), publishResolved },
     } as unknown as GatewayRequestContext;
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-run-race");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -145,7 +146,7 @@ describe("queueDelegatedApproval", () => {
     await expect(result).rejects.toThrow("system-agent approval authority is no longer active");
     expect(applyEffect).not.toHaveBeenCalled();
     await vi.waitFor(() =>
-      expect(context.approvalEvents.publishResolved).toHaveBeenCalledWith(
+      expect(publishResolved).toHaveBeenCalledWith(
         "system-agent",
         expect.objectContaining({ applicationStatus: "not-applied" }),
       ),
