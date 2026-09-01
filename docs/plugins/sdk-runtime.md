@@ -55,6 +55,14 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Channel plugins that deliver agent replies directly can call
+`renderPresentationForDelivery(handler, payload)` from
+`openclaw/plugin-sdk/interactive-runtime` in their `preparePayload` hook. Supply
+the channel's `presentationCapabilities` and `renderPresentation` callback; the
+callback receives a payload with a normalized, adapted `presentation`. This
+shares core outbound rendering's fallback-text policy and removes the portable
+presentation fields after rendering. The callback may be synchronous or async.
+
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for

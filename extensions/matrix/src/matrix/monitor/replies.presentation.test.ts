@@ -67,7 +67,7 @@ describe("Matrix reply presentation delivery", () => {
   const deliver = async (reply: ReplyPayload) =>
     await deliverMatrixReplies({
       cfg,
-      replies: [prepareMatrixReplyPayload(reply)],
+      replies: [await prepareMatrixReplyPayload(reply)],
       roomId: "room:1",
       client: {} as MatrixClient,
       runtime: runtimeEnv,
@@ -135,13 +135,16 @@ describe("Matrix reply presentation delivery", () => {
   });
 
   it("sends the authored text once when the presentation only restates it", async () => {
-    // `/status` ships its own plain rendering plus a table nothing on Matrix renders
-    // natively; re-flattening the table would replace that rendering with a worse one.
+    // `/status` curates table/context facts into prose with extra diagnostics.
+    // Native context support must not replace that authored fallback when tables degrade.
+    const authoredText =
+      "Status: ok\nUptime: 42s\nReference UTC: 12:00\n\n| agent | state |\n| --- | --- |\n| main | idle |";
     await deliver({
-      text: "Status: ok\n\n| agent | state |\n| --- | --- |\n| main | idle |",
+      text: authoredText,
       presentationTextMode: "fallback",
       presentation: {
         blocks: [
+          { type: "context", text: "Status: ok · Uptime: 42s" },
           {
             type: "table",
             caption: "Agents",
@@ -152,12 +155,13 @@ describe("Matrix reply presentation delivery", () => {
       },
     });
 
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
     const [, text, opts] = sendMessageMatrixMock.mock.calls[0] as [
       string,
       string,
       Record<string, unknown>,
     ];
-    expect(text).toBe("Status: ok\n\n| agent | state |\n| --- | --- |\n| main | idle |");
+    expect(text).toBe(authoredText);
     expect(opts.extraContent).toBeUndefined();
   });
 
