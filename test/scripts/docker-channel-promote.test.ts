@@ -348,7 +348,26 @@ describe("Docker channel promotion", () => {
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(true);
   });
 
-  it("allows a first promotion when the target alias does not exist", () => {
+  it.each([
+    [
+      "manifest unknown in the error message",
+      (ref: string) => new Error(`${ref}: manifest unknown`),
+    ],
+    [
+      "no such manifest in buffered stderr",
+      () =>
+        Object.assign(new Error("docker inspect failed"), {
+          stderr: Buffer.from("no such manifest"),
+        }),
+    ],
+    [
+      "the exact image reference not found in stdout",
+      (ref: string) =>
+        Object.assign(new Error("docker inspect failed"), {
+          stdout: `ERROR: ${ref}: not found`,
+        }),
+    ],
+  ])("allows a first promotion for %s", (_label, createMissingError) => {
     let created = false;
     const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
       if (args[2] === "create") {
@@ -357,9 +376,7 @@ describe("Docker channel promotion", () => {
       }
       if (args.at(-1)?.includes(".Image")) {
         if (!args[3]!.includes("@") && !created) {
-          const error = new Error("docker inspect failed");
-          Object.assign(error, { stderr: `ERROR: ${args[3]}: not found` });
-          throw error;
+          throw createMissingError(args[3]!);
         }
         return imageConfig("2026.6.33");
       }
@@ -374,12 +391,20 @@ describe("Docker channel promotion", () => {
     expect(created).toBe(true);
   });
 
-  it("fails closed when an existing alias cannot be inspected", () => {
+  it.each([
+    [
+      "an unrelated executable lookup",
+      Object.assign(new Error("docker inspect failed"), {
+        stderr: "docker credential helper: not found",
+      }),
+    ],
+    ["authentication", new Error("unauthorized: authentication required")],
+    ["a timeout", new Error("docker inspect timed out")],
+    ["a transport failure", new Error("read: connection reset by peer")],
+  ])("fails closed on %s while inspecting an existing alias", (_label, inspectionError) => {
     const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
       if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@")) {
-        const error = new Error("unauthorized: authentication required");
-        Object.assign(error, { stderr: "denied: requested access to the resource is denied" });
-        throw error;
+        throw inspectionError;
       }
       if (args.at(-1)?.includes(".Image")) {
         return imageConfig("2026.6.33");
@@ -392,7 +417,28 @@ describe("Docker channel promotion", () => {
         { version: "2026.6.33", images: images.slice(0, 1) },
         { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
       ),
-    ).toThrow("unauthorized");
+    ).toThrow(inspectionError.message);
+    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
+  });
+
+  it("does not treat a longer image token as the inspected alias", () => {
+    const execFileSyncImpl = vi.fn((_command: string, args: string[]) => {
+      if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@")) {
+        const error = new Error("docker inspect failed");
+        Object.assign(error, { stderr: `mirror-${args[3]}: not found` });
+        throw error;
+      }
+      return args.at(-1)?.includes(".Image")
+        ? imageConfig("2026.6.33")
+        : JSON.stringify({ digest });
+    });
+
+    expect(() =>
+      promoteDockerChannel(
+        { version: "2026.6.33", images: images.slice(0, 1) },
+        { execFileSyncImpl, verifyAttestationsImpl: skipAttestationVerification },
+      ),
+    ).toThrow("docker inspect failed");
     expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(false);
   });
 

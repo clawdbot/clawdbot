@@ -80,6 +80,8 @@ describe("models config input presence", () => {
         discoveryAuthConfig: cfg,
         sourceConfigForSecrets,
         agentDir: "/tmp/openclaw-model-input-presence",
+        // Model-ID policies are part of this prepared merge fixture, not ambient discovery.
+        pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
         env: { AWS_PROFILE: "default" },
         existingRaw: "",
         existingParsed: {},

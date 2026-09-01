@@ -1,5 +1,6 @@
 // Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   timestampMsToIsoString,
@@ -479,9 +480,12 @@ async function runAutoUpdateCommand(
       logPath: started.logPath,
     };
   } catch (err) {
+    // Filesystem failures can contain private helper paths; keep the full cause local.
+    log.info("automatic update handoff failed", { error: String(err) });
+    const code = extractErrorCode(err);
     return failure(
       "managed-service-handoff-failed",
-      `Automatic update handoff failed: ${String(err)}. Run \`${command}\` from a shell to inspect and retry.`,
+      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
   }
 }

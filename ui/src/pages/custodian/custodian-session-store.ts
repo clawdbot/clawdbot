@@ -27,9 +27,9 @@ import {
   hasCustodianUserInput,
   type CustodianSessionVariant,
 } from "./session-lifecycle.ts";
-import { parseCustodianQuestion } from "./structured-question.ts";
 import {
   createCustodianMessage,
+  createCustodianReplyMessage,
   custodianErrorMessage,
   CustodianTranscriptLoader,
   hasUnresolvedCustodianQuestion,
@@ -38,7 +38,6 @@ import {
 } from "./transcript.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
 
@@ -64,7 +63,7 @@ export class CustodianSessionStore {
   abandonedTurnOutcomeUnknown = false;
 
   private inferenceState: "unverified" | "ready" = "unverified";
-  private inputDrafts = { ordinary: "", sensitive: "" };
+  private inputDrafts = { ordinary: { value: "" }, sensitive: { value: "" } };
   private context: ApplicationContext | null = null;
   private variant: CustodianSessionVariant = "caretaker";
   private sessionVariant: CustodianSessionVariant | null = null;
@@ -131,11 +130,11 @@ export class CustodianSessionStore {
   }
 
   get input(): string {
-    return this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"];
+    return this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"].value;
   }
 
   set input(value: string) {
-    this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"] = value;
+    this.inputDrafts[this.sensitive ? "sensitive" : "ordinary"] = { value };
   }
 
   setInput(value: string): void {
@@ -146,7 +145,7 @@ export class CustodianSessionStore {
   private resetPromptInput(sensitive: boolean): void {
     // Retire prompt input at admission or replacement, even if the reply fails.
     // Ordinary composer drafts survive explicit actions and prompt replacement.
-    this.inputDrafts.sensitive = "";
+    this.inputDrafts.sensitive = { value: "" };
     [this.wizardValue, this.wizardSecretVisible] = [undefined, false];
     this.sensitive = sensitive;
   }
@@ -269,7 +268,7 @@ export class CustodianSessionStore {
       if (admit && !admit()) {
         return false;
       }
-      const draftConsumed = ordinaryDraft !== this.inputDrafts.ordinary;
+      const consumedDraft = this.inputDrafts.ordinary;
       this.resetPromptInput(this.sensitive);
       replyEpoch = this.requestEpoch;
       if (questionReply) {
@@ -282,7 +281,7 @@ export class CustodianSessionStore {
       return () => {
         this.messages = this.messages.filter((entry) => entry !== message);
         this.answeredQuestions = questionState[0];
-        if (draftConsumed && !this.inputDrafts.ordinary) {
+        if (ordinaryDraft !== consumedDraft && this.inputDrafts.ordinary === consumedDraft) {
           this.inputDrafts.ordinary = ordinaryDraft;
         }
       };
@@ -646,7 +645,7 @@ export class CustodianSessionStore {
     this.error = null;
     this.transcript.reset();
     this.inferenceState = "unverified";
-    this.inputDrafts.ordinary = "";
+    this.inputDrafts.ordinary = { value: "" };
     this.resetPromptInput(false);
     this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
@@ -704,8 +703,6 @@ export class CustodianSessionStore {
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
       this.inferenceState = "ready";
-      const step = result.step ?? null;
-      const question = step ? null : parseCustodianQuestion(result.question);
       if (this.rejoinBarrierPending && !hasCustodianUserInput(params)) {
         // Rejoin barrier: this input-free request queued behind any in-flight
         // turn on the Gateway's per-session queue, so refreshing here shows
@@ -718,16 +715,10 @@ export class CustodianSessionStore {
           return "sent";
         }
       }
-      this.wizardValue = step ? initialCustodianWizardValue(step) : undefined;
-      const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
-      if (!silentReply || question || step) {
-        const message = createCustodianMessage(
-          this.nextMessageId++,
-          "assistant",
-          silentReply ? "" : result.reply,
-          question,
-          step,
-        );
+      this.wizardValue = result.step ? initialCustodianWizardValue(result.step) : undefined;
+      const message = createCustodianReplyMessage(this.nextMessageId, result);
+      if (message) {
+        this.nextMessageId += 1;
         this.messages = [...this.messages, message];
       }
       if (result.action === "open-agent") {
@@ -746,8 +737,8 @@ export class CustodianSessionStore {
       return "sent";
     } catch (error) {
       if (epoch === this.requestEpoch && client === this.activeClient) {
-        // Only a known-unsent turn may restore its draft; receipts and sensitive
-        // input stay consumed, and a replacement conversation owns its own state.
+        // Only a known-unsent turn may restore its unchanged draft; newer edits,
+        // receipts, sensitive input and replacement conversations stay untouched.
         if (delivery === "unsent" && rollbackUnsent) {
           rollbackUnsent();
         }

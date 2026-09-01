@@ -98,21 +98,24 @@ describe("update success notice", () => {
       failure === "unavailable"
         ? null
         : {
-            ...storage,
-            ...(failure === "read denied"
-              ? {
-                  getItem: () => {
-                    throw new Error("Access denied");
-                  },
-                }
-              : {}),
-            ...(failure === "quota exceeded"
-              ? {
-                  setItem: () => {
-                    throw new Error("Quota exceeded");
-                  },
-                }
-              : {}),
+            get length() {
+              return storage.length;
+            },
+            clear: storage.clear.bind(storage),
+            key: storage.key.bind(storage),
+            removeItem: storage.removeItem.bind(storage),
+            getItem: (key: string) => {
+              if (failure === "read denied") {
+                throw new Error("Access denied");
+              }
+              return storage.getItem(key);
+            },
+            setItem: (key: string, value: string) => {
+              if (failure === "quota exceeded") {
+                throw new Error("Quota exceeded");
+              }
+              storage.setItem(key, value);
+            },
           },
     );
     const session = createUpdateNoticeSession(scope.gateway);

@@ -1,6 +1,7 @@
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { t } from "../i18n/index.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { clampText } from "../lib/format.ts";
@@ -10,6 +11,7 @@ import type { ApplicationContext } from "./context.ts";
 import { closeFailedUpdateDialog } from "./update-confirmation.runtime.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
 
+registerSettingsEnglish();
 registerUpdateActionsEnglish();
 
 export function presentUpdateFailureTriage(

@@ -927,6 +927,12 @@ catalog, API-key auth, and dynamic model resolution.
         `openclaw/plugin-sdk/provider-http`. The helper normalizes upload
         filenames, including AAC uploads that need an M4A-style filename for
         compatible transcription APIs.
+
+        Official plugins can use the private `blob-runtime` helper
+        `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
+        `new Blob(...)` to preserve the Buffer range without an intermediate copy;
+        shared backing is copied when needed. Construct the Blob before awaiting
+        other work so it snapshots the bytes immediately.
       </Tab>
       <Tab title="Realtime voice">
         Consumers can pass candidate provider IDs as the optional second argument

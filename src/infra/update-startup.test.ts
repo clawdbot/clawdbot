@@ -2347,12 +2347,15 @@ describe("update-startup", () => {
   it.each([false, true])(
     "preserves a failed handoff when automatic triage fails=%s",
     async (triageFails) => {
+      const helperPath = "/private/temporary-update-handoff/handoff.cjs";
+      const startupError = Object.assign(
+        new Error(`ENOENT: no such file or directory, open '${helperPath}'`),
+        { code: "ENOENT", path: helperPath },
+      );
       mockPackageInstallStatus();
       mockNpmChannelTag("beta", "2.0.0-beta.1");
       detectRespawnSupervisorMock.mockReturnValue("launchd");
-      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
-        Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
-      );
+      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(startupError);
       if (triageFails) {
         runUpdateFailureTriageMock.mockResolvedValueOnce({
           status: "failed",
@@ -2383,7 +2386,7 @@ describe("update-startup", () => {
         tag: "beta",
         forced: false,
         reason: "managed-service-handoff-failed",
-        message: expect.stringContaining("spawn ENOENT"),
+        message: expect.stringContaining("ENOENT"),
         triage: expect.stringContaining(triageFails ? "openclaw triage" : triageResult.hint),
       });
       expect(log.info).toHaveBeenCalledWith(
@@ -2401,6 +2404,13 @@ describe("update-startup", () => {
         stats: { reason: "managed-service-handoff-failed" },
       });
       expect(runUpdateFailureTriageMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(runUpdateFailureTriageMock.mock.calls[0]?.[0].failure)).not.toContain(
+        helperPath,
+      );
+      expect(JSON.stringify((await terminalSentinels.at(-1))?.payload)).not.toContain(helperPath);
+      expect(log.info).toHaveBeenCalledWith("automatic update handoff failed", {
+        error: String(startupError),
+      });
     },
   );
 

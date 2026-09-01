@@ -331,7 +331,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical diagnostic flag checker through its focused subpath.
       // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      4359,
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      4362,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -439,7 +441,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical diagnostic flag checker through its focused subpath.
       // +1: shared approval expiry formatter for native channel prompts.
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
-      2594,
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      2597,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

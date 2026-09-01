@@ -120,6 +120,7 @@ function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     repository: string;
     runCheck?: boolean;
@@ -181,6 +182,7 @@ function evaluateWorkflowExpression(
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: context.steps ?? {},
     needs: {
+      resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       preflight: {
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
@@ -1520,6 +1522,34 @@ describe("ci workflow guards", () => {
     expect(readCiWorkflow()).toEqual(expected);
   });
 
+  it.each([
+    ["artifact", 1],
+    ["source", 0],
+    ["published", 0],
+  ] as const)(
+    "fetches the required release preparation history for %s mode",
+    (packageMode, depth) => {
+      const prepare = readReleaseChecksWorkflow().jobs.prepare_release_package;
+      const checkout = prepare.steps.find(
+        (step: WorkflowStep) => step.name === "Checkout trusted workflow ref",
+      );
+      expect(checkout.with.ref).toBe("${{ github.sha }}");
+      expect(checkout.with["persist-credentials"]).toBe(false);
+      expect(checkout.with.filter).toBe("blob:none");
+      const fetchDepth = checkout.with["fetch-depth"];
+      expect(
+        typeof fetchDepth === "string"
+          ? evaluateWorkflowExpression(fetchDepth, {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              resolveTargetOutputs: { package_mode: packageMode },
+            })
+          : fetchDepth,
+      ).toBe(depth);
+    },
+  );
+
   it("gates frozen runtime-pair compatibility on the trusted suite outcome", () => {
     const workflow = readReleaseChecksWorkflow();
     const laneJob = workflow.jobs.qa_lab_runtime_pair_lane_release_checks;
@@ -1938,7 +1968,59 @@ NODE
     }
   });
 
-  it("serializes both Swift package suites on hosted macOS retries", () => {
+  it("runs release compilation independently of the complete native test workload", () => {
+    const workflow = readCiWorkflow();
+    const swift = workflow.jobs["macos-swift"];
+    expect(swift.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 2,
+      matrix: { phase: ["release", "tests"] },
+    });
+    expect(swift["continue-on-error"]).not.toBe(true);
+    const workloads = {
+      release: ["Native state schema version contract", "Swift lint", "Swift build (release)"],
+      tests: [
+        "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
+        "OpenClawKit tests",
+        "Swift test",
+      ],
+    };
+    const names = [];
+    for (const [phase, expected] of Object.entries(workloads)) {
+      const context = {
+        eventName: "workflow_dispatch" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: { phase },
+        preflightOutputs: { run_openclawkit_tests: "true" },
+      };
+      names.push(evaluateWorkflowExpression(swift.name, context));
+      const selected = swift.steps
+        .filter((step: WorkflowStep) =>
+          Object.values(workloads)
+            .flat()
+            .includes(step.name ?? ""),
+        )
+        .filter(
+          (step: WorkflowStep) =>
+            !step.if || evaluateWorkflowExpression(`\${{ ${step.if} }}`, context),
+        )
+        .map((step: WorkflowStep) => step.name);
+      expect(selected, phase).toEqual(expected);
+    }
+    // The release collector keys retained/rerun evidence by the displayed job name.
+    expect(new Set(names).size).toBe(2);
+    expect(workflow.jobs["ci-gate"].needs).toContain("macos-swift");
+    const gateStep = workflow.jobs["ci-gate"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify selected CI lanes",
+    );
+    expect(gateStep.env.SELECTED_RESULTS).toContain("macos-swift=${{ needs.macos-swift.result }}");
+    for (const conclusion of ["failure", "cancelled"]) {
+      expect(runCiGateFixture("preflight=success", `macos-swift=${conclusion}`).status).toBe(1);
+    }
+  });
+
+  it("serializes the shared Swift package suite on hosted macOS retries", () => {
     const macosSwift = readCiWorkflow().jobs["macos-swift"];
 
     expect(macosSwift.env.OPENCLAWKIT_TEST_EXECUTION).toContain("github.run_attempt > 1");
@@ -7633,13 +7715,18 @@ exit 1
       (step: WorkflowStep) => step.id === "swift-build-cache",
     );
     const nativeCachePrefix =
-      "${{ runner.os }}-swift-build-v6-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-" +
+      "${{ runner.os }}-swift-build-v6-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-" +
       "${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-";
 
     expect(buildCache.with).toMatchObject({
       key: expect.stringContaining(nativeCachePrefix),
       "restore-keys": `${nativeCachePrefix}\n`,
     });
+    expect(
+      macosSwift.steps.find((step: WorkflowStep) => step.name === "Save SwiftPM cache").if,
+    ).toBe(
+      "matrix.phase == 'release' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'",
+    );
     const restoreMetadata = macosSwift.steps.find(
       (step: WorkflowStep) => step.name === "Restore Swift build input timestamps",
     );
@@ -9385,7 +9472,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(swiftLint.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
-    expect(openClawKitTests.if).toBe("needs.preflight.outputs.run_openclawkit_tests == 'true'");
+    expect(openClawKitTests.if).toBe(
+      "matrix.phase == 'tests' && needs.preflight.outputs.run_openclawkit_tests == 'true'",
+    );
 
     const checkShard = workflow.jobs["check-shard"].steps.find(
       (step: { name?: string }) => step.name === "Run check shard",

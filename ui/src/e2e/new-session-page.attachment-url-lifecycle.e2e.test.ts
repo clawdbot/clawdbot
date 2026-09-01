@@ -130,6 +130,8 @@ suite.define(() => {
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
         await waitForCommittedNewSessionDraft(page, "", 1);
+        // Synthetic paste leaves the pointer over the replacement remove button.
+        await page.mouse.move(0, 0);
         const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
         await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
         await expect

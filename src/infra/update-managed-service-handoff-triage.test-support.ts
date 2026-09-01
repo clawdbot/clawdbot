@@ -1,3 +1,5 @@
+import { renderTriagePrompt } from "../commands/triage-prompt.js";
+import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import type {
   ManagedServiceManagerBoundaryOptions,
@@ -147,19 +149,24 @@ export function registerManagedUpdateHandoffTriageTests(
           },
         },
       });
+      const recovery =
+        options.recoveryExitCode === 0
+          ? "Helper service recovery succeeded."
+          : "Helper service recovery failed.";
       expect(state.triageInput).toHaveProperty(
         "error",
-        expect.stringContaining("Original package build diagnostic"),
+        `Original package build diagnostic\n${recovery}`,
       );
-      expect(state.triageInput).toHaveProperty(
-        "error",
-        expect.stringContaining(
-          options.recoveryExitCode === 0
-            ? "Helper service recovery succeeded."
-            : "Helper service recovery failed.",
-        ),
-      );
-      expect(state.triageInput).toHaveProperty("error", expect.stringContaining("Handoff log:"));
+      const redaction = { env: { HOME: "/triage-test-home" }, stateDir: "/triage-test-state" };
+      const prompt = renderTriagePrompt({
+        findings: [],
+        bundle: { kind: "skipped" },
+        redaction,
+        updateFailure: sanitizeTriageUpdateFailure(state.triageInput, redaction),
+      });
+      expect(prompt).toContain("Original package build diagnostic");
+      expect(prompt).toContain(recovery);
+      expect(prompt).not.toContain("handoff.log");
       expect(state.triageInput).not.toHaveProperty("result.before");
       expect(state.triageInput).not.toHaveProperty("result.after");
       if (options.recoverySentinel === "consumed") {

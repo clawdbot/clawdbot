@@ -110,15 +110,21 @@ export function createApplicationUpdateOverlays(
   let updateStatusRevision = 0;
   let updateRunGeneration = 0;
   let updateHoldInFlight = false;
+  let observedApplyingCampaignId: string | null = null;
   let currentFailure: { failure: UpdateFailureTriage; profileId: string | null } | null = null;
 
-  function publish() {
-    const applying = snapshot.updateSchedule?.campaign?.state === "applying";
-    // A new campaign supersedes the failed attempt across every schedule source.
-    // Retire its display and admission together, preserving unrelated request errors.
-    if (applying && (currentFailure || snapshot.recordedUpdateAttempt)) {
-      currentFailure = null;
-      snapshot = { ...snapshot, updateStatusBanner: null, recordedUpdateAttempt: null };
+  function publish(failurePrepared = false) {
+    const wasBusy = snapshot.updateRunning || snapshot.updateReconciliationPending;
+    const campaign = snapshot.updateSchedule?.campaign;
+    const applying = campaign?.state === "applying";
+    // Adopt once, including across reconnects: repeated schedule observations
+    // must not erase a terminal result subsequently published by the verifier.
+    if (applying && campaign.id !== observedApplyingCampaignId) {
+      observedApplyingCampaignId = campaign.id;
+      if (currentFailure || snapshot.recordedUpdateAttempt) {
+        currentFailure = null;
+        snapshot = { ...snapshot, updateStatusBanner: null, recordedUpdateAttempt: null };
+      }
     }
     snapshot = {
       ...snapshot,
@@ -128,6 +134,14 @@ export function createApplicationUpdateOverlays(
       updateReconciliationPending: pendingUpdate !== null,
     };
     onChange();
+    // Present after the install interlock releases, so the conversation does
+    // not consume its one-shot prompt while admission still rejects the send.
+    if (
+      failurePrepared ||
+      (wasBusy && !snapshot.updateRunning && !snapshot.updateReconciliationPending)
+    ) {
+      presentFailureTriage();
+    }
   }
   const isCurrentClient = (client: NonNullable<typeof activeClient>) =>
     !disposed &&
@@ -151,7 +165,7 @@ export function createApplicationUpdateOverlays(
   });
   const presentFailureTriage = () => {
     const owned = currentFailure;
-    if (!owned) {
+    if (!owned || snapshot.updateRunning || pendingUpdate) {
       return;
     }
     const scope = noticeScope();
@@ -211,10 +225,7 @@ export function createApplicationUpdateOverlays(
       recordedUpdateAttempt: failure.attempt,
       updateStatusBanner: failure.banner,
     };
-    publish();
-    if (prepared) {
-      presentFailureTriage();
-    }
+    publish(prepared);
   };
   const clearPendingUpdateTimer = () => {
     if (pendingUpdateTimer !== null) {
@@ -261,11 +272,19 @@ export function createApplicationUpdateOverlays(
     if (pendingUpdate) {
       return;
     }
-    const { failure, ...status } = projectUpdateStatusResponse(
+    const { failure: projectedFailure, ...status } = projectUpdateStatusResponse(
       response,
       snapshot,
       currentFailure?.failure,
     );
+    let failure = projectedFailure;
+    if ((status.updateSchedule ?? snapshot.updateSchedule)?.campaign?.state === "applying") {
+      // The status sentinel can still belong to the previous attempt. Active
+      // verification owns terminal facts until campaign completion triggers a read.
+      failure = currentFailure?.failure ?? null;
+      status.updateStatusBanner = snapshot.updateStatusBanner;
+      status.recordedUpdateAttempt = snapshot.recordedUpdateAttempt;
+    }
     const prepared = failure ? prepareFailureTriage(failure) : false;
     if (!failure && response.sentinel?.kind === "update") {
       currentFailure = null;
@@ -275,10 +294,7 @@ export function createApplicationUpdateOverlays(
       ...status,
       updateCampaignStatusHydrated: true,
     };
-    publish();
-    if (prepared) {
-      presentFailureTriage();
-    }
+    publish(prepared);
   };
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
@@ -316,6 +332,7 @@ export function createApplicationUpdateOverlays(
       setPendingUpdate(null);
       updateRequestRunning = false;
       currentFailure = null;
+      observedApplyingCampaignId = null;
       updateGatewayScope = nextGatewayScope;
       snapshot = {
         ...snapshot,

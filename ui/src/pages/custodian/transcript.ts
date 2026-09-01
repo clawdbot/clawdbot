@@ -1,6 +1,7 @@
 import type {
   SystemAgentChatHistoryResult,
   SystemAgentChatHistoryTurn,
+  SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -19,9 +20,10 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
-import type { CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 export type CustodianMessage = {
   id: number;
@@ -40,6 +42,18 @@ export function createCustodianMessage(
   step: WizardStep | null = null,
 ): CustodianMessage {
   return { id, role, text, at: Date.now(), question, step };
+}
+
+export function createCustodianReplyMessage(
+  id: number,
+  result: SystemAgentChatResult,
+): CustodianMessage | null {
+  const step = result.step ?? null;
+  const question = step ? null : parseCustodianQuestion(result.question);
+  const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
+  return silentReply && !question && !step
+    ? null
+    : createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step);
 }
 
 export function hasUnresolvedCustodianQuestion(

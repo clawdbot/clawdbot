@@ -2,8 +2,10 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
+import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
 import {
   handleMarkdownCodeBlockClick,
   markdownCodeBlocks,
@@ -176,7 +178,8 @@ function resolveSidebarCanvasSandbox(
 
 type MarkdownSidebarProps = {
   content: ChatDetailPanelContent | null;
-  error: string | null;
+  error: Error | null;
+  onRetry: () => void;
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
@@ -248,8 +251,12 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       <div class="sidebar-content">
         ${props.error
           ? html`
-              <div class="callout danger">${props.error}</div>
-              ${content?.rawText?.trim()
+              ${renderLazyViewError({
+                error: props.error,
+                stale: isStaleChunkImportError(props.error),
+                onRetry: props.onRetry,
+              })}
+              ${content?.kind === "file" || content?.rawText?.trim()
                 ? html`
                     <button
                       @click=${props.onViewRawText}

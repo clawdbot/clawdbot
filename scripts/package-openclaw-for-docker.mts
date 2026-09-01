@@ -884,13 +884,13 @@ async function restorePackageSourceArtifacts(
 ) {
   await restoreChangelog(sourceDir);
   await restoreManifest(sourceDir);
-  // Release the lifecycle receipt only after every other source mutation settles.
-  await restoreDocsMap(sourceDir);
   await Promise.all(
     [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
       (relativePath) => fs.rm(path.join(sourceDir, relativePath), { force: true }),
     ),
   );
+  // Release the lifecycle receipt only after every other source mutation settles.
+  await restoreDocsMap(sourceDir);
 }
 
 async function loadSourcePackageLifecycle(
@@ -984,6 +984,9 @@ export async function packOpenClawPackageForDocker(
     }
   };
   try {
+    console.error("==> Writing OpenClaw package inventory");
+    await writePackageInventoryForDocker(sourcePath, packageOptions.runImpl ?? run);
+
     await prepareManifest(sourcePath);
     await prepareChangelog(sourcePath);
   } catch (error) {
@@ -1151,9 +1154,6 @@ async function main() {
   if (!options.skipBuild) {
     await buildPackageArtifacts(sourceDir, { bundlePlugins: options.bundlePlugins });
   }
-
-  console.error("==> Writing OpenClaw package inventory");
-  await writePackageInventoryForDocker(sourceDir);
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
     bundlePlugins: options.bundlePlugins,

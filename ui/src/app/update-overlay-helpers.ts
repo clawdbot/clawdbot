@@ -158,7 +158,7 @@ export function projectUpdateSentinel(
   const record = {
     id:
       readUpdateHandoffId(sentinel) ??
-      (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}:${sentinel.status}` : null),
+      (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
     timestampMs: sentinel.ts ?? null,
   };
   const id = record.id ?? requestId;
@@ -342,8 +342,8 @@ export type PendingUpdateReconciliation = {
   profileId: string | null;
   expectedVersion: string | null;
   expectedSha: string | null;
-  // A lost response (or an unmanaged restart) has no handoff id. That path
-  // can compare installed identity, but cannot distinguish identical attempts.
+  // Without a handoff id or learned server record, installed identity alone
+  // cannot distinguish identical attempts after a lost response.
   handoffId: string | null;
   // Server timestamps order different attempts; the same handoff may finish
   // without changing its timestamp. Never compare them to the browser clock.
@@ -456,7 +456,7 @@ export function createUpdateVerificationController(params: {
     params.clearPending();
     params.publishFailure(
       {
-        id: reconciliation.handoffId ?? reconciliation.requestId,
+        id: reconciliation.handoffId ?? reconciliation.record?.id ?? reconciliation.requestId,
         outcome,
         attempt: null,
         banner,

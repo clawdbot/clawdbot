@@ -7,15 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
+import { classifyDependencySpec } from "./lib/dependency-spec-policy.mts";
 
 const PACKAGE_DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies"];
 const WORKSPACE_DEPENDENCY_SECTIONS = ["overrides"];
-const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const EXACT_NPM_ALIAS_PATTERN =
-  /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
-const PINNED_GITHUB_TARBALL_PATTERN =
-  /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 
 type DependencyPinViolation = {
@@ -68,25 +63,6 @@ function readTrackedJson(
   return asRecord(JSON.parse(runGit(cwd, ["show", `:${relativePath}`], timeoutMs)) as unknown);
 }
 
-function isAllowedPinnedSpec(spec: unknown): boolean {
-  if (typeof spec !== "string") {
-    return false;
-  }
-  if (EXACT_SEMVER_PATTERN.test(spec) || EXACT_NPM_ALIAS_PATTERN.test(spec)) {
-    return true;
-  }
-  if (spec === "workspace:*" || spec.startsWith("file:") || spec.startsWith("link:")) {
-    return true;
-  }
-  if (/^(?:git\+|github:|gitlab:|bitbucket:)/u.test(spec)) {
-    return PINNED_GIT_PATTERN.test(spec);
-  }
-  if (PINNED_GITHUB_TARBALL_PATTERN.test(spec)) {
-    return true;
-  }
-  return false;
-}
-
 function collectPackageJsonViolations(
   cwd: string,
   timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
@@ -96,7 +72,7 @@ function collectPackageJsonViolations(
     const packageJson = readTrackedJson(cwd, relativePath, timeoutMs);
     for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
       for (const [name, spec] of Object.entries(asRecord(packageJson[section]))) {
-        if (!isAllowedPinnedSpec(spec)) {
+        if (!classifyDependencySpec(spec).allowedPinned) {
           violations.push({ file: relativePath, section, name, spec });
         }
       }
@@ -115,7 +91,7 @@ function collectDependencyMapViolations(
     if (section === "overrides" && spec === "-") {
       continue;
     }
-    if (!isAllowedPinnedSpec(spec)) {
+    if (!classifyDependencySpec(spec).allowedPinned) {
       violations.push({ file, section, name, spec });
     }
   }

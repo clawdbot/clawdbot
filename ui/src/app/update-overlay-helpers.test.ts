@@ -91,7 +91,7 @@ async function verifyUpdate(params: {
     requestId: "request-current",
     profileId: null,
     handoffId,
-    record: sentinel ? { id: handoffId ?? "recorded:1000:ok", timestampMs: 1_000 } : undefined,
+    record: sentinel ? { id: handoffId ?? "recorded:1000", timestampMs: 1_000 } : undefined,
     deadlineAtMs: 35 * 60_000,
   };
   const client = {

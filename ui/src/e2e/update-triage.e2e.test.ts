@@ -257,12 +257,18 @@ suite.define(() => {
               });
             } else {
               const session = window.sessionStorage;
-              const setItem = Storage.prototype.setItem;
+              const setItem: unknown = Object.getOwnPropertyDescriptor(
+                Storage.prototype,
+                "setItem",
+              )?.value;
+              if (typeof setItem !== "function") {
+                throw new Error("Storage.setItem is unavailable");
+              }
               Storage.prototype.setItem = function (key, value) {
                 if (this === session) {
                   throw new DOMException("Storage full", "QuotaExceededError");
                 }
-                setItem.call(this, key, value);
+                Reflect.apply(setItem, this, [key, value]);
               };
             }
           }, storageFailure);

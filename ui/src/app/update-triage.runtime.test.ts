@@ -306,6 +306,111 @@ describe("update triage presentation", () => {
     }
   });
 
+  it.each(["timeout", "failure"] as const)(
+    "waits for campaign completion before diagnosing a verifier %s",
+    async (outcome) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const pending = {
+        kind: "update",
+        status: "skipped",
+        ts: 2_000,
+        stats: { handoffId: "applying-handoff", reason: "managed-service-handoff-started" },
+      };
+      const schedule = {
+        channel: "stable",
+        autoEnabled: true,
+        campaign: {
+          id: "applying-campaign",
+          state: "applying",
+          announcedAtMs: 1_000,
+          forceAtMs: 2_000,
+          updatedAtMs: 2_000,
+        },
+      } as const;
+      let status: UpdateRestartStatusResponse = { sentinel: null };
+      const request = vi.fn(
+        async (method: string, params?: { sessionId?: string; message?: string }) => {
+          if (method === "update.run") {
+            status = { sentinel: pending };
+            return {
+              ok: true,
+              handoff: { status: "started" },
+              result: { status: "skipped", reason: pending.stats.reason },
+              sentinel: { payload: pending },
+            };
+          }
+          if (method === "update.status") {
+            return status;
+          }
+          return method === "openclaw.chat"
+            ? { sessionId: params?.sessionId, reply: "Ready to inspect the update." }
+            : {};
+        },
+      );
+      const diagnosticMessages = () =>
+        request.mock.calls.flatMap(([method, params]) =>
+          method === "openclaw.chat" && params?.message ? [params.message] : [],
+        );
+      const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
+      const overlays = createApplicationOverlays(context.gateway, {
+        onUpdateFailure: (failure, admission) =>
+          presentUpdateFailureTriage(context, failure, admission),
+      });
+      const provider = createApplicationContextProvider(context);
+      const surface = document.createElement("openclaw-custodian-surface");
+      surface.store = new CustodianSessionStore();
+      provider.append(surface);
+      document.body.append(provider);
+      try {
+        await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+        vi.useFakeTimers();
+        await overlays.runUpdate();
+        setGatewaySnapshot({ phase: "reconnecting" });
+        setGatewaySnapshot({ phase: "connected" });
+        await vi.advanceTimersByTimeAsync(0);
+        emitGatewayEvent({ event: "update.available", payload: { schedule } });
+        status = {
+          schedule,
+          sentinel:
+            outcome === "failure"
+              ? {
+                  ...pending,
+                  status: "error",
+                  stats: { handoffId: pending.stats.handoffId, reason: "build-failed" },
+                }
+              : pending,
+        };
+        if (outcome === "timeout") {
+          vi.setSystemTime(Date.now() + 35 * 60_000);
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+        await surface.updateComplete;
+        expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+        expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
+        expect(overlays.snapshot.updateRunning).toBe(true);
+        expect(diagnosticMessages()).toEqual([]);
+
+        status = { ...status, schedule: { channel: "stable", autoEnabled: true } };
+        emitGatewayEvent({ event: "update.available", payload: { schedule: status.schedule } });
+        await vi.advanceTimersByTimeAsync(0);
+        await surface.updateComplete;
+        expect(overlays.snapshot.updateRunning).toBe(false);
+        expect(diagnosticMessages()).toEqual([expect.stringContaining("Do not retry the update")]);
+
+        await overlays.refreshUpdateStatus();
+        emitGatewayEvent({ event: "update.available", payload: { schedule: status.schedule } });
+        setGatewaySnapshot({ phase: "reconnecting" });
+        setGatewaySnapshot({ phase: "connected" });
+        await vi.advanceTimersByTimeAsync(0);
+        await surface.updateComplete;
+        expect(diagnosticMessages()).toHaveLength(1);
+      } finally {
+        overlays.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["offline", "missing capability", "non-admin", "stale owner"])(
     "does not claim an agent launch for %s",
     (boundary) => {
@@ -352,6 +457,10 @@ describe("update triage presentation", () => {
     presentUpdateFailureTriage(context, FAILURE, admission);
     await surface.updateComplete;
 
+    expect(surface.textContent).toContain("Reason code: build-failed");
+    expect(surface.textContent).toContain(
+      "Before update: 1111111111111111111111111111111111111111",
+    );
     expect(surface.textContent).toContain("Disk is full");
     expect(surface.textContent).toContain("openclaw triage");
     expect(admission.admit).not.toHaveBeenCalled();

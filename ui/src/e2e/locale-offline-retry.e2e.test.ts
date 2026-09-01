@@ -63,9 +63,9 @@ suite.define(() => {
     const requests = new Map<string, number>();
     page.on("request", (request) => {
       const match = new URL(request.url()).pathname.match(/\/src\/i18n\/locales\/([^/]+)\.ts$/);
-      const locale = match?.[1];
-      if (isSupportedLocale(locale) && locale !== "en") {
-        requests.set(locale, (requests.get(locale) ?? 0) + 1);
+      // English registrar modules are not operator-selectable locale adapters.
+      if (match?.[1] && isSupportedLocale(match[1]) && match[1] !== "en") {
+        requests.set(match[1], (requests.get(match[1]) ?? 0) + 1);
       }
     });
 

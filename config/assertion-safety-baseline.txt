@@ -501,7 +501,6 @@ extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
 extensions/firecrawl/src/firecrawl-client.ts	4
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
-extensions/firecrawl/web-search-shared.ts	1
 extensions/fish-audio-speech/speech-provider.ts	1
 extensions/github-copilot/connection-bound-ids.ts	1
 extensions/github-copilot/embeddings.ts	6
@@ -940,7 +939,7 @@ extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
-extensions/perplexity/src/perplexity-web-search-provider.runtime.ts	6
+extensions/perplexity/src/perplexity-web-search-provider.runtime.ts	5
 extensions/perplexity/src/perplexity-web-search-provider.shared.ts	1
 extensions/pixverse/video-generation-provider.ts	2
 extensions/policy/src/cli.ts	1
@@ -1345,7 +1344,7 @@ extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	3
 extensions/voice-call/src/tts-provider-voice.ts	1
 extensions/voice-call/src/webhook.ts	10
-extensions/voice-call/src/webhook/realtime-handler.ts	3
+extensions/voice-call/src/webhook/realtime-handler.ts	1
 extensions/volcengine/tts.ts	2
 extensions/voyage/embedding-batch.ts	1
 extensions/vydra/shared.ts	2
@@ -1839,7 +1838,7 @@ src/agents/embedded-agent-runner/thinking.ts	25
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	5
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	9
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
-src/agents/embedded-agent-runner/tool-result-truncation.ts	23
+src/agents/embedded-agent-runner/tool-result-truncation.ts	22
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
@@ -2875,7 +2874,7 @@ src/gateway/server-methods/approval.ts	8
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
 src/gateway/server-methods/channel-pairing.ts	3
-src/gateway/server-methods/channels.ts	16
+src/gateway/server-methods/channels.ts	12
 src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-abort-handler.ts	2
 src/gateway/server-methods/chat-assistant-content.ts	1
@@ -2999,7 +2998,7 @@ src/gateway/session-utils.fs.ts	2
 src/gateway/sessions-history-http.ts	1
 src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
-src/gateway/talk-agent-consult.ts	3
+src/gateway/talk-agent-consult.ts	2
 src/gateway/talk-realtime-relay-forced-consults.ts	1
 src/gateway/talk-realtime-relay-session-create.ts	1
 src/gateway/terminal/node-relay.ts	1
@@ -3077,8 +3076,6 @@ src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
-src/infra/error-graph-internal.ts	1
-src/infra/errors.ts	3
 src/infra/exec-approval-channel-runtime.ts	9
 src/infra/exec-approval-forwarder.ts	1
 src/infra/exec-approval-policy-snapshot.ts	2
@@ -3176,7 +3173,6 @@ src/infra/restart-sentinel-store.ts	10
 src/infra/restart-sentinel.ts	1
 src/infra/restart-stale-pids.ts	3
 src/infra/retry-policy.ts	3
-src/infra/retryable-network-errors.ts	1
 src/infra/session-cost-usage-aggregation.ts	5
 src/infra/session-cost-usage-cache-runtime.ts	1
 src/infra/session-cost-usage-cache.sqlite.ts	1

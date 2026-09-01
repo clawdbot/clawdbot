@@ -400,6 +400,17 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 
 ## Troubleshooting
 
+When a local Claude Agent SDK subprocess fails, its run error includes a bounded,
+redacted stderr diagnostic when available. Check the run error or `openclaw logs`
+for the underlying launch, permission, or runtime failure. Successful turns do not
+forward stderr into logs. Each live process has its own diagnostic buffer. Since
+stderr has no turn identifiers, a warm process's failure can include earlier turns;
+the error labels that output as process-wide rather than attributing it to the failing turn.
+Oversized incomplete lines are omitted so truncation cannot expose credential
+fragments. Native stdout and MCP input are not included in these diagnostics.
+Stderr is supplemental display text only; it does not change the native error's
+retry, authentication, timeout, or fallback classification.
+
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |
 | CLI not found         | Put the CLI on the gateway service's `PATH`, or update the owning plugin's registered command. |

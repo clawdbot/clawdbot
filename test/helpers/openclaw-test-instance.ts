@@ -333,7 +333,7 @@ async function stopGatewayProcess(
         Math.max(0, Math.floor((deadline - Date.now()) / Math.max(1, remainingSteps))),
       ),
     );
-  const terminate = (signal: NodeJS.Signals) => {
+  const terminate = (signal: NodeJS.Signals) =>
     terminateManagedChild(
       child,
       signal,
@@ -343,16 +343,33 @@ async function stopGatewayProcess(
             platform,
           },
     );
-  };
-  const forceWindowsTree = options.forceWindowsTree === true && platform === "win32";
-  const signals = forceWindowsTree ? (["SIGKILL"] as const) : (["SIGTERM", "SIGKILL"] as const);
 
   if (hasGatewayProcessClosed(child)) {
     return true;
   }
+  if (platform === "win32") {
+    if (hasChildExited(child) && (await waitForClose(2))) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    // Taskkill owns its bounded synchronous TERM/force sequence. Node cannot observe
+    // exit or pipe closure until it returns, so charge the existing close allowance afterward.
+    try {
+      const termination = terminate(options.forceWindowsTree ? "SIGKILL" : "SIGTERM");
+      return (
+        termination?.processTreeState === "terminated" &&
+        (await waitForGatewayClose(child, stopTimeoutMs))
+      );
+    } catch {
+      return false;
+    }
+  }
+  const signals = ["SIGTERM", "SIGKILL"] as const;
   // An exited leader can leave inherited stdio open in descendants. Let it
   // settle briefly, then terminate the owned tree before releasing the slot.
-  if (!forceWindowsTree && hasChildExited(child) && (await waitForClose(signals.length + 1))) {
+  if (hasChildExited(child) && (await waitForClose(signals.length + 1))) {
     return true;
   }
   for (const [index, signal] of signals.entries()) {

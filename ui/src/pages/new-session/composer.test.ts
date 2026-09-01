@@ -914,6 +914,18 @@ describe("new-session composer dictation insertion", () => {
     expect(textarea.value).toBe("ship please it");
   });
 
+  it("preserves edits made after Stop before inserting a late transcript", () => {
+    const { composer, textareaController } = renderComposer({ message: "ship it" });
+    const textarea = draftTextarea(composer, "ship it", 4);
+    textareaController.captureSelection();
+    textarea.value = "ship it today";
+    textarea.selectionStart = 4;
+    textarea.selectionEnd = 4;
+
+    expect(textareaController.insertTranscript("please", true)).toBe("ship please it today");
+    expect(textarea.value).toBe("ship please it today");
+  });
+
   it("replaces the range the writer had highlighted", () => {
     const { composer, textareaController } = renderComposer({ message: "ship the thing" });
     draftTextarea(composer, "ship the thing", 5, 14);

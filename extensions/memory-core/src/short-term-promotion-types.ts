@@ -69,6 +69,7 @@ export type ShortTermStoreMeta = {
 export type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
+  ownerStartTime?: number;
 };
 
 type PromotionComponents = {

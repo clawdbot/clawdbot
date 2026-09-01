@@ -145,6 +145,11 @@ describe("application update attempt continuity", () => {
         expect(admission.admit()).toBe(false);
         expect(onUpdateFailure).toHaveBeenCalledOnce();
 
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+
         failStatus = true;
         await overlays.refreshUpdateStatus();
         expect(overlays.snapshot.updateStatusBanner?.text).toContain("Status request unavailable");
@@ -163,6 +168,73 @@ describe("application update attempt continuity", () => {
         expect(onUpdateFailure).toHaveBeenCalledTimes(2);
         expect(admission.isCurrent()).toBe(false);
         expect(onUpdateFailure.mock.calls[1]?.[1].admit()).toBe(true);
+        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
+  it.each(["timeout", "failure"] as const)(
+    "preserves a verifier %s while the observed campaign still applies",
+    async (outcome) => {
+      const schedule = {
+        channel: "stable",
+        autoEnabled: true,
+        campaign: {
+          id: "active-campaign",
+          state: "applying",
+          announcedAtMs: 1_000,
+          forceAtMs: 2_000,
+          updatedAtMs: 2_000,
+        },
+      } as const;
+      let response: UpdateRestartStatusResponse = HANDOFF_PENDING;
+      const request = vi.fn<RequestFn>(async (method) =>
+        method === "update.run" ? HANDOFF_RESPONSE : response,
+      );
+      const harness = createUpdateHarness(request);
+      const onUpdateFailure = vi.fn();
+      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await overlays.runUpdate();
+        harness.update({ phase: "reconnecting" });
+        harness.update({ phase: "connected" });
+        await flushMicrotasks();
+        harness.emitEvent("update.available", { schedule });
+        if (outcome === "failure") {
+          response = {
+            sentinel: {
+              ...HANDOFF_RESPONSE.sentinel.payload,
+              status: "error",
+              stats: { handoffId: HANDOFF_ID, reason: "build-failed" },
+            },
+          };
+        }
+        await vi.advanceTimersByTimeAsync(outcome === "timeout" ? HANDOFF_MS : 1_000);
+
+        expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+        expect(overlays.snapshot.updateStatusBanner?.tone).toBe("danger");
+        expect(onUpdateFailure).not.toHaveBeenCalled();
+        // An observed applying campaign still owns the install interlock.
+        expect(overlays.snapshot.updateRunning).toBe(true);
+
+        const banner = overlays.snapshot.updateStatusBanner;
+        response = { ...response, schedule };
+        harness.emitEvent("update.available", { schedule });
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.updateStatusBanner).toEqual(banner);
+        expect(onUpdateFailure).not.toHaveBeenCalled();
+
+        response = { ...response, schedule: { channel: "stable", autoEnabled: true } };
+        harness.emitEvent("update.available", { schedule: response.schedule });
+        await flushMicrotasks();
+        expect(overlays.snapshot.updateRunning).toBe(false);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        const [failure, admission] = onUpdateFailure.mock.calls[0]!;
+        expect(failure.outcome).toBe(outcome === "timeout" ? "unknown" : "failed");
+        expect(admission.isCurrent()).toBe(true);
+        expect(admission.admit()).toBe(true);
         expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
       } finally {
         overlays.dispose();
@@ -286,6 +358,89 @@ describe("application update attempt continuity", () => {
           await overlays.refreshUpdateStatus();
           expect(onUpdateFailure).toHaveBeenCalledOnce();
         }
+        expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { outcome: "mismatch", handoffId: HANDOFF_ID },
+    { outcome: "mismatch", handoffId: undefined },
+    { outcome: "timeout", handoffId: HANDOFF_ID },
+    { outcome: "timeout", handoffId: undefined },
+  ])(
+    "consumes a $outcome diagnosis across late failure and reload (handoff: $handoffId)",
+    async ({ outcome, handoffId }) => {
+      const accepted = {
+        kind: "update",
+        status: "ok",
+        ts: 2_000,
+        stats: { handoffId, after: { version: "2.0.0" } },
+      };
+      let response: UpdateRestartStatusResponse = {};
+      const request = vi.fn<RequestFn>(async (method) =>
+        method === "update.run"
+          ? {
+              ok: true,
+              result: { status: "ok", after: { version: "2.0.0" } },
+              sentinel: { payload: accepted },
+            }
+          : response,
+      );
+      const harness = createUpdateHarness(request);
+      const onUpdateFailure = vi.fn();
+      let overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await overlays.runUpdate();
+        harness.update({ phase: "reconnecting" });
+        response = {
+          sentinel: {
+            ...accepted,
+            stats: {
+              handoffId,
+              ...(outcome === "mismatch" ? { after: { version: "1.0.0" } } : {}),
+            },
+          },
+        };
+        harness.update({ phase: "connected" });
+        await vi.advanceTimersByTimeAsync(outcome === "timeout" ? 10_000 : 0);
+        expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        expect(onUpdateFailure.mock.calls[0]?.[0].outcome).toBe(
+          outcome === "timeout" ? "unknown" : "failed",
+        );
+        expect(onUpdateFailure.mock.calls[0]?.[1].admit()).toBe(true);
+
+        // Restart health can rewrite the same record after verification has ended.
+        response = {
+          sentinel: {
+            ...accepted,
+            status: "error",
+            stats: { handoffId, reason: "restart-unhealthy" },
+          },
+        };
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("restart-unhealthy");
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        overlays.dispose();
+        overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+        await flushMicrotasks();
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("restart-unhealthy");
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+
+        response = {
+          sentinel: {
+            ...response.sentinel,
+            ts: 3_000,
+            stats: { handoffId: handoffId ? "next-handoff" : undefined, reason: "build-failed" },
+          },
+        };
+        await overlays.refreshUpdateStatus();
+        expect(overlays.snapshot.recordedUpdateAttempt?.reason).toBe("build-failed");
+        expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+        expect(onUpdateFailure.mock.calls[1]?.[1].admit()).toBe(true);
         expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1);
       } finally {
         overlays.dispose();
