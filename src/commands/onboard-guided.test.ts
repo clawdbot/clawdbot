@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter, trackWizardProgress } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -197,24 +197,6 @@ function setupApplyResult() {
 
 function recommendationOutcome(config: OpenClawConfig) {
   return { config, commitResult: vi.fn() };
-}
-
-function trackProgressOwnership(prompter: WizardPrompter) {
-  let active = 0;
-  let peak = 0;
-  vi.mocked(prompter.progress).mockImplementation(() => {
-    peak = Math.max(peak, ++active);
-    return {
-      update: vi.fn(),
-      stop: vi.fn(() => {
-        active--;
-      }),
-    };
-  });
-  return () => {
-    expect(active).toBe(0);
-    expect(peak).toBe(1);
-  };
 }
 
 function setupDeps(params: {
@@ -740,7 +722,7 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
-    const expectSettledProgress = trackProgressOwnership(prompter);
+    const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi
       .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({
@@ -749,8 +731,7 @@ describe("runGuidedOnboarding", () => {
         error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
       })
       .mockImplementationOnce(async ({ prompter: activationPrompter }) => {
-        const verification = activationPrompter!.progress("Testing your AI connection…");
-        verification.stop();
+        activationPrompter!.progress("Testing your AI connection…").stop();
         return {
           ok: true,
           modelRef: "openai/gpt-5.4",
@@ -806,10 +787,9 @@ describe("runGuidedOnboarding", () => {
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const expectSettledProgress = trackProgressOwnership(prompter);
+    const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
-      const verification = params.prompter!.progress("Testing your AI connection…");
-      verification.stop();
+      params.prompter!.progress("Testing your AI connection…").stop();
       return {
         ok: true as const,
         modelRef: "openai/gpt-5.5",
