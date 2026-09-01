@@ -24,6 +24,7 @@ scenario:
     channel: qa-channel
     config:
       contextNeedle: FORKED-CONTEXT-ALPHA
+      expectedChildLabel: qa-fork-context
       prompt: "Forked subagent context QA check. The visible code in this current conversation is FORKED-CONTEXT-ALPHA. Delegate to a native subagent to report the visible code from the requester transcript. Do not include the visible code in the child task text; the child must recover it from forked transcript context. Use forked context if the child needs the current transcript; otherwise it will not know the code. A spawn-accepted result is not the answer. Wait for the child completion, then make sure user-visible output includes the visible code."
 
 flow:
@@ -31,10 +32,17 @@ flow:
     - name: forks current transcript context for the child
       actions:
         - call: reset
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:forked-context:${randomUUID().slice(0, 8)}`"
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:forked-context
+            - sessionKey:
+                ref: sessionKey
               message:
                 expr: config.prompt
               timeoutMs:
@@ -50,9 +58,27 @@ flow:
             expr: "env.mock || String(outbound.text ?? '').includes(config.contextNeedle)"
             message:
               expr: "`expected live final answer to include fork-only context code ${config.contextNeedle}, got: ${outbound.text}`"
+        - set: subagentEvidenceRequest
+          value:
+            expr: "({ env, kind: 'fork', requesterSessionKey: sessionKey, expectedChildLabel: config.expectedChildLabel, contextNeedle: config.contextNeedle, timeoutMs: liveTurnTimeoutMs(env, 60000) })"
+        - try:
+            actions:
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      async: true
+                      expr: "(await collectSubagentScenarioEvidence(subagentEvidenceRequest)).evidence"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+            catch:
+              - set: subagentEvidenceFailure
+                value:
+                  expr: "await collectSubagentScenarioEvidence(subagentEvidenceRequest)"
+              - throw:
+                  expr: "`forked subagent evidence failed: ${subagentEvidenceFailure.summary}`"
         - set: forkDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))] : []"
         - assert:
             expr: "!env.mock || forkDebugRequests.some((request) => !request.toolOutput && /forked subagent context qa check/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn' && (request.plannedToolArgs?.context === 'fork' || /context\\s*=\\s*fork/i.test(String(request.allInputText ?? ''))))"
             message:

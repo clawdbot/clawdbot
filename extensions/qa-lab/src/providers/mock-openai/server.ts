@@ -17,6 +17,7 @@ import {
   buildAssistantText,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
+  readCompletedSubagentHandoffResult,
 } from "./mock-openai-assistant-text.js";
 import {
   type ResponsesInputItem,
@@ -883,6 +884,11 @@ async function buildResponsesPayload(
           ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
           : resolveCompactionRecoverySummary(allInputText),
     );
+  }
+  if (readCompletedSubagentHandoffResult(allInputText)) {
+    // A canonical child completion owns this continuation even when its result
+    // contains stale prompt markers from earlier parent turns.
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||

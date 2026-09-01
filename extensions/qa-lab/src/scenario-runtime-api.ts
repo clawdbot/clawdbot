@@ -102,6 +102,7 @@ export type QaScenarioRuntimeDeps = {
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
   hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
+  collectSubagentScenarioEvidence: QaScenarioRuntimeFunction;
 };
 
 type QaScenarioRuntimeApiDeps = Pick<QaScenarioRuntimeDeps, "sleep" | "waitForTransportReady">;

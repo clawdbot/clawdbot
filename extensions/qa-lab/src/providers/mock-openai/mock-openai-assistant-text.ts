@@ -1,4 +1,5 @@
 // QA Lab mock provider assistant text fixtures.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -63,6 +64,47 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
     return undefined;
   }
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
+export function readCompletedSubagentHandoffResult(allInputText: string): string | undefined {
+  const eventStart = Math.max(
+    allInputText.lastIndexOf("[Internal task completion event]"),
+    allInputText.lastIndexOf(
+      "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+    ),
+  );
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = allInputText.slice(eventStart);
+  const resultMatch =
+    /^Child result(?:\s*\([^\r\n]*\))?\s*:\s*\r?\n<prompt-data>\s*([\s\S]*?)\s*<\/prompt-data>/imu.exec(
+      completionEvent,
+    );
+  const metadata = resultMatch ? completionEvent.slice(0, resultMatch.index) : "";
+  if (
+    !resultMatch ||
+    !/^source:\s*subagent\s*$/imu.test(metadata) ||
+    !/^task:\s*qa-sidecar\s*$/imu.test(metadata) ||
+    !/^status:\s*(?:completed successfully|completed;\s*ready for parent review)\s*$/imu.test(
+      metadata,
+    )
+  ) {
+    return undefined;
+  }
+  const childResult = resultMatch[1]?.trim();
+  if (!childResult || childResult === "(no output)") {
+    return undefined;
+  }
+  try {
+    const payload: unknown = JSON.parse(childResult);
+    if (isRecord(payload) && payload.status === "accepted") {
+      return undefined;
+    }
+  } catch {
+    // Protected child output is ordinary user-facing text, not required JSON.
+  }
+  return childResult.replace(/\s+/gu, " ");
 }
 
 export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
@@ -144,6 +186,17 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
+  const completedSubagentResult = readCompletedSubagentHandoffResult(allInputText);
+  if (completedSubagentResult) {
+    return [
+      "Delegated task:",
+      "- Inspect the QA workspace via a bounded subagent.",
+      "Result:",
+      `- ${completedSubagentResult}`,
+      "Evidence:",
+      "- The successful qa-sidecar child completed and its actual result was delivered.",
+    ].join("\n");
+  }
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =

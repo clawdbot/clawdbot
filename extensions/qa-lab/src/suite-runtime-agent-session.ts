@@ -125,6 +125,19 @@ function readAssistantToolCalls(message: Record<string, unknown>): Array<{
   });
 }
 
+function readQaTranscriptArtifactModel(
+  message: Record<string, unknown>,
+): "delivery-mirror" | "gateway-injected" | undefined {
+  // Provider/model provenance distinguishes known OpenClaw bookkeeping from
+  // real model output; marker-only historical rows are not strong QA evidence.
+  if (message.provider !== "openclaw") {
+    return undefined;
+  }
+  return message.model === "delivery-mirror" || message.model === "gateway-injected"
+    ? message.model
+    : undefined;
+}
+
 function readWaitingCodeModeRunId(message: Record<string, unknown>) {
   const details = isRecord(message.details) ? message.details : undefined;
   return details?.status === "waiting" ? readNonEmptyString(details.runId) : undefined;
@@ -153,6 +166,7 @@ function summarizeSessionTranscriptEvents(
   const successfulToolCallIds = new Set<string>();
   const waitRunIdsByCallId = new Map<string, string>();
   let finalText = "";
+  let hasCurrentTurnProviderFinalText = false;
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
   let lastAssistantStopReason: string | undefined;
@@ -178,9 +192,11 @@ function summarizeSessionTranscriptEvents(
     lastMessageRole = readNonEmptyString(message.role);
     if (message.role === "user") {
       userMessageCount += 1;
+      hasCurrentTurnProviderFinalText = false;
       continue;
     }
     if (message.role === "toolResult") {
+      hasCurrentTurnProviderFinalText = false;
       const toolCallId = readNonEmptyString(message.toolCallId);
       const toolName = readNonEmptyString(message.toolName);
       const details = isRecord(message.details) ? message.details : undefined;
@@ -240,7 +256,18 @@ function summarizeSessionTranscriptEvents(
     }
     const text = extractGatewayMessageText(message);
     if (text) {
-      finalText = text;
+      const artifactModel = readQaTranscriptArtifactModel(message);
+      // Gateway-injected rows are never provider output. A delivery mirror may
+      // supply the reply only when the current turn has no provider final.
+      if (
+        artifactModel === undefined ||
+        (artifactModel === "delivery-mirror" && !hasCurrentTurnProviderFinalText)
+      ) {
+        finalText = text;
+      }
+      if (artifactModel === undefined) {
+        hasCurrentTurnProviderFinalText = true;
+      }
     }
     const openClawMeta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
     const mirrorIdentity = readNonEmptyString(openClawMeta?.mirrorIdentity);

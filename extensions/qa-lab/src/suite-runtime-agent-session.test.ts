@@ -568,6 +568,90 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it.each([
+    {
+      name: "provider final over gateway and delivery bookkeeping",
+      messages: [
+        { role: "assistant", content: "provider final" },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: "gateway bookkeeping",
+        },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "delivery bookkeeping",
+        },
+      ],
+      expected: "provider final",
+    },
+    {
+      name: "delivery-only fallback",
+      messages: [
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "delivered final",
+        },
+      ],
+      expected: "delivered final",
+    },
+    ...[
+      { role: "user", content: "next turn" },
+      {
+        role: "toolResult",
+        toolCallId: "next-turn-tool",
+        toolName: "message",
+        content: [{ type: "text", text: "next turn" }],
+        isError: false,
+      },
+    ].map((boundary) => ({
+      name: `${boundary.role} boundary resets provider precedence`,
+      messages: [
+        { role: "assistant", content: "earlier provider final" },
+        boundary,
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "later delivered final",
+        },
+      ],
+      expected: "later delivered final",
+    })),
+    {
+      name: "latest provider final after delivery bookkeeping",
+      messages: [
+        { role: "assistant", content: "earlier provider final" },
+        { role: "user", content: "next turn" },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "interim delivery",
+        },
+        { role: "assistant", content: "latest provider final" },
+      ],
+      expected: "latest provider final",
+    },
+  ])("selects $name", async ({ messages, expected }) => {
+    const tempRoot = await makeTempDir("qa-session-transcript-artifacts-");
+    const sessionKey = "agent:qa:transcript-artifacts";
+    const sessionId = "session-transcript-artifacts";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    for (const message of messages) {
+      await appendQaTranscriptMessage({ tempRoot, sessionKey, sessionId, message });
+    }
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({ finalText: expected });
+  });
+
   it("counts only correlated non-error tool results as successful", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-tool-results-");
     const sessionKey = "agent:qa:tool-results";
