@@ -97,6 +97,108 @@ describe("matrix doctor contract state migrations", () => {
     resetPluginStateStoreForTests();
   });
 
+  it("repairs account-scoped SQLite schemas without losing Matrix plugin state", async () => {
+    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+    const storageRootDir = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "default",
+      "matrix.example.org__bot",
+      "token-hash",
+    );
+    const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec(`
+        PRAGMA user_version = 1;
+        CREATE TABLE audit_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          source_id TEXT NOT NULL UNIQUE,
+          source_sequence INTEGER NOT NULL,
+          occurred_at INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          action TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error_code TEXT,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          session_key TEXT,
+          session_id TEXT,
+          run_id TEXT NOT NULL,
+          tool_call_id TEXT,
+          tool_name TEXT
+        );
+        CREATE TABLE plugin_state_entries (
+          plugin_id TEXT NOT NULL,
+          namespace TEXT NOT NULL,
+          entry_key TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER,
+          PRIMARY KEY (plugin_id, namespace, entry_key)
+        ) STRICT;
+        INSERT INTO plugin_state_entries (
+          plugin_id, namespace, entry_key, value_json, created_at, expires_at
+        ) VALUES
+          ('matrix', 'storage-meta', 'current', '{"accountId":"default"}', 1, NULL),
+          ('matrix', 'sync-cache', 'current:meta', '{"kind":"meta","version":1}', 2, NULL);
+      `);
+    } finally {
+      db.close();
+    }
+
+    const migration = migrationById("matrix-account-sqlite-schema");
+    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      preview: [
+        `Matrix account SQLite schema migration (audit-events-v2): ${storageRootDir}`,
+        `Matrix account SQLite schema migration (strict-tables-v3): ${storageRootDir}`,
+      ],
+    });
+
+    const result = await migration.migrateLegacyState(createMigrationParams(stateDir));
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain(
+      `Matrix account SQLite ${storageRootDir}: Migrated shared state audit event ledger → versioned message lifecycle schema`,
+    );
+    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
+
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const userVersion = repaired.prepare("PRAGMA user_version").get() as {
+        user_version: number;
+      };
+      expect(userVersion.user_version).toBeGreaterThan(1);
+      expect(
+        repaired
+          .prepare(
+            `SELECT plugin_id, namespace, entry_key, value_json
+             FROM plugin_state_entries
+             ORDER BY namespace, entry_key`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          plugin_id: "matrix",
+          namespace: "storage-meta",
+          entry_key: "current",
+          value_json: '{"accountId":"default"}',
+        },
+        {
+          plugin_id: "matrix",
+          namespace: "sync-cache",
+          entry_key: "current:meta",
+          value_json: '{"kind":"meta","version":1}',
+        },
+      ]);
+    } finally {
+      repaired.close();
+    }
+  });
+
   it("migrates legacy sync cache JSON to SQLite plugin state", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const storageRootDir = path.join(
