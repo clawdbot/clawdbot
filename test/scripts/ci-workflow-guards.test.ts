@@ -4572,7 +4572,7 @@ NODE
       let dependencyEnvironment = configureStore();
       const cachePaths = readFileSync(outputFile, "utf8");
       expect(cachePaths).toBe(
-        `paths<<EOF\nnode_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n${path.relative(workspace, store)}\nEOF\n`,
+        `paths<<EOF\nnode_modules\nui/node_modules\npackages/*/node_modules\nextensions/*/node_modules\nexamples/*/node_modules\n${runnerOs === "macOS" ? "~/Library/pnpm/store" : ".cache/openclaw-pnpm-store"}\nEOF\n`,
       );
       const runPnpm = (args: string[], cwd: string, home = userHome) =>
         spawnSync(pnpm.command, [...pnpm.args, ...args], {
@@ -4747,9 +4747,19 @@ server.listen(0, "127.0.0.1", () => {
 
         const archive = path.join(root, "dependency-cache.tar");
         const manifest = path.join(root, "dependency-cache.manifest");
+        // Actions expands HOME in glob inputs, then makes matched tar entries
+        // workspace-relative. Passing ../ directly to its globber is invalid.
+        const patterns = cachePaths
+          .split("\n")
+          .slice(1, -2)
+          .map((pattern) =>
+            pattern.startsWith("~/") ? path.join(userHome, pattern.slice(2)) : pattern,
+          );
         writeFileSync(
           manifest,
-          globSync(cachePaths.split("\n").slice(1, -2), { cwd: workspace }).join("\n"),
+          globSync(patterns, { cwd: workspace })
+            .map((entry) => path.relative(workspace, path.resolve(workspace, entry)))
+            .join("\n"),
         );
         // Actions uses GNU tar's POSIX format and -P for workspace-relative
         // HOME entries. Keep importer/store hard links in that same archive.

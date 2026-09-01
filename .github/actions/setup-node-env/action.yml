@@ -76,7 +76,7 @@ outputs:
     description: Exact semantic dependency cache key.
     value: ${{ steps.dependency-cache-key.outputs.key }}
   dependency-cache-paths:
-    description: Workspace-relative importer and store paths for the exact archive.
+    description: Importer and store path patterns for the exact archive.
     value: ${{ steps.dependency-cache-store.outputs.paths }}
   pnpm-store-cache-hit:
     description: Whether the pnpm store restored an exact key.
@@ -174,6 +174,7 @@ runs:
       run: |
         set -euo pipefail
         store_dir="$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"
+        store_pattern=.cache/openclaw-pnpm-store
         if [ "${RUNNER_OS:-}" = "macOS" ]; then
           # Only disposable hosted Macs grant cleanup authority over the HOME store.
           # Keep the coarse cache's existing native path and archive version.
@@ -182,16 +183,17 @@ runs:
             exit 1
           fi
           store_dir="${HOME:?}/Library/pnpm/store"
+          store_pattern='~/Library/pnpm/store'
         fi
         echo "PNPM_CONFIG_STORE_DIR=$store_dir" >> "$GITHUB_ENV"
         # Pnpm also needs registry metadata for offline supply-chain checks.
         echo "PNPM_CONFIG_CACHE_DIR=$store_dir/cache" >> "$GITHUB_ENV"
-        # Relative HOME depth participates in the Actions archive version. Both
-        # publication and restore must use this same importer/store path list.
+        # Actions expands HOME before making tar entries workspace-relative;
+        # its input globber rejects parent traversals. Share the original patterns.
         {
           echo 'paths<<EOF'
           printf '%s\n' node_modules ui/node_modules 'packages/*/node_modules' 'extensions/*/node_modules' 'examples/*/node_modules'
-          node -e 'console.log(require("node:path").relative(process.argv[1], process.argv[2]))' "$GITHUB_WORKSPACE" "$store_dir"
+          printf '%s\n' "$store_pattern"
           echo EOF
         } >> "$GITHUB_OUTPUT"
 
