@@ -1,54 +1,93 @@
-/**
- * Backgrounded exec must carry its follow-up route in the structured value.
- *
- * Code Mode hands the guest `details` only (`code-mode-bridge.ts`), never `content`,
- * so guidance that lives solely in the visible text is invisible from inside a run.
- * That is how a backgrounded session reads as a dead end and gets abandoned.
- */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import { processSchema } from "./bash-tools.schemas.js";
+import { createProcessTool } from "./bash-tools.process.js";
 
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
+afterEach(resetProcessRegistryForTests);
 
-test("a backgrounded run exposes its process follow-up route in details, not only in text", async () => {
+function nodeCommand(source: string): string {
+  const quote = (value: string) =>
+    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+  const command = `${quote(process.execPath)} -e ${quote(source)}`;
+  return process.platform === "win32" ? `& ${command}` : command;
+}
+
+test.each([
+  { label: "explicit background", args: { background: true } },
+  { label: "elapsed yield window", args: { yieldMs: 10 } },
+])("provides a usable structured follow-up route after $label", async ({ label, args }) => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "exec-followup-")));
+  const releasePath = path.join(directory, "release");
+  const scopeKey = `agent:main:followup-${label}`;
   const exec = createExecTool({
     host: "gateway",
     security: "full",
     ask: "off",
     allowBackground: true,
-    backgroundMs: 0,
-    scopeKey: "agent:main:followup-proof",
+    notifyOnExit: false,
+    timeoutSec: 5,
+    scopeKey,
   });
+  const processTool = createProcessTool({ scopeKey });
+  // A parent-owned file releases the child only after the background result is observed.
+  const command = nodeCommand(
+    `const fs = require("node:fs"); const timer = setInterval(() => {
+      if (fs.existsSync(${JSON.stringify(releasePath)})) {
+        clearInterval(timer); process.stdout.write("FOLLOWUP_COMPLETE");
+      }
+    }, 10);`,
+  );
+  try {
+    const started = await exec.execute("followup-start", { command, ...args });
+    expect(started.details.status).toBe("running");
+    if (started.details.status !== "running") {
+      throw new Error("Expected a background process handle");
+    }
+    expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
+    const followUp = started.details.followUp;
+    expect(followUp).toContain("poll");
+    if (!followUp) {
+      throw new Error("Expected a structured follow-up route");
+    }
+    expect(started.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining(followUp),
+    });
 
-  const result = await exec.execute("background-followup", {
-    command: `node -e "setTimeout(() => {}, 2000)"`,
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    const completed = await processTool.execute("followup-poll", {
+      action: "poll",
+      sessionId: started.details.sessionId,
+    });
+    expect(completed.details).toMatchObject({
+      status: "completed",
+      sessionId: started.details.sessionId,
+      aggregated: "FOLLOWUP_COMPLETE",
+    });
+  } finally {
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not advertise detached continuation when process is unavailable", async () => {
+  const exec = createExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    processToolAvailabilityRef: { value: false },
+    notifyOnExit: false,
+  });
+  const result = await exec.execute("followup-foreground", {
+    command: nodeCommand('process.stdout.write("FOREGROUND_COMPLETE")'),
     background: true,
   });
-
-  const details = result.details as { status?: string; sessionId?: string; followUp?: string };
-  expect(details.status).toBe("running");
-  expect(details.sessionId).toEqual(expect.any(String));
-
-  // The guest value alone must name the recovery surface.
-  const followUp = details.followUp ?? "";
-  expect(followUp).toContain("process");
-
-  // Bind the advertised actions to the real process schema so this cannot rot into
-  // guidance that names an action the tool does not implement.
-  const processActions = (processSchema.properties.action as { enum?: string[] }).enum ?? [];
-  const advertised = /process \(([^)]+)\)/.exec(followUp)?.[1]?.split("/") ?? [];
-  expect(advertised.length).toBeGreaterThan(0);
-  for (const action of advertised) {
-    expect(processActions).toContain(action);
-  }
-
-  // The visible text keeps the same route, so the two surfaces cannot drift.
-  const text = (result.content as Array<{ type: string; text?: string }>)
-    .map((block) => block.text ?? "")
-    .join("");
-  expect(text).toContain(followUp);
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "FOREGROUND_COMPLETE" });
+  expect(result.details).not.toHaveProperty("followUp");
 });

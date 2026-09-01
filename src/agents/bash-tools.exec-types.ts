@@ -153,7 +153,6 @@ export type ExecToolDetails = {
       startedAt: number;
       cwd?: string;
       tail?: string;
-      /** Recovery route for a still-running session; Code Mode guests receive `details` only. */
       followUp?: string;
     }
   | {

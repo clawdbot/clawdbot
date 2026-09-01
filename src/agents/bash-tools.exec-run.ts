@@ -731,7 +731,7 @@ export function createExecTool(
                   startedAt: run.startedAt,
                   cwd: run.session.cwd,
                   tail: run.session.tail,
-                  // Code Mode guests receive `details` only, never `content`.
+                  // Structured callers receive details without the visible content.
                   followUp: BACKGROUND_EXEC_FOLLOW_UP,
                 },
               },
