@@ -4,6 +4,7 @@
 import path from "node:path";
 import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
+import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -23,6 +24,7 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts";
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
@@ -253,12 +255,23 @@ export async function runExtensionBatchPlan(
     preparePlanGroup(group, index, env, vitestArgs, exactExcludePaths, useDedicatedCache),
   );
   const invocations = preparedGroups.flatMap((group) => group.invocations);
+  const cwd = path.resolve(import.meta.dirname, "..");
+  const homeMode = combineTestHomeSelections(
+    invocations.map(({ config, args, targets, env: invocationEnv }) =>
+      resolveVitestHomeSelection(["--config", config, ...args, ...targets], {
+        cwd,
+        env: invocationEnv,
+      }),
+    ),
+  );
+  // Admit the whole selection before report or runtime preparation can import code.
+  assertTestHomeSelection(env, homeMode);
   const reports = await createVitestReportOwner(
     invocations.map((invocation) => ({
       config: invocation.config,
       args: ["run", "--config", invocation.config, ...invocation.args, ...invocation.targets],
     })),
-    path.resolve(import.meta.dirname, ".."),
+    cwd,
   );
   const termination: { signal: NodeJS.Signals | null } = { signal: null };
   const onSignal = (value: NodeJS.Signals) => {
@@ -354,6 +367,7 @@ export async function runExtensionBatchPlan(
               args,
               targets: [],
               env,
+              homeMode,
               onComplete(value) {
                 outcome = value;
                 termination.signal ??= value.signal;

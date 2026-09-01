@@ -389,20 +389,24 @@ async function activateSetupInference(
       transformParams: Parameters<typeof transformConfigWithPendingPluginInstalls>[0],
     ) => {
       const transform = transformParams.transform;
-      const wrappedTransform: typeof transform = async (config, context) =>
-        await transform(canonicalizeAgentEntriesForTest(config), {
-          ...context,
-          snapshot: {
-            ...context.snapshot,
-            config: materializeRuntimeAgentListForTest(context.snapshot.config),
-            sourceConfig: canonicalizeAgentEntriesForTest(
-              context.snapshot.sourceConfig ?? context.snapshot.config,
-            ),
-            runtimeConfig: materializeRuntimeAgentListForTest(
-              context.snapshot.runtimeConfig ?? context.snapshot.config,
-            ),
+      const wrappedTransform: typeof transform = async (config, context, preservation) =>
+        await transform(
+          canonicalizeAgentEntriesForTest(config),
+          {
+            ...context,
+            snapshot: {
+              ...context.snapshot,
+              config: materializeRuntimeAgentListForTest(context.snapshot.config),
+              sourceConfig: canonicalizeAgentEntriesForTest(
+                context.snapshot.sourceConfig ?? context.snapshot.config,
+              ),
+              runtimeConfig: materializeRuntimeAgentListForTest(
+                context.snapshot.runtimeConfig ?? context.snapshot.config,
+              ),
+            },
           },
-        });
+          preservation,
+        );
       return await transformConfigWithPendingPluginInstalls({
         ...transformParams,
         transform: wrappedTransform,

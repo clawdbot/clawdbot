@@ -280,11 +280,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
       runtime.log(theme.muted(change));
     }
   }
-  const convergenceOutcomes = convergence.warnings.flatMap((warning): PluginUpdateOutcome[] =>
-    warning.pluginId
-      ? [{ pluginId: warning.pluginId, status: "error", message: warning.message }]
-      : [],
-  );
+  const convergenceOutcomes: PluginUpdateOutcome[] = [
+    ...(convergence.outcomes ?? []),
+    ...convergence.warnings.flatMap((warning): PluginUpdateOutcome[] =>
+      warning.pluginId
+        ? [{ pluginId: warning.pluginId, status: "error", message: warning.message }]
+        : [],
+    ),
+  ];
   const convergenceErrored = convergence.errored;
   for (const warning of [...convergence.warnings, ...(convergence.notices ?? [])]) {
     warnings.push(warning);

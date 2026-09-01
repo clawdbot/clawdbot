@@ -4,6 +4,7 @@ import type { SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
+import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
 import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -13,6 +14,7 @@ import {
 } from "./lib/vitest-build-prerequisites.mts";
 import { isVitestWorkerMetadataRequest } from "./lib/vitest-cli-mode.mts";
 import type { exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -98,11 +100,17 @@ function cleanupVitestRunSpec(spec: VitestRunSpec) {
   }
 }
 
-function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], workerRun?: VitestWorkerRun) {
+function runPnpmSpecCommand(
+  spec: VitestRunSpec,
+  pnpmArgs: string[],
+  workerRun?: VitestWorkerRun,
+  homeMode?: Parameters<typeof spawnWatchedVitestProcess>[0]["homeMode"],
+) {
   let noOutputTimedOut = false;
   return new Promise<VitestCommandOutcome>((resolve, reject) => {
     const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       workerRun,
+      homeMode,
       pnpmArgs,
       env: spec.env,
       onNoOutputTimeout: () => {
@@ -140,7 +148,12 @@ async function runVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
   try {
     if (spec.preflightPnpmArgs) {
       console.error(`[test] preflight ${spec.config}`);
-      const preflightResult = await runPnpmSpecCommand(spec, spec.preflightPnpmArgs);
+      const preflightResult = await runPnpmSpecCommand(
+        spec,
+        spec.preflightPnpmArgs,
+        undefined,
+        "tooling",
+      );
       if (preflightResult.code !== 0 || preflightResult.signal) {
         return preflightResult;
       }
@@ -343,6 +356,11 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
   runSpecs.forEach((spec, index) => {
     spec.reportIndex = index;
   });
+  const homeMode = combineTestHomeSelections(
+    runSpecs.map((spec) => resolveVitestHomeSelection(spec.pnpmArgs, { env: spec.env })),
+  );
+  // Refuse a mixed real-home run before report setup or runtime preparation imports code.
+  assertTestHomeSelection(baseEnv, homeMode);
   const reports = await createVitestReportOwner(
     runSpecs.map((spec) => ({
       config: spec.config,
@@ -466,13 +484,18 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
           async (mergeArgs) => {
             // Replay is source-only: selected configs load after all compiled
             // borrowers close; report blobs own the exact executed selection.
-            const outcome = await runPnpmSpecCommand({ ...runSpecs[0]!, env: baseEnv }, [
-              "exec",
-              "node",
-              ...resolveVitestNodeArgs(baseEnv),
-              resolveVitestCliEntry(),
-              ...mergeArgs,
-            ]);
+            const outcome = await runPnpmSpecCommand(
+              { ...runSpecs[0]!, env: baseEnv },
+              [
+                "exec",
+                "node",
+                ...resolveVitestNodeArgs(baseEnv),
+                resolveVitestCliEntry(),
+                ...mergeArgs,
+              ],
+              undefined,
+              homeMode,
+            );
             termination.signal ??= outcome.signal;
             return outcome;
           },

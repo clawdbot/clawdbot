@@ -19,6 +19,12 @@ describe("update failure triage diagnostics", () => {
       root: path.join(home, "npm", "openclaw"),
       reason: "Package install failed",
       before: { version: "2026.8.1" },
+      recovery: {
+        serviceRestartSafe: true,
+        version: "2026.8.1",
+        buildId: "verified-recovery-build",
+        service: "healthy",
+      },
       durationMs: 10,
       steps: Array.from({ length: 5 }, (_, index) => ({
         name: `step-${index}`,
@@ -46,7 +52,11 @@ describe("update failure triage diagnostics", () => {
     expect(raw).not.toContain("unredacted-command");
     expect(raw).not.toContain("\uFFFD");
     expect(failure).toMatchObject({
-      result: { reason: "Package install failed", before: { version: "2026.8.1" } },
+      result: {
+        reason: "Package install failed",
+        before: { version: "2026.8.1" },
+        recovery: result.recovery,
+      },
     });
     expect("result" in failure && failure.result.steps.map((step) => step.name)).toEqual([
       "step-1",

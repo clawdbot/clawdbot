@@ -18,6 +18,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
+import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
@@ -36,6 +37,7 @@ type PostCoreConvergenceResult = {
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
+  outcomes?: PluginUpdateOutcome[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
   /**
@@ -143,8 +145,9 @@ function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCore
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Transient repair fetch failures stay nonblocking;
- * consent that prevents activation and payload smoke failures are errors.
+ * the gateway is restarted. Transient missing-plugin fetch failures stay
+ * nonblocking. Consent that prevents activation retains its typed update
+ * outcome and, like payload smoke failure, blocks explicit update completion.
  * Gateway startup quarantines known payload failures before any module import,
  * then boots with those plugins marked configured-unavailable.
  */
@@ -272,6 +275,7 @@ export async function runPostCorePluginConvergence(params: {
     ],
     notices,
     warnings,
+    outcomes: repair.outcomes,
     errored: repair.capabilityConsentRequired === true || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,

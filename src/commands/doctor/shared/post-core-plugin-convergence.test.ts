@@ -453,6 +453,7 @@ describe("runPostCorePluginConvergence", () => {
       env: {},
     });
     expect(result.errored).toBe(false);
+    expect(result.outcomes).toBeUndefined();
     expect(result.warnings).toStrictEqual([
       {
         reason:
