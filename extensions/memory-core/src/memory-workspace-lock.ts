@@ -14,7 +14,7 @@ import {
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
 const MEMORY_WORKSPACE_LOCK_WAIT_TIMEOUT_MS = 10_000;
-export const SHORT_TERM_LOCK_STALE_MS = 60_000;
+const SHORT_TERM_LOCK_STALE_MS = 60_000;
 /**
  * Store-level backstop for orphaned lock rows: a lock is registered with this
  * TTL, and a row older than it is stealable even when its owner pid answers
@@ -22,7 +22,7 @@ export const SHORT_TERM_LOCK_STALE_MS = 60_000;
  * recycled pid (pid 1 in particular) can keep a dead holder's lock looking
  * alive forever without this age bound.
  */
-export const SHORT_TERM_LOCK_TTL_MS = 10 * 60_000;
+const SHORT_TERM_LOCK_TTL_MS = 10 * 60_000;
 const MEMORY_WORKSPACE_LOCK_RETRY_DELAY_MS = 40;
 const inProcessMemoryWorkspaceLocks = new KeyedAsyncQueue();
 
@@ -73,7 +73,7 @@ export function resolveLockPath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_LOCK_NAMESPACE, workspaceDir);
 }
 
-export function parseLockOwnerPid(raw: string): number | null {
+function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
   if (!match) {
     return null;
@@ -85,7 +85,7 @@ export function parseLockOwnerPid(raw: string): number | null {
   return pid;
 }
 
-export function isProcessLikelyAlive(pid: number): boolean {
+function isProcessLikelyAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
   } catch (err) {

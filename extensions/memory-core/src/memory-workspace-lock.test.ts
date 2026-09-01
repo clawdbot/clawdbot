@@ -6,12 +6,15 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import { configureMemoryCoreDreamingState, memoryCoreWorkspaceStateKey } from "./dreaming-state.js";
-import { SHORT_TERM_LOCK_TTL_MS, withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
   shortTermTestState as testing,
 } from "./test-helpers.js";
+
+// Mirrors the lock module's unexported SHORT_TERM_LOCK_TTL_MS.
+const LOCK_TTL_MS = 10 * 60_000;
 
 describe("memory workspace lock orphan recovery", () => {
   let fixtureRoot = "";
@@ -44,11 +47,8 @@ describe("memory workspace lock orphan recovery", () => {
     const workspaceDir = await makeWorkspace();
     // The container-restart shape from #134999: the owner pid is alive in the
     // new pid namespace (here: this very process), so only the lock TTL's age
-    // bound can unwedge the row. The fallback keeps this test behavioral when
-    // the source is reverted for red-green runs.
-    const lockTtlMs = Number.isFinite(SHORT_TERM_LOCK_TTL_MS)
-      ? SHORT_TERM_LOCK_TTL_MS
-      : 10 * 60_000;
+    // bound can unwedge the row.
+    const lockTtlMs = LOCK_TTL_MS;
     await testing.writeShortTermLock(workspaceDir, {
       owner: `${process.pid}:${Date.now() - lockTtlMs - 5_000}`,
       acquiredAt: Date.now() - lockTtlMs - 5_000,
@@ -83,7 +83,7 @@ describe("memory workspace lock orphan recovery", () => {
 
     const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
     expect(registered.filter((entry) => entry.key === lockKey)).toEqual([
-      { key: lockKey, ttlMs: SHORT_TERM_LOCK_TTL_MS },
+      { key: lockKey, ttlMs: LOCK_TTL_MS },
     ]);
   });
 });
