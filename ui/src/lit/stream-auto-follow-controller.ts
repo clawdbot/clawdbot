@@ -45,8 +45,7 @@ export class StreamAutoFollowController implements ReactiveController {
         if (!container) {
           return;
         }
-        const distance =
-          container.scrollHeight - container.scrollTop - container.clientHeight;
+        const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
         if (
           !force &&
           (!this.options.isEnabled() || (!this.atBottom && distance >= AT_BOTTOM_THRESHOLD_PX))
