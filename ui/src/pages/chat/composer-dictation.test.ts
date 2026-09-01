@@ -698,6 +698,30 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("does not commit a stale late final once a newer session starts", async () => {
+    const { controller, onCommit, target } = createHarness();
+    await startHold(target);
+    await commitLatched(controller, target);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // A newer session starts before the first session's final drains.
+    expect(controller.startDirect()).toBe(true);
+
+    // The first session's late final arrives during the drain.
+    emit({
+      transcriptionSessionId: "dictation-1",
+      type: "transcript",
+      text: "stale words",
+      final: true,
+    });
+    emit({ transcriptionSessionId: "dictation-1", type: "close", reason: "completed" });
+
+    // The stale final must not reach the composer.
+    await waitForFast(() => expect(controller.active).toBe(true));
+    expect(onCommit).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
   it("closes and discards transcript when Escape cancels", async () => {
     const { controller, onCommit, target } = createHarness();
     await startHold(target);

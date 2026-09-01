@@ -680,7 +680,11 @@ export class ComposerDictationController {
     this.session = null;
     this.reset();
     const finalTranscript = await session.finish(true).catch(() => "");
-    const finalCommitted = Boolean(finalTranscript && wasActive && !this.disposed);
+    // A new session may have started while the old one drained; only commit the
+    // late final if this controller still owns no newer session.
+    const finalCommitted = Boolean(
+      finalTranscript && wasActive && !this.disposed && this.session === null,
+    );
     if (finalCommitted) {
       this.options.onCommit(finalTranscript);
     }
