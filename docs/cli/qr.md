@@ -57,8 +57,10 @@ Use `--voice-node` for an embedded or room voice client. It keeps the node token
 
 Plaintext LAN `ws://` setup remains available, but OpenClaw automatically uses
 the limited profile because a network observer could capture and race the bearer
-bootstrap token. Configure `wss://` or Tailscale Serve, then generate a new code
-to get full access.
+bootstrap token. The first connection stays pending until an existing owner
+approves it with `openclaw devices approve <requestId>`; the mobile app retries
+and receives its tokens only after that approval. Configure `wss://` or Tailscale
+Serve, then generate a new code to retain automatic setup and get full access.
 
 ## Gateway URL resolution
 

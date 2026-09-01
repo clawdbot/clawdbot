@@ -29,7 +29,8 @@ import {
 import {
   deviceBootstrapProfilesEqual,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  isMobilePairingSetupBootstrapProfile,
+  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   resolvePairingSetupAccess,
   type DeviceBootstrapProfileInput,
   type PairingSetupAccess,
@@ -529,11 +530,14 @@ export async function resolvePairingSetupFromConfig(
       requestedBootstrapProfile,
       FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     ) && uniqueUrls.some((url) => !isFullAccessMobilePairingUrl(url));
+  const requiresOwnerApproval =
+    isMobilePairingSetupBootstrapProfile(requestedBootstrapProfile) &&
+    uniqueUrls.some((url) => !isFullAccessMobilePairingUrl(url));
   // Every advertised URL shares this bearer token. Keep plaintext LAN routes
-  // useful for node/chat access, but reserve admin handoff for an all-TLS
-  // route set (or same-host loopback, where no LAN observer exists).
-  const issuedBootstrapProfile = accessDowngraded
-    ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+  // useful after an owner approves the bound device, but never let the first
+  // bearer presenter silently gain operator access over an observable route.
+  const issuedBootstrapProfile = requiresOwnerApproval
+    ? PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE
     : requestedBootstrapProfile;
   const directGatewayTlsFingerprintRaw =
     urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")

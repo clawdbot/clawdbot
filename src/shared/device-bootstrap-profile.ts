@@ -6,6 +6,7 @@ export type DeviceBootstrapPurpose =
   | "control-ui"
   | "control-ui-owner"
   | "mobile-full"
+  | "mobile-lan"
   | "voice-node"
   | "cloud-worker";
 
@@ -67,6 +68,12 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+};
+
+/** Plaintext-LAN mobile profile: same handoff, but only after owner approval. */
+export const PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  ...PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  purpose: "mobile-lan",
 };
 
 /** Full browser-owner profile issued only by dashboard and graphical onboarding. */
@@ -132,6 +139,7 @@ export function isMobilePairingSetupBootstrapProfile(
 ): boolean {
   return (
     isPairingSetupBootstrapProfile(input) ||
+    matchesBootstrapProfile(input, PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
     matchesBootstrapProfile(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
   );
 }
@@ -259,6 +267,7 @@ export function normalizeDeviceBootstrapProfile(
     input?.purpose === "control-ui" ||
     input?.purpose === "control-ui-owner" ||
     input?.purpose === "mobile-full" ||
+    input?.purpose === "mobile-lan" ||
     input?.purpose === "voice-node" ||
     input?.purpose === "cloud-worker"
       ? input.purpose

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
 import {
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
@@ -340,7 +340,7 @@ describe("registerQrCli", () => {
 
     expectLoggedSetupCode("ws://192.168.1.8:18789");
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+      expect.objectContaining({ profile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
   });
@@ -357,7 +357,7 @@ describe("registerQrCli", () => {
 
     expectLoggedSetupCode("ws://10.0.2.2:18789");
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+      expect.objectContaining({ profile: PLAINTEXT_LAN_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
   });
