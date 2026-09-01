@@ -1236,7 +1236,7 @@ Existing apps that already use `features.assistant_view` can keep their current 
     - `emoji:read`
     - `search:read` (if you depend on Slack search reads)
 
-    For user identity (`identity: "user"`), the user token authorizes both reads and writes (`extensions/slack/src/accounts.ts:47-55`), so add `bookmarks:write` (and `pins:write`, `reactions:write`, `chat:write` as needed) for the corresponding write operations.
+    For user identity (`postAs: "user"`), the user token authorizes both reads and writes (`extensions/slack/src/accounts.ts:47-55`), so add `bookmarks:write` (and `pins:write`, `reactions:write`, `chat:write` as needed) for the corresponding write operations.
 
   </Accordion>
 </AccordionGroup>
