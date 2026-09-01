@@ -339,6 +339,7 @@ export async function consumeCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
     return undefined;
   }
+  let committed = false;
   const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
@@ -354,12 +355,12 @@ export async function consumeCliSessionForkInStore(params: {
       setCliSessionBinding(next, provider, consumedBinding);
       return next;
     },
-    { fallbackEntry: entry },
+    { fallbackEntry: entry, onCommitted: () => (committed = true) },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
-  return persisted ?? undefined;
+  return committed ? (persisted ?? undefined) : undefined;
 }
 
 /** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
@@ -376,6 +377,7 @@ export async function restoreCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
     return undefined;
   }
+  let committed = false;
   const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
@@ -390,12 +392,12 @@ export async function restoreCliSessionForkInStore(params: {
       setCliSessionBinding(next, provider, { ...currentBinding, forkNextResume: true });
       return next;
     },
-    { fallbackEntry: entry },
+    { fallbackEntry: entry, onCommitted: () => (committed = true) },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
-  return persisted ?? undefined;
+  return committed ? (persisted ?? undefined) : undefined;
 }
 
 /** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
@@ -419,6 +421,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
   if (!entry || successorCliSessionId === expectedCliSessionId) {
     return undefined;
   }
+  let committed = false;
   const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
@@ -437,12 +440,12 @@ export async function persistCliSessionForkSuccessorInStore(params: {
       });
       return next;
     },
-    { fallbackEntry: entry },
+    { fallbackEntry: entry, onCommitted: () => (committed = true) },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
-  return persisted ?? undefined;
+  return committed ? (persisted ?? undefined) : undefined;
 }
 
 /** Records CLI compaction metadata on the persisted session entry. */

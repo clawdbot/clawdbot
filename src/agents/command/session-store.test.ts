@@ -3227,6 +3227,54 @@ describe("consumeCliSessionForkInStore", () => {
       });
     });
   });
+
+  it.each(["consume", "restore", "successor"] as const)(
+    "does not report %s success after a concurrent durable rebind",
+    async (operation) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = `agent:main:cli-fork-cas:${operation}`;
+        const sourceBinding = {
+          sessionId: "claude-source-session",
+          forceReuse: true,
+          ...(operation === "consume" ? { forkNextResume: true as const } : {}),
+        };
+        const cached: SessionEntry = {
+          sessionId: "openclaw-session-1",
+          updatedAt: 1,
+          cliSessionBindings: { "claude-cli": sourceBinding },
+        };
+        const rebound: SessionEntry = {
+          ...cached,
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "claude-other-session", forceReuse: true },
+          },
+        };
+        const sessionStore = { [sessionKey]: cached };
+        await seedSessionStore(storePath, { [sessionKey]: rebound });
+
+        const common = {
+          provider: "claude-cli",
+          sessionKey,
+          sessionStore,
+          storePath,
+          expectedCliSessionId: "claude-source-session",
+        };
+        const result =
+          operation === "consume"
+            ? await consumeCliSessionForkInStore(common)
+            : operation === "restore"
+              ? await restoreCliSessionForkInStore(common)
+              : await persistCliSessionForkSuccessorInStore({
+                  ...common,
+                  successorCliSessionId: "claude-successor-session",
+                });
+
+        expect(result).toBeUndefined();
+        expect(sessionStore[sessionKey]).toMatchObject(rebound);
+        expect(loadPersistedSessionEntry(storePath, sessionKey)).toMatchObject(rebound);
+      });
+    },
+  );
 });
 
 describe("clearCliSessionInStore", () => {
