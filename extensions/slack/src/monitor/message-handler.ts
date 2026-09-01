@@ -367,23 +367,11 @@ export function createSlackMessageHandler(params: {
       ctx.runtime.error?.(`slack inbound debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
-  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
-  const scopedThreadTsResolvers = new WeakMap<
+  // Keep cache and in-flight lookups with Bolt's client; replaced clients start fresh.
+  const threadTsResolvers = new WeakMap<
     SlackEventScope["client"],
     ReturnType<typeof createSlackThreadTsResolver>
   >();
-  const resolveThreadTsResolver = (eventScope?: SlackEventScope) => {
-    if (!eventScope) {
-      return threadTsResolver;
-    }
-    const existing = scopedThreadTsResolvers.get(eventScope.client);
-    if (existing) {
-      return existing;
-    }
-    const resolver = createSlackThreadTsResolver({ client: eventScope.client });
-    scopedThreadTsResolvers.set(eventScope.client, resolver);
-    return resolver;
-  };
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
 
   async function enqueueSlackMessage(
@@ -406,7 +394,13 @@ export function createSlackMessageHandler(params: {
     // Relay and native events can overlap; a following typeless bot event must see it.
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     trackEvent?.();
-    const resolvedMessage = await resolveThreadTsResolver(opts.eventScope).resolve({
+    const client = opts.eventScope?.client ?? ctx.app.client;
+    let threadTsResolver = threadTsResolvers.get(client);
+    if (!threadTsResolver) {
+      threadTsResolver = createSlackThreadTsResolver({ client });
+      threadTsResolvers.set(client, threadTsResolver);
+    }
+    const resolvedMessage = await threadTsResolver.resolve({
       message,
       source: opts.source,
       ...(opts.turnAdoptionLifecycle ? { turnAdoptionLifecycle: opts.turnAdoptionLifecycle } : {}),
