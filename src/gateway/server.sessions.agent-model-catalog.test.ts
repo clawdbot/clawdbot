@@ -247,9 +247,11 @@ describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => 
       });
     }
     const before = loadSessionEntry(access);
-    const { readConfigFileSnapshot } = await getGatewayConfigModule();
+    const configModule = await getGatewayConfigModule();
+    const { readConfigFileSnapshot } = configModule;
     const beforeConfig = await readConfigFileSnapshot();
     const loadGatewayModelCatalog = createAgentModelCatalogLoader();
+    const configMutations = vi.spyOn(configModule, "mutateConfigFileWithRetry");
     const result = await directSessionReq<{ entry?: SessionEntry }>(
       method,
       {
@@ -262,7 +264,16 @@ describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => 
         context: { loadGatewayModelCatalog },
         ...(scenario.error ? { client: { connect: { scopes: ["operator.admin"] } } as never } : {}),
       },
-    );
+    ).finally(async () => {
+      // Admin patches persist defaults in the background; join their writes before
+      // the shared config fixture resets for the next case.
+      await Promise.allSettled(
+        configMutations.mock.results
+          .filter((result) => result.type === "return")
+          .map((result) => result.value),
+      );
+      configMutations.mockRestore();
+    });
 
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
     if (fixture) {

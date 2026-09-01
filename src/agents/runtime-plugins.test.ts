@@ -406,6 +406,7 @@ describe("agent runtime plugin registries", () => {
       allowGatewaySubagentBinding: true,
     });
     const error = await ensureSelectedAgentHarnessPlugin({
+      config,
       provider: "openai",
       modelId: "gpt-5.5",
       agentHarnessRuntimeOverride: "codex",
@@ -415,7 +416,7 @@ describe("agent runtime plugin registries", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("plugins disabled");
-    expect(getPluginRuntimeLoadContext(pluginRegistry)?.activationSourceConfig).toBe(config);
+    expect(pluginRegistry).toBe(cachedRegistry);
     expect(getPluginRuntimeLoadContext(cachedRegistry)).toBeUndefined();
     expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });

@@ -208,36 +208,46 @@ describe("harness runtime plugins", () => {
     expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
   });
 
-  it("reports a missing activatable owner as degraded when a sibling owner is blocked", async () => {
-    const config = { plugins: { allow: ["ready-owner"] } } satisfies OpenClawConfig;
-    const pluginRegistry = createEmptyPluginRegistry();
-    attachPreparedPluginFacts(
-      pluginRegistry,
-      config,
-      makeRegistry(
-        ["blocked-owner", "ready-owner"].map((id) => ({
-          id,
-          channels: [],
-          origin: "bundled" as const,
-          activation: { onAgentHarnesses: ["custom-harness"] },
-        })),
-      ),
-    );
+  it.each([1, 3])(
+    "reports a missing activatable owner as degraded with %i blocked sibling owners",
+    async (blockedCount) => {
+      const config = {
+        plugins: { allow: ["ready-owner"], entries: { "ready-owner": { enabled: true } } },
+      } satisfies OpenClawConfig;
+      const pluginRegistry = createEmptyPluginRegistry();
+      attachPreparedPluginFacts(
+        pluginRegistry,
+        config,
+        makeRegistry(
+          [
+            ...Array.from({ length: blockedCount }, (_, index) => `blocked-owner-${index}`),
+            "ready-owner",
+          ].map((id) => ({
+            id,
+            channels: [],
+            origin: "bundled" as const,
+            activation: { onAgentHarnesses: ["custom-harness"] },
+          })),
+        ),
+      );
 
-    const error = await ensureSelectedAgentHarnessPlugin({
-      provider: "custom-provider",
-      modelId: "custom-model",
-      config,
-      agentHarnessRuntimeOverride: "custom-harness",
-      workspaceDir: "/tmp/workspace",
-      pluginRegistry,
-    }).catch((cause: unknown) => cause);
+      const error = await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        config,
+        agentHarnessRuntimeOverride: "custom-harness",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry,
+      }).catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("reason=owner-plugin-degraded");
-    expect((error as Error).message).toContain('Owner plugin "blocked-owner" is not activatable');
-    expect((error as Error).message).toContain("ready-owner");
-  });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("reason=owner-plugin-degraded");
+      expect((error as Error).message).toContain(
+        'Owner plugin "blocked-owner-0" is not activatable',
+      );
+      expect((error as Error).message).toContain("ownerPluginIds=");
+    },
+  );
 
   it("reports the prepared owner's loader failure before activation policy", async () => {
     const pluginRegistry = createEmptyPluginRegistry();
@@ -324,34 +334,38 @@ describe("harness runtime plugins", () => {
     );
   });
 
-  it("reports an activated owner missing from the prepared registry as degraded", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    attachPreparedPluginFacts(
-      pluginRegistry,
-      {},
-      makeRegistry([
+  it.each(["config", "bundled", "platform"] as const)(
+    "reports an activated %s owner missing from the prepared registry as degraded",
+    async (mode) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      const manifestRegistry = makeRegistry([
         {
           id: "custom-owner",
           channels: [],
           activation: { onAgentHarnesses: ["custom-harness"] },
         },
-      ]),
-    );
+      ]);
+      const owner = manifestRegistry.plugins[0]!;
+      owner.origin = mode === "config" ? "config" : "bundled";
+      owner.enabledByDefault = mode === "bundled";
+      owner.enabledByDefaultOnPlatforms = mode === "platform" ? [process.platform] : undefined;
+      attachPreparedPluginFacts(pluginRegistry, {}, manifestRegistry);
 
-    const error = await ensureSelectedAgentHarnessPlugin({
-      provider: "custom-provider",
-      modelId: "custom-model",
-      agentHarnessRuntimeOverride: "custom-harness",
-      workspaceDir: "/tmp/workspace",
-      pluginRegistry,
-    }).catch((cause: unknown) => cause);
+      const error = await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        agentHarnessRuntimeOverride: "custom-harness",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry,
+      }).catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "(reason=owner-plugin-degraded, ownerPluginId=custom-owner)",
-    );
-    expect((error as Error).message).toContain("The owner plugin did not register.");
-  });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(
+        "(reason=owner-plugin-degraded, ownerPluginId=custom-owner)",
+      );
+      expect((error as Error).message).toContain("The owner plugin did not register.");
+    },
+  );
 
   it("gives an unknown harness without owner metadata a stable reason", async () => {
     const error = await ensureSelectedAgentHarnessPlugin({
