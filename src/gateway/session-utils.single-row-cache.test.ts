@@ -217,7 +217,7 @@ describe("single gateway session row child projections", () => {
     vi.clearAllMocks();
   });
 
-  test("hides internal effects from listings while preserving exact reads for private history", async () => {
+  test("preserves session selection and hidden effects across metadata and full reads", async () => {
     await withSingleRowCacheStore(
       "openclaw-single-row-hidden-effects-",
       "/tmp/openclaw-single-row-hidden-effects",
@@ -226,11 +226,46 @@ describe("single gateway session row child projections", () => {
           agentId: MAIN_AGENT_ID,
           runId: "suppressed-effects",
         });
+        const sessionKey = "agent:main:main";
+        const visible: SessionEntry = {
+          ...parentSession("visible-session", now),
+          skillsSnapshot: { prompt: "saved skill prompt", skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: now,
+            systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
+        };
         await seedSessionEntries(storePath, {
+          [sessionKey]: visible,
           [hidden.sessionKey]: parentSession(hidden.sessionId, now),
         });
 
+        const metadata = loadSessionEntry("main", {
+          agentId: MAIN_AGENT_ID,
+          clone: false,
+          projection: "list",
+        });
+        expect(metadata).toMatchObject({
+          agentId: MAIN_AGENT_ID,
+          canonicalKey: sessionKey,
+          storePath,
+          entry: parentSession(visible.sessionId, now),
+        });
+        expect(metadata.entry?.skillsSnapshot).toBeUndefined();
+        expect(metadata.entry?.systemPromptReport).toBeUndefined();
+        expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone: false })).toMatchObject({
+          agentId: metadata.agentId,
+          canonicalKey: metadata.canonicalKey,
+          storePath: metadata.storePath,
+          entry: visible,
+        });
+
         expect(loadSessionEntry(hidden.sessionKey).entry).toBeUndefined();
+        expect(loadSessionEntry(hidden.sessionKey, { projection: "list" }).entry).toBeUndefined();
         expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
           hidden.sessionId,
         );

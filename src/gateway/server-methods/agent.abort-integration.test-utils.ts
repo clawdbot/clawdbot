@@ -978,6 +978,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
       agentId: "work",
       clone: false,
+      projection: "list",
     });
     expect(context.chatAbortControllers.has(runId)).toBe(false);
 
