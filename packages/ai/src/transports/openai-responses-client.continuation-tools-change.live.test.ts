@@ -122,7 +122,7 @@ async function runSecretRecallToolsChangeScenario(params: {
   sessionId: string;
   turn1Tools: Tool[];
   turn2Tools: Tool[];
-}): Promise<{ secondRequest: Record<string, unknown> }> {
+}): Promise<{ secondRequest: Record<string, unknown> | undefined }> {
   const capture = new GlobalFetchRequestCapture();
   capture.install();
   try {
@@ -161,7 +161,9 @@ async function runSecretRecallToolsChangeScenario(params: {
     const secondRequest = capture.requests[1];
     expect(secondRequest).toHaveProperty("previous_response_id");
     expect(typeof secondRequest?.previous_response_id).toBe("string");
-    expect((secondRequest?.previous_response_id as string).length).toBeGreaterThan(0);
+    expect(
+      (secondRequest?.previous_response_id as string | undefined)?.length ?? 0,
+    ).toBeGreaterThan(0);
     // Trimmed input -- only the new user message, not the full replayed
     // history -- confirms this was a real continuation, not the full-history
     // fallback succeeding to coincidentally produce the right answer.
@@ -200,9 +202,11 @@ describeLive(
           turn2Tools: [readFile, webFetch],
         });
         expect(secondRequest?.tools).toHaveLength(2);
-        expect((secondRequest?.tools as Array<{ name: string }>).map((t) => t.name).sort()).toEqual(
-          ["read_file", "web_fetch"],
-        );
+        expect(
+          ((secondRequest?.tools ?? []) as Array<{ name: string }>)
+            .map((t) => t.name)
+            .toSorted((a, b) => a.localeCompare(b)),
+        ).toEqual(["read_file", "web_fetch"]);
       },
       LIVE_TIMEOUT_MS,
     );
@@ -216,9 +220,9 @@ describeLive(
           turn2Tools: [readFile],
         });
         expect(secondRequest?.tools).toHaveLength(1);
-        expect((secondRequest?.tools as Array<{ name: string }>).map((t) => t.name)).toEqual([
-          "read_file",
-        ]);
+        expect(
+          ((secondRequest?.tools ?? []) as Array<{ name: string }>).map((t) => t.name),
+        ).toEqual(["read_file"]);
       },
       LIVE_TIMEOUT_MS,
     );
@@ -267,6 +271,8 @@ describeLive(
           const toolResultMsg = {
             role: "toolResult" as const,
             toolCallId: (toolCall as { id: string }).id,
+            toolName: "read_file",
+            isError: false,
             content: [{ type: "text" as const, text: "file contents: hello world" }],
             timestamp: 2,
           };
@@ -307,7 +313,9 @@ describeLive(
           expect(capture.requests).toHaveLength(3);
           const finalRequest = capture.requests[2];
           expect(finalRequest).toHaveProperty("previous_response_id");
-          expect((finalRequest?.previous_response_id as string).length).toBeGreaterThan(0);
+          expect(
+            (finalRequest?.previous_response_id as string | undefined)?.length ?? 0,
+          ).toBeGreaterThan(0);
           expect(finalRequest?.tools).toHaveLength(2);
           expect(JSON.stringify(finalRequest)).not.toContain(secretCode);
         } finally {
