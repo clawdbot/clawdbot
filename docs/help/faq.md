@@ -680,7 +680,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
     - Startup can migrate deterministic legacy keys in eligible single-file configs when the whole result validates, keeping the previous config in the `.bak` ring. Other invalid edits make startup fail closed; hot reload skips invalid edits without rewriting `openclaw.json`.
-    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and saves the rejected file as `openclaw.json.clobbered.*`.
+    - `openclaw doctor --fix` owns repairs beyond that startup migration, can restore last-known-good, and on a successful recovery saves the replaced file as `openclaw.json.clobbered.*`.
+    - A valid config missing its `meta` block (typical of a hand-authored or config-managed file) is not itself a clobber: on its own it is left in place and warned with `Config observe anomaly: ... (missing-meta-vs-last-good)`, since the writer always stamps `meta` and a valid file without it was authored outside OpenClaw. If the same read also trips a recoverable signal (`gateway.mode` lost, an `update-channel`-only root, or a sharp size drop), last-known-good is still restored.
 
     Recover:
 

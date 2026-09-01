@@ -365,7 +365,7 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("auto-restores when metadata disappears from an otherwise valid config", async () => {
+  it("does not auto-restore when only metadata is missing from a valid config (#126806)", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
@@ -377,10 +377,13 @@ describe("config observe recovery", () => {
 
       const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
 
-      expect((recovered.parsed as { meta?: unknown }).meta).toEqual(recoverableTelegramConfig.meta);
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(true);
-      expectSuspiciousIncludes(observe, "missing-meta-vs-last-good");
+      // `missing-meta-vs-last-good` alone is not a restore signal: a valid config
+      // without `meta` was hand-authored, so restoring would silently revert it
+      // on a read-only command. Detection stays (observe path), restore does not.
+      expect((recovered.parsed as { meta?: unknown }).meta).toBeUndefined();
+      expect(recovered.raw).toBe(clobbered.raw);
+      expect(await listClobberFiles(configPath)).toEqual([]);
+      expect(await readObserveEvents(auditPath)).toEqual([]);
     });
   });
 
@@ -509,6 +512,29 @@ describe("config observe recovery", () => {
 
       expect(config.gateway?.mode).toBe("local");
       expectWarnContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
+  it("loadConfig leaves a valid hand-authored config without meta untouched (#126806)", async () => {
+    await withSuiteHome(async (home) => {
+      const { io, configPath, warn } = createTestConfigIO(home);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
+      // A hand-authored valid config without a `meta` block — exactly the file a
+      // silent revert destroyed on a read-only command. The .bak generation is the
+      // same content plus `meta`, so a restore would only re-add the `meta` block.
+      const handAuthored = await writeConfigRaw(configPath, {
+        update: { channel: "beta" },
+        gateway: { mode: "local" },
+      });
+
+      io.loadConfig();
+
+      // No restore: the operator's file is the source of truth on a read-only load.
+      expect(await fsp.readFile(configPath, "utf-8")).toBe(handAuthored.raw);
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
+      // The missing-meta signal is still observed as a warning, not silently acted on.
+      expectWarnContaining(warn, "Config observe anomaly");
+      expectWarnContaining(warn, "missing-meta-vs-last-good");
     });
   });
 
@@ -888,7 +914,7 @@ describe("config observe recovery", () => {
   );
 
   it.each(["async", "sync"] as const)(
-    "%s recovery uses canonical metadata fingerprints",
+    "%s recovery leaves a valid config alone when only metadata differs (#126806)",
     async (mode) => {
       await withSuiteHome(async (home) => {
         const { deps, configPath } = makeDeps(home);
@@ -902,7 +928,11 @@ describe("config observe recovery", () => {
             ? await maybeRecoverSuspiciousConfigRead(input)
             : maybeRecoverSuspiciousConfigReadSync(input);
 
-        expect(recovered.parsed).toEqual(backup);
+        // Only `meta` differs (here a non-standard fingerprint in the backup): the
+        // current file validates cleanly, so it is the source of truth, not a
+        // clobber to revert (#126806).
+        expect(recovered.parsed).toEqual(clobbered.parsed);
+        expect(recovered.raw).toBe(clobbered.raw);
       });
     },
   );
