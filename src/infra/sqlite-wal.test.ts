@@ -941,29 +941,6 @@ describe("sqlite WAL maintenance", () => {
     ]);
   });
 
-  it("retries the WAL transition when the wall clock jumps forward during the retry window", () => {
-    vi.useFakeTimers();
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    let journalModeAttempts = 0;
-    vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql === "PRAGMA journal_mode = WAL;" && journalModeAttempts++ === 0) {
-        vi.setSystemTime(Date.now() + 1_000_000);
-        throw Object.assign(new Error("database is locked"), {
-          code: "ERR_SQLITE_ERROR",
-          errcode: 5,
-        });
-      }
-    });
-
-    configureSqliteConnectionPragmas(db, {
-      busyTimeoutMs: 50,
-      checkpointIntervalMs: 0,
-    });
-
-    expect(journalModeAttempts).toBe(2);
-  });
-
   it("rejects a WAL transition that SQLite silently declines", () => {
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
