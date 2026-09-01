@@ -552,7 +552,7 @@ describe("triageCommand", () => {
         .filter((line) => line.startsWith("  "));
       expect(commands).toHaveLength(3);
       for (const command of commands) {
-        expect(command).not.toMatch(/^  env /u);
+        expect(command).not.toMatch(/^ {2}env /u);
         expect(command).toContain(`'${configPath.replaceAll("'", "''")}'`);
       }
       expect(commands[0]).toContain("| & claude -p");
