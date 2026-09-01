@@ -483,6 +483,7 @@ describe("telegramApprovalNativeRuntime", () => {
         sessionId: "delegation-origin-followup",
         turnSourceChannel: "telegram",
         turnSourceTo: "1234",
+        turnSourceThreadId: 42,
       },
       createdAtMs: 0,
       expiresAtMs: 60_000,
@@ -507,6 +508,7 @@ describe("telegramApprovalNativeRuntime", () => {
         token: "tg-token",
         accountId: "default",
         textMode: "html",
+        messageThreadId: 42,
       },
     );
 

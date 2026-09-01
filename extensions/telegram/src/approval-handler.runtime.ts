@@ -277,6 +277,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         const originChatId = parsedOrigin
           ? normalizeTelegramChatId(parsedOrigin.chatId)
           : undefined;
+        const originThreadId = request.request.turnSourceThreadId ?? parsedOrigin?.messageThreadId;
         if (originChatId && (entry.chatId !== originChatId || editError !== undefined)) {
           if (!terminalizedSystemAgentApprovals.has(request.id)) {
             const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
@@ -287,9 +288,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
               token: resolved.context.token,
               accountId: resolved.accountId,
               textMode: "html",
-              ...(parsedOrigin?.messageThreadId != null
-                ? { messageThreadId: parsedOrigin.messageThreadId }
-                : {}),
+              ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
             });
             terminalizedSystemAgentApprovals.add(request.id);
           }

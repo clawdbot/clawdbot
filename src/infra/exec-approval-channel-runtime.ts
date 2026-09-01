@@ -195,6 +195,10 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleResolved = async (resolved: TResolved): Promise<void> => {
+    if ("terminalStatus" in resolved && resolved.terminalStatus === "expired") {
+      await handleExpired(resolved.id);
+      return;
+    }
     const settled = pending.settle(resolved.id, async (entry) => {
       log.debug(`resolved ${resolved.id} with ${resolved.decision}`);
       await adapter.finalizeResolved({

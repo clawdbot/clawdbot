@@ -558,6 +558,13 @@ subscription, and routed-elsewhere notices.
   `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
 
+Native approval runtimes can receive three approval kinds: `exec`, `plugin`,
+and `system-agent`. A `system-agent` request asks an operator to approve a
+Gateway-side persistent change, such as a config write or Gateway restart.
+The runtime must render the typed approval actions and then render the final
+application result. An allowed request can finish as applied or not applied;
+do not treat the recorded approval alone as proof that the change completed.
+
 Other approval helpers:
 
 - Use `createNativeApprovalChannelRouteGates` from

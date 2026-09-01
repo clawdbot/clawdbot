@@ -208,7 +208,7 @@ export type ExecuteOptions = {
    * A multi-step operation may invoke it more than once; every invocation is
    * immediately followed by the persistent effect it authorizes.
    */
-  beforePersistentApply?: () => Promise<void>;
+  beforePersistentApply?: () => void | Promise<void>;
   /** Adopt the exact final binding after a verified model-route write commits. */
   onVerifiedInferenceChanged?: (binding: SystemAgentVerifiedInferenceBinding) => void;
 };
@@ -252,7 +252,10 @@ export async function applyPersistentOperation(params: {
   const { readConfigFileSnapshot } = await loadConfigModule();
   const before = await readConfigFileSnapshot();
   const commit: PersistentApplyContext["commit"] = async (effect) => {
-    await opts.beforePersistentApply?.();
+    const authorityCheck = opts.beforePersistentApply?.();
+    if (authorityCheck) {
+      await authorityCheck;
+    }
     return await effect();
   };
   const outcome = await params.run({ runtime, deps: opts.deps, commit });

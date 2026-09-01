@@ -586,13 +586,13 @@ export class ChatTurnRouter {
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
+      if (approved) {
+        await this.callbacks.requirePersistentApplyInference(capture);
+      }
       return await execute(operation, capture, {
         approved,
         deps: this.commandDeps(),
-        beforePersistentApply: async () => {
-          await this.callbacks.requirePersistentApplyInference(capture);
-          beforePersistentApply?.();
-        },
+        beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });
     } catch (error) {
