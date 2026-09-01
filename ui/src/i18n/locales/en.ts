@@ -921,6 +921,8 @@ export const en: TranslationMap = {
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     nodeCommandNotDeclared:
       "This device does not declare the required command ({command}). Declare it on the node or pick another device.",
+    nodeCommandPendingApproval:
+      "This device declared the required command ({command}) but it awaits pairing approval. Approve the pending request or pick another device.",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",

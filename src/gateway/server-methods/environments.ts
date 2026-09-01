@@ -102,6 +102,9 @@ function summarizeNodeEnvironment(
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
+    ...(node.pendingDeclaredCommands?.length
+      ? { pendingDeclaredCommands: uniqueSortedStrings(node.pendingDeclaredCommands) }
+      : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
@@ -162,6 +165,7 @@ export async function listGatewayEnvironments(
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
+    pendingNodes: nodes.pending,
     connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
     ...runtimeState,
   });

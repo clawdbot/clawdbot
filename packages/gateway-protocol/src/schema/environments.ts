@@ -108,6 +108,7 @@ function createEnvironmentSummarySchema() {
         uniqueItems: true,
       }),
     ),
+    pendingDeclaredCommands: Type.Optional(Type.Array(NonEmptyString)),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),

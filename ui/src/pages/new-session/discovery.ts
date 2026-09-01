@@ -59,6 +59,7 @@ export type DraftEnvironment = {
   trust?: "persistent" | "disposable";
   capabilities?: string[];
   invocableCommands?: string[];
+  pendingDeclaredCommands?: string[];
   issues?: RuntimeTargetIssue[];
 };
 
@@ -223,6 +224,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         trust?: unknown;
         capabilities?: unknown;
         invocableCommands?: unknown;
+        pendingDeclaredCommands?: unknown;
         issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
@@ -247,6 +249,9 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             .filter((command) => command.length <= 128)
             .slice(0, 128)
         : undefined;
+      const pendingDeclaredCommands = normalizeArrayBackedTrimmedStringList(
+        environment.pendingDeclaredCommands,
+      );
       const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
       const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
@@ -271,6 +276,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
           ...(invocableCommands ? { invocableCommands } : {}),
+          ...(pendingDeclaredCommands ? { pendingDeclaredCommands } : {}),
           ...(issues ? { issues } : {}),
         },
       ];

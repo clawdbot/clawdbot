@@ -174,6 +174,16 @@ describe("device placement projection", () => {
       selectable: false,
       reason: /does not declare/i,
     },
+    {
+      name: "a pending-approval command reports awaiting pairing approval",
+      requirement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      environment: { pendingDeclaredCommands: ["codex.exec-server.stdio.v1"] },
+      selectable: false,
+      reason: /await|approv/i,
+    },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);
 

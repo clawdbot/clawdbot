@@ -111,4 +111,64 @@ describe("node environment command authority", () => {
       | undefined;
     expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
   });
+
+  it("projects pending declared commands separately from the approved surface", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [],
+      pending: [
+        {
+          requestId: "request-exec",
+          nodeId: "node-exec",
+          displayName: "Execution Node",
+          platform: "linux",
+          deviceFamily: "Linux",
+          caps: ["session.host"],
+          commands: ["codex.exec-server.stdio.v1"],
+          ts: 100,
+        },
+      ],
+    } as never);
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { allow: [], deny: [] } } } }),
+      nodeRegistry: {
+        listConnectedForPairingStates: () => [
+          {
+            nodeId: "node-exec",
+            connId: "conn-exec",
+            displayName: "Execution Node",
+            platform: "linux",
+            deviceFamily: "Linux",
+            declaredCaps: ["session.host"],
+            caps: ["session.host"],
+            declaredCommands: ["codex.exec-server.stdio.v1"],
+            commands: ["codex.exec-server.stdio.v1"],
+            connectedAtMs: 123,
+          },
+        ],
+      },
+    };
+
+    const listRespond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: {},
+      respond: listRespond,
+      context,
+    } as never);
+    const listPayload = listRespond.mock.calls.at(0)?.[1] as
+      | {
+          environments: Array<{
+            id: string;
+            capabilities?: string[];
+            pendingDeclaredCommands?: string[];
+          }>;
+        }
+      | undefined;
+    const listed = listPayload?.environments.find(
+      (environment) => environment.id === "node:node-exec",
+    );
+
+    expect(listed?.capabilities).toContain("codex.exec-server.stdio.v1");
+    expect(listed?.pendingDeclaredCommands).toEqual(["codex.exec-server.stdio.v1"]);
+  });
 });
