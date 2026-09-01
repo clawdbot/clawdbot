@@ -51,12 +51,7 @@ import {
   type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-export {
-  isBilling429MessageForProvider,
-  isGenericUnknownStreamErrorMessage,
-  isTransientHttpError,
-  isUnclassifiedNoBodyHttpSignal,
-} from "./classification-rules.js";
+export { isUnclassifiedNoBodyHttpSignal } from "./classification-rules.js";
 export {
   isContextOverflowError,
   isLikelyContextOverflowError,
