@@ -643,9 +643,7 @@ final class AppState {
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
 
-        if !self.isPreview, startupConfig.migrationPersisted {
-            self.reconcilePreferredGatewayRouteBinding()
-        } else if !self.isPreview {
+        if !self.isPreview, !startupConfig.migrationPersisted {
             self.gatewayConfigSyncState = .failed
         }
         self.isInitializing = false
@@ -1075,13 +1073,6 @@ extension AppState {
         }
     }
 
-    @discardableResult
-    private func reconcilePreferredGatewayRouteBinding() -> Bool {
-        GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(
-            self.currentGatewayRouteBinding(),
-            key: self.gatewayRouteBindingKey)
-    }
-
     private func currentGatewayRouteBinding() -> String? {
         GatewayDiscoveryPreferences.routeBinding(
             connectionMode: self.connectionMode,
@@ -1106,9 +1097,6 @@ extension AppState {
             GatewayDiscoveryPreferences.setPreferredStableID(nil)
             return
         }
-        _ = GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(
-            routeBinding,
-            key: self.gatewayRouteBindingKey)
     }
 
     private static func defaultGatewayRouteBindingKey(_ isPreview: Bool) -> SymmetricKey? {
@@ -1661,11 +1649,6 @@ extension AppState {
 
     var _testConflictedGatewayConfigFields: [String] {
         self.conflictedGatewayConfigFields.map(\.rawValue).sorted()
-    }
-
-    @discardableResult
-    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
-        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif

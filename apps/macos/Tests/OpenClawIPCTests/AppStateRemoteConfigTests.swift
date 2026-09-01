@@ -784,7 +784,7 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
-    func `cold direct config replacement clears the prior discovery owner`() async {
+    func `cold direct config replacement keeps the prior owner quarantined`() async {
         let configPath = TestIsolation.tempConfigPath()
 
         await TestIsolation.withIsolatedState(
@@ -820,14 +820,20 @@ struct AppStateRemoteConfigTests {
                 gatewayRouteBindingKey: gatewayRouteBindingTestKey)
 
             #expect(state.remoteUrl == "wss://gateway-b.example.test")
-            #expect(state._testReconcilePreferredGatewayRouteBinding())
-            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() != nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: state.connectionMode,
+                    remoteTransport: state.remoteTransport,
+                    remoteURL: state.remoteUrl,
+                    remoteTarget: state.remoteTarget),
+                key: gatewayRouteBindingTestKey) == .mismatch)
         }
     }
 
     @Test
-    func `cold SSH config replacement overrides stale defaults and clears their owner`() async {
+    func `cold SSH config replacement overrides defaults and keeps owner quarantined`() async {
         let configPath = TestIsolation.tempConfigPath()
 
         await TestIsolation.withIsolatedState(
@@ -870,9 +876,15 @@ struct AppStateRemoteConfigTests {
                 #expect(state.remoteIdentity == "/tmp/gateway-b-id")
                 #expect(settings.target == "bob@gateway-b.example.test")
                 #expect(settings.identity == "/tmp/gateway-b-id")
-                #expect(state._testReconcilePreferredGatewayRouteBinding())
-                #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-                #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() == nil)
+                #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
+                #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerifier() != nil)
+                #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                    GatewayDiscoveryPreferences.routeBinding(
+                        connectionMode: state.connectionMode,
+                        remoteTransport: state.remoteTransport,
+                        remoteURL: state.remoteUrl,
+                        remoteTarget: state.remoteTarget),
+                    key: gatewayRouteBindingTestKey) == .mismatch)
             }
     }
 

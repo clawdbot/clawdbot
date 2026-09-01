@@ -197,10 +197,9 @@ enum GatewayDiscoveryPreferences {
             return (currentRoot, false, false)
         case .match:
             return (currentRoot, false, false)
-        case .mismatch:
-            self.setPreferredStableID(nil)
-            return (currentRoot, false, false)
-        case .unverifiable:
+        case .mismatch, .unverifiable:
+            // A device-only key replacement is indistinguishable from a route
+            // mismatch here. Keep both quarantined until an explicit route action.
             return (currentRoot, false, false)
         case .invalidReceipt:
             break
@@ -275,23 +274,6 @@ enum GatewayDiscoveryPreferences {
             remoteTransport: remoteTransport,
             remoteURL: remoteURL,
             remoteTarget: remoteTarget)
-    }
-
-    @discardableResult
-    static func clearPreferredStableIDIfRouteBindingMismatch(
-        _ currentRouteBinding: String?,
-        key: SymmetricKey?) -> Bool
-    {
-        switch self.preferredRouteBindingVerification(currentRouteBinding, key: key) {
-        case .noPreference:
-            AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
-            return false
-        case .match, .invalidReceipt, .unverifiable:
-            return false
-        case .mismatch:
-            self.setPreferredStableID(nil)
-            return true
-        }
     }
 
     static func routeBinding(root: [String: Any]) -> String? {

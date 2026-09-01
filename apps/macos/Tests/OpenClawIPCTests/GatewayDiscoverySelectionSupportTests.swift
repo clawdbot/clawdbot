@@ -758,6 +758,88 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
+    @Test func `interactive key replacement keeps prior receipt quarantined`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(
+            configPath: configPath,
+            env: [
+                "OPENCLAW_GATEWAY_TOKEN": "ambient-token",
+                "OPENCLAW_GATEWAY_PASSWORD": "ambient-password",
+            ])
+        {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": "configured-token",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            let routeBinding = try #require(GatewayDiscoveryPreferences.routeBinding(root: root))
+            let replacementKey = SymmetricKey(data: Data(repeating: 0xB6, count: 32))
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: routeBinding,
+                key: self.routeBindingKey)
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { _ in false },
+                key: replacementKey)
+
+            #expect(!startup.migrationChanged)
+            #expect(startup.migrationPersisted)
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingVerification(
+                routeBinding,
+                key: replacementKey) == .mismatch)
+
+            let state = AppState(preview: true, gatewayRouteBindingKey: replacementKey)
+            let stateDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: stateDir) }
+
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let identity = DeviceIdentityStore.loadOrCreate()
+                for role in ["operator", "node"] {
+                    try #require(DeviceAuthStore.storeTokenPersisted(
+                        deviceId: identity.deviceId,
+                        role: role,
+                        token: "gateway-a-\(role)-token",
+                        gatewayID: routeBinding))
+                }
+
+                var source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    routeBindingKey: replacementKey,
+                    beforeConfigRead: {})
+                #expect(source.token == nil)
+                #expect(source.password == nil)
+                #expect(source.deviceAuthGatewayID == nil)
+                try await self.requireNoAuth(source)
+
+                GatewayDiscoveryPreferences.setPreferredStableID(nil)
+                source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                    state: state,
+                    routeBindingKey: replacementKey,
+                    beforeConfigRead: {})
+                #expect(source.deviceAuthGatewayID == routeBinding)
+                try self.requireOnlyAuth(
+                    try await self.connectAuth(source: source),
+                    key: "token",
+                    value: "configured-token")
+                try self.requireOnlyAuth(
+                    try await self.connectNodeAuth(source: source),
+                    key: "token",
+                    value: "configured-token")
+            }
+        }
+    }
+
     @Test func `config route replacement retires stale owner before stored auth`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         try await self.withIsolation(configPath: configPath) {
