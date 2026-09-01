@@ -202,12 +202,13 @@ class ComposerDictationSession {
       }
     });
     await this.appendChain;
-    await this.closeRemote();
     if (waitForTerminal) {
-      // `talk.session.close` only acknowledges scheduling the provider drain;
-      // wait for the terminal close event so a late final transcript still
-      // lands before the listener is retired.
+      // Start the close RPC independently so a slow or disconnected Gateway
+      // cannot hold the composer; the bounded drain timeout governs finalization.
+      void this.closeRemote();
       await this.waitForCloseEvent();
+    } else {
+      await this.closeRemote();
     }
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -673,12 +674,12 @@ export class ComposerDictationController {
       return committed;
     }
     // Commit was requested but no transcript had arrived yet (early Stop before
-    // the first partial/final). Wait for the bounded final drain, then commit the
-    // accumulated final transcript exactly once. Detach the session first so a
-    // late drain error cannot be surfaced as the current session's failure.
+    // the first partial/final). Detach the session and reset the composer first
+    // so a slow or disconnected Gateway cannot leave the UI read-only; then wait
+    // for the bounded final drain and commit the transcript exactly once.
     this.session = null;
-    const finalTranscript = await session.finish(true).catch(() => "");
     this.reset();
+    const finalTranscript = await session.finish(true).catch(() => "");
     const finalCommitted = Boolean(finalTranscript && wasActive && !this.disposed);
     if (finalCommitted) {
       this.options.onCommit(finalTranscript);
