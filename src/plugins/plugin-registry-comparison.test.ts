@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index-types.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { resolvePluginRegistryContent } from "./plugin-registry-comparison.js";
+import { createInstalledPluginIndexSnapshot } from "./status.test-fixtures.js";
 
 function makePluginRecord(
   overrides: Partial<InstalledPluginIndexRecord> = {},
@@ -10,18 +11,18 @@ function makePluginRecord(
     pluginId: "demo",
     source: "/plugins/demo",
     manifestPath: "/plugins/demo/openclaw.plugin.json",
+    manifestHash: "manifest-hash",
+    rootDir: "/plugins/demo",
+    origin: "bundled",
     enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
     ...overrides,
   };
 }
 
 function makeIndex(plugins: InstalledPluginIndexRecord[]): InstalledPluginIndex {
-  return {
-    generatedAtMs: 1,
-    plugins,
-    installRecords: {},
-    diagnostics: [],
-  };
+  return createInstalledPluginIndexSnapshot(plugins) as InstalledPluginIndex;
 }
 
 describe("resolvePluginRegistryContent packageBuild normalization", () => {
