@@ -202,11 +202,10 @@ class ComposerDictationSession {
       }
     });
     if (waitForTerminal) {
-      // Close needs the session id from create; audio append is not required for
-      // close. Wait for create, send close, then start the bounded final-drain
-      // deadline once the close sequence can actually begin.
-      await startPromise;
-      await this.closeRemote();
+      // Arm the exact-session drain before background cleanup; close is sent as
+      // soon as create resolves, independently of any queued audio flush, so a
+      // stalled cleanup request cannot delay the bounded final-drain deadline.
+      void startPromise?.then(() => this.closeRemote());
       await this.waitForCloseEvent();
     } else {
       await startPromise;
