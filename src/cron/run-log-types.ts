@@ -35,4 +35,6 @@ export type CronRunLogEntry = {
   durationMs?: number;
   nextRunAtMs?: number;
   triggerFired?: boolean;
+  /** True once provider execution started; used to distinguish pre-start retries. */
+  executionStarted?: boolean;
 } & CronRunTelemetry;

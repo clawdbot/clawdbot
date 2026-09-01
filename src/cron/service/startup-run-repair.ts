@@ -208,7 +208,9 @@ export function restoreFinalizedStartupRun(params: {
       job.state.lastFailureAlertAtMs = endedAt;
     }
   }
-  const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
+  const retryScheduledAtMs =
+    job.enabled && typeof job.state.nextRunAtMs === "number" ? job.state.nextRunAtMs : undefined;
+  const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs ?? retryScheduledAtMs;
   job.state.nextRunAtMs =
     job.state.autoDisabled || finalizedNextRunAtMs === undefined
       ? undefined
@@ -223,7 +225,7 @@ export function restoreFinalizedStartupRun(params: {
   if (
     job.schedule.kind === "at" &&
     replacementAtMs === undefined &&
-    entry.nextRunAtMs === undefined
+    finalizedNextRunAtMs === undefined
   ) {
     job.enabled = false;
   }

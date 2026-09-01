@@ -51,6 +51,7 @@ export function cronRunLogEntryFromEvent(
     durationMs: event.durationMs,
     nextRunAtMs: event.nextRunAtMs,
     triggerFired: event.triggerFired,
+    executionStarted: event.executionStarted,
     model: event.model,
     provider: event.provider,
     usage: event.usage,

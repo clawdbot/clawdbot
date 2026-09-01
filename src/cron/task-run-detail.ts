@@ -98,6 +98,10 @@ const cronRunLogEntrySchema = z.looseObject({
     .unknown()
     .optional()
     .transform((value) => (value === true ? true : undefined)),
+  executionStarted: z
+    .unknown()
+    .optional()
+    .transform((value) => (value === true ? true : undefined)),
   model: optionalNonBlankCronStringSchema,
   provider: optionalNonBlankCronStringSchema,
   usage: cronUsageSchema,
@@ -172,6 +176,7 @@ export function parseCronRunLogEntryObject(
     durationMs: entryObj.durationMs,
     nextRunAtMs: entryObj.nextRunAtMs,
     triggerFired: entryObj.triggerFired,
+    executionStarted: entryObj.executionStarted,
     model: entryObj.model,
     provider: entryObj.provider,
     usage: entryObj.usage,
@@ -234,6 +239,7 @@ export function cronRunLogEntryToTaskDetail(
     durationMs: entry.durationMs,
     nextRunAtMs: entry.nextRunAtMs,
     triggerFired: entry.triggerFired,
+    executionStarted: entry.executionStarted,
     triggerStateChanged:
       options.triggerEval?.fired === true ? options.triggerEval.stateChanged : undefined,
     triggerState:

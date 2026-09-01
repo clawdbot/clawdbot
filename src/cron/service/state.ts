@@ -65,6 +65,7 @@ export type CronEvent = {
   runId?: string;
   nextRunAtMs?: number;
   triggerFired?: boolean;
+  executionStarted?: boolean;
 } & CronRunTelemetry;
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */

@@ -1427,6 +1427,7 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "error",
           error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          executionStarted: true,
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
         },
