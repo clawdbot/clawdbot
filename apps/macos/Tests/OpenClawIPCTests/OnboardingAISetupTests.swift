@@ -2043,71 +2043,95 @@ struct OnboardingAISetupTests {
         await gateway.shutdown()
     }
 
-    @Test func `retired cancellation reconciliation cannot clear a replacement auth attempt`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRetiredAuthCancellationTests"))
-        let cancellationGate = AISetupRequestGate()
-        let detections = AISetupSocketGeneration()
-        let startedSessions = LockIsolated<[String]>([])
-        let session = makeAISetupRequestSession(handler: { task, request in
-            switch request.method {
-            case "openclaw.setup.detect":
-                let response = detections.claim() == 0
-                    ? detectedSetupResponse(id: request.id)
-                    : persistedDetectedSetupResponse(id: request.id)
-                task.emitReceiveSuccess(.data(response))
-            case "openclaw.setup.auth.start":
-                let sessionID = try #require(request.params["sessionId"] as? String)
-                startedSessions.withValue { $0.append(sessionID) }
-                task.emitReceiveSuccess(.data(Data(
-                    """
-                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
-                      "sessionId":"\(sessionID)","done":false,"status":"running",
-                      "step":{"id":"login","type":"text","executor":"client",
-                        "message":"Enter the sign-in response"}}}
-                    """.utf8)))
-            case "wizard.cancel":
-                await cancellationGate.wait()
-                task.emitReceiveSuccess(.data(Data(
-                    #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"wizard not found"}}"#
-                        .utf8)))
-            default:
-                Issue.record("Unexpected setup request: \(request.method)")
+    @Test(
+        arguments: [OnboardingAISetupModel.ProviderWizardKind.auth, .prepare],
+        ["cancel", "start", "next"])
+    func `retired reconciliation cannot change a replacement wizard`(
+        kind: OnboardingAISetupModel.ProviderWizardKind, failureAt: String) async throws
+    {
+        try await withMainSerialExecutor {
+            let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRetiredAuthReconciliationTests"))
+            let reconciliationGate = AISetupRequestGate()
+            let detections = AISetupSocketGeneration()
+            let starts = AISetupSocketGeneration()
+            let startedSessions = LockIsolated<[String]>([])
+            let session = makeAISetupRequestSession(handler: { task, request in
+                switch request.method {
+                case "openclaw.setup.detect":
+                    if detections.claim() == 1 {
+                        await reconciliationGate.wait()
+                    }
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                case kind.startMethod:
+                    let sessionID = try #require(request.params["sessionId"] as? String)
+                    startedSessions.withValue { $0.append(sessionID) }
+                    if starts.claim() == 0, failureAt == "start" {
+                        task.emitReceiveSuccess(.data(Data(
+                            #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Sign-in reply unavailable"}}"#
+                                .utf8)))
+                    } else {
+                        task.emitReceiveSuccess(.data(Data(
+                            """
+                            {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                              "sessionId":"\(sessionID)","done":false,"status":"running",
+                              "step":{"id":"login","type":"text","executor":"client",
+                                "message":"Enter the sign-in response"}}}
+                            """.utf8)))
+                    }
+                case "wizard.next":
+                    task.emitReceiveSuccess(.data(Data(
+                        #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Sign-in reply unavailable"}}"#
+                            .utf8)))
+                case "wizard.cancel":
+                    task.emitReceiveSuccess(.data(Data(
+                        #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"wizard not found"}}"#
+                            .utf8)))
+                default:
+                    Issue.record("Unexpected setup request: \(request.method)")
+                }
+            })
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let gateway = makeAISetupGateway(url: url, session: session)
+            let model = makeAISetupModel(gateway: gateway, defaults: defaults)
+            let option = OnboardingAISetupModel.AuthOption(
+                id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
+                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
+
+            await model.detectAndAutoConnect()
+            model.startProviderWizard(option, kind: kind)
+            let firstSessionID = try #require(model._test_authSessionID)
+            if failureAt != "start" {
+                await waitForAISetupState { model.authStep != nil }
+                if failureAt == "cancel" {
+                    model.cancelProviderAuth()
+                } else {
+                    model.authText = "first-response"
+                    model.continueProviderAuth()
+                }
             }
-        })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let gateway = makeAISetupGateway(url: url, session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        let option = OnboardingAISetupModel.AuthOption(
-            id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false)
+            await reconciliationGate.waitUntilStarted()
+            model.resetForGatewayChange()
+            await model.detectAndAutoConnect()
+            model.startProviderWizard(option, kind: kind)
+            await waitForAISetupState { model.authStep != nil }
+            let replacementSessionID = try #require(model._test_authSessionID)
+            #expect(replacementSessionID != firstSessionID)
+            model.authText = "replacement-response"
 
-        await model.detectAndAutoConnect()
-        model.startProviderAuth(option)
-        for _ in 0..<200 where model.authStep == nil {
-            try? await Task.sleep(nanoseconds: 5_000_000)
+            await reconciliationGate.release()
+            await Task.megaYield()
+
+            #expect(startedSessions.value == [firstSessionID, replacementSessionID])
+            #expect(model.activeAuthOption == option)
+            #expect(model._test_authSessionID == replacementSessionID)
+            #expect(model.authStep?.id == "login")
+            #expect(model.authText == "replacement-response")
+            #expect(model.authError == nil)
+            #expect(!model.authBusy)
+            #expect(model.providerAuthCancellation == nil)
+            #expect(!model.connected)
+            await gateway.shutdown()
         }
-        let firstSessionID = try #require(model._test_authSessionID)
-
-        model.cancelProviderAuth()
-        await cancellationGate.waitUntilStarted()
-        model.resetForGatewayChange()
-        await model.detectAndAutoConnect()
-        model.startProviderAuth(option)
-        for _ in 0..<200 where model._test_authSessionID == nil || model.authStep == nil {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-        let replacementSessionID = try #require(model._test_authSessionID)
-        #expect(replacementSessionID != firstSessionID)
-
-        await cancellationGate.release()
-        await settleQueuedAISetupTasks()
-
-        #expect(startedSessions.value == [firstSessionID, replacementSessionID])
-        #expect(model.activeAuthOption == option)
-        #expect(model._test_authSessionID == replacementSessionID)
-        #expect(model.authStep?.id == "login")
-        #expect(!model.connected)
-        await gateway.shutdown()
     }
 
     @Test func `provider auth mismatch cancels returned server session id`() {
