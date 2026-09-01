@@ -130,14 +130,14 @@ export function queueDelegatedApproval(params: {
     decision: ExecApprovalDecision,
     applicationStatus: SystemAgentApprovalApplicationStatus,
   ) => {
-    const resolvedEvent: SystemAgentApprovalResolved = {
+    const resolvedEvent = {
       id: record.id,
       decision,
       resolvedBy: record.resolvedBy ?? null,
       ts: Date.now(),
       request,
       applicationStatus,
-    };
+    } satisfies SystemAgentApprovalResolved;
     broadcastApprovalResolvedEvent({
       approvalKind: "system-agent",
       context: params.context,
