@@ -386,7 +386,7 @@ function crossOriginStructuredSvgAttachment(
   };
 }
 
-export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
+function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
   const content = asNonArrayRecord(message).content;
   if (!Array.isArray(content)) {
     return [];
@@ -698,7 +698,7 @@ export function extractMessageAttachments(
   });
 }
 
-export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
+function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
   for (const {
     path: mediaPath,

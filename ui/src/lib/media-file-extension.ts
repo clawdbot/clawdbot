@@ -17,7 +17,7 @@ function isSameOriginMediaRoute(value: string): boolean {
 }
 
 /** Returns the final filename after decoding one URL path-segment layer. */
-export function getMediaFileName(value: string): string | undefined {
+function getMediaFileName(value: string): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;

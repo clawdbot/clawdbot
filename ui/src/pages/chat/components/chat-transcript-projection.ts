@@ -513,7 +513,8 @@ export function projectChatTranscript(
     for (const group of groups) {
       for (const source of group.messages) {
         const sourceMessageId = persistedMessageEntryId(source.message);
-        if (sourceMessageId && resolveMessageReplyText(source.message).trim()) {
+        // The preview resolves content lazily; indexing only needs persisted identities.
+        if (sourceMessageId) {
           messageRowKeysById.set(sourceMessageId, item.key);
           loadedReplySources.set(sourceMessageId, {
             message: source.message,
