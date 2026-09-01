@@ -120,6 +120,7 @@ function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     repository: string;
     runCheck?: boolean;
@@ -181,6 +182,7 @@ function evaluateWorkflowExpression(
     runner: { environment: context.runnerEnvironment ?? "" },
     steps: context.steps ?? {},
     needs: {
+      resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
       preflight: {
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
@@ -1519,6 +1521,33 @@ describe("ci workflow guards", () => {
 
     expect(readCiWorkflow()).toEqual(expected);
   });
+
+  it.each([
+    ["artifact", 1],
+    ["source", 0],
+    ["published", 0],
+  ] as const)(
+    "fetches the required release preparation history for %s mode",
+    (packageMode, depth) => {
+      const prepare = readReleaseChecksWorkflow().jobs.prepare_release_package;
+      const checkout = prepare.steps.find(
+        (step: WorkflowStep) => step.name === "Checkout trusted workflow ref",
+      );
+      expect(checkout.with.ref).toBe("${{ github.sha }}");
+      expect(checkout.with["persist-credentials"]).toBe(false);
+      const fetchDepth = checkout.with["fetch-depth"];
+      expect(
+        typeof fetchDepth === "string"
+          ? evaluateWorkflowExpression(fetchDepth, {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              resolveTargetOutputs: { package_mode: packageMode },
+            })
+          : fetchDepth,
+      ).toBe(depth);
+    },
+  );
 
   it("gates frozen runtime-pair compatibility on the trusted suite outcome", () => {
     const workflow = readReleaseChecksWorkflow();
