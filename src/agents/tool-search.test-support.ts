@@ -1,6 +1,5 @@
-import type { AgentToolResult } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
+import type { ToolSearchConfig } from "./tool-search.js";
 import "./tool-search.js";
 
 type ToolSearchTestApi = {
@@ -15,10 +14,6 @@ type ToolSearchTestApi = {
     runtime: ToolSearchRuntime;
     signal?: AbortSignal;
   }): Promise<unknown>;
-  executeInternalToolSearchRequest(
-    ctx: ToolSearchToolContext,
-    args: unknown,
-  ): Promise<AgentToolResult<unknown>>;
 };
 
 function getTestApi(): ToolSearchTestApi {
@@ -36,6 +31,4 @@ export const testing: ToolSearchTestApi = {
   setToolSearchMinCodeTimeoutMsForTest: (value) =>
     getTestApi().setToolSearchMinCodeTimeoutMsForTest(value),
   runCodeModeChild: (params) => getTestApi().runCodeModeChild(params),
-  executeInternalToolSearchRequest: (ctx, args) =>
-    getTestApi().executeInternalToolSearchRequest(ctx, args),
 };
