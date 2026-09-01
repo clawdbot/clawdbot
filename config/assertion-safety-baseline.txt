@@ -3868,7 +3868,6 @@ ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
 ui/src/app/theme.ts	4
 ui/src/app/update-schedule-dto.ts	2
-ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	2
 ui/src/components/agent-select.ts	3

@@ -564,6 +564,8 @@ export const en: TranslationMap = {
         "Automatic dev updates require a source (git) install. This install is a package install — use stable or beta for automatic updates.",
       extendedStableAutomaticHint:
         "Extended stable reports available releases but never installs them automatically.",
+      checksDisabledAutomaticHint:
+        "Update checks are disabled. Set update.checkOnStart to true to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
       commits: "Commits",
@@ -604,9 +606,9 @@ export const en: TranslationMap = {
     verificationFailedWithIdentity:
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
-      "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     outcomeUnknown:
-      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
+      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -634,6 +636,8 @@ export const en: TranslationMap = {
       alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
+      managedServiceHandoffUnavailable:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
       managedServiceHandoffFailed:
         "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",

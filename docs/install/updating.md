@@ -19,7 +19,7 @@ backup.
 
 ## Recommended: `openclaw update`
 
-Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+Detects your install type (npm, pnpm, Bun, or git), fetches the latest version, runs `openclaw doctor`, and restarts a managed Gateway service.
 
 ```bash
 openclaw update
@@ -42,6 +42,12 @@ openclaw update --dry-run   # preview without applying
 when the beta tag is missing or its version is older than the latest stable
 release. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
+
+A saved `update.channel` remains the channel for future updates, automatic
+checks, and update status. For example, a one-off beta package on a saved stable
+channel keeps checking stable afterward. Use `--channel beta` to subscribe to
+beta updates. Plugins still follow the installed core version where required
+for compatibility.
 
 `--channel extended-stable` is package-only, and installation remains
 foreground-only. OpenClaw reads the public npm `extended-stable` selector,
@@ -376,6 +382,13 @@ specific number of commits behind. It also shows exact and relative build,
 verified install, and last-commit times. Existing checkouts show an unknown
 install time until their next verified successful update.
 
+Automatic installation requires a managed Gateway service that can hand off
+the update and restart safely. A Gateway running directly in a terminal can
+still show update hints, but it does not automatically replace its running
+installation. Stop that Gateway, run `openclaw update`, and launch it again
+afterward, or [install a managed service](/cli/gateway#manage-the-gateway-service) for
+unattended updates.
+
 | Channel           | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `stable`          | After a built-in delay with deterministic jitter for a spread rollout, announces an update campaign.                                                                |
@@ -401,8 +414,7 @@ fixed target and does not move if upstream `main` advances during the countdown.
 
 Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
-in the restart sentinel and surface after the Gateway returns; direct
-unsupervised failures remain in the running Gateway's logs.
+in the restart sentinel and surface after the Gateway returns.
 
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
@@ -411,6 +423,9 @@ External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information
 sent by the daily check and optional anonymous feature statistics.
+
+Disabling checks also cancels unfinished discovery and its campaign; a late
+response from the previous settings cannot start an update afterward.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

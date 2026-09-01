@@ -143,6 +143,23 @@ describe("renderUpdates", () => {
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
   });
 
+  it("explains when disabled update checks prevent automatic installation", () => {
+    render(
+      renderUpdates(
+        createProps({
+          configObject: {
+            update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
+          },
+          schedule: { channel: "stable", autoEnabled: false },
+        }),
+      ),
+      container,
+    );
+
+    expect(row("Automatic updates").textContent).toContain("update.checkOnStart");
+    expect(row("Automatic updates").textContent).toContain("disabled");
+  });
+
   it.each([
     {
       name: "disables dev package installs",

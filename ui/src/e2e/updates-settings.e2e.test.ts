@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,6 +16,103 @@ const suite = createControlUiE2eSuite({
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("locks update policy while an automatic apply runs and reports its terminal failure", async () => {
+    const artifactDir = captureProof
+      ? createControlUiE2eArtifactDir("updates-automatic-lifecycle")
+      : null;
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const config = { update: { auto: { enabled: true }, channel: "stable" } };
+        const schedule = {
+          channel: "stable",
+          autoEnabled: true,
+          install: { kind: "package" },
+          target: { kind: "package", version: "2026.8.2" },
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["config.get", "config.set", "update.run", "update.status"],
+          methodResponses: {
+            "config.get": {
+              config,
+              hash: "automatic-update-config",
+              issues: [],
+              raw: JSON.stringify(config),
+              runtimeConfig: config,
+              valid: true,
+            },
+            "update.status": { sentinel: null, schedule },
+          },
+          operatorScopes: ["operator.read", "operator.admin"],
+        });
+        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+        await gateway.waitForRequest("update.status");
+        const policy = page.getByRole("switch", { name: "Automatic updates" });
+        await policy.waitFor();
+        await expect.poll(() => policy.isDisabled()).toBe(false);
+
+        const now = Date.now();
+        await gateway.emitGatewayEvent("update.available", {
+          schedule: {
+            ...schedule,
+            campaign: {
+              id: "campaign-automatic",
+              state: "applying",
+              announcedAtMs: now - 60_000,
+              holdUntilMs: now + 3_600_000,
+              forceAtMs: now + 4_500_000,
+              updatedAtMs: now,
+            },
+          },
+        });
+        const status = page.locator("#config-section-update .settings-status");
+        await expect.poll(() => status.textContent()).toMatch(/Applying update|Update held/);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(artifactDir, "01-automatic-applying.png"),
+          });
+        }
+        expect(await status.textContent()).toContain("Applying update");
+        expect(await policy.isDisabled()).toBe(true);
+        expect(await page.locator("wa-radio-group").getAttribute("disabled")).not.toBeNull();
+        expect(
+          await page.getByRole("button", { name: "Updating…", exact: true }).isDisabled(),
+        ).toBe(true);
+
+        await gateway.setMethodResponse("update.status", {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            ts: now,
+            stats: { mode: "npm", reason: "global-install-failed" },
+          },
+          schedule,
+        });
+        await gateway.emitGatewayEvent("update.available", { schedule });
+        await status.filter({ hasText: "global-install-failed" }).waitFor();
+        expect(await policy.isDisabled()).toBe(false);
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(artifactDir, "02-automatic-failure.png"),
+          });
+        }
+      },
+    );
+  });
+
   it("renders live campaign status without requesting config.schema", async () => {
     if (captureProof) {
       await mkdir(path.join(suite.artifactDir, "updates-settings"), { recursive: true });
@@ -205,10 +303,14 @@ suite.define(() => {
         await gateway.waitForRequest("update.status");
         const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
         await checkStatus.waitFor();
+        await expect.poll(() => checkStatus.isDisabled()).toBe(false);
+        const statusRequestsBeforeCheck = (await gateway.getRequests("update.status")).length;
 
         await gateway.deferNext("update.status");
         await checkStatus.click();
-        await expect.poll(async () => (await gateway.getRequests("update.status")).length).toBe(2);
+        await expect
+          .poll(async () => (await gateway.getRequests("update.status")).length)
+          .toBe(statusRequestsBeforeCheck + 1);
         expect(await checkStatus.isDisabled()).toBe(true);
 
         await gateway.rejectDeferred("update.status", {

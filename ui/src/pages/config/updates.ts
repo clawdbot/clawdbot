@@ -365,6 +365,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     });
   }
   const automaticUpdatesSupported = settings.channel !== "extended-stable";
+  const checksDisabled = asConfigRecord(props.configObject.update)?.checkOnStart === false;
   const devPackageInstall =
     settings.channel === "dev" && props.schedule?.install?.kind === "package";
   const campaign = props.schedule?.campaign;
@@ -397,7 +398,9 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
         ? t("updates.page.extendedStableAutomaticHint")
         : devPackageInstall
           ? t("updates.page.devPackageAutomaticHint")
-          : t("updates.page.automaticUpdatesDescription"),
+          : checksDisabled
+            ? t("updates.page.checksDisabledAutomaticHint")
+            : t("updates.page.automaticUpdatesDescription"),
       checked: automaticUpdatesSupported && settings.autoEnabled,
       disabled: props.configBusy || !automaticUpdatesSupported || devPackageInstall,
       onChange: props.onAutomaticUpdatesChange,
