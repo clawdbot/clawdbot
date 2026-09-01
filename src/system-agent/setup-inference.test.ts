@@ -2452,6 +2452,33 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toEqual({});
   });
 
+  it("preserves the redacted revalidation cause through bound verification", async () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true, model: "openai/gpt-5.6-sol" } } },
+    };
+    const result = await verifySetupInferenceConfig({
+      config,
+      requireExecutionOwner: true,
+      deps: {
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
+        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
+          throw new Error(
+            "The successful inference credential is no longer the active route owner.",
+          );
+        }) as never,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: expect.stringContaining("verified inference owner changed"),
+    });
+    expect(result.error).toContain(
+      "The successful inference credential is no longer the active route owner.",
+    );
+  });
+
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
     const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
