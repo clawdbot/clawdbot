@@ -3,7 +3,13 @@ import { FailoverError } from "../../failover-error.js";
 
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
+  warn: vi.fn((_message: string) => {}),
 }));
+
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return { ...actual, log: { ...actual.log, warn: mocks.warn } };
+});
 
 vi.mock("../../../infra/backoff.js", async () => {
   const actual = await vi.importActual<typeof import("../../../infra/backoff.js")>(
@@ -48,7 +54,29 @@ const rateLimitContext = {
 describe("createEmbeddedRunFailoverRetryController", () => {
   beforeEach(() => {
     mocks.sleepWithAbort.mockClear();
+    mocks.warn.mockClear();
     rateLimitContext.logFallbackDecision.mockClear();
+  });
+
+  it("records the truncation when the window ends a budget that still has attempts", async () => {
+    let nowMs = 1_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      const controller = createController(vi.fn(async () => false));
+      // A raised budget only delivers the attempts the 90s window fits; without this
+      // record an operator cannot tell why the configured retries never ran.
+      controller.setTransientRetryBudget(8);
+      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(true);
+      nowMs += 90_000;
+      await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
+
+      expect(controller.transientRetryCount).toBe(1);
+      const truncationLog = mocks.warn.mock.calls.at(-1)?.[0];
+      expect(truncationLog).toContain("transient retry window elapsed");
+      expect(truncationLog).toContain("after 1/8 retries");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("bounds transient retries across reasons and honors Retry-After", async () => {

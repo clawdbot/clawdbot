@@ -152,9 +152,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       return transientRetryCount;
     },
     // Saved retry.provider.maxRetries keeps its meaning as the transient-retry
-    // attempt budget, now owned here instead of per-SDK-request. The 90s window in
-    // resolveTransientRetryDelayMs still bounds it, so values larger than the window
-    // fits degrade to fewer attempts rather than an unbounded wait.
+    // attempt budget, now owned here instead of per-SDK-request.
     setTransientRetryBudget: (maxRetries?: number) => {
       transientRetryBudget = maxRetries ?? MAX_TRANSIENT_RETRIES;
     },
@@ -244,6 +242,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         elapsedMs: nowMs - transientRetryWindowStartMs,
       });
       if (delayMs === undefined) {
+        // The window in resolveTransientRetryDelayMs outranks the attempt budget when
+        // requests are slow, so record the truncation: a configured maxRetries that
+        // never runs must be diagnosable. Failover is the better recovery past here.
+        log.warn(
+          `transient retry window elapsed for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${transientRetryBudget} retries; failing over`,
+        );
         return false;
       }
       log.warn(
