@@ -1,6 +1,7 @@
 // Retry policy: backoff, attempt floor + age gate for dead-letter.
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
+import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -161,6 +162,57 @@ describe("ingress retry policy", () => {
       kind: "fail",
       reason: "retry-limit-exceeded",
       attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+    });
+  });
+
+  it("bounds a wrapped session-start conflict at the configured attempt budget", () => {
+    const maxAttempts = 3;
+    const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
+    const conflict = Object.assign(new Error(message), {
+      code: SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+    });
+    const wrapped = Object.assign(new Error("BotError in middleware"), {
+      error: new Error("telegram spooled update processing failed", { cause: conflict }),
+    });
+    const beforeLimit = resolveIngressFailureDisposition({
+      err: wrapped,
+      event: {
+        receivedAt: 1_000,
+        attempts: maxAttempts - 2,
+      },
+      formatError: coerceErrorMessage,
+      config: { maxAttempts },
+      now: 2_000,
+    });
+    expect(beforeLimit).toMatchObject({
+      kind: "release",
+      attempt: maxAttempts - 1,
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: new Error(message),
+        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts },
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "release", attempt: maxAttempts });
+
+    const atLimit = resolveIngressFailureDisposition({
+      err: wrapped,
+      event: {
+        receivedAt: 1_000,
+        attempts: maxAttempts - 1,
+      },
+      formatError: coerceErrorMessage,
+      config: { maxAttempts },
+      now: 2_000,
+    });
+    expect(atLimit).toEqual({
+      kind: "fail",
+      reason: "session-start-conflict-retry-limit",
+      message: wrapped.message,
+      attempt: maxAttempts,
     });
   });
 });

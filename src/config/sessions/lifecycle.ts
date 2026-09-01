@@ -9,6 +9,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "./types.js";
+import { SESSION_WORK_START_INVALIDATED_ERROR_CODE } from "./work-start-error.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
@@ -41,7 +42,6 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
 
 export class SessionWorkStartInvalidatedError extends Error {
@@ -51,6 +51,14 @@ export class SessionWorkStartInvalidatedError extends Error {
     super(message);
     this.name = "SessionWorkStartInvalidatedError";
   }
+}
+
+export function createSessionWorkStartChangedError(
+  sessionKey: string,
+): SessionWorkStartInvalidatedError {
+  return new SessionWorkStartInvalidatedError(
+    `Session "${sessionKey}" changed while starting work. Retry.`,
+  );
 }
 
 export function isSessionWorkStartInvalidatedError(
