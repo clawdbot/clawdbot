@@ -431,6 +431,8 @@ function closeClaudeAgentSdkSession(
 
   const turn = session.currentTurn;
   session.currentTurn = undefined;
+  // Descendants can retain stderr after exit; session closure owns redaction-material cleanup.
+  session.process?.[Symbol.dispose]();
   if (turn) {
     turn.error =
       error instanceof Error ? error : new Error("Claude Agent SDK live session closed.");
@@ -643,7 +645,7 @@ export async function* executeClaudeAgentSdk(
     controller,
     userInput: createClaudeAgentSdkUserInputAuthorizer(context),
   };
-  const processOwner = createClaudeAgentSdkProcessOwner(() => activeTurn?.context, secretInput);
+  using processOwner = createClaudeAgentSdkProcessOwner(() => activeTurn?.context, secretInput);
   let sawTerminalResult = false;
   const abort = () => controller.abort();
   context.abortSignal?.addEventListener("abort", abort, { once: true });

@@ -4,16 +4,21 @@ import path from "node:path";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
+  CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ClaudeAgentSdkSecretInput } from "./agent-sdk-process.js";
 import { executeClaudeAgentSdk } from "./agent-sdk.runtime.js";
+import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const roots: string[] = [];
 const sessions = new Set<CliBackendLiveSessionHandle>();
 
 const PROTOCOL_CHILD = `
   import { createInterface } from "node:readline";
-  import { writeSync } from "node:fs";
+  import { readFileSync, writeSync } from "node:fs";
+  const credential = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR
+    ? readFileSync(3, "utf8") : "";
   const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
   createInterface({ input: process.stdin }).on("line", (line) => {
     const message = JSON.parse(line);
@@ -25,7 +30,8 @@ const PROTOCOL_CHILD = `
       const text = message.message.content;
       if (text === "fail silently") process.exit(1);
       if (text === "fail noisily") {
-        writeSync(2, "PermissionError: current turn failed\\n");
+        writeSync(2, "PermissionError: current turn failed " + credential + "\\n");
+        writeSync(2, "process environment: " + process.env.OPENCLAW_MCP_TOKEN + "\\n");
         process.exit(1);
       }
       if (text === "success with stderr") writeSync(2, "previous turn diagnostic\\n");
@@ -71,9 +77,10 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
 async function collect(
   context: CliBackendExecuteContext,
   secretInput?: Parameters<typeof executeClaudeAgentSdk>[1],
+  execute = executeClaudeAgentSdk,
 ) {
   const events: Record<string, unknown>[] = [];
-  for await (const event of executeClaudeAgentSdk(context, secretInput)) {
+  for await (const event of execute(context, secretInput)) {
     events.push(event);
   }
   return events;
@@ -172,10 +179,34 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
     expect(stderr).not.toHaveBeenCalled();
   });
 
-  it.each(["fail silently", "fail noisily"])(
-    "isolates a warm successful turn's stderr from the next turn: %s",
+  it.each(["fail silently", "fail noisily", "close idle"])(
+    "isolates a managed-auth warm turn after credential cleanup: %s",
     async (prompt) => {
       const context = await contextForChild(PROTOCOL_CHILD);
+      const credential = "opaque-warm-credential-fixture";
+      const processGrant = "opaque-first-process-grant-fixture";
+      const backend = buildAnthropicCliBackend();
+      const prepare = async () => {
+        // The descriptor is a provider-private field, outside the public SDK result type.
+        const prepared = (await backend.prepareExecution?.({
+          workspaceDir: context.cwd,
+          provider: "claude-cli",
+          modelId: context.modelId,
+          executionMode: "agent",
+          authCredential: { type: "token", token: credential },
+        } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
+          | (CliBackendPreparedExecution & { secretInput?: ClaudeAgentSdkSecretInput })
+          | undefined;
+        if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
+          throw new Error("Expected a managed Claude SDK execution.");
+        }
+        return {
+          ...prepared,
+          execute: prepared.execute,
+          secretInput: prepared.secretInput,
+          cleanup: prepared.cleanup,
+        };
+      };
       let current: CliBackendLiveSessionHandle | undefined;
       context.liveSession = {
         fingerprint: "synthetic-process-policy",
@@ -192,18 +223,55 @@ describe("Claude subprocess diagnostics through the real Agent SDK", () => {
         },
       };
       const stderr = vi.spyOn(process.stderr, "write");
-      await expect(collect({ ...context, prompt: "success with stderr" })).resolves.toContainEqual(
-        expect.objectContaining({ result: "ok" }),
-      );
+      const first = await prepare();
+      const buffers: Buffer[] = [];
+      const createData = first.secretInput.createData;
+      vi.spyOn(first.secretInput, "createData").mockImplementation(() => {
+        const bytes = createData();
+        buffers.push(bytes);
+        return bytes;
+      });
+      await expect(
+        collect(
+          {
+            ...context,
+            env: { ...context.env, ...first.env, OPENCLAW_MCP_TOKEN: processGrant },
+            prompt: "success with stderr",
+          },
+          undefined,
+          first.execute,
+        ),
+      ).resolves.toContainEqual(expect.objectContaining({ result: "ok" }));
+      await first.cleanup();
+      expect(() => first.secretInput.createData()).toThrow("no longer available");
       expect(current?.isIdle()).toBe(true);
-      const error = await collect({ ...context, prompt, useResume: true }).catch(
-        (failure: unknown) => failure,
-      );
-      expect(String(error)).toContain("exited with code 1");
-      expect(String(error)).not.toContain("previous turn diagnostic");
-      expect(String(error).includes("PermissionError: current turn failed")).toBe(
-        prompt === "fail noisily",
-      );
+      if (prompt === "close idle") {
+        const closing = current;
+        closing?.close("idle");
+        await closing?.waitForExit();
+      } else {
+        const second = await prepare();
+        const error = await collect(
+          {
+            ...context,
+            env: { ...context.env, ...second.env, OPENCLAW_MCP_TOKEN: "opaque-next-grant-fixture" },
+            prompt,
+            useResume: true,
+          },
+          undefined,
+          second.execute,
+        ).catch((failure: unknown) => failure);
+        await second.cleanup();
+        expect(String(error)).toContain("exited with code 1");
+        expect(String(error)).not.toContain("previous turn diagnostic");
+        expect(String(error)).not.toContain(credential);
+        expect(String(error)).not.toContain(processGrant);
+        expect(String(error).includes("PermissionError: current turn failed")).toBe(
+          prompt === "fail noisily",
+        );
+      }
+      expect(buffers.length).toBeGreaterThan(0);
+      expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
       expect(stderr).not.toHaveBeenCalled();
     },
   );

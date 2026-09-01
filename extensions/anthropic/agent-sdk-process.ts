@@ -56,6 +56,9 @@ export function createClaudeAgentSdkProcessOwner(
   currentContext: () => CliBackendExecuteContext | undefined,
   secretInput?: ClaudeAgentSdkSecretInput,
 ) {
+  // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.
+  const credential = secretInput?.createData();
+  let environment: SpawnOptions["env"] = {};
   let child: ChildProcessWithoutNullStreams | undefined;
   let drained: Promise<void> | undefined;
   let owner: CliBackendExecuteContext | undefined;
@@ -101,10 +104,18 @@ export function createClaudeAgentSdkProcessOwner(
     });
   };
   return {
+    [Symbol.dispose]() {
+      credential?.fill(0);
+      environment = {};
+      tail = "";
+      owner = undefined;
+    },
     // stdout/stderr are independent pipes. Drain this poll cycle before releasing a warm turn.
     settleStderr: () => settleIo(),
-    spawn: (options: SpawnOptions) =>
-      spawnClaudeAgentSdkProcess(options, secretInput, observeStderr),
+    spawn: (options: SpawnOptions) => {
+      environment = options.env;
+      return spawnClaudeAgentSdkProcess(options, secretInput, observeStderr);
+    },
     async withDiagnostics(error: unknown): Promise<unknown> {
       const context = currentContext();
       if (!context || context.abortSignal?.aborted) {
@@ -129,32 +140,30 @@ export function createClaudeAgentSdkProcessOwner(
       }
       let diagnostic = tail;
       // Known opaque credentials need exact-value masking as well as pattern redaction.
-      const credential = secretInput?.createData();
-      try {
-        const secrets = Object.entries(context.env)
-          .filter(
-            ([name, value]) => redactSensitiveFieldValue(name, value, { mode: "tools" }) !== value,
-          )
-          .map(([, value]) => value);
-        if (credential) {
-          secrets.push(credential.toString("utf8"));
-        }
-        for (const secret of secrets.filter(Boolean)) {
-          for (const value of [
-            secret,
-            encodeURIComponent(secret),
-            JSON.stringify(secret).slice(1, -1),
-          ]) {
-            diagnostic = diagnostic.replaceAll(value, "[REDACTED]");
-          }
-        }
-        diagnostic = sliceUtf16Safe(
-          redactSensitiveText(diagnostic, { mode: "tools" }),
-          -STDERR_PREVIEW_CHARS,
-        ).trim();
-      } finally {
-        credential?.fill(0);
+      // Warm turns can mint new grants while the child retains its original environment.
+      const secrets = [environment, context.env].flatMap((env) =>
+        Object.entries(env).flatMap(([name, value]) =>
+          value && redactSensitiveFieldValue(name, value, { mode: "tools" }) !== value
+            ? [value]
+            : [],
+        ),
+      );
+      if (credential) {
+        secrets.push(credential.toString("utf8"));
       }
+      for (const secret of secrets.filter(Boolean)) {
+        for (const value of [
+          secret,
+          encodeURIComponent(secret),
+          JSON.stringify(secret).slice(1, -1),
+        ]) {
+          diagnostic = diagnostic.replaceAll(value, "[REDACTED]");
+        }
+      }
+      diagnostic = sliceUtf16Safe(
+        redactSensitiveText(diagnostic, { mode: "tools" }),
+        -STDERR_PREVIEW_CHARS,
+      ).trim();
       return diagnostic
         ? new Error(
             `${error instanceof Error ? error.message : String(error)}\nstderr: ${diagnostic}`,
