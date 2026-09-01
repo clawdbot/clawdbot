@@ -148,9 +148,11 @@ export function resolveTlonAccount(
     enabled: merged.enabled !== false,
     configured,
     mediaMaxBytes:
-      configuredMediaMaxBytes === undefined
-        ? undefined
-        : Math.max(1, Math.floor(configuredMediaMaxBytes)),
+      configuredMediaMaxBytes !== undefined &&
+      Number.isFinite(configuredMediaMaxBytes) &&
+      configuredMediaMaxBytes > 0
+        ? Math.max(1, Math.floor(configuredMediaMaxBytes))
+        : undefined,
     ship,
     url,
     code,
