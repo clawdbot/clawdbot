@@ -297,7 +297,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         }
       }
       if (editError !== undefined) {
-        throw editError;
+        throw editError instanceof Error ? editError : new Error(String(editError));
       }
     },
   },
