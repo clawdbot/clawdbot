@@ -241,6 +241,11 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only` id is not registered, no check runs for that id; use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.
 
+To check model credentials, run `openclaw doctor --lint --only core/doctor/auth-profiles --json`.
+This opt-in check inspects shared credentials and each configured agent's local
+auth store, including fleets without a default agent. Shared credential problems
+are reported once; agent-specific cooldowns remain attributed to their local store.
+
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
