@@ -491,7 +491,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `background startup preserves each configured auth mode with key access deferred`() async throws {
+    @Test func `background startup preserves configured auth with noninteractive key access`() async throws {
         let authCases: [(key: String, value: String)] = [
             ("token", "configured-token"),
             ("password", "configured-password"),
@@ -531,7 +531,7 @@ struct GatewayDiscoverySelectionSupportTests {
                         saveCount += 1
                         return true
                     },
-                    key: nil,
+                    key: self.routeBindingKey,
                     keyAccessAllowed: false)
 
                 #expect(!startup.migrationChanged)
@@ -541,11 +541,11 @@ struct GatewayDiscoverySelectionSupportTests {
                 let state = AppState(preview: true)
                 let source = await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
-                    routeBindingKey: nil,
+                    routeBindingKey: self.routeBindingKey,
                     beforeConfigRead: {})
                 #expect(source.token == (authCase.key == "token" ? authCase.value : nil))
                 #expect(source.password == (authCase.key == "password" ? authCase.value : nil))
-                #expect(source.deviceAuthGatewayID == nil)
+                #expect(source.deviceAuthGatewayID == routeBinding)
 
                 try self.requireOnlyAuth(
                     try await self.connectAuth(source: source),
@@ -614,7 +614,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `background policy withholds ambient and stored auth from unverifiable owner`() async throws {
+    @Test func `background policy withholds all auth when the existing key is unavailable`() async throws {
         let configPath = TestIsolation.tempConfigPath()
         try await self.withIsolation(
             configPath: configPath,
@@ -629,6 +629,8 @@ struct GatewayDiscoverySelectionSupportTests {
                     "remote": [
                         "transport": "direct",
                         "url": "wss://gateway-a.example.test",
+                        "token": "configured-token",
+                        "password": "configured-password",
                     ],
                 ],
             ]
@@ -668,6 +670,66 @@ struct GatewayDiscoverySelectionSupportTests {
                 #expect(try await self.connectAuth(source: source) == nil)
                 #expect(try await self.connectNodeAuth(source: source) == nil)
             }
+        }
+    }
+
+    @Test func `background stale receipt cannot carry config auth with or without its key`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        try await self.withIsolation(
+            configPath: configPath,
+            env: ["OPENCLAW_GATEWAY_TOKEN": "ambient-token"])
+        {
+            let root: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-b.example.test",
+                        "token": "stale-token",
+                        "password": "stale-password",
+                    ],
+                ],
+            ]
+            #expect(OpenClawConfigFile.saveDict(root))
+            let routeA = try #require(GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://gateway-a.example.test",
+                remoteTarget: ""))
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: routeA,
+                key: self.routeBindingKey)
+
+            let deferred = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { _ in false },
+                key: nil,
+                keyAccessAllowed: false)
+            #expect(!deferred.migrationChanged)
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
+
+            let state = AppState(preview: true)
+            var source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                routeBindingKey: nil,
+                beforeConfigRead: {})
+            #expect(source.token == nil)
+            #expect(source.password == nil)
+            #expect(source.deviceAuthGatewayID == nil)
+            #expect(try await self.connectAuth(source: source) == nil)
+            #expect(try await self.connectNodeAuth(source: source) == nil)
+
+            source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                routeBindingKey: self.routeBindingKey,
+                beforeConfigRead: {})
+            #expect(source.token == nil)
+            #expect(source.password == nil)
+            #expect(source.deviceAuthGatewayID == nil)
+            #expect(try await self.connectAuth(source: source) == nil)
+            #expect(try await self.connectNodeAuth(source: source) == nil)
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-a")
         }
     }
 

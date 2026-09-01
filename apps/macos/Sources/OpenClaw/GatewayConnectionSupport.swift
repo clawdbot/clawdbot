@@ -54,10 +54,18 @@ enum GatewayActivationBindingKeyStore {
         return nil
     }
 
-    private static func load() -> Data? {
+    static func loadExistingWithoutAuthenticationUI() -> SymmetricKey? {
+        guard let data = load(authenticationUI: kSecUseAuthenticationUIFail) else { return nil }
+        return SymmetricKey(data: data)
+    }
+
+    private static func load(authenticationUI: CFString? = nil) -> Data? {
         var query = self.baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if let authenticationUI {
+            query[kSecUseAuthenticationUI as String] = authenticationUI
+        }
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,

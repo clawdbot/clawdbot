@@ -24,28 +24,17 @@ enum GatewayDiscoveryPreferences {
     private static let routeBindingVerifierPrefix = "hmac-sha256:gateway-discovery-route-binding:v1:"
     private static let routeBindingVerifierDomain = "openclaw.gateway-discovery.route-binding:v1"
     private static let routeBindingKey: SymmetricKey? = {
-        guard AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess else { return nil }
-        return GatewayActivationBindingKeyStore.loadOrCreate()
-    }()
-
-    static func preferredGatewayOwnsRoute(_ routeBinding: String?) -> Bool {
-        self.preferredGatewayOwnsRoute(routeBinding, key: self.routeBindingKey)
-    }
-
-    static func preferredGatewayOwnsRoute(_ routeBinding: String?, key: SymmetricKey?) -> Bool {
-        switch self.preferredRouteBindingVerification(routeBinding, key: key) {
-        case .match, .invalidReceipt, .unverifiable:
-            // An unresolved discovery receipt must continue fencing ambient
-            // credentials until a verified mismatch or explicit manual edit.
-            true
-        case .noPreference, .mismatch:
-            false
+        return switch AppLaunchRuntimePlan.current.mode {
+        case .interactive:
+            GatewayActivationBindingKeyStore.loadOrCreate()
+        case .background:
+            // Background startup may verify an existing receipt, but this query
+            // can neither create an item nor present SecurityAgent UI.
+            GatewayActivationBindingKeyStore.loadExistingWithoutAuthenticationUI()
+        case .elevationHost:
+            nil
         }
-    }
-
-    static func hasKnownInvalidPreferredRouteBindingReceipt() -> Bool {
-        self.preferredRouteBindingVerification(nil, key: nil) == .invalidReceipt
-    }
+    }()
 
     static func preferredGatewayVerifiedForRoute(_ routeBinding: String?) -> Bool {
         self.preferredRouteBindingVerification(routeBinding) == .match
@@ -192,7 +181,8 @@ enum GatewayDiscoveryPreferences {
         }
         if !keyAccessAllowed {
             // Background hosts intentionally keep the prompt-bearing Keychain
-            // cold. Defer repair; explicit config remains route-scoped authority.
+            // cold. Endpoint resolution may verify an existing key, but only an
+            // explicit interactive route action may retire mismatched ownership.
             return StartupConfig(
                 root: loadedRoot,
                 migrationChanged: false,

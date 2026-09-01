@@ -1001,16 +1001,15 @@ extension GatewayEndpointStore {
             remoteTarget: sshRouteIdentity?.target ?? "")
         // Route identity is not credential authority for a discovery selection
         // until its persisted receipt verifies against this exact route.
+        let routeVerification = GatewayDiscoveryPreferences
+            .preferredRouteBindingVerification(routeBinding, key: routeBindingKey)
         let deviceAuthGatewayID = GatewayDiscoveryPreferences
             .authorizedDeviceAuthGatewayID(routeBinding, key: routeBindingKey)
-        // Ambient env credentials are process-wide, not proof for this newly
-        // selected Gateway. A discovery route always resolves auth from config.
-        let credentialEnv = isRemote && GatewayDiscoveryPreferences
-            .preferredGatewayOwnsRoute(routeBinding, key: routeBindingKey) ? [:] : env
-        // Legacy and malformed receipts are invalid without consulting Keychain.
-        // Keep their config intact for interactive repair, but never send its auth.
+        // Any unresolved discovery owner fences process-wide environment auth.
+        // Config auth additionally requires no owner or an exact HMAC match.
+        let credentialEnv = isRemote && routeVerification != .noPreference ? [:] : env
         let configCredentialsAllowed = !isRemote ||
-            !GatewayDiscoveryPreferences.hasKnownInvalidPreferredRouteBindingReceipt()
+            routeVerification == .noPreference || routeVerification == .match
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
